@@ -1,0 +1,5476 @@
+# Pasco Single-File Web App (Flask + SQLite) – Admin + Student + Tutor portals
+# -----------------------------------------------------------------------------
+# - Pasco branding (green + gold), polished UI
+# - Reliable server-side QR PNGs
+# - CSV "remove list" export
+# - Student & Tutor portals with PIN login
+# - Admin can add/remove students & tutors, reset PINs
+# - Forgot-PIN inbox (admin can view/set/reset PINs)
+# - Tutors upload materials & YouTube links; students see after approval
+# - Students choose 5-digit PIN at registration
+# - Tutors ⇄ many Subjects; Students ⇄ many Subjects per month
+# - Tutors see WhatsApp links + sessions; can mark attendance (QR or manual)
+# - Tutors can delete their own uploads within 24h
+# - Assignments with due date, submissions, grading (marks/feedback)
+# - Grade save shows success alert; assignments support “Out of” totals
+# - Footer shows “⚡ Powered by Pasca Ragophala”; branding = “Pasco”
+# - Student portal has styled “Feedback & Results”
+# - Proof of Payment is REQUIRED (min 1, max 2 files)
+# - Guardian phone, Email, and Subjects are REQUIRED
+# - PoP supports multiple files via a new enrollment_files table
+# - Admin → Students table shows Guardian & Email (N/A if missing)
+# - Messaging: Student ↔ Tutor and Tutor ↔ Admin; Admin can message both
+# - Analytics dashboard (attendance, submissions, marks, ratings, completion)
+# - Monthly Ratings: Learners can rate each ACTIVE subject from the 24th → month-end
+#
+# How to run
+#   1) pip install flask qrcode[pil]
+#   2) python ebta_single_file_app.py
+#   3) Open http://127.0.0.1:5000
+#
+# Notes
+# - Admin password via ENV EBTA_ADMIN_PASSWORD (default: admin)
+# - Secret key via ENV EBTA_SECRET_KEY (auto-generated if missing)
+# - Files saved under ./uploads (PoP), ./materials (tutor files), ./submissions (student work)
+# - Change logo via ENV EBTA_LOGO_URL
+# -----------------------------------------------------------------------------
+
+import os
+import sqlite3
+import secrets
+import datetime
+import base64
+import random
+import calendar
+from io import BytesIO
+import json
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
+
+from ast import literal_eval
+from pathlib import Path
+from urllib.parse import urlencode
+import urllib.request as urlreq
+from flask import (
+    Flask, request, redirect, url_for, send_from_directory, session,
+    make_response
+)
+
+try:
+    import qrcode
+except Exception:
+    qrcode = None
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("EBTA_SECRET_KEY", secrets.token_hex(16))
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = BASE_DIR / "uploads"       # PoP
+MATERIALS_DIR = BASE_DIR / "materials"  # Tutor uploads
+SUBMISSIONS_DIR = BASE_DIR / "submissions"  # Student assignment submissions
+for d in (UPLOAD_DIR, MATERIALS_DIR, SUBMISSIONS_DIR):
+    d.mkdir(exist_ok=True)
+DB_PATH = BASE_DIR / "ebta.db"
+LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/1nieF2O.jpg")
+
+
+# ===================== DB =====================
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA foreign_keys=ON")
+    except Exception:
+        pass
+    return conn
+
+def now_utc_iso():
+    """Return ISO timestamp in Africa/Johannesburg timezone (UTC+02:00)."""
+    try:
+        if ZoneInfo is not None:
+            tz = ZoneInfo('Africa/Johannesburg')
+            return datetime.datetime.now(tz).isoformat()
+    except Exception:
+        pass
+    # Fallback: fixed UTC+02 offset if zoneinfo unavailable
+    tz = datetime.timezone(datetime.timedelta(hours=2))
+    return (datetime.datetime.utcnow() + datetime.timedelta(hours=2)).replace(tzinfo=tz).isoformat()
+
+
+def ensure_column(conn, table, column, ddl_tail):
+    cur = conn.cursor()
+    cur.execute(f"PRAGMA table_info({table})")
+    cols = [r[1] for r in cur.fetchall()]
+    if column not in cols:
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_tail}")
+
+def init_db():
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS settings(
+        key TEXT PRIMARY KEY,
+        value TEXT
+      );
+    """)
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS students(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone_whatsapp TEXT NOT NULL UNIQUE,
+        guardian_phone TEXT,
+        email TEXT,
+        grade TEXT NOT NULL,
+        pin TEXT,
+        created_at TEXT NOT NULL
+      );
+    """)
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS subjects(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        grade TEXT NOT NULL,
+        UNIQUE(name,grade)
+      );
+    """)
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS groups(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        subject_id INTEGER NOT NULL,
+        month TEXT NOT NULL,
+        invite_link TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(subject_id,month),
+        FOREIGN KEY(subject_id) REFERENCES subjects(id)
+      );
+    """)
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS enrollments(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id INTEGER NOT NULL,
+        subject_id INTEGER NOT NULL,
+        month TEXT NOT NULL,
+        status TEXT NOT NULL,
+        payment_method TEXT,
+        payment_ref TEXT,
+        pop_url TEXT,                 -- legacy single PoP (kept for compatibility)
+        status_token TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(student_id) REFERENCES students(id),
+        FOREIGN KEY(subject_id) REFERENCES subjects(id)
+      );
+    """)
+
+    # Multiple PoP files per enrollment
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS enrollment_files(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        enrollment_id INTEGER NOT NULL,
+        file_path TEXT NOT NULL,
+        FOREIGN KEY(enrollment_id) REFERENCES enrollments(id) ON DELETE CASCADE
+      );
+    """)
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS payments(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        enrollment_id INTEGER NOT NULL,
+        amount INTEGER NOT NULL,
+        gateway TEXT NOT NULL,
+        reference TEXT NOT NULL,
+        result TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        FOREIGN KEY(enrollment_id) REFERENCES enrollments(id)
+      );
+    """)
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS tutors(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL UNIQUE,
+        pin TEXT,
+        created_at TEXT NOT NULL
+      );
+    """)
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS tutor_subjects(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tutor_id INTEGER NOT NULL,
+        subject_id INTEGER NOT NULL,
+        UNIQUE(tutor_id,subject_id),
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
+      );
+    """)
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS sessions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        subject_id INTEGER NOT NULL,
+        tutor_id INTEGER NOT NULL,
+        day_of_week INTEGER NOT NULL,
+        start_time TEXT NOT NULL,
+        end_time TEXT NOT NULL,
+        meet_link TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id),
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id)
+      );
+    """)
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS attendance(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        date TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES sessions(id),
+        FOREIGN KEY(student_id) REFERENCES students(id)
+      );
+    """)
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS materials(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        subject_id INTEGER NOT NULL,
+        tutor_id INTEGER NOT NULL,
+        month TEXT NOT NULL,
+        title TEXT NOT NULL,
+        kind TEXT NOT NULL,          -- 'file'|'youtube'|'assignment'
+        file_path TEXT,
+        youtube_url TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id),
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id)
+      );
+    """)
+    
+    ensure_column(conn, "students", "guardian_name", "TEXT")
+    ensure_column(conn, "materials", "is_assignment", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "materials", "due_date", "TEXT")
+    ensure_column(conn, "materials", "max_points", "INTEGER NOT NULL DEFAULT 100")
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS submissions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        material_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        file_path TEXT NOT NULL,
+        submitted_at TEXT NOT NULL,
+        mark INTEGER,
+        feedback TEXT,
+        evaluated_at TEXT,
+        UNIQUE(material_id,student_id),
+        FOREIGN KEY(material_id) REFERENCES materials(id) ON DELETE CASCADE,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+      );
+    """)
+
+    # Simple direct messages between roles
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS direct_messages(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_role TEXT NOT NULL,     -- 'student'|'tutor'|'admin'
+        from_id INTEGER,             -- null/0 for admin
+        to_role TEXT NOT NULL,
+        to_id INTEGER,
+        subject_id INTEGER,          -- optional context
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        is_read INTEGER NOT NULL DEFAULT 0
+      );
+    """)
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS messages(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        resolved INTEGER NOT NULL DEFAULT 0
+      );
+    """)
+
+    # Students rate their classes monthly (24th to end-of-month)
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS lesson_ratings(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id INTEGER NOT NULL,
+        subject_id INTEGER NOT NULL,
+        month TEXT NOT NULL,         -- 'YYYY-MM'
+        rating INTEGER NOT NULL,     -- 1..5
+        comment TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(student_id, subject_id, month),
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
+      );
+    """)
+
+    # Defaults & seed
+    cur.execute("SELECT value FROM settings WHERE key='current_month'")
+    if not cur.fetchone():
+        cur.execute("INSERT INTO settings(key,value) VALUES(?,?)",
+                    ('current_month', datetime.date.today().strftime('%Y-%m')))
+
+    cur.execute("SELECT COUNT(*) AS c FROM subjects")
+    if cur.fetchone()["c"] == 0:
+        seed = [
+            ("Mathematics","G8"),("Mathematics","G9"),("Mathematics","G10"),
+            ("Mathematics","G11"),("Mathematics","G12"),
+            ("Physical Sciences","G10"),("Physical Sciences","G11"),("Physical Sciences","G12"),
+            ("Life Sciences","G10"),("Life Sciences","G11"),
+            ("Accounting","G10"),("Accounting","G12"),
+            ("Maths Lit","G12"),("Geography","G12"),
+            ("Business Studies","G10"),
+            ("Business Studies","G11"),
+            ("Business Studies","G12"),
+            ("Economics","G10"),
+            ("Economics","G11"),
+            ("Economics","G12"),
+            ("Maths Lit","G10"),
+            ("Maths Lit","G11")
+        ]
+        cur.executemany("INSERT OR IGNORE INTO subjects(name,grade) VALUES(?,?)", seed)
+        # Ensure required subjects exist even if DB was previously seeded
+        required_subjects = [
+            ("Business Studies","G10"), ("Business Studies","G11"), ("Business Studies","G12"),
+            ("Economics","G10"), ("Economics","G11"), ("Economics","G12"),
+            ("Accounting","G10"), ("Accounting","G11"), ("Accounting","G12"),
+            ("Maths Lit","G10"), ("Maths Lit","G11"),
+        ]
+        cur.executemany("INSERT OR IGNORE INTO subjects(name,grade) VALUES(?,?)", required_subjects)
+    
+
+    
+    # --- Quizzes ---
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS quizzes(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        subject_id INTEGER NOT NULL,
+        tutor_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        duration_minutes INTEGER NOT NULL DEFAULT 10,
+        opens_at TEXT,
+        closes_at TEXT,
+        is_published INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE
+      );
+    """)
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS quiz_questions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        quiz_id INTEGER NOT NULL,
+        question_text TEXT NOT NULL,
+        options_json TEXT NOT NULL,
+        correct_index INTEGER NOT NULL,
+        points INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY(quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE
+      );
+    """)
+
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS quiz_attempts(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        quiz_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        started_at TEXT NOT NULL,
+        submitted_at TEXT,
+        score INTEGER,
+        detail_json TEXT,
+        UNIQUE(quiz_id,student_id),
+        FOREIGN KEY(quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+      );
+    """)
+    conn.commit()
+    conn.close()
+
+
+
+# ===================== Helpers =====================
+
+def safe_url(endpoint, fallback):
+    """Return url_for(endpoint) if route exists, else fallback string."""
+    try:
+        return url_for(endpoint)
+    except Exception:
+        return fallback
+
+
+DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
+
+def get_setting(key, default=""):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM settings WHERE key=?", (key,))
+    row = cur.fetchone()
+    conn.close()
+    return row["value"] if row else default
+
+def set_setting(key, value):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value)
+    )
+    conn.commit()
+    conn.close()
+
+def grade_label(g): return g.replace("G","Grade ")
+
+def is_admin(): return bool(session.get("admin"))
+def is_student(): return session.get("student_id")
+def is_tutor(): return session.get("tutor_id")
+
+def require_admin():
+    if not is_admin(): return redirect(url_for('admin_login'))
+def require_student():
+    if not is_student(): return redirect(url_for('student_login'))
+def require_tutor():
+    if not is_tutor(): return redirect(url_for('tutor_login'))
+
+def secure_name(name):
+    keep="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+    return ''.join(ch if ch in keep else '_' for ch in name)
+
+def gen_pin(existing):
+    while True:
+        p = f"{random.randint(0,99999):05d}"
+        if p not in existing: return p
+
+def is_valid_pin(pin): return len(pin)==5 and pin.isdigit()
+
+def pin_in_use(conn, pin):
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM students WHERE pin=? LIMIT 1",(pin,))
+    if cur.fetchone(): return True
+    cur.execute("SELECT 1 FROM tutors WHERE pin=? LIMIT 1",(pin,))
+    return cur.fetchone() is not None
+
+def b64url_encode(b): return base64.urlsafe_b64encode(b).decode('ascii').rstrip('=')
+def b64url_decode(s):
+    pad = '=' * (-len(s)%4)
+    return base64.urlsafe_b64decode(s+pad)
+
+def month_last_day(year:int, month:int) -> int:
+    return calendar.monthrange(year, month)[1]
+
+def rating_window_open(current_month: str) -> bool:
+    """Open from the 24th to the last day of current_month (server date)."""
+    today = datetime.date.today()
+    try:
+        y, m = map(int, current_month.split('-'))
+    except Exception:
+        return False
+    last = month_last_day(y, m)
+    if today.year == y and today.month == m and 24 <= today.day <= last:
+        return True
+    return False
+        
+def pretty_month_label(month_str: str) -> str:
+    """Convert 'YYYY-MM' to 'Month YYYY' (e.g., '2025-10' -> 'October 2025')."""
+    try:
+        y, m = map(int, month_str.split('-')[:2])
+        return datetime.date(y, m, 1).strftime('%B %Y')
+    except Exception:
+        return month_str
+
+
+
+# ===================== Templating =====================
+
+GOOGLE_FONTS = "<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap' rel='stylesheet'>"
+
+BASE_CSS = """
+<style>
+:root{
+  --primary:#1b5e20;            /* Pasco green */
+  --primary-dark:#0f3d14;
+  --primary-light:#43a047;
+  --primary-bg:#f0fdf4;
+  --accent:#ffd54f;             /* Pasco gold */
+  --accent-light:#ffec99;
+  --bg:#f8fafc;
+  --card:#ffffff;
+  --text:#0f172a;
+  --muted:#64748b;
+  --border:#e2e8f0;
+  --border-light:#f1f5f9;
+  --table-stripe:#f8fafc;
+  --radius-sm:6px; --radius:10px; --radius-lg:14px; --radius-xl:18px; --radius-full:9999px;
+  --shadow-sm:0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow:0 1px 3px rgb(0 0 0 / 0.1), 0 1px 2px rgb(0 0 0 / 0.06);
+  --shadow-md:0 4px 6px rgb(0 0 0 / 0.1), 0 2px 4px rgb(0 0 0 / 0.06);
+  --shadow-lg:0 10px 15px rgb(0 0 0 / 0.1), 0 4px 6px rgb(0 0 0 / 0.05);
+  --transition:all .2s ease;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  background:linear-gradient(135deg, var(--primary-bg) 0%, var(--bg) 100%);
+  color:var(--text);
+  line-height:1.55;
+}
+/* Header */
+.header{
+  position:sticky; top:0; z-index:20;
+  background:rgba(255,255,255,.95); backdrop-filter: blur(14px);
+  border-bottom:1px solid var(--border-light);
+  box-shadow:0 1px 3px rgba(0,0,0,.05);
+}
+.nav{max-width:1200px;margin:0 auto; padding:14px 18px; display:flex; align-items:center; justify-content:space-between}
+.brand{display:flex;align-items:center;gap:12px}
+.brand-logo{width:42px;height:42px;border-radius:14px;object-fit:cover;border:2px solid var(--primary-bg);box-shadow:var(--shadow-md);transition:var(--transition)}
+.brand:hover .brand-logo{transform:scale(1.05)}
+.brand .title{font-weight:800; letter-spacing:-.3px; background:linear-gradient(135deg,var(--primary-dark),var(--primary)); -webkit-background-clip:text; -webkit-text-fill-color:transparent}
+.links a{color:#0f172a;text-decoration:none;font-weight:600; font-size:14px; margin-left:12px; padding:8px 12px; border-radius:10px; transition:var(--transition)}
+.links a:hover{background:var(--border-light); color:var(--primary)}
+/* Layout */
+.wrap{max-width:1200px;margin:22px auto;padding:0 18px}
+.grid{display:grid;grid-template-columns:1fr;gap:14px}
+/* Cards */
+.card{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:var(--radius-xl);
+  padding:16px;
+  box-shadow:var(--shadow);
+  position:relative; overflow:hidden; transition:var(--transition);
+}
+.card.soft{background:linear-gradient(180deg,rgba(255,255,255,.92),rgba(255,255,255,.75))}
+.card:hover{box-shadow:var(--shadow-lg); transform:translateY(-2px)}
+.card::before{
+  content:""; position:absolute; inset:0 0 auto 0; height:3px;
+  background:linear-gradient(90deg,var(--primary),var(--accent)); opacity:.0; transition:var(--transition)
+}
+.card:hover::before{opacity:1}
+/* Headings */
+h1{font-family:"Plus Jakarta Sans", Inter, sans-serif; font-size:22px; margin:0 0 8px}
+h2{font-size:18px;margin:0 0 10px}
+h3{font-size:16px;margin:0 0 8px}
+.muted{color:var(--muted)} .mini{font-size:12px}
+.auth-card{max-width:420px;margin:0 auto}
+/* Forms */
+label{font-size:13px;color:var(--muted); display:block; margin-bottom:6px; font-weight:600}
+input,select,textarea{
+  width:100%; padding:11px 12px; border:2px solid var(--border);
+  border-radius:12px; background:#fff; color:var(--text); transition:var(--transition)
+}
+input:focus,select:focus,textarea:focus{outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(27,94,32,.12)}
+textarea{min-height:96px; resize:vertical}
+input::file-selector-button{padding:8px 10px;border:0;background:linear-gradient(135deg,var(--primary),var(--primary-dark));color:#fff;border-radius:10px;margin-right:10px}
+/* Buttons */
+.btn{
+  display:inline-flex; align-items:center; gap:8px; padding:11px 16px;
+  border-radius:12px; border:0; background:linear-gradient(135deg,var(--primary),var(--primary-dark));
+  color:#fff; text-decoration:none; cursor:pointer; box-shadow:var(--shadow-md); font-weight:700; transition:var(--transition); position:relative; overflow:hidden
+}
+.btn:hover{transform:translateY(-2px); box-shadow:var(--shadow-lg)}
+.btn.secondary{background:#fff; color:var(--primary); border:2px solid var(--primary)}
+.btn.success{background:linear-gradient(135deg,var(--primary-light),#2e7d32)}
+.btn.warn{background:linear-gradient(135deg,#f59e0b,#d97706)}
+.btn.danger{background:linear-gradient(135deg,#ef4444,#dc2626)}
+.btn.mini{padding:6px 10px; font-weight:600}
+/* Toolbar */
+.toolbar{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0}
+/* Chips/Badges */
+.chip{
+  display:inline-block; padding:6px 10px; border-radius:999px; font-size:12px;
+  background:#eef6ee; color:#14532d; border:1px solid rgba(20,83,45,.15); font-weight:700
+}
+.chip.pending{background:linear-gradient(135deg,#fef3c7,#fde68a); color:#92400e; border-color:#fbbf24}
+.chip.active{background:linear-gradient(135deg,#d1fae5,#a7f3d0); color:#065f46; border-color:#34d399}
+.chip.lapsed{background:linear-gradient(135deg,#fee2e2,#fecaca); color:#991b1b; border-color:#f87171}
+.badge{display:inline-block;font-size:11px;background:#e6f5e7;color:#185c1c;border:1px solid #cbe8cd;padding:2px 8px;border-radius:999px}
+/* Tables */
+table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border-radius:14px}
+thead th{
+  background:var(--bg); text-align:left; padding:12px; font-size:12px; color:#1b441c;
+  text-transform:uppercase; letter-spacing:.4px; border-bottom:1px solid var(--border)
+}
+tbody td{padding:12px; border-bottom:1px dashed rgba(0,0,0,.06)}
+tbody tr:nth-child(even){background:var(--table-stripe)}
+tbody tr:hover{background:#f0f7f1}
+/* Messages */
+.msg{border:1px solid var(--border);border-radius:14px;padding:12px;margin:8px 0;background:#fff}
+.msg.me{border-left:4px solid var(--primary)} .msg.them{border-left:4px solid var(--accent)}
+.msg .meta{font-size:12px;color:var(--muted);margin-bottom:4px}
+/* Empty state */
+.empty{padding:16px;border:1px dashed var(--border);border-radius:14px;color:var(--muted);text-align:center}
+/* Footer */
+.footer{
+  padding:28px 0; margin-top:36px; color:var(--muted); font-size:12px; text-align:center;
+  border-top:1px solid var(--border-light);
+  background:linear-gradient(180deg,transparent,var(--bg))
+}
+/* Utilities */
+.small{max-width:760px;margin:0 auto}
+.stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+.stat{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;box-shadow:var(--shadow)}
+.stat .k{font-size:20px;font-weight:800;color:var(--primary)}
+.inlineform{display:inline-grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
+.feedback-list{display:grid;gap:10px}
+.feedback-item{background:#fff;border:1px solid var(--border);border-left:4px solid var(--primary);padding:12px;border-radius:14px}
+/* Responsive */
+@media (max-width: 768px){
+  .nav{padding:12px}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .wrap{padding:0 14px}
+  .footer{padding:22px 0}
+}
+/* === Modern LMS Layout Additions === */
+.layout{display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start}
+.sidebar{
+  position:sticky; top:76px;
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:var(--radius-xl);
+  box-shadow:var(--shadow);
+  padding:14px;
+  max-height: calc(100vh - 100px);
+  overflow:auto;
+}
+.sidebar .role{font-weight:800; font-size:14px; margin-bottom:6px}
+.sidebar .user{font-size:13px;color:var(--muted); margin-bottom:12px}
+.side-links{display:grid;gap:8px;margin:8px 0 14px}
+.side-links a{
+  display:block; text-decoration:none; padding:10px 12px;
+  border:1px solid var(--border); border-radius:12px; font-weight:600;
+  color:var(--text); background:#fff; transition:var(--transition)
+}
+.side-links a:hover{transform:translateY(-1px); box-shadow:var(--shadow-sm); border-color:var(--primary)}
+.stats-mini{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px}
+.stats-mini .s{
+  background:#fff; border:1px solid var(--border);
+  border-radius:12px; padding:10px; box-shadow:var(--shadow-sm)
+}
+.stats-mini .s .k{font-size:18px; font-weight:800; color:var(--primary)}
+.stats-mini .s .t{font-size:11px; color:var(--muted)}
+.announce{background:#fffaf0; border:1px solid #fde68a; padding:12px; border-radius:12px; margin-bottom:12px}
+.announce h3{margin:0 0 6px; font-size:14px}
+@media (max-width: 1024px){
+  .layout{grid-template-columns:1fr}
+  .sidebar{position:relative; top:auto; max-height:none}
+}
+/* Hash navigation highlight */
+.flash-highlight{animation: flashBorder 2.8s ease-in-out; box-shadow: 0 0 0 4px rgba(255,215,0,.25); position: relative;}
+@keyframes flashBorder{
+  0%{box-shadow: 0 0 0 0 rgba(255,215,0,.0)}
+  10%{box-shadow: 0 0 0 4px rgba(255,215,0,.35)}
+  55%{box-shadow: 0 0 0 4px rgba(46,125,50,.35)}
+  100%{box-shadow: 0 0 0 0 rgba(46,125,50,.0)}
+}
+.flash-highlight::before{
+  content:""; position:absolute; inset:-1px; border-radius:inherit; padding:1px;
+  background: linear-gradient(135deg,#ffd54f,#2e7d32);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+}
+.side-links a.active{ outline:2px solid #2e7d32; background:#f0fff4; }
+
+/* === EBTA wide-mode & sidebar collapse enhancements (kept INSIDE <style>) === */
+:root { --page-max: 1280px; }
+.wrap, .container, .shell, .page, .content-wrap, main.page { max-width: var(--page-max); }
+.admin-shell, .two-col, .layout-admin, .admin-grid { display: grid; grid-template-columns: 280px 1fr; gap: 18px; }
+body.sidebar-collapsed .admin-shell,
+body.sidebar-collapsed .two-col,
+body.sidebar-collapsed .layout-admin,
+body.sidebar-collapsed .admin-grid { grid-template-columns: 72px 1fr; }
+body.sidebar-collapsed .side-links .label { display: none; }
+body.sidebar-collapsed .side-links .item { justify-content: center; }
+body.sidebar-collapsed .side-links .icon { margin-right: 0; }
+body.wide-mode :root, body.wide-mode .wrap, body.wide-mode .container, body.wide-mode .shell, body.wide-mode .page, body.wide-mode .content-wrap { --page-max: 1440px; }
+.card, .panel, .stats .tile { transition: transform .12s ease, box-shadow .12s ease; }
+.card:hover, .panel:hover, .stats .tile:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,.08); }
+.btn { transition: transform .08s ease; } .btn:active { transform: scale(.98); }
+.ui-controls { position: sticky; top: 8px; display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-bottom: 8px; }
+.ui-controls .chip { cursor: pointer; padding: 6px 10px; border: 1px solid #cfd8d3; border-radius: 999px; background: #ffffffcc; backdrop-filter: blur(6px); font-size: 12px; }
+.sidebar-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.sidebar-head .collapse { font-size:12px; border:1px solid #cfd8d3; border-radius:8px; padding:6px 8px; cursor:pointer; background:#fff; }
+</style>
+"""
+
+
+BASE_JS = """
+<script>
+function filterTable(inputId, tableId){
+  const q=(document.getElementById(inputId)?.value||"").toLowerCase();
+  const rows=document.querySelectorAll('#'+tableId+' tbody tr');
+  rows.forEach(r=>{ r.style.display = r.innerText.toLowerCase().includes(q) ? '' : 'none'; });
+}
+document.addEventListener('DOMContentLoaded',()=> {
+  const appear = new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{
+      if(e.isIntersecting){ e.target.style.transition='transform .4s, opacity .4s'; e.target.style.transform='translateY(0)'; e.target.style.opacity='1'; appear.unobserve(e.target); }
+    });
+  }, {threshold:.12});
+  document.querySelectorAll('.card').forEach(el=>{ el.style.transform='translateY(8px)'; el.style.opacity='.0'; appear.observe(el); });
+});
+
+function smoothScrollIntoView(el){
+  if(!el) return;
+  const y = el.getBoundingClientRect().top + window.scrollY - 90;
+  window.scrollTo({top:y, behavior:'smooth'});
+  el.classList.add('flash-highlight');
+  setTimeout(()=>el.classList.remove('flash-highlight'), 3000);
+}
+function findCardByHeadingText(keywords){
+  const cards=[...document.querySelectorAll('.card')];
+  for(const card of cards){
+    const h = card.querySelector('h1,h2,h3');
+    if(!h) continue;
+    const t = (h.textContent||'').toLowerCase();
+    for(const k of keywords){
+      if(t.includes(k.toLowerCase())) return card;
+    }
+  }
+  return null;
+}
+function highlightSectionByHash(hash){
+  if(!hash) return;
+  let el=null;
+  switch(hash){
+    case '#dashboard':
+      // Try to find "Your Enrollments"
+      el = findCardByHeadingText(['your enrollments','welcome']);
+      if(el){
+        // also lightly highlight next siblings
+        const next1 = el.nextElementSibling, next2 = next1 && next1.nextElementSibling;
+        [el,next1,next2].forEach(x=>{ if(x && x.classList.contains('card')) { x.classList.add('flash-highlight'); setTimeout(()=>x.classList.remove('flash-highlight'),3000);} });
+        smoothScrollIntoView(el);
+        return;
+      }
+      break;
+    case '#upload':
+      el = findCardByHeadingText(['upload materials','upload'])
+      break;
+    case '#assignments':
+      el = findCardByHeadingText(['assignments','materials & assignments','materials']);
+      break;
+    case '#materials':
+      el = findCardByHeadingText(['materials']);
+      break;
+    case '#messages':
+      el = findCardByHeadingText(['messages','inbox']);
+      break;
+    case '#status':
+      el = document.getElementById('status-banner') || findCardByHeadingText(['status']);
+      break;
+    case '#students':
+    case '#tutors':
+    case '#subjects':
+    case '#enrollments':
+    case '#groups':
+    el = findCardByHeadingText(['group links','whatsapp links']); break;
+
+    case '#sessions':
+    case '#inbox':
+    case '#analytics':
+    case '#settings':
+    case '#export':
+      el = findCardByHeadingText([hash.replace('#','')]);
+      break;
+    default:
+      // Fall back: try id
+      el = document.querySelector(hash);
+  }
+  if(el){ smoothScrollIntoView(el); }
+}
+window.addEventListener('hashchange', ()=>highlightSectionByHash(location.hash));
+document.addEventListener('DOMContentLoaded', ()=>{
+  // intercept sidebar hash clicks for immediate action
+  document.body.addEventListener('click', (e)=>{
+    const a = e.target.closest('a[href^="#"]');
+    if(a){ e.preventDefault(); const h=a.getAttribute('href'); history.pushState(null,"",h); highlightSectionByHash(h); }
+  });
+  // if page loaded with a hash
+  if(location.hash){ setTimeout(()=>highlightSectionByHash(location.hash), 50); }
+});
+
+function mapAdminAnchors(){
+  // Add stable IDs to common admin sections by heading text
+  const pairs = [
+    {id:'enrollments', keys:['manage enrollments','enrollments']},
+    {id:'students', keys:['students']},
+    {id:'tutors', keys:['tutors']},
+    {id:'groups', keys:['group links','whatsapp links']},
+    {id:'sessions', keys:['sessions & qr','sessions','qr']},
+    {id:'inbox', keys:['inbox']},
+    {id:'messages', keys:['direct messages','messages']},
+    {id:'analytics', keys:['analytics','dashboard']},
+    {id:'settings', keys:['settings']},
+    {id:'export', keys:['export remove list','export','remove list']},
+  ];
+  const cards=[...document.querySelectorAll('.card')];
+  for(const {id,keys} of pairs){
+    for(const card of cards){
+      const h=card.querySelector('h1,h2,h3'); if(!h) continue;
+      const t=(h.textContent||'').toLowerCase();
+      if(keys.some(k=>t.includes(k))){
+        card.setAttribute('id', id);
+        break;
+      }
+    }
+  }
+}
+
+function smoothScrollIntoView(el){
+  if(!el) return;
+  const y = el.getBoundingClientRect().top + window.scrollY - 90;
+  window.scrollTo({top:y, behavior:'smooth'});
+  el.classList.add('flash-highlight');
+  setTimeout(()=>el.classList.remove('flash-highlight'), 3000);
+}
+function findCardByHeadingText(keywords){
+  const cards=[...document.querySelectorAll('.card')];
+  for(const card of cards){
+    const h = card.querySelector('h1,h2,h3');
+    if(!h) continue;
+    const t = (h.textContent||'').toLowerCase();
+    for(const k of keywords){
+      if(t.includes(k.toLowerCase())) return card;
+    }
+  }
+  return null;
+}
+function highlightSectionByHash(hash){
+  if(!hash) return;
+  let el=null;
+  switch(hash){
+    case '#dashboard':
+      el = findCardByHeadingText(['your enrollments','welcome','overview','analytics']); 
+      if(el){
+        const next1 = el.nextElementSibling, next2 = next1 && next1.nextElementSibling;
+        [el,next1,next2].forEach(x=>{ if(x && x.classList.contains('card')) { x.classList.add('flash-highlight'); setTimeout(()=>x.classList.remove('flash-highlight'),3000);} });
+        smoothScrollIntoView(el); return;
+      }
+      break;
+    case '#upload':
+      el = findCardByHeadingText(['upload materials','upload']); break;
+    case '#assignments':
+      el = findCardByHeadingText(['assignments','materials & assignments','materials']); break;
+    case '#materials':
+      el = findCardByHeadingText(['materials']); break;
+    case '#messages':
+      el = findCardByHeadingText(['messages','inbox','direct messages']); break;
+    case '#status':
+      el = document.getElementById('status-banner') || findCardByHeadingText(['status']); break;
+    case '#enrollments':
+      el = document.getElementById('enrollments') || findCardByHeadingText(['manage enrollments','enrollments']); break;
+    case '#students':
+      el = document.getElementById('students') || findCardByHeadingText(['students']); break;
+    case '#tutors':
+      el = document.getElementById('tutors') || findCardByHeadingText(['tutors']); break;
+    case '#groups':
+      el = document.getElementById('groups') || findCardByHeadingText(['group links','whatsapp links']); break;
+    case '#sessions':
+      el = document.getElementById('sessions') || findCardByHeadingText(['sessions & qr','sessions','qr']); break;
+    case '#inbox':
+      el = document.getElementById('inbox') || findCardByHeadingText(['inbox']); break;
+    case '#analytics':
+      el = document.getElementById('analytics') || findCardByHeadingText(['analytics','dashboard']); break;
+    case '#settings':
+      el = document.getElementById('settings') || findCardByHeadingText(['settings']); break;
+    case '#export':
+      el = document.getElementById('export') || findCardByHeadingText(['export remove list','export','remove list']); break;
+    default:
+      el = document.querySelector(hash);
+  }
+  if(el){ smoothScrollIntoView(el); }
+}
+window.addEventListener('hashchange', ()=>highlightSectionByHash(location.hash));
+document.addEventListener('DOMContentLoaded', ()=>{
+  mapAdminAnchors();
+  document.body.addEventListener('click', (e)=>{
+    const a = e.target.closest('a[href^=\"#\"]');
+    if(a){ e.preventDefault(); const h=a.getAttribute('href'); history.pushState(null,\"\",h); highlightSectionByHash(h); }
+  });
+  if(location.hash){ setTimeout(()=>{ mapAdminAnchors(); highlightSectionByHash(location.hash); }, 50); }
+});
+
+// --- Admin sidebar -> real content navigation (robust) ---
+const ADMIN_MAP = {
+  '#enrollments': ['manage enrollments','enrollments','manage enrollment','enrollment'],
+  '#students': ['students','student list'],
+  '#tutors': ['tutors','tutor list'],
+  '#groups': ['group links','whatsapp links','links','groups'],
+  '#sessions': ['sessions & qr','sessions','qr'],
+  '#inbox': ['inbox'],
+  '#messages': ['direct messages','messages'],
+  '#analytics': ['analytics','dashboard','reports'],
+  '#settings': ['settings','configuration'],
+  '#export': ['export remove list','export','remove list']
+};
+
+function normalizeText(t){ return (t||'').replace(/\\s+/g,' ').trim().toLowerCase(); }
+
+function findToolbarElementByLabels(labels){
+  const scope = document.querySelector('.dashboard-main') || document;
+  const candidates = [...scope.querySelectorAll('a,button')]
+    .filter(el => !el.closest('.side-links')); // exclude sidebar itself
+  for(const el of candidates){
+    const txt = normalizeText(el.textContent);
+    for(const lbl of labels){
+      const l = normalizeText(lbl);
+      if(txt === l || txt.includes(l)) return el;
+    }
+  }
+  return null;
+}
+
+function gotoAdminSection(hash){
+  const labels = ADMIN_MAP[hash];
+  if(!labels) return false;
+  const el = findToolbarElementByLabels(labels);
+  if(!el) return false;
+
+  // Prefer native navigation if it's a link
+  const href = el.getAttribute('href');
+  if(href){
+    if(href.startsWith('#')){
+      // intra-page: emulate natural click so existing handlers fire
+      el.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+    }else{
+      window.location.href = href;
+    }
+  }else{
+    el.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+  }
+  return true;
+}
+
+function setActiveSidebar(hash){
+  document.querySelectorAll('.side-links a').forEach(a=>a.classList.remove('active'));
+  const link = document.querySelector(`.side-links a[href="${hash}"]`);
+  if(link){ link.classList.add('active'); }
+}
+
+document.addEventListener('DOMContentLoaded', ()=>{
+  document.body.addEventListener('click', (e)=>{
+    const a = e.target.closest('.side-links a[href^="#"]');
+    if(!a) return;
+    const hash = a.getAttribute('href');
+    setActiveSidebar(hash);
+    if(ADMIN_MAP[hash]){
+      e.preventDefault();
+      const ok = gotoAdminSection(hash);
+      if(!ok){
+        // fallback to hash highlight
+        history.pushState(null,"",hash);
+        highlightSectionByHash(hash);
+      }
+    }
+  });
+
+  if(location.hash && ADMIN_MAP[location.hash]){
+    setActiveSidebar(location.hash);
+    // try to open the section on load too
+    gotoAdminSection(location.hash);
+  }
+});
+// --- end robust admin nav ---
+
+/* EBTA UI toggles */
+(function(){
+  const LS = window.localStorage;
+  const apply = () => {
+    if (LS.getItem('ebta-wide') === '1') document.body.classList.add('wide-mode'); else document.body.classList.remove('wide-mode');
+    if (LS.getItem('ebta-sidebar-collapsed') === '1') document.body.classList.add('sidebar-collapsed'); else document.body.classList.remove('sidebar-collapsed');
+  };
+  apply();
+  document.addEventListener('DOMContentLoaded', ()=>{
+    apply();
+    const tWide = document.getElementById('toggleWide');
+    const tSide = document.getElementById('toggleSidebar');
+    const collapseBtn = document.getElementById('collapseSidebar');
+    const toggleSide = ()=>{
+      const v = LS.getItem('ebta-sidebar-collapsed') === '1' ? '0':'1';
+      LS.setItem('ebta-sidebar-collapsed', v); apply();
+    };
+    if (tWide) tWide.addEventListener('click', ()=>{
+      const v = LS.getItem('ebta-wide') === '1' ? '0':'1';
+      LS.setItem('ebta-wide', v); apply();
+    });
+    if (tSide) tSide.addEventListener('click', toggleSide);
+    if (collapseBtn) collapseBtn.addEventListener('click', toggleSide);
+  });
+})();
+
+
+document.addEventListener('DOMContentLoaded', function () {
+  const LS = window.localStorage;
+  const body = document.body;
+  const collapseBtn = document.getElementById('collapseSidebar');
+  const toggleBtn = document.getElementById('toggleSidebar');
+  const wideBtn = document.getElementById('toggleWide');
+
+  function applyState() {
+    body.classList.toggle('sidebar-collapsed', LS.getItem('sidebarCollapsed') === '1');
+    body.classList.toggle('wide-mode', LS.getItem('wideMode') === '1');
+  }
+
+  function toggleSidebar() {
+    const newState = LS.getItem('sidebarCollapsed') === '1' ? '0' : '1';
+    LS.setItem('sidebarCollapsed', newState);
+    applyState();
+  }
+
+  function toggleWide() {
+    const newState = LS.getItem('wideMode') === '1' ? '0' : '1';
+    LS.setItem('wideMode', newState);
+    applyState();
+  }
+
+  if (collapseBtn) collapseBtn.addEventListener('click', toggleSidebar);
+  if (toggleBtn) toggleBtn.addEventListener('click', toggleSidebar);
+  if (wideBtn) wideBtn.addEventListener('click', toggleWide);
+
+  applyState();
+});
+
+
+</script>
+"""
+
+
+def page(title, body_html, extra_head="", extra_js=""):
+    auth = []
+    if not (is_student() or is_tutor() or is_admin()):
+        auth += [f"<a href='{url_for('student_login')}'>Student</a>",
+                 f"<a href='{url_for('tutor_login')}'>Tutor</a>",
+                 f"<a href='{url_for('admin_login')}'>Admin</a>"]
+    else:
+        if is_student():
+            auth += [f"<a href='{url_for('student_home')}'>My Portal</a>", f"<a href='{url_for('student_logout')}'>Logout</a>"]
+        if is_tutor():
+            auth += [f"<a href='{url_for('tutor_home')}'>Tutor</a>", f"<a href='{url_for('tutor_logout')}'>Logout</a>"]
+        if is_admin():
+            auth += [f"<a href='{safe_url('admin_home','/admin')}'>Admin</a>", f"<a href='{url_for('admin_logout')}'>Logout</a>"]
+    right = " ".join(auth) if auth else "<a href='/admin/login'>Admin</a>"
+
+    # Build role-aware sidebar with compact stats
+    sidebar_html = ""
+    ann_html = ""
+    try:
+        conn = get_db(); cur = conn.cursor()
+        month = get_setting('current_month')
+
+        if is_student():
+            sid = is_student()
+            cur.execute("SELECT COUNT(*) FROM enrollments WHERE student_id=? AND month=? AND status='ACTIVE'", (sid, month))
+            active_subjects = cur.fetchone()[0] or 0
+            cur.execute("""
+                SELECT COUNT(*)
+                  FROM materials m
+                 WHERE (m.is_assignment=1 OR m.kind='assignment') AND m.month=?
+                   AND m.subject_id IN (SELECT subject_id FROM enrollments WHERE student_id=? AND month=? AND status='ACTIVE')
+                   AND NOT EXISTS (SELECT 1 FROM submissions s WHERE s.material_id=m.id AND s.student_id=?)
+            """, (month, sid, month, sid))
+            pending = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM submissions WHERE student_id=? AND mark IS NOT NULL", (sid,))
+            graded = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM direct_messages WHERE to_role='student' AND to_id=? AND is_read=0", (sid,))
+            unread = cur.fetchone()[0] or 0
+            role_title, user_name = "Student", session.get('student_name','Student')
+            links = [
+                ("Dashboard", "#dashboard"),
+                ("Assignments", "#assignments"),
+                ("Materials", "#materials"),
+                ("Messages", "#messages"),
+                ("Status", "#status"),
+                ("Logout", url_for('student_logout'))
+            ]
+            stats_grid = f"""
+            <div class='stats-mini'>
+              <div class='s'><div class='k'>{active_subjects}</div><div class='t'>Active subjects</div></div>
+              <div class='s'><div class='k'>{pending}</div><div class='t'>Pending tasks</div></div>
+              <div class='s'><div class='k'>{graded}</div><div class='t'>Marks released</div></div>
+              <div class='s'><div class='k'>{unread}</div><div class='t'>Unread messages</div></div>
+            </div>"""
+        elif is_tutor():
+            tid = is_tutor()
+            cur.execute("SELECT COUNT(*) FROM tutor_subjects WHERE tutor_id=?", (tid,))
+            subs = cur.fetchone()[0] or 0
+            cur.execute("""
+                SELECT COUNT(*)
+                  FROM submissions s
+                  JOIN materials m ON m.id=s.material_id
+                 WHERE m.tutor_id=? AND (s.mark IS NULL OR s.mark='')
+            """, (tid,))
+            to_mark = cur.fetchone()[0] or 0
+            cur.execute("""
+                SELECT COUNT(DISTINCT e.student_id)
+                  FROM enrollments e
+                 WHERE e.month=? AND e.status='ACTIVE'
+                   AND e.subject_id IN (SELECT subject_id FROM tutor_subjects WHERE tutor_id=?)
+            """, (month, tid))
+            active_students = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM direct_messages WHERE to_role='tutor' AND to_id=? AND is_read=0", (tid,))
+            unread = cur.fetchone()[0] or 0
+            role_title, user_name = "Tutor", session.get('tutor_name','Tutor')
+            links = [
+                ("Dashboard", "#dashboard"),
+                ("Upload Material", "#upload"),
+                ("Assignments", "#assignments"),
+                ("Attendance", "#attendance"),
+                ("Messages", "#messages"),
+                ("Logout", url_for('tutor_logout'))
+            ]
+            stats_grid = f"""
+            <div class='stats-mini'>
+              <div class='s'><div class='k'>{subs}</div><div class='t'>Subjects</div></div>
+              <div class='s'><div class='k'>{to_mark}</div><div class='t'>To mark</div></div>
+              <div class='s'><div class='k'>{active_students}</div><div class='t'>Active students</div></div>
+              <div class='s'><div class='k'>{unread}</div><div class='t'>Unread messages</div></div>
+            </div>"""
+        elif is_admin():
+            cur.execute("SELECT COUNT(*) FROM enrollments WHERE status='PENDING'")
+            pend = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM messages WHERE kind IN ('forgot_student_pin','forgot_tutor_pin') AND resolved=0")
+            resets = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM students")
+            students = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM tutors")
+            tutors = cur.fetchone()[0] or 0
+            role_title, user_name = "Admin", "Administrator"
+            links = [
+                ("Manage enrollments", "#enrollments"),
+                ("Students", "#students"),
+                ("Tutors", "#tutors"),
+                ("Group links", "#groups"),
+                ("Sessions & QR", "#sessions"),
+                ("Inbox", "#inbox"),
+                ("Direct messages", "#messages"),
+                ("Analytics", "#analytics"),
+                ("Settings", "#settings"),
+                ("Export remove list", "#export"),
+                ("Logout", url_for('admin_logout'))
+            ]
+            stats_grid = f"""
+            <div class='stats-mini'>
+              <div class='s'><div class='k'>{pend}</div><div class='t'>PoPs pending</div></div>
+              <div class='s'><div class='k'>{resets}</div><div class='t'>PIN resets</div></div>
+              <div class='s'><div class='k'>{students}</div><div class='t'>Students</div></div>
+              <div class='s'><div class='k'>{tutors}</div><div class='t'>Tutors</div></div>
+            </div>"""
+        else:
+            role_title = ""
+            user_name = ""
+            links = []
+            stats_grid = ""
+
+        # Build announcements (optional)
+        cur = get_db().cursor()
+        cur.execute("SELECT payload, created_at FROM messages WHERE kind='announcement' ORDER BY id ASC LIMIT 3")
+        ann = cur.fetchall()
+        if ann:
+            items = "".join([f"<div><div class='mini muted'>{r['created_at'][:16].replace('T',' ')}</div><div>{r['payload']}</div></div>" for r in ann])
+            ann_html = f"<div class='announce'><h3>Announcements</h3>{items}</div>"
+    except Exception:
+        role_title = ""
+        links = []
+        stats_grid = ""
+        ann_html = ""
+
+    if role_title:
+        links_html = "".join([
+            f"<a href='{href}'>{label}</a>"
+            for (label, href) in links
+        ])
+        sidebar_html = f"""
+        <aside class='sidebar'>
+          <div class='role'>{role_title}</div>
+          <div class='user'>{user_name}</div>
+          
+
+<div class='side-links'>{links_html}</div>
+          {stats_grid}
+        </aside>
+        """
+
+    # Build optional student status banner
+    status_banner = ""
+    try:
+        if role_title == 'Student':
+            # active_subjects and month already computed above
+            if active_subjects and int(active_subjects) > 0:
+                status_text = f"Enrolled for {month} (subjects: {active_subjects})"
+                status_extra = ""
+            else:
+                status_text = f"Not enrolled for {month}"
+                status_extra = f" <a class='links' href='/'>(Enroll now)</a>"
+            status_banner = f"<div id='status-banner' class='card'><h2>Status</h2><div>{status_text}{status_extra}</div></div>"
+    except Exception:
+        status_banner = ""
+
+    content_wrapped = f"<div class='layout'>{sidebar_html}<section class='dashboard-main'>{ann_html}{status_banner}{body_html}</section></div>" if sidebar_html else body_html
+
+    return f"""
+    <html><head>
+      <meta name='viewport' content='width=device-width, initial-scale=1'/>
+      <title>{title}</title>
+      {GOOGLE_FONTS}{BASE_CSS}{BASE_JS}{extra_head}
+    </head><body>
+      <header class='header'>
+        <div class='nav'>
+          <div class='brand'>
+            <img class='brand-logo'
+                 src="/uploads/ebta_logo.png"
+                 alt="EBTA logo"/>
+            <div class='title'>EBTA Portal</div>
+          </div>
+          <div class='links'>
+            <a href='/'>Home</a>{right}
+          </div>
+        </div>
+      </header>
+
+
+      <main class='wrap'>{content_wrapped}</main>
+      <footer class='footer'>⚡ Powered by Pasca Ragophala</footer>{extra_js}
+    </body></html>
+    """
+# ===================== File routes =====================
+
+@app.route('/uploads/<path:filename>')
+def uploads(filename): return send_from_directory(UPLOAD_DIR, filename)
+
+@app.route('/materials-files/<path:filename>')
+def materials_files(filename): return send_from_directory(MATERIALS_DIR, filename)
+
+@app.route('/submission-files/<path:filename>')
+def submission_files(filename): return send_from_directory(SUBMISSIONS_DIR, filename)
+
+@app.get('/logo')
+def logo():
+    for ext in ['png','jpg','jpeg','webp','gif']:
+        f=UPLOAD_DIR/f'logo.{ext}'
+        if f.exists(): return send_from_directory(UPLOAD_DIR, f.name)
+    try:
+        if LOGO_URL:
+            with urlreq.urlopen(LOGO_URL, timeout=7) as r:
+                data=r.read()
+                ct=(r.headers.get('Content-Type') or 'image/jpeg').split(';')[0]
+                ext='png' if 'png' in ct else ('webp' if 'webp' in ct else ('gif' if 'gif' in ct else 'jpg'))
+                p=UPLOAD_DIR/f'logo.{ext}'
+                p.write_bytes(data)
+                resp=make_response(data); resp.headers['Content-Type']=ct; return resp
+    except Exception: pass
+    svg=("<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'>"
+         "<rect width='48' height='48' rx='8' fill='#2e7d32'/>"
+         "<text x='24' y='28' text-anchor='middle' font-family='Poppins, Arial' font-size='20' font-weight='700' fill='#ffeb3b'>PA</text>"
+         "</svg>")
+    resp=make_response(svg); resp.headers['Content-Type']='image/svg+xml'; return resp
+
+
+# ===================== Home & Registration (multi-subject + PIN + PoP required) =====================
+
+
+
+@app.get('/')
+def home():
+    conn = get_db()
+    cur = conn.cursor()
+    # Ensure key subjects exist for Grades 10-12 (idempotent)
+    required_subjects = [
+        ("Business Studies", "G10"), ("Business Studies", "G11"), ("Business Studies", "G12"),
+        ("Economics", "G10"), ("Economics", "G11"), ("Economics", "G12"),
+        ("Accounting", "G10"), ("Accounting", "G11"), ("Accounting", "G12"),
+        ("Maths Lit", "G10"), ("Maths Lit", "G11"),
+    ]
+    try:
+        cur.executemany("INSERT OR IGNORE INTO subjects(name,grade) VALUES(?,?)", required_subjects)
+        conn.commit()
+    except Exception:
+        pass
+
+    cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
+    subjects = cur.fetchall()
+    conn.close()
+
+    order = ['G8', 'G9', 'G10', 'G11', 'G12']
+    grade_names = {
+        'G8': 'Grade 8',
+        'G9': 'Grade 9',
+        'G10': 'Grade 10',
+        'G11': 'Grade 11',
+        'G12': 'Grade 12'
+    }
+
+    # Build grade dropdown options (only grades that have subjects)
+    available_grades = sorted({row['grade'] for row in subjects if row['grade'] in order},
+                              key=lambda g: order.index(g))
+    grade_options = "<option value=''>Select grade…</option>" + "".join(
+        f"<option value='{g}'>{grade_names.get(g, g)}</option>"
+        for g in available_grades
+    )
+
+    # Build a flat list of subject checkboxes, each tagged with data-grade
+    subject_items = "".join(
+        f"<label data-grade='{s['grade']}' "
+        f"style='display:none; gap:8px; align-items:center; border:1px solid var(--border); "
+        f"padding:8px; border-radius:10px'>"
+        f"<input type='checkbox' name='subject_ids' value='{s['id']}'/>"
+        f"<span>{grade_names.get(s['grade'], s['grade'])} — {s['name']}</span>"
+        f"</label>"
+        for s in subjects
+    )
+
+    month_raw = get_setting('current_month')
+    month_label = pretty_month_label(month_raw)
+
+    body = fr"""
+    <section class='grid' style='margin-top:10px'>
+      <div class='card soft'>
+        <h1>Register for {month_label}</h1>
+        <p class='muted'>All required fields are marked. Upload 1–2 Proof of Payment files.</p>
+
+        <form id='reg_form' method='post' action='{url_for('register')}' enctype='multipart/form-data' class='grid'>
+
+          <!-- Student & guardian details -->
+          <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
+            <div>
+              <label>Student Name</label>
+              <input name='full_name' required/>
+            </div>
+            <div>
+              <label>Student WhatsApp Number</label>
+              <input name='phone' required/>
+            </div>
+            <div>
+              <label>Guardian Name</label>
+              <input name='guardian_name' required/>
+            </div>
+            <div>
+              <label>Guardian WhatsApp Number</label>
+              <input name='guardian' required/>
+            </div>
+            <div>
+              <label>Student Email (optional)</label>
+              <input name='email'/>
+            </div>
+          </div>
+
+          <!-- Grade & subjects -->
+          <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
+            <div>
+              <label>Choose grade</label>
+              <select id='grade_select' name='grade'>
+                {grade_options}
+              </select>
+            </div>
+            <div class='mini muted' style='align-self:end'>
+              Select a grade first, then choose subject(s) for that grade.
+            </div>
+          </div>
+
+          <div class='grid'>
+            <label>Choose subject(s) for selected grade</label>
+            <div id='subject_list'
+                 class='grid'
+                 style='gap:8px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))'>
+              {subject_items}
+            </div>
+          </div>
+
+          <!-- PIN + PoP -->
+          <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
+            <div>
+              <label>Create a 5-digit PIN</label>
+              <input name='pin' required minlength='5' maxlength='5' pattern='\d{{5}}'/>
+            </div>
+            <div>
+              <label>Proof of Payment (1–2 files)</label>
+              <input type='file' name='pop'
+                     accept='.pdf,.png,.jpg,.jpeg,.gif,.webp'
+                     required multiple/>
+            </div>
+          </div>
+
+          <div class='toolbar'>
+            <button class='btn'>Submit registration</button>
+            <a class='btn secondary' href='{url_for('student_login')}'>Student login</a>
+            <a class='btn secondary' href='{url_for('tutor_login')}'>Tutor login</a>
+            <a class='btn secondary' href='{url_for('admin_login')}'>Admin</a>
+          </div>
+        </form>
+      </div>
+    </section>
+    """
+
+    extra_js = """
+    <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      const form = document.getElementById('reg_form');
+      if (!form) return;
+
+      const gradeSelect = document.getElementById('grade_select');
+      const boxes = Array.from(
+        form.querySelectorAll("input[type='checkbox'][name='subject_ids']")
+      );
+
+      function updateSubjects() {
+        const grade = gradeSelect.value;
+        boxes.forEach(box => {
+          const label = box.closest('label');
+          if (!label) return;
+          const g = label.getAttribute('data-grade');
+
+          if (!grade) {
+            // No grade selected: hide all and clear
+            label.style.display = 'none';
+            box.checked = false;
+          } else if (g === grade) {
+            label.style.display = 'flex';
+          } else {
+            label.style.display = 'none';
+            box.checked = false;
+          }
+        });
+      }
+
+      gradeSelect.addEventListener('change', updateSubjects);
+      updateSubjects(); // initial
+
+      form.addEventListener('submit', function(e){
+        const grade = gradeSelect.value;
+        if (!grade) {
+          e.preventDefault();
+          alert('Please choose a grade first.');
+          return;
+        }
+        const anyChecked = boxes.some(b => b.checked);
+        if (!anyChecked) {
+          e.preventDefault();
+          alert('Please select at least one subject for the chosen grade.');
+        }
+      });
+    });
+    </script>
+    """
+
+    return page("EBTA Enrollment", body, extra_js=extra_js)
+
+
+
+@app.post('/register')
+def register():
+    full_name = request.form.get('full_name','').strip()
+    phone     = request.form.get('phone','').strip()
+    guardian  = request.form.get('guardian','').strip()
+    email     = request.form.get('email','').strip()
+    guardian_name = request.form.get('guardian_name','').strip()
+    subject_ids = request.form.getlist('subject_ids')
+    pin       = request.form.get('pin','').strip()
+    pops      = request.files.getlist('pop')
+
+    # Validate required fields
+    if not (full_name and phone and guardian_name and guardian and subject_ids and pin):
+        return page("Error", card_msg("All fields are required."))
+    if not is_valid_pin(pin):
+        return page("Error", card_msg("PIN must be exactly 5 digits."))
+
+    # Validate PoP files: 1–2 files required
+    pops = [f for f in pops if (f and f.filename)]
+    if len(pops) < 1 or len(pops) > 2:
+        return page("Error", card_msg("Upload 1 or 2 Proof of Payment files."))
+
+    conn = get_db()
+    if pin_in_use(conn, pin):
+        conn.close()
+        return page("Error", card_msg("PIN already in use. Pick another."))
+
+    cur = conn.cursor()
+
+    # derive grade from the first subject selected
+    cur.execute("SELECT grade FROM subjects WHERE id=?", (subject_ids[0],))
+    r0 = cur.fetchone()
+    if not r0:
+        conn.close()
+        return page("Error", card_msg("Invalid subject selection."))
+    derived_grade = r0['grade']
+
+    cur.execute("SELECT id,pin FROM students WHERE phone_whatsapp=?", (phone,))
+    srow = cur.fetchone()
+    already = bool(srow)
+
+    # Save PoP files
+    saved_paths = []
+    ts = int(datetime.datetime.now().timestamp())
+    for idx, pop in enumerate(pops, start=1):
+        safe = f"{ts}_{idx}_{secure_name(pop.filename)}"
+        dest = UPLOAD_DIR / safe
+        pop.save(dest)
+        saved_paths.append(f"/uploads/{safe}")
+
+    created_at = now_utc_iso()
+    if srow:
+        sid = srow['id']
+        if not srow['pin']:
+            cur.execute(
+                "UPDATE students SET pin=?,full_name=?,guardian_name=?,guardian_phone=?,email=?,grade=? WHERE id=?",
+                (pin, full_name, guardian_name, guardian, email, derived_grade, sid)
+            )
+        else:
+            cur.execute(
+                "UPDATE students SET full_name=?,guardian_name=?,guardian_phone=?,email=? WHERE id=?",
+                (full_name, guardian_name, guardian, email, sid)
+            )
+    else:
+        cur.execute(
+            "INSERT INTO students(full_name,phone_whatsapp,guardian_name,guardian_phone,email,grade,pin,created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (full_name, phone, guardian_name, guardian, email, derived_grade, pin, created_at)
+        )
+        sid = cur.lastrowid
+
+    month = get_setting('current_month', datetime.date.today().strftime('%Y-%m'))
+    cur.execute("SELECT subject_id FROM enrollments WHERE student_id=? AND month=?", (sid, month))
+    existing = {str(x['subject_id']) for x in cur.fetchall()}
+
+    created = []
+    for subid in subject_ids:
+        if subid in existing:
+            continue
+        token = secrets.token_urlsafe(16)
+        # legacy single PoP column + full list in enrollment_files
+        pop_url_legacy = saved_paths[0]
+        cur.execute(
+            """INSERT INTO enrollments(student_id,subject_id,month,status,payment_method,payment_ref,pop_url,status_token,created_at)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (sid, subid, month, 'PENDING', 'EFT', None, pop_url_legacy, token, created_at)
+        )
+        eid = cur.lastrowid
+        for pth in saved_paths:
+            cur.execute("INSERT INTO enrollment_files(enrollment_id,file_path) VALUES(?,?)", (eid, pth))
+        created.append((eid, token))
+
+    conn.commit()
+    conn.close()
+
+    if not created:
+        return page("No change", card_msg("Already enrolled for selected subjects this month."))
+
+    if len(created) == 1:
+        eid, tok = created[0]
+        return redirect(url_for('status', id=eid) + '?' + urlencode({'token': tok}))
+
+    # Multiple enrollments: show links
+    links = [
+        f"<li><a class='links' target='_blank' href='{url_for('status', id=e)}?{urlencode({'token': t})}'>Status for enrollment #{e}</a></li>"
+        for e, t in created
+    ]
+
+    body = f"""
+    <section class='wrap small'>
+      <div class='card'>
+        <h1>Registration submitted</h1>
+        <div class='ui-controls'>
+          <button class='chip' id='toggleSidebar' title='Collapse/expand sidebar'>Toggle sidebar</button>
+          <button class='chip' id='toggleWide' title='Toggle wider layout'>Wide mode</button>
+        </div>
+        <ul>{''.join(links)}</ul>
+      </div>
+    </section>
+    """
+    return page("Submitted", body)
+
+
+# ===================== Status page =====================
+
+@app.get('/status/<int:id>')
+def status(id:int):
+    token=request.args.get('token')
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("""
+      SELECT e.*, s.full_name, s.phone_whatsapp, sub.name AS subject_name, sub.id AS subject_id
+      FROM enrollments e
+      JOIN students s ON s.id=e.student_id
+      JOIN subjects sub ON sub.id=e.subject_id
+      WHERE e.id=?""",(id,))
+    e=cur.fetchone()
+    if not e:
+        conn.close(); return page("Not found", card_msg("Enrollment not found."))
+    if token and token!=e['status_token']:
+        conn.close(); return page("Forbidden", card_msg("Invalid token."))
+    cur.execute("SELECT invite_link FROM groups WHERE subject_id=? AND month=? ORDER BY id DESC LIMIT 1",(e['subject_id'],e['month']))
+    g=cur.fetchone()
+    cur.execute("SELECT file_path FROM enrollment_files WHERE enrollment_id=?",(id,))
+    pops = [r['file_path'] for r in cur.fetchall()]
+    conn.close()
+    gl=g['invite_link'] if g else None
+    join=(f"<a class='btn success' target='_blank' href='{gl}'>Join WhatsApp Group</a>"
+          if (e['status']=='ACTIVE' and gl) else "<div class='muted'>Link appears once ACTIVE.</div>")
+    pop_list = " • ".join([f"<a class='links' href='{p}' target='_blank'>PoP</a>" for p in pops]) if pops else "—"
+    body=fr"""
+    <a class='links' href='/'>← Back</a>
+    <section class='grid'><div class='card'><h1>Hello {e['full_name']}</h1>
+    <p class='muted'>Subject: {e['subject_name']} • Month: {pretty_month_label(e['month'])}</p>
+    <p>Status: <span class='chip {e['status'].lower()}'>{e['status']}</span></p>
+    <p class='mini muted'>Proof of Payment: {pop_list}</p>
+    {join}</div></section>"""
+    return page("Status", body)
+
+
+# ===================== Student Portal (includes messaging & monthly ratings) =====================
+
+@app.get('/student/login')
+def student_login():
+    if is_student(): return redirect(url_for('student_home'))
+    body=fr"""
+    <section class='wrap small'><div class='card auth-card'><h1>Student login</h1>
+      <form method='post' action='{url_for('student_login_post')}' class='grid'>
+        <div><label>WhatsApp number</label><input name='phone' required/></div>
+        <div><label>5-digit PIN</label><input name='pin' required maxlength='5' minlength='5'/></div>
+        <button class='btn success'>Login</button>
+      </form><hr/>
+      <form method='post' action='{url_for('student_forgot_pin')}' class='grid'>
+        <div class='muted'>Forgot your PIN?</div>
+        <div><label>Enter your WhatsApp number</label><input name='phone' required/></div>
+        <button class='btn secondary'>Notify Admin</button>
+      </form></div></section>"""
+    return page("Student Login", body)
+
+@app.post('/student/login')
+def student_login_post():
+    phone=request.form.get('phone','').strip()
+    pin=request.form.get('pin','').strip()
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("SELECT id,pin,full_name FROM students WHERE phone_whatsapp=?", (phone,))
+    row=cur.fetchone(); conn.close()
+    if not row or not row['pin'] or row['pin']!=pin:
+        return page("Login failed", card_msg("Wrong phone or PIN."))
+    session['student_id']=row['id']; session['student_name']=row['full_name']
+    return redirect(url_for('student_home'))
+
+@app.post('/student/forgot-pin')
+def student_forgot_pin():
+    phone=request.form.get('phone','').strip()
+    if not phone: return page("Error", card_msg("Phone required."))
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("INSERT INTO messages(kind,payload,created_at) VALUES(?,?,?)",
+                ('forgot_student_pin', f"phone={phone}", now_utc_iso()))
+    conn.commit(); conn.close()
+    return page("Submitted", card_msg("Request sent to Admin."))
+
+@app.get('/student/logout')
+def student_logout():
+    session.pop('student_id',None); session.pop('student_name',None)
+    return redirect(url_for('student_login'))
+
+@app.get('/student')
+def student_home():
+    r=require_student()
+    if r: return r
+    sid=is_student(); month=get_setting('current_month')
+    conn=get_db(); cur=conn.cursor()
+
+    # Enrollments this month
+    cur.execute("""
+      SELECT e.subject_id, e.status, s.name AS subject_name, s.grade
+      FROM enrollments e JOIN subjects s ON s.id=e.subject_id
+      WHERE e.student_id=? AND e.month=? ORDER BY s.grade,s.name
+    """,(sid,month))
+    enrolls=cur.fetchall()
+    active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status']=='ACTIVE']
+
+    # WhatsApp links for enrolled subjects
+    group_html="<div class='empty'>No group links yet.</div>"
+    if active_sub_ids:
+        q=f"SELECT g.subject_id, g.invite_link, s.name, s.grade FROM groups g JOIN subjects s ON s.id=g.subject_id WHERE g.month=? AND g.subject_id IN ({','.join('?'*len(active_sub_ids))}) ORDER BY s.grade,s.name"
+        cur.execute(q,(month,*active_sub_ids)); gs=cur.fetchall()
+        if gs:
+            rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['name']}</td><td><a class='links' target='_blank' href='{r['invite_link']}'>Open WhatsApp</a></td></tr>" for r in gs])
+            group_html=f"<table><thead><tr><th>Subject</th><th>Link</th></tr></thead><tbody>{rows}</tbody></table>"
+
+    # Sessions + Meet link for enrolled subjects
+    sessions_html="<div class='empty'>No sessions yet.</div>"
+    if active_sub_ids:
+        q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link
+              FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
+              WHERE s.subject_id IN ({','.join('?'*len(active_sub_ids))})
+              ORDER BY s.day_of_week, s.start_time"""
+        cur.execute(q, (*active_sub_ids,))
+        sess=cur.fetchall()
+        if sess:
+            rows=[]
+            for r in sess:
+                meet = f"<a class='links' target='_blank' href='{r['meet_link']}'>Join</a>" if r['meet_link'] else "—"
+                rows.append(f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td><td>{DOW[r['day_of_week']]} {r['start_time']}-{r['end_time']}</td><td>{meet}</td></tr>")
+            sessions_html=f"<table><thead><tr><th>Subject</th><th>When</th><th>Meet</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+
+    # Materials & Assignments list (with upload timestamp)
+    materials_html="<div class='empty'>No materials yet.</div>"
+    assignments=[]; normal=[]
+    tutors_for_subject={}
+    if active_sub_ids:
+        # get tutors for each active subject (for messaging)
+        cur.execute(f"""SELECT ts.subject_id, t.id AS tutor_id, t.full_name
+                        FROM tutor_subjects ts JOIN tutors t ON t.id=ts.tutor_id
+                        WHERE ts.subject_id IN ({','.join('?'*len(active_sub_ids))})""", (*active_sub_ids,))
+        for row in cur.fetchall():
+            tutors_for_subject.setdefault(row['subject_id'], []).append((row['tutor_id'], row['full_name']))
+
+        q=f"""SELECT m.*, sub.name AS subject_name, sub.grade, t.full_name AS tutor_name
+              FROM materials m
+              JOIN subjects sub ON sub.id=m.subject_id
+              JOIN tutors t ON t.id=m.tutor_id
+              WHERE m.month=? AND m.subject_id IN ({','.join('?'*len(active_sub_ids))})
+              ORDER BY m.created_at DESC"""
+        cur.execute(q,(month,*active_sub_ids)); mats=cur.fetchall()
+        if mats:
+            for m in mats:
+                is_ass = (m['is_assignment']==1 or m['kind']=='assignment')
+                when = m['created_at'][:16].replace('T',' ')
+                link = f"<a class='links' target='_blank' href='{m['file_path']}'>Download</a>" if m['kind'] in ('file','assignment') and m['file_path'] else f"<a class='links' target='_blank' href='{m['youtube_url']}'>Open</a>"
+                row = (m, f"<tr><td>{grade_label(m['grade'])} — {m['subject_name']}</td><td>{m['title']} {'<span class=\"badge\">assignment</span>' if is_ass else ''}</td><td>{m['tutor_name']}</td><td>{when}</td><td>{link}</td></tr>")
+                (assignments if is_ass else normal).append(row)
+            def pack(rows):
+                return "<table><thead><tr><th>Subject</th><th>Title</th><th>Tutor</th><th>Uploaded</th><th>Link</th></tr></thead><tbody>"+''.join([r[1] for r in rows])+"</tbody></table>"
+            materials_html = (("<h3>Assignments</h3>"+pack(assignments)) if assignments else "") + (("<h3>Materials</h3>"+pack(normal)) if normal else "")
+
+    # Assignment submission blocks (top priority)
+    submit_blocks=[]
+    if assignments:
+        for m,_ in assignments:
+            due = m['due_date'] or ''
+            # submission status
+            cur.execute("SELECT id,file_path,mark,feedback,submitted_at FROM submissions WHERE material_id=? AND student_id=?", (m['id'], sid))
+            sub = cur.fetchone()
+            maxp = m['max_points'] if m['max_points'] else 100
+            if sub:
+                mark = f" • Mark: {sub['mark']} / {maxp}" if sub['mark'] is not None else ""
+                fb = f"<div class='muted mini'>Feedback: {sub['feedback']}</div>" if sub['feedback'] else ""
+                submit_blocks.append(f"<div class='card'><b>{m['title']}</b> — {grade_label(m['grade'])} {m['subject_name']} • Due: {due or '—'}<br/>Submitted: {sub['submitted_at'][:16].replace('T',' ')}{mark}{fb} <a class='links' href='{sub['file_path']}' target='_blank'>Download your file</a></div>")
+            else:
+                allow=True
+                if due:
+                    try:
+                        end=datetime.datetime.fromisoformat(due+"T23:59:59+00:00")
+                        allow = datetime.datetime.now(datetime.timezone.utc) <= end
+                    except Exception: pass
+                if allow:
+                    submit_blocks.append(f"""
+                      <div class='card'>
+                        <b>{m['title']}</b> — {grade_label(m['grade'])} {m['subject_name']} • Due: {due or '—'} • Total: {maxp}
+                        <form method='post' action='{url_for('student_submit_assignment', mid=m['id'])}' enctype='multipart/form-data' class='grid' style='grid-template-columns:1fr auto;gap:10px;margin-top:8px'>
+                          <input type='file' name='file' required accept='.pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.txt'/>
+                          <button class='btn'>Submit</button>
+                        </form>
+                      </div>""")
+                else:
+                    submit_blocks.append(f"<div class='card'><b>{m['title']}</b> — Due: {due} <span class='chip'>Closed</span></div>")
+
+    # Feedback & Results (graded items)
+    feedback_card = ""
+    cur.execute("""SELECT m.title, m.max_points, s2.name AS subject_name, s2.grade,
+                          sub.mark, sub.feedback, sub.evaluated_at
+                   FROM submissions sub
+                   JOIN materials m ON m.id=sub.material_id
+                   JOIN subjects s2 ON s2.id=m.subject_id
+                   WHERE sub.student_id=? AND sub.mark IS NOT NULL
+                   ORDER BY sub.evaluated_at DESC LIMIT 50""", (sid,))
+    graded = cur.fetchall()
+    if graded:
+        items = []
+        for g in graded:
+            when = (g['evaluated_at'] or '')[:16].replace('T',' ')
+            maxp = g['max_points'] if g['max_points'] else 100
+            fb = f"<div class='muted mini' style='margin-top:4px'>{g['feedback']}</div>" if g['feedback'] else ""
+            items.append(
+                f"<div class='feedback-item'><div class='feedback-title'>{g['title']} — "
+                f"{grade_label(g['grade'])} {g['subject_name']}</div>"
+                f"<div>Mark: <span class='badge'>{g['mark']} / {maxp}</span> <span class='muted mini'>• {when}</span></div>"
+                f"{fb}</div>"
+            )
+        feedback_card = f"<div class='card'><h2>Feedback & Results</h2><div class='feedback-list'>{''.join(items)}</div></div>"
+
+    # Messages (compose to tutor + inbox)
+    # Compose: pick "Tutor (Subject)"
+    options=[]
+    for subid in active_sub_ids:
+        sid_int = int(subid)
+        for (tid, tname) in tutors_for_subject.get(sid_int, []):
+            # label: Tutor Name — Subject
+            subj = next((f"{grade_label(e['grade'])} {e['subject_name']}" for e in enrolls if e['subject_id']==sid_int), "Subject")
+            options.append((tid, sid_int, f"{tname} — {subj}"))
+    msg_opts = "".join([f"<option value='{tid}|{sid_int}'>{label}</option>" for tid,sid_int,label in options]) or "<option value=''>No tutors available</option>"
+
+    cur.execute("""SELECT dm.*, 
+                          CASE dm.from_role 
+                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
+                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
+                               ELSE 'Admin' END AS from_name,
+                          CASE dm.to_role 
+                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
+                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
+                               ELSE 'Admin' END AS to_name
+                   FROM direct_messages dm
+                   WHERE (to_role='student' AND to_id=?) OR (from_role='student' AND from_id=?)
+                   ORDER BY created_at ASC LIMIT 30""",(sid,sid))
+    msgs = cur.fetchall()
+    msg_list = "".join([f"<div class='msg {'me' if m['from_role']=='student' else 'them'}'><div class='meta'>{m['from_name']} → {m['to_name']} • {m['created_at'][:16].replace('T',' ')}</div><div>{m['body']}</div></div>" for m in msgs]) or "<div class='empty'>No messages yet.</div>"
+
+    conn.close()
+
+    # Enrollment list UI
+    if enrolls:
+        e_rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td><td><span class='chip {r['status'].lower()}'>{r['status']}</span></td></tr>" for r in enrolls])
+        enr_html=f"<table><thead><tr><th>Subject</th><th>Status</th></tr></thead><tbody>{e_rows}</tbody></table>"
+    else:
+        enr_html="<div class='empty'>No enrollments yet.</div>"
+
+    # ===== Ratings block (24th to month-end) =====
+    rate_card = ""
+    if rating_window_open(month) and active_sub_ids:
+        # Fetch existing ratings this month for prefill
+        cur2 = get_db().cursor()
+        cur2.execute("""SELECT subject_id, rating, comment FROM lesson_ratings
+                       WHERE student_id=? AND month=?""", (sid, month))
+        previous = {r["subject_id"]:(r["rating"], r["comment"]) for r in cur2.fetchall()}
+        cur2.connection.close()
+
+        rows=[]
+        for e in enrolls:
+            if e['status'] != 'ACTIVE':
+                continue
+            sid_int = int(e['subject_id'])
+            r0, c0 = previous.get(sid_int, (None, "")) if sid_int in previous else (None, "")
+            rows.append(f"""
+              <tr>
+                <td>{grade_label(e['grade'])} — {e['subject_name']}</td>
+                <td>
+                  <select name='rating_{sid_int}' required>
+                    <option value='' {'selected' if not r0 else ''}>Select</option>
+                    {''.join([f"<option value='{k}' {'selected' if r0==k else ''}>{k} ★</option>" for k in range(1,6)])}
+                  </select>
+                </td>
+                <td><input name='comment_{sid_int}' placeholder='Optional comment' value="{(c0 or '').replace('"','&quot;')}"/></td>
+              </tr>
+            """)
+
+        rate_card = f"""
+          <div class='card'>
+            <h2>Rate your classes for {month}</h2>
+            <p class='muted mini'>This is open from the 24th to the end of the month. 1 ★ (poor) → 5 ★ (excellent).</p>
+            <form method='post' action='{url_for('student_submit_ratings')}'>
+              <table>
+                <thead><tr><th>Subject</th><th>Rating</th><th>Comment</th></tr></thead>
+                <tbody>{''.join(rows)}</tbody>
+              </table>
+              <div class='toolbar'><button class='btn'>Save ratings</button></div>
+            </form>
+          </div>
+        """
+
+    compose_block = f"""
+      <div class='card'><h2>Messages</h2>
+        <form method='post' action='{url_for('student_send_message')}' class='grid'>
+          <div><label>To Tutor</label><select name='combo' required>{msg_opts}</select></div>
+          <div><label>Your message</label><textarea name='body' required placeholder='Type your message...'></textarea></div>
+          <button class='btn'>Send</button>
+        </form>
+        <div style='margin-top:10px'>{msg_list}</div>
+      </div>
+    """
+
+    body=fr"""
+    <section class='grid'>
+      <div class='card'>
+        <h1>Welcome, {session.get('student_name','Student')}</h1>
+        <p class='muted'>Month: {month}</p>
+        <h2>Your Enrollments</h2>{enr_html}
+        <p class='mini muted'>To add more subjects, submit the Home form again with your phone number and the new subjects + PoP.</p>
+      </div>
+
+      <div class='card'><h2>WhatsApp Links</h2>{group_html}</div>
+      <div class='card'><h2>Sessions</h2>{sessions_html}</div>
+      <div class='card'><h2>Materials & Assignments</h2>{materials_html}</div>
+{(''.join(submit_blocks)) if submit_blocks else ''}
+
+      {feedback_card}
+      {rate_card}
+      {compose_block}
+    </section>"""
+    return page("Student Portal", body)
+
+@app.post('/student/assignment/<int:mid>/submit')
+def student_submit_assignment(mid:int):
+    r=require_student()
+    if r: return r
+    sid=is_student(); file=request.files.get('file')
+    if not file or not file.filename: return page("Error", card_msg("File required."))
+    conn=get_db(); cur=conn.cursor()
+    month=get_setting('current_month')
+    cur.execute("SELECT subject_id,is_assignment,kind,month,due_date FROM materials WHERE id=?", (mid,))
+    m=cur.fetchone()
+    if not m or (m['kind']!='assignment' and m['is_assignment']!=1) or m['month']!=month:
+        conn.close(); return page("Error", card_msg("Assignment not available."))
+    cur.execute("SELECT 1 FROM enrollments WHERE student_id=? AND subject_id=? AND month=? AND status='ACTIVE'", (sid, m['subject_id'], month))
+    if not cur.fetchone():
+        conn.close(); return page("Error", card_msg("You are not ACTIVE in this subject."))
+    if m['due_date']:
+        try:
+            end=datetime.datetime.fromisoformat(m['due_date']+"T23:59:59+00:00")
+            if datetime.datetime.now(datetime.timezone.utc) > end:
+                conn.close(); return page("Closed", card_msg("Submission window has closed."))
+        except Exception: pass
+    safe=f"{int(datetime.datetime.now().timestamp())}_{sid}_{secure_name(file.filename)}"
+    dest=SUBMISSIONS_DIR/safe; file.save(dest)
+    path=f"/submission-files/{safe}"
+    now=now_utc_iso()
+    cur.execute("INSERT OR REPLACE INTO submissions(material_id,student_id,file_path,submitted_at) VALUES(?,?,?,?)",
+                (mid, sid, path, now))
+    conn.commit(); conn.close()
+    return page("Submitted", card_msg("Your assignment was submitted."))
+
+# Student → Tutor message
+@app.post('/student/message')
+def student_send_message():
+    r=require_student()
+    if r: return r
+    sid=is_student()
+    combo=request.form.get('combo','')
+    body=request.form.get('body','').strip()
+    if not (combo and body): return page("Error", card_msg("Choose a tutor and write a message."))
+    try:
+        tutor_id_str, subject_id_str = combo.split('|',1)
+        tutor_id=int(tutor_id_str); subject_id=int(subject_id_str)
+    except Exception:
+        return page("Error", card_msg("Bad selection."))
+    conn=get_db(); cur=conn.cursor()
+    # verify student is ACTIVE in subject and tutor teaches that subject
+    month=get_setting('current_month')
+    cur.execute("SELECT 1 FROM enrollments WHERE student_id=? AND subject_id=? AND month=? AND status='ACTIVE'", (sid,subject_id,month))
+    if not cur.fetchone():
+        conn.close(); return page("Error", card_msg("You are not ACTIVE in that subject."))
+    cur.execute("SELECT 1 FROM tutor_subjects WHERE tutor_id=? AND subject_id=?", (tutor_id,subject_id))
+    if not cur.fetchone():
+        conn.close(); return page("Error", card_msg("Tutor not assigned to that subject."))
+    cur.execute("INSERT INTO direct_messages(from_role,from_id,to_role,to_id,subject_id,body,created_at) VALUES('student',?,?,?,?,?,?)",
+                (sid,'tutor',tutor_id,subject_id,body,now_utc_iso()))
+    conn.commit(); conn.close()
+    return redirect(url_for('student_home'))
+
+# Student: submit monthly ratings
+@app.post('/student/ratings')
+def student_submit_ratings():
+    r = require_student()
+    if r: return r
+    sid = is_student()
+    month = get_setting('current_month')
+    if not rating_window_open(month):
+        return page("Closed", card_msg("The rating window is not open."))
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""SELECT subject_id FROM enrollments
+                   WHERE student_id=? AND month=? AND status='ACTIVE'""", (sid, month))
+    subids = [row['subject_id'] for row in cur.fetchall()]
+    now = now_utc_iso()
+    for subid in subids:
+        rkey = f"rating_{subid}"
+        ckey = f"comment_{subid}"
+        raw = request.form.get(rkey, "").strip()
+        if not raw:
+            continue
+        try:
+            rating = int(raw)
+        except Exception:
+            continue
+        if rating < 1 or rating > 5:
+            continue
+        comment = request.form.get(ckey, "").strip() or None
+        cur.execute("""INSERT INTO lesson_ratings(student_id,subject_id,month,rating,comment,created_at)
+                       VALUES(?,?,?,?,?,?)
+                       ON CONFLICT(student_id,subject_id,month)
+                       DO UPDATE SET rating=excluded.rating, comment=excluded.comment, created_at=excluded.created_at""",
+                    (sid, subid, month, rating, comment, now))
+    conn.commit(); conn.close()
+    return page("Thanks!", card_msg("Your ratings were saved."))
+
+
+# ===================== Tutor Portal (includes messaging to student/admin) =====================
+
+@app.get('/tutor/login')
+def tutor_login():
+    if is_tutor(): return redirect(url_for('tutor_home'))
+    body=fr"""
+    <section class='wrap small'><div class='card auth-card'><h1>Tutor login</h1>
+      <form method='post' action='{url_for('tutor_login_post')}' class='grid'>
+        <div><label>Phone</label><input name='phone' required/></div>
+        <div><label>5-digit PIN</label><input name='pin' required maxlength='5' minlength='5'/></div>
+        <button class='btn success'>Login</button>
+      </form><hr/>
+      <form method='post' action='{url_for('tutor_forgot_pin')}' class='grid'>
+        <div class='muted'>Forgot your PIN?</div>
+        <div><label>Enter your phone</label><input name='phone' required/></div>
+        <button class='btn secondary'>Notify Admin</button>
+      </form></div></section>"""
+    return page("Tutor Login", body)
+
+@app.post('/tutor/login')
+def tutor_login_post():
+    phone=request.form.get('phone','').strip(); pin=request.form.get('pin','').strip()
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("SELECT id,pin,full_name FROM tutors WHERE phone=?", (phone,))
+    row=cur.fetchone(); conn.close()
+    if not row or not row['pin'] or row['pin']!=pin:
+        return page("Login failed", card_msg("Wrong phone or PIN."))
+    session['tutor_id']=row['id']; session['tutor_name']=row['full_name']
+    return redirect(url_for('tutor_home'))
+
+@app.post('/tutor/forgot-pin')
+def tutor_forgot_pin():
+    phone=request.form.get('phone','').strip()
+    if not phone: return page("Error", card_msg("Phone required."))
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("INSERT INTO messages(kind,payload,created_at) VALUES(?,?,?)",
+                ('forgot_tutor_pin', f"phone={phone}", now_utc_iso()))
+    conn.commit(); conn.close()
+    return page("Submitted", card_msg("Request sent to Admin."))
+
+@app.get('/tutor/logout')
+def tutor_logout():
+    session.pop('tutor_id',None); session.pop('tutor_name',None)
+    return redirect(url_for('tutor_login'))
+
+@app.get('/tutor')
+def tutor_home():
+    r=require_tutor()
+    if r: return r
+    tid=is_tutor(); month=get_setting('current_month')
+    conn=get_db(); cur=conn.cursor()
+
+    # Assigned subjects
+    cur.execute("""SELECT s.id AS subject_id, s.name AS subject_name, s.grade
+                   FROM tutor_subjects ts JOIN subjects s ON s.id=ts.subject_id
+                   WHERE ts.tutor_id=? ORDER BY s.grade,s.name""",(tid,))
+    subs=cur.fetchall()
+    assigned_list=", ".join([f"{grade_label(r['grade'])} — {r['subject_name']}" for r in subs]) or "<span class='muted'>No subjects assigned yet.</span>"
+
+    # WhatsApp links for current month
+    sub_ids=[str(x['subject_id']) for x in subs]
+    groups_html="<div class='empty'>No group links yet.</div>"
+    if sub_ids:
+        q=f"""SELECT g.subject_id, g.invite_link, s.name, s.grade
+              FROM groups g JOIN subjects s ON s.id=g.subject_id
+              WHERE g.month=? AND g.subject_id IN ({','.join('?'*len(sub_ids))})
+              ORDER BY s.grade,s.name"""
+        cur.execute(q,(month,*sub_ids)); groups=cur.fetchall()
+        if groups:
+            rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['name']}</td><td><a class='links' target='_blank' href='{r['invite_link']}'>Open WhatsApp</a></td></tr>" for r in groups])
+            groups_html=f"<table><thead><tr><th>Subject</th><th>Link</th></tr></thead><tbody>{rows}</tbody></table>"
+
+    # Sessions for this tutor
+    cur.execute("""SELECT se.id, se.subject_id, s.name AS subject_name, s.grade, se.day_of_week, se.start_time, se.end_time, se.meet_link
+                   FROM sessions se JOIN subjects s ON s.id=se.subject_id
+                   WHERE se.tutor_id=? ORDER BY se.day_of_week,se.start_time""",(tid,))
+    sess=cur.fetchall()
+    s_rows="".join([
+        f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td>"
+        f"<td>{DOW[r['day_of_week']]} {r['start_time']}-{r['end_time']}</td>"
+        f"<td>{('<a class=\"links\" target=\"_blank\" href=\"'+r['meet_link']+'\">Meet</a>') if r['meet_link'] else '—'}</td>"
+        f"<td><a class='links' href='{url_for('session_qr', id=r['id'])}'>QR</a> · "
+        f"<a class='links' href='{url_for('tutor_session_attendance', sid=r['id'])}'>Mark attendance</a></td></tr>"
+        for r in sess
+    ]) or "<tr><td colspan='4'><div class='empty'>No sessions yet.</div></td></tr>"
+
+    # Upload form (assignments + due date + max points)
+    subjects_options="".join([f"<option value='{r['subject_id']}'>{grade_label(r['grade'])} — {r['subject_name']}</option>" for r in subs]) or "<option value=''>No assigned subjects</option>"
+
+    upload_block=f"""
+      <div class='card'>
+        <h2>Upload materials (Month: {month})</h2>
+        <form method='post' action='{url_for('tutor_upload')}' enctype='multipart/form-data' class='grid'>
+          <div><label>Subject</label><select name='subject_id' required>{subjects_options}</select></div>
+          <div><label>Title</label><input name='title' required/></div>
+          <div><label>Upload File</label><input type='file' name='file' accept='.pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.zip'/></div>
+          <div><label>YouTube URL</label><input name='youtube' placeholder='https://youtube.com/...'/></div>
+          <div class='grid' style='grid-template-columns:1fr 1fr 1fr;gap:10px'>
+            <label style='display:flex;align-items:center;gap:8px'><input type='checkbox' name='is_assignment'/> Mark as assignment</label>
+            <div><label>Due date (YYYY-MM-DD)</label><input name='due' placeholder='e.g. 2025-10-01'/></div>
+            <div><label>Out of (default 100)</label><input name='max_points' type='number' min='1' max='1000' placeholder='100'/></div>
+          </div>
+          <button class='btn'>Save</button>
+          <p class='muted mini'>Attach a file and/or paste a YouTube link. Assignments show first to students.</p>
+        </form>
+      </div>
+    """
+
+    # Your uploads (delete within 24h)
+    cur.execute("""SELECT m.*, s.name AS subject_name, s.grade
+                   FROM materials m JOIN subjects s ON s.id=m.subject_id
+                   WHERE m.tutor_id=? ORDER BY m.created_at DESC LIMIT 200""",(tid,))
+    mymats=cur.fetchall()
+    def can_delete(ts):
+        try:
+            created=datetime.datetime.fromisoformat(ts)
+            return (datetime.datetime.now(datetime.timezone.utc) - created) <= datetime.timedelta(hours=24)
+        except Exception:
+            return False
+    rows=[]
+    for m in mymats:
+        when=m['created_at'][:16].replace('T',' ')
+        delbtn=f"<form method='post' action='{url_for('tutor_delete_material', mid=m['id'])}' style='display:inline' onsubmit='return confirm(\"Delete this upload?\")'><button class='btn danger mini'>Delete</button></form>" if can_delete(m['created_at']) else "<span class='muted mini'>Locked</span>"
+        rows.append(f"<tr><td>{grade_label(m['grade'])} — {m['subject_name']}</td><td>{m['title']} {'<span class=\"badge\">assignment</span>' if (m['is_assignment']==1 or m['kind']=='assignment') else ''}</td><td>{when}</td><td>{delbtn}</td></tr>")
+    uploads_html = "<div class='empty'>No uploads yet.</div>" if not rows else f"<table><thead><tr><th>Subject</th><th>Title</th><th>Uploaded</th><th>Action</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+
+    # Assignments you posted (manage submissions)
+    cur.execute("""SELECT m.id, m.title, m.due_date, m.max_points, s.name AS subject_name, s.grade
+                   FROM materials m JOIN subjects s ON s.id=m.subject_id
+                   WHERE m.tutor_id=? AND (m.is_assignment=1 OR m.kind='assignment') ORDER BY m.created_at DESC""",(tid,))
+    asg=cur.fetchall()
+    asg_rows="".join([f"<tr><td>{grade_label(a['grade'])} — {a['subject_name']}</td><td>{a['title']}</td><td>Due: {a['due_date'] or '—'}</td><td>Total: {a['max_points'] or 100}</td><td><a class='links' href='{url_for('tutor_assignment_manage', mid=a['id'])}'>Manage</a></td></tr>" for a in asg]) or "<tr><td colspan='5'><div class='empty'>No assignments yet.</div></td></tr>"
+
+    # Students overview per subject (attendance + avg mark) + simple "message a student" picker
+    stu_sections=[]
+    message_student_options=[]
+    for s in subs:
+        cur.execute("""SELECT st.id, st.full_name
+                       FROM enrollments e JOIN students st ON st.id=e.student_id
+                       WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
+                       ORDER BY st.full_name""",(s['subject_id'], month))
+        studs=cur.fetchall()
+        cur.execute("SELECT COUNT(DISTINCT date) AS c FROM attendance a JOIN sessions se ON se.id=a.session_id WHERE se.subject_id=? AND strftime('%Y-%m', a.date)=?", (s['subject_id'], month))
+        total_days = cur.fetchone()['c'] or 0
+        rows=[]
+        for st in studs:
+            cur.execute("""SELECT COUNT(*) AS c FROM attendance a JOIN sessions se ON se.id=a.session_id
+                           WHERE a.student_id=? AND se.subject_id=? AND strftime('%Y-%m', a.date)=?""",(st['id'], s['subject_id'], month))
+            c=cur.fetchone()['c'] or 0
+            rate = f"{int(round((c/total_days)*100))}%" if total_days>0 else "—"
+            cur.execute("""SELECT AVG(mark) AS avgm FROM submissions sub
+                           JOIN materials m ON m.id=sub.material_id
+                           WHERE sub.student_id=? AND m.subject_id=? AND m.month=? AND sub.mark IS NOT NULL""",(st['id'], s['subject_id'], month))
+            avgm = cur.fetchone()['avgm']
+            rows.append(f"<tr><td>{st['full_name']}</td><td>{c}</td><td>{rate}</td><td>{'-' if avgm is None else int(round(avgm))}</td></tr>")
+            message_student_options.append((st['id'], s['subject_id'], f"{st['full_name']} — {grade_label(s['grade'])} {s['subject_name']}"))
+        table = "<div class='empty'>No active students.</div>" if not rows else f"<table><thead><tr><th>Student</th><th>Attendance</th><th>Rate</th><th>Avg mark</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        stu_sections.append(f"<div class='card'><h3>{grade_label(s['grade'])} — {s['subject_name']}</h3>{table}</div>")
+
+    # Tutor inbox
+    cur.execute("""SELECT dm.*,
+                          CASE dm.from_role 
+                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
+                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
+                               ELSE 'Admin' END AS from_name,
+                          CASE dm.to_role 
+                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
+                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
+                               ELSE 'Admin' END AS to_name
+                   FROM direct_messages dm
+                   WHERE (to_role='tutor' AND to_id=?) OR (from_role='tutor' AND from_id=?)
+                   ORDER BY created_at ASC LIMIT 40""",(tid,tid))
+    inbox = cur.fetchall()
+    inbox_list = "".join([f"<div class='msg {'me' if m['from_role']=='tutor' else 'them'}'><div class='meta'>{m['from_name']} → {m['to_name']} • {m['created_at'][:16].replace('T',' ')}</div><div>{m['body']}</div></div>" for m in inbox]) or "<div class='empty'>No messages yet.</div>"
+
+    # Compose forms
+    stud_opts = "".join([f"<option value='{sid}|{subid}'>{label}</option>" for sid,subid,label in message_student_options]) or "<option value=''>No students</option>"
+
+    inbox_card = f"""
+      <div class='card'><h2>Inbox & Messages</h2>
+        <div class='grid' style='grid-template-columns:1fr;gap:8px'>
+          <form method='post' action='{url_for('tutor_message_student')}' class='grid'>
+            <div><label>Message a student</label><select name='combo' required>{stud_opts}</select></div>
+            <div><label>Your message</label><textarea name='body' required placeholder='Type your message...'></textarea></div>
+            <button class='btn'>Send</button>
+          </form>
+          <form method='post' action='{url_for('tutor_message_admin')}' class='grid'>
+            <div><label>Message Admin</label><textarea name='body' required placeholder='Type your message for Admin...'></textarea></div>
+            <button class='btn secondary'>Send to Admin</button>
+          </form>
+        </div>
+        <div style='margin-top:10px'>{inbox_list}</div>
+      </div>
+    """
+
+    conn.close()
+
+    body=fr"""
+    <section class='grid'>
+      <div class='card'><h1>Welcome, {session.get('tutor_name','Tutor')}</h1><p class='muted'>Your subjects</p><div>{assigned_list}</div></div>
+
+      <div class='card'><h2>WhatsApp Links — {month}</h2>{groups_html}</div>
+
+      <div class='card'><h2>Your sessions</h2>
+        <table><thead><tr><th>Subject</th><th>When</th><th>Meet</th><th>Tools</th></tr></thead><tbody>{s_rows}</tbody></table>
+      </div>
+
+      {upload_block}
+
+      <div class='card'><h2>Your uploads</h2>{uploads_html}</div>
+
+      <div class='card'><h2>Your assignments</h2>
+        <table><thead><tr><th>Subject</th><th>Title</th><th>Due</th><th>Total</th><th>Manage</th></tr></thead><tbody>{asg_rows}</tbody></table>
+      </div>
+
+      {inbox_card}
+
+      {''.join(stu_sections)}
+    </section>
+    """
+    return page("Tutor Portal", body)
+
+@app.post('/tutor/upload')
+def tutor_upload():
+    r=require_tutor()
+    if r: return r
+    tid=is_tutor(); month=get_setting('current_month')
+    subject_id=request.form.get('subject_id','').strip()
+    title=request.form.get('title','').strip()
+    youtube=request.form.get('youtube','').strip()
+    file=request.files.get('file')
+    is_assignment=1 if request.form.get('is_assignment')=='on' else 0
+    due=request.form.get('due','').strip() or None
+    max_points = request.form.get('max_points','').strip()
+    try:
+        max_points = int(max_points) if max_points else 100
+    except Exception:
+        max_points = 100
+    if max_points < 1: max_points = 1
+    if max_points > 1000: max_points = 1000
+    if not (subject_id and title): return page("Error", card_msg("Subject and title required."))
+
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("SELECT 1 FROM tutor_subjects WHERE tutor_id=? AND subject_id=?", (tid,subject_id))
+    if not cur.fetchone():
+        conn.close(); return page("Error", card_msg("This subject is not assigned to you."))
+    file_path=None
+    if file and file.filename:
+        safe=f"{int(datetime.datetime.now().timestamp())}_{secure_name(file.filename)}"
+        dest=MATERIALS_DIR/safe; file.save(dest); file_path=f"/materials-files/{safe}"
+    if not (file_path or youtube):
+        conn.close(); return page("Error", card_msg("Attach a file or provide a YouTube link."))
+
+    now=now_utc_iso()
+    kind = 'assignment' if is_assignment else ('file' if file_path else 'youtube')
+    cur.execute("""INSERT INTO materials(subject_id,tutor_id,month,title,kind,file_path,youtube_url,created_at,is_assignment,due_date,max_points)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (subject_id, tid, month, title, kind, file_path, youtube if youtube else None, now, is_assignment, due, max_points))
+    conn.commit(); conn.close()
+    return page("Uploaded", card_msg("Saved. Students with ACTIVE enrollments will see it."))
+
+@app.post('/tutor/materials/<int:mid>/delete')
+def tutor_delete_material(mid:int):
+    r=require_tutor()
+    if r: return r
+    tid=is_tutor()
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("SELECT tutor_id,created_at FROM materials WHERE id=?", (mid,))
+    m=cur.fetchone()
+    if not m or m['tutor_id']!=tid:
+        conn.close(); return page("Error", card_msg("Not found."))
+    try:
+        created=datetime.datetime.fromisoformat(m['created_at'])
+        if (datetime.datetime.now(datetime.timezone.utc)-created) > datetime.timedelta(hours=24):
+            conn.close(); return page("Locked", card_msg("You can only delete within 24 hours."))
+    except Exception:
+        pass
+    cur.execute("DELETE FROM materials WHERE id=?", (mid,))
+    conn.commit(); conn.close()
+    return page("Deleted", card_msg("Upload removed."))
+
+# Tutor: manage one assignment (submissions + grading)
+@app.get('/tutor/assignment/<int:mid>')
+def tutor_assignment_manage(mid:int):
+    r=require_tutor()
+    if r: return r
+    tid=is_tutor()
+    saved = request.args.get('saved')
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("""SELECT m.*, s.name AS subject_name, s.grade
+                   FROM materials m JOIN subjects s ON s.id=m.subject_id
+                   WHERE m.id=? AND m.tutor_id=?""",(mid,tid))
+    m=cur.fetchone()
+    if not m:
+        conn.close()
+        return page("Not found", card_msg("Assignment not found."))
+    total = m['max_points'] if m['max_points'] else 100
+
+    # active students in subject (this month)
+    month=get_setting('current_month')
+    cur.execute("""SELECT st.id, st.full_name
+                   FROM enrollments e JOIN students st ON st.id=e.student_id
+                   WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
+                   ORDER BY st.full_name""",(m['subject_id'], month))
+    studs=cur.fetchall()
+    rows=[]
+    for st in studs:
+        cur.execute("SELECT id,file_path,submitted_at,mark,feedback FROM submissions WHERE material_id=? AND student_id=?", (mid, st['id']))
+        sub=cur.fetchone()
+        if sub:
+            filelink=f"<a class='links' target='_blank' href='{sub['file_path']}'>download</a>"
+            mark = '' if sub['mark'] is None else str(sub['mark'])
+            rows.append(f"""
+            <tr><td>{st['full_name']}</td><td>{filelink} <span class='muted mini'>({sub['submitted_at'][:16].replace('T',' ')})</span></td>
+                <td>
+                  <form method='post' action='{url_for('tutor_assignment_grade', mid=mid, sid=st['id'])}' class='inlineform'>
+                    <input type='number' name='mark' min='0' max='{total}' placeholder='0..{total}' value='{mark if mark else ""}' style='width:100px'/>
+                    <input name='feedback' placeholder='Feedback' value='{sub['feedback'] or ""}'/>
+                    <button class='btn mini'>Save</button>
+                  </form>
+                </td></tr>""")
+        else:
+            rows.append(f"<tr><td>{st['full_name']}</td><td><span class='muted'>No submission</span></td><td>—</td></tr>")
+    table = "<div class='empty'>No students.</div>" if not rows else f"<table><thead><tr><th>Student</th><th>Submission</th><th>Grade (0..{total})</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+    conn.close()
+
+    js_alert = "<script>alert('Grade saved');</script>" if saved else ""
+    body=fr"""
+      <a class='links' href='{url_for('tutor_home')}'>← Back</a>
+      <section class='grid'>
+        <div class='card'><h1>{m['title']}</h1>
+          <p class='muted'>{grade_label(m['grade'])} — {m['subject_name']} • Due: {m['due_date'] or '—'} • Total: {total}</p>
+          {table}
+        </div>
+      </section>
+    """
+    return page("Manage Assignment", body, extra_js=js_alert)
+
+@app.post('/tutor/assignment/<int:mid>/grade/<int:sid>')
+def tutor_assignment_grade(mid:int, sid:int):
+    r=require_tutor()
+    if r: return r
+    raw_mark=request.form.get('mark','').strip()
+    feedback=request.form.get('feedback','').strip() or None
+    conn=get_db(); cur=conn.cursor()
+    # fetch total
+    cur.execute("SELECT max_points FROM materials WHERE id=?", (mid,))
+    mrow = cur.fetchone()
+    total = mrow['max_points'] if (mrow and mrow['max_points']) else 100
+    mark=None
+    if raw_mark != "":
+        try:
+            mark=int(raw_mark)
+        except Exception:
+            conn.close(); return page("Error", card_msg("Mark must be a number or blank."))
+        if mark < 0 or mark > total:
+            conn.close(); return page("Error", card_msg(f"Mark must be between 0 and {total}."))
+    cur.execute("SELECT id FROM submissions WHERE material_id=? AND student_id=?", (mid, sid))
+    row=cur.fetchone()
+    if not row:
+        conn.close(); return page("Error", card_msg("No submission to grade."))
+    cur.execute("UPDATE submissions SET mark=?, feedback=?, evaluated_at=? WHERE id=?", (mark, feedback, now_utc_iso(), row['id']))
+    conn.commit(); conn.close()
+    # redirect with saved alert
+    return redirect(url_for('tutor_assignment_manage', mid=mid, saved=1))
+
+# Tutor → Student message
+@app.post('/tutor/message-student')
+def tutor_message_student():
+    r=require_tutor()
+    if r: return r
+    tid=is_tutor()
+    combo=request.form.get('combo','')
+    body=request.form.get('body','').strip()
+    if not (combo and body): return page("Error", card_msg("Choose a student and write a message."))
+    try:
+        student_id_str, subject_id_str = combo.split('|',1)
+        student_id=int(student_id_str); subject_id=int(subject_id_str)
+    except Exception:
+        return page("Error", card_msg("Bad selection."))
+    conn=get_db(); cur=conn.cursor()
+    # verify tutor teaches subject and student is ACTIVE there
+    month=get_setting('current_month')
+    cur.execute("SELECT 1 FROM tutor_subjects WHERE tutor_id=? AND subject_id=?", (tid,subject_id))
+    if not cur.fetchone():
+        conn.close(); return page("Error", card_msg("You are not assigned to that subject."))
+    cur.execute("""SELECT 1 FROM enrollments WHERE student_id=? AND subject_id=? AND month=? AND status='ACTIVE'""",(student_id,subject_id,month))
+    if not cur.fetchone():
+        conn.close(); return page("Error", card_msg("Student not ACTIVE in that subject this month."))
+    cur.execute("INSERT INTO direct_messages(from_role,from_id,to_role,to_id,subject_id,body,created_at) VALUES('tutor',?,?,?,?,?,?)",
+                (tid,'student',student_id,subject_id,body,now_utc_iso()))
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_home'))
+
+# Tutor → Admin message
+@app.post('/tutor/message-admin')
+def tutor_message_admin():
+    r=require_tutor()
+    if r: return r
+    tid=is_tutor()
+    body=request.form.get('body','').strip()
+    if not body: return page("Error", card_msg("Message is empty."))
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("INSERT INTO direct_messages(from_role,from_id,to_role,to_id,subject_id,body,created_at) VALUES('tutor',?,'admin',0,NULL,?,?)",
+                (tid, body, now_utc_iso()))
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_home'))
+
+# Tutor: manual attendance (fixes missing route)
+@app.route('/tutor/session/<int:sid>/attendance', methods=['GET','POST'])
+def tutor_session_attendance(sid:int):
+    r = require_tutor()
+    if r: return r
+    tid = is_tutor()
+    conn = get_db(); cur = conn.cursor()
+
+    # Session + subject
+    cur.execute("""SELECT se.*, s.name AS subject_name, s.grade
+                   FROM sessions se JOIN subjects s ON s.id=se.subject_id
+                   WHERE se.id=? AND se.tutor_id=?""", (sid, tid))
+    se = cur.fetchone()
+    if not se:
+        conn.close(); return page("Not found", card_msg("Session not found."))
+
+    month = get_setting('current_month')
+    # Which students are ACTIVE in this subject this month?
+    cur.execute("""SELECT st.id, st.full_name
+                   FROM enrollments e JOIN students st ON st.id=e.student_id
+                   WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
+                   ORDER BY st.full_name""", (se['subject_id'], month))
+    studs = cur.fetchall()
+
+    # Date (default today)
+    date_str = request.form.get('date') if request.method=='POST' else datetime.date.today().strftime('%Y-%m-%d')
+
+    if request.method == 'POST':
+        present_ids = set(map(int, request.form.getlist('present')))
+        # Wipe & reinsert for that date/session
+        cur.execute("DELETE FROM attendance WHERE session_id=? AND date=?", (sid, date_str))
+        now = now_utc_iso()
+        for st in studs:
+            if st['id'] in present_ids:
+                cur.execute("""INSERT INTO attendance(session_id,student_id,date,created_at)
+                               VALUES(?,?,?,?)""", (sid, st['id'], date_str, now))
+        conn.commit()
+        conn.close()
+        return page("Saved", card_msg("Attendance saved."))
+
+    # GET: show checkboxes with current state
+    cur.execute("SELECT student_id FROM attendance WHERE session_id=? AND date=?", (sid, date_str))
+    already = {row['student_id'] for row in cur.fetchall()}
+    conn.close()
+
+    rows = []
+    for st in studs:
+        chk = "checked" if st['id'] in already else ""
+        rows.append(f"<tr><td>{st['full_name']}</td><td><input type='checkbox' name='present' value='{st['id']}' {chk}/></td></tr>")
+    table = "<div class='empty'>No students.</div>" if not rows else f"<table><thead><tr><th>Student</th><th>Present</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+
+    body = f"""
+      <a class='links' href='{url_for('tutor_home')}'>← Back</a>
+      <section class='card'>
+        <h1>Mark attendance — {grade_label(se['grade'])} {se['subject_name']}</h1>
+        <form method='post' class='grid'>
+          <div><label>Date (YYYY-MM-DD)</label><input name='date' value='{date_str}' required/></div>
+          {table}
+          <button class='btn'>Save</button>
+        </form>
+      </section>
+    """
+    return page("Attendance", body)
+
+
+# ===================== Admin Portal (guardian/email in Students, DM, analytics) =====================
+
+def card_msg(msg): return f"<section class='wrap small'><div class='card'><p>{msg}</p></div></section>"
+def stat(title,value): return f"<div class='stat'><div class='muted'>{title}</div><div class='k'>{value}</div></div>"
+
+@app.get('/admin/login')
+def admin_login():
+    if is_admin(): return redirect(url_for('admin_home'))
+    body=fr"""<section class='wrap small'><div class='card auth-card'><h1>Admin login</h1>
+      <form method='post' action='{url_for('admin_login_post')}' class='grid'>
+        <div><label>Password</label><input type='password' name='pwd' required/></div>
+        <button class='btn'>Login</button>
+      </form></div></section>"""
+    return page("Admin Login", body)
+
+@app.post('/admin/login')
+def admin_login_post():
+    pwd=request.form.get('pwd',''); expected=os.environ.get('EBTA_ADMIN_PASSWORD','admin@!!@pasca*charlotte##$47start')
+    if pwd==expected: session['admin']=True; return redirect(url_for('admin_home'))
+    return page("Error", card_msg("Wrong password."))
+
+@app.get('/admin/logout')
+def admin_logout(): session.clear(); return redirect(url_for('admin_login'))
+
+@app.get('/admin')
+def admin_home():
+    r=require_admin()
+    if r: return r
+    month=get_setting('current_month')
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,)); total=cur.fetchone()['c']
+    counts={}
+    for st in ["PENDING","ACTIVE","LAPSED"]:
+        cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status=?", (month,st)); counts[st]=cur.fetchone()['c']
+    cur.execute("SELECT COUNT(*) AS c FROM messages WHERE resolved=0"); msg_count=cur.fetchone()['c']
+    # direct messages count to admin (unread)
+    cur.execute("SELECT COUNT(*) AS c FROM direct_messages WHERE to_role='admin' AND is_read=0"); dm_unread = cur.fetchone()['c']
+    conn.close()
+    body=fr"""
+    <section class='grid'><div class='stats'>
+      {stat('Current month', month)}{stat('Total enrollments', str(total))}
+      {stat('Pending', str(counts.get('PENDING',0)))}{stat('Active', str(counts.get('ACTIVE',0)))}
+      {stat('Admin inbox', str(msg_count))}{stat('Direct msgs (unread)', str(dm_unread))}
+    </div>
+    <div class='toolbar'>
+      <a class='btn secondary' href='{url_for('admin_enrollments')}'>Manage enrollments</a>
+      <a class='btn secondary' href='{url_for('admin_students')}'>Students</a>
+      <a class='btn secondary' href='{url_for('admin_tutors')}'>Tutors</a>
+      <a class='btn secondary' href='{url_for('admin_groups')}'>Group links</a>
+      <a class='btn secondary' href='{url_for('admin_sessions')}'>Sessions & QR</a>
+      <a class='btn secondary' href='{url_for('admin_messages')}'>Inbox</a>
+      <a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct messages</a>
+      <a class='btn secondary' href='{url_for('admin_analytics')}'>Analytics</a>
+      <a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>
+      <a class='btn secondary' href='{url_for('export_remove_list')}'>Export remove list</a>
+      <a class='btn danger' href='#logout'>Logout</a>
+    </div></section>"""
+    return page("Admin", body)
+
+# --- Admin: Enrollments (show all PoP files) ---
+
+@app.get('/admin/enrollments')
+def admin_enrollments():
+    r = require_admin()
+    if r:
+        return r
+    month = get_setting('current_month')
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT e.*, st.full_name, st.phone_whatsapp, sub.name AS subject_name
+        FROM enrollments e
+        JOIN students st ON st.id=e.student_id
+        JOIN subjects sub ON sub.id=e.subject_id
+        WHERE e.month=?
+        ORDER BY e.created_at ASC
+        """,
+        (month,),
+    )
+    rows = cur.fetchall()
+
+    def pop_cell(eid, legacy):
+        cur.execute("SELECT file_path FROM enrollment_files WHERE enrollment_id=?", (eid,))
+        files = [r['file_path'] for r in cur.fetchall()]
+        if not files and legacy:
+            files=[legacy]
+        return " ".join([f"<a class='links' target='_blank' href='{p}'>PoP</a>" for p in files]) or "—"
+
+    table_rows = "".join(
+        [
+            f"<tr><td>{r['full_name']}<div class='muted'>{r['phone_whatsapp']}</div></td>"
+            f"<td>{r['subject_name']}</td>"
+            f"<td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>"
+            f"<td>{pop_cell(r['id'], r['pop_url'])}</td>"
+            f"<td>"
+            f"<form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'><button class='btn success'>Approve</button></form> "
+            f"<form method='post' action='{url_for('enrollment_action', id=r['id'], action='lapse')}' style='display:inline'><button class='btn danger'>Lapse</button></form>"
+            f"</td>"
+            f"<td><a class='links' target='_blank' href='{url_for('status', id=r['id'])}?{urlencode({'token': r['status_token']})}'>open</a></td>"
+            f"</tr>"
+            for r in rows
+        ]
+    )
+    conn.close()
+
+    body = f"""
+      <a class='links' href='{url_for('admin_home')}'>← Back</a>
+      <section class='card'>
+        <h1>Enrollments — {month}</h1>
+        <div class='toolbar'>
+          <input id='enr_q' class='pill' placeholder='Search by name, phone, subject' oninput="filterTable('enr_q','enr_tbl')"/>
+          <a class='btn secondary' href='{url_for('export_remove_list')}'>Download remove list</a>
+        </div>
+        <table id='enr_tbl'>
+          <thead><tr><th>Student</th><th>Subject</th><th>Status</th><th>PoP</th><th>Actions</th><th>Status link</th></tr></thead>
+          <tbody>{table_rows}</tbody>
+        </table>
+      </section>
+    """
+    return page("Enrollments", body)
+
+@app.post('/admin/enrollments/<int:id>/<action>')
+def enrollment_action(id: int, action: str):
+    r = require_admin()
+    if r:
+        return r
+    conn = get_db()
+    cur = conn.cursor()
+    if action == 'approve':
+        cur.execute("UPDATE enrollments SET status='ACTIVE' WHERE id=?", (id,))
+        cur.execute("""
+            SELECT st.id, st.pin FROM students st
+            JOIN enrollments e ON e.student_id=st.id WHERE e.id=?
+        """, (id,))
+        srow = cur.fetchone()
+        if srow and not srow['pin']:
+            pins = set()
+            cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
+            pins |= {r['pin'] for r in cur.fetchall()}
+            cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
+            pins |= {r['pin'] for r in cur.fetchall()}
+            new_pin = gen_pin(pins)
+            cur.execute("UPDATE students SET pin=? WHERE id=?", (new_pin, srow['id']))
+    elif action == 'lapse':
+        cur.execute("UPDATE enrollments SET status='LAPSED' WHERE id=?", (id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('admin_enrollments'))
+
+# --- Admin: Students (show Guardian & Email) ---
+
+@app.get('/admin/students')
+def admin_students():
+    r = require_admin()
+    if r:
+        return r
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id, full_name, phone_whatsapp, guardian_phone, email, grade, pin FROM students ORDER BY created_at DESC")
+    rows = cur.fetchall()
+    conn.close()
+
+    def nz(v): return v if (v and str(v).strip()) else "N/A"
+
+    trs = []
+    for s in rows:
+        pin = s['pin'] if s['pin'] else "<span class='muted'>not set</span>"
+        trs.append(
+            f"<tr><td>{s['full_name']}<div class='muted'>{s['phone_whatsapp']}</div></td>"
+            f"<td>{grade_label(s['grade'])}</td>"
+            f"<td>{nz(s['guardian_phone'])}</td>"
+            f"<td>{nz(s['email'])}</td>"
+            f"<td>{pin}</td>"
+            f"<td>"
+            f"<form method='post' action='{url_for('admin_student_reset_pin', sid=s['id'])}' style='display:inline'><button class='btn success'>Reset PIN</button></form> "
+            f"<form method='post' action='{url_for('admin_student_delete', sid=s['id'])}' style='display:inline' onsubmit='return confirm(\"Delete this student?\")'><button class='btn danger'>Delete</button></form>"
+            f"</td></tr>"
+        )
+
+    body = f"""
+      <a class='links' href='{url_for('admin_home')}'>← Back</a>
+      <section class='card'>
+        <h1>Students</h1>
+        <div class='toolbar'>
+          <input id='stu_q' class='pill' placeholder='Search students' oninput="filterTable('stu_q','stu_tbl')"/>
+          <form method='post' action='{url_for('admin_student_add')}' class='grid' style='grid-template-columns:1fr 160px 120px 1fr auto;gap:10px;margin-left:auto'>
+            <input name='full_name' placeholder='Full name' required />
+            <input name='phone' placeholder='Phone/WhatsApp' required />
+            <input name='grade' placeholder='G8..G12' required />
+            <input name='email' placeholder='Email (optional)' />
+            <button class='btn'>Add</button>
+          </form>
+        </div>
+        <table id='stu_tbl'>
+          <thead><tr><th>Student</th><th>Grade</th><th>Guardian</th><th>Email</th><th>PIN</th><th>Actions</th></tr></thead>
+          <tbody>{''.join(trs) if trs else "<tr><td colspan='6'><div class='empty'>No students yet.</div></td></tr>"}</tbody>
+        </table>
+      </section>
+    """
+    return page("Students", body)
+
+@app.post('/admin/students/add')
+def admin_student_add():
+    r = require_admin()
+    if r:
+        return r
+    full_name = request.form.get('full_name','').strip()
+    phone = request.form.get('phone','').strip()
+    grade = request.form.get('grade','').strip()
+    email = request.form.get('email','').strip() or None
+    if not (full_name and phone and grade):
+        return page("Error", card_msg("Missing fields."))
+    now = now_utc_iso()
+    conn = get_db()
+    cur = conn.cursor()
+    pins = set()
+    cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
+    pins |= {r['pin'] for r in cur.fetchall()}
+    cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
+    pins |= {r['pin'] for r in cur.fetchall()}
+    pin = gen_pin(pins)
+    try:
+        cur.execute("""
+            INSERT INTO students(full_name,phone_whatsapp,guardian_phone,email,grade,pin,created_at)
+            VALUES(?,?,?,?,?,?,?)
+        """, (full_name, phone, None, email, grade, pin, now))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Error", card_msg("Phone already exists."))
+    conn.close()
+    return redirect(url_for('admin_students'))
+
+@app.post('/admin/students/<int:sid>/reset-pin')
+def admin_student_reset_pin(sid:int):
+    r = require_admin()
+    if r:
+        return r
+    conn = get_db()
+    cur = conn.cursor()
+    pins = set()
+    cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
+    pins |= {r['pin'] for r in cur.fetchall()}
+    cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
+    pins |= {r['pin'] for r in cur.fetchall()}
+    new_pin = gen_pin(pins)
+    cur.execute("UPDATE students SET pin=? WHERE id=?", (new_pin, sid))
+    conn.commit()
+    conn.close()
+    return page("PIN Updated", card_msg(f"Student PIN reset to: {new_pin}"))
+
+@app.post('/admin/students/<int:sid>/delete')
+def admin_student_delete(sid:int):
+    r = require_admin()
+    if r:
+        return r
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM attendance WHERE student_id=?", (sid,))
+    cur.execute("DELETE FROM enrollments WHERE student_id=?", (sid,))
+    cur.execute("DELETE FROM students WHERE id=?", (sid,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('admin_students'))
+
+# --- Admin: Tutors ---
+
+@app.get('/admin/tutors')
+def admin_tutors():
+    r = require_admin()
+    if r:
+        return r
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id, full_name, phone, pin FROM tutors ORDER BY created_at DESC")
+    rows = cur.fetchall()
+    # subjects list for mapping
+    cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
+    subjects = cur.fetchall()
+    # existing mappings
+    cur.execute("""SELECT ts.tutor_id, s.name||' ('||s.grade||')' AS label
+                   FROM tutor_subjects ts JOIN subjects s ON s.id=ts.subject_id ORDER BY s.grade,s.name""")
+    maps = {}
+    for rmap in cur.fetchall():
+        maps.setdefault(rmap['tutor_id'], []).append(rmap['label'])
+    conn.close()
+
+    options = "".join([f"<option value='{s['id']}'>{s['name']} — {s['grade']}</option>" for s in subjects])
+
+    trs = []
+    for t in rows:
+        pin = t['pin'] if t['pin'] else "<span class='muted'>not set</span>"
+        mapped = ", ".join(maps.get(t['id'], [])) or "<span class='muted'>No subjects</span>"
+        trs.append(
+            f"<tr><td>{t['full_name']}<div class='muted'>{t['phone']}</div></td>"
+            f"<td>{pin}</td>"
+            f"<td>{mapped}</td>"
+            f"<td>"
+            f"<form method='post' action='{url_for('admin_tutor_reset_pin', tid=t['id'])}' style='display:inline'><button class='btn success'>Reset PIN</button></form> "
+            f"<form method='post' action='{url_for('admin_tutor_delete', tid=t['id'])}' style='display:inline' onsubmit='return confirm(\"Delete this tutor?\")'><button class='btn danger'>Delete</button></form>"
+            f"<form method='post' action='{url_for('admin_tutor_add_subject', tid=t['id'])}' class='inlineform' style='margin-left:8px'>"
+            f"<select name='subject_id'>{options}</select><button class='btn mini'>Add subject</button></form>"
+            f"</td></tr>"
+        )
+
+    body = f"""
+      <a class='links' href='{url_for('admin_home')}'>← Back</a>
+      <section class='card'>
+        <h1>Tutors</h1>
+        <div class='toolbar'>
+          <input id='tut_q' class='pill' placeholder='Search tutors' oninput="filterTable('tut_q','tut_tbl')"/>
+          <form method='post' action='{url_for('admin_tutor_add')}' class='grid' style='grid-template-columns:1fr 160px auto;gap:10px;margin-left:auto'>
+            <input name='full_name' placeholder='Full name' required />
+            <input name='phone' placeholder='Phone' required />
+            <button class='btn'>Add</button>
+          </form>
+        </div>
+        <table id='tut_tbl'>
+          <thead><tr><th>Tutor</th><th>PIN</th><th>Subjects</th><th>Actions</th></tr></thead>
+          <tbody>{''.join(trs) if trs else "<tr><td colspan='4'><div class='empty'>No tutors yet.</div></td></tr>"}</tbody>
+        </table>
+      </section>
+    """
+    return page("Tutors", body)
+
+@app.post('/admin/tutors/add')
+def admin_tutor_add():
+    r = require_admin()
+    if r:
+        return r
+    full_name = request.form.get('full_name','').strip()
+    phone = request.form.get('phone','').strip()
+    if not (full_name and phone):
+        return page("Error", card_msg("Missing fields."))
+    now = now_utc_iso()
+    conn = get_db()
+    cur = conn.cursor()
+    pins = set()
+    cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
+    pins |= {r['pin'] for r in cur.fetchall()}
+    cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
+    pins |= {r['pin'] for r in cur.fetchall()}
+    pin = gen_pin(pins)
+    try:
+        cur.execute("INSERT INTO tutors(full_name,phone,pin,created_at) VALUES(?,?,?,?)",
+                    (full_name, phone, pin, now))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Error", card_msg("Phone already exists."))
+    conn.close()
+    return page("Tutor Added", card_msg(f"Tutor added. Share this PIN securely: {pin}"))
+
+@app.post('/admin/tutors/<int:tid>/reset-pin')
+def admin_tutor_reset_pin(tid:int):
+    r = require_admin()
+    if r:
+        return r
+    conn = get_db()
+    cur = conn.cursor()
+    pins = set()
+    cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
+    pins |= {r['pin'] for r in cur.fetchall()}
+    cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
+    pins |= {r['pin'] for r in cur.fetchall()}
+    new_pin = gen_pin(pins)
+    cur.execute("UPDATE tutors SET pin=? WHERE id=?", (new_pin, tid))
+    conn.commit()
+    conn.close()
+    return page("PIN Updated", card_msg(f"Tutor PIN reset to: {new_pin}"))
+
+@app.post('/admin/tutors/<int:tid>/delete')
+def admin_tutor_delete(tid:int):
+    r = require_admin()
+    if r:
+        return r
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM sessions WHERE tutor_id=?", (tid,))
+    cur.execute("DELETE FROM materials WHERE tutor_id=?", (tid,))
+    cur.execute("DELETE FROM tutor_subjects WHERE tutor_id=?", (tid,))
+    cur.execute("DELETE FROM tutors WHERE id=?", (tid,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('admin_tutors'))
+
+@app.post('/admin/tutors/<int:tid>/add-subject')
+def admin_tutor_add_subject(tid:int):
+    r = require_admin()
+    if r:
+        return r
+    subject_id = request.form.get('subject_id','').strip()
+    if not subject_id:
+        return page("Error", card_msg("Select a subject."))
+    conn=get_db(); cur=conn.cursor()
+    try:
+        cur.execute("INSERT OR IGNORE INTO tutor_subjects(tutor_id,subject_id) VALUES(?,?)",(tid,subject_id))
+        conn.commit()
+    finally:
+        conn.close()
+    return redirect(url_for('admin_tutors'))
+
+# --- Admin: Groups ---
+
+@app.get('/admin/groups')
+def admin_groups():
+    r = require_admin()
+    if r:
+        return r
+    month = get_setting('current_month')
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
+    subjects = cur.fetchall()
+    cur.execute("""
+       SELECT g.id, g.invite_link, s.name, s.grade
+       FROM groups g JOIN subjects s ON s.id=g.subject_id
+       WHERE g.month=? ORDER BY s.grade, s.name
+    """, (month,))
+    groups = cur.fetchall()
+    conn.close()
+
+    group_list = (
+        ''.join(
+            [
+                f"<div class='row' style='display:flex;justify-content:space-between;border-top:1px solid var(--border);padding:10px 0'>"
+                f"<div>{grade_label(g['grade'])} — {g['name']}</div>"
+                f"<div><a class='links' target='_blank' href='{g['invite_link']}'>Open link</a></div></div>"
+                for g in groups
+            ]
+        )
+        or "<div class='empty'>No links saved for this month yet.</div>"
+    )
+
+    options = ''.join(
+        [f"<option value='{s['id']}'>{s['grade']} — {s['name']}</option>" for s in subjects]
+    )
+
+    body = f"""
+      <a class='links' href='{url_for('admin_home')}'>← Back</a>
+      <section class='card'>
+        <h1>Group links — {month}</h1>
+        <form class='grid' method='post' action='{url_for('admin_groups_post')}'>
+          <div style='display:grid;grid-template-columns:1fr 130px 1fr auto;gap:10px'>
+            <select name='subject_id'>{options}</select>
+            <input name='month' value='{month}' placeholder='YYYY-MM' />
+            <input name='link' placeholder='WhatsApp invite link' />
+            <button class='btn'>Save</button>
+          </div>
+        </form>
+        <div style='margin-top:10px'>{group_list}</div>
+      </section>
+    """
+    return page("Groups", body)
+
+@app.post('/admin/groups')
+def admin_groups_post():
+    r = require_admin()
+    if r:
+        return r
+    subject_id = request.form.get('subject_id', '')
+    month = request.form.get('month', '')
+    link = request.form.get('link', '')
+    if not (subject_id and month and link):
+        return page("Error", card_msg("Missing fields."))
+    now = now_utc_iso()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM groups WHERE subject_id=? AND month=?", (subject_id, month))
+    row = cur.fetchone()
+    if row:
+        cur.execute("UPDATE groups SET invite_link=?, created_at=? WHERE id=?",(link, now, row["id"]))
+    else:
+        cur.execute("INSERT INTO groups(subject_id,month,invite_link,created_at) VALUES(?,?,?,?)",(subject_id, month, link, now))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('admin_groups'))
+
+# --- Admin: Settings ---
+
+@app.get('/admin/settings')
+def admin_settings():
+    r = require_admin()
+    if r:
+        return r
+    cur_month = get_setting('current_month')
+    body = f"""
+      <a class='links' href='{url_for('admin_home')}'>← Back</a>
+      <section class='card'>
+        <h1>Settings</h1>
+        <form class='grid' method='post' action='{url_for('admin_settings_post')}'>
+          <div><label>Current month (YYYY-MM)</label><input name='month' value='{cur_month}' /></div>
+          <button class='btn'>Save</button>
+        </form>
+      </section>
+    """
+    return page("Settings", body)
+
+@app.post('/admin/settings')
+def admin_settings_post():
+    r = require_admin()
+    if r:
+        return r
+    month = request.form.get('month', '').strip()
+    if not month:
+        return page("Error", card_msg("Month required."))
+    set_setting('current_month', month)
+    return redirect(url_for('admin_home'))
+
+# --- Admin: Sessions (ensures tutor_subjects mapping) ---
+
+@app.get('/admin/sessions')
+def admin_sessions():
+    r = require_admin()
+    if r:
+        return r
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
+    subjects = cur.fetchall()
+    cur.execute("""
+      SELECT se.*, s.name AS subject_name, s.grade, t.full_name AS tutor_name, t.phone AS tutor_phone
+      FROM sessions se
+      JOIN subjects s ON s.id=se.subject_id
+      JOIN tutors t ON t.id=se.tutor_id
+      ORDER BY se.day_of_week, se.start_time
+    """)
+    sessions_rows = cur.fetchall()
+    conn.close()
+
+    options = ''.join([f"<option value='{s['id']}'>{s['grade']} — {s['name']}</option>" for s in subjects])
+    dow_opts = ''.join([f"<option value='{i}'>{d}</option>" for i, d in enumerate(DOW)])
+    rows = ''.join(
+        [
+            f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td>"
+            f"<td>{r['tutor_name']} ({r['tutor_phone']})</td>"
+            f"<td>{DOW[r['day_of_week']]} {r['start_time']}-{r['end_time']}</td>"
+            f"<td><a class='links' href='{url_for('session_qr', id=r['id'])}'>Open QR</a></td></tr>"
+            for r in sessions_rows
+        ]
+    ) or "<tr><td colspan='4'><div class='empty'>No sessions.</div></td></tr>"
+
+    body = f"""
+      <a class='links' href='{url_for('admin_home')}'>← Back</a>
+      <section class='card'>
+        <h1>Sessions</h1>
+        <form class='grid' method='post' action='{url_for('admin_sessions_post')}'>
+          <div style='display:grid;grid-template-columns:1fr 1fr 110px 110px 1fr auto;gap:10px'>
+            <select name='subject_id'>{options}</select>
+            <input name='tutor_name' placeholder='Tutor name' required />
+            <select name='dow'>{dow_opts}</select>
+            <input name='start' placeholder='Start HH:MM' required />
+            <input name='end' placeholder='End HH:MM' required />
+            <input name='tutor_phone' placeholder='Tutor phone' required />
+            <input name='meet' placeholder='Meet link (optional)' />
+            <button class='btn'>Add</button>
+          </div>
+        </form>
+        <table><thead><tr><th>Subject</th><th>Tutor</th><th>When</th><th>QR</th></tr></thead><tbody>{rows}</tbody></table>
+      </section>
+    """
+    return page("Sessions", body)
+
+@app.post('/admin/sessions')
+def admin_sessions_post():
+    r = require_admin()
+    if r:
+        return r
+    subject_id = request.form.get('subject_id')
+    tutor_name = request.form.get('tutor_name', '').strip()
+    tutor_phone = request.form.get('tutor_phone', '').strip()
+    dow = int(request.form.get('dow', '0'))
+    start = request.form.get('start', '')
+    end = request.form.get('end', '')
+    meet = request.form.get('meet', '') or None
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM tutors WHERE full_name=?", (tutor_name,))
+    row = cur.fetchone()
+    tutor_id = row['id'] if row else None
+    if not tutor_id:
+        pins = set()
+        cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
+        pins |= {r['pin'] for r in cur.fetchall()}
+        cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
+        pins |= {r['pin'] for r in cur.fetchall()}
+        pin = gen_pin(pins)
+        now = now_utc_iso()
+        cur.execute("INSERT INTO tutors(full_name,phone,pin,created_at) VALUES(?,?,?,?)", (tutor_name, tutor_phone, pin, now))
+        tutor_id = cur.lastrowid
+    cur.execute("""
+      INSERT INTO sessions(subject_id,tutor_id,day_of_week,start_time,end_time,meet_link)
+      VALUES(?,?,?,?,?,?)
+    """, (subject_id, tutor_id, dow, start, end, meet))
+    # Ensure tutor-subject mapping exists for uploads and messaging
+    cur.execute("INSERT OR IGNORE INTO tutor_subjects(tutor_id,subject_id) VALUES(?,?)",(tutor_id,subject_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('admin_sessions'))
+
+# --- Session QR (uses PNG endpoint) ---
+
+@app.get('/session/<int:id>/qr')
+def session_qr(id: int):
+    r = require_admin()
+    if r:
+        return r
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+      SELECT se.*, s.name AS subject_name, s.grade, t.full_name AS tutor_name
+      FROM sessions se JOIN subjects s ON s.id=se.subject_id
+      JOIN tutors t ON t.id=se.tutor_id WHERE se.id=?
+    """, (id,))
+    se = cur.fetchone()
+    conn.close()
+    if not se:
+        return page("Not found", card_msg("Session not found."))
+    today = datetime.date.today().strftime('%Y-%m-%d')
+    payload = {'session_id': id, 'date': today}
+    code = b64url_encode(str(payload).encode('utf-8'))
+    attend_url = url_for('attend_get', _external=True) + '?' + urlencode({'code': code})
+    qr_src = url_for('qr_png') + '?' + urlencode({'text': attend_url})
+
+    body = f"""
+      <a class='links' href='{url_for('admin_sessions')}'>← Back</a>
+      <section class='card' style='text-align:center'>
+        <h1>Scan to check in</h1>
+        <p class='muted'>{grade_label(se['grade'])} — {se['subject_name']} with {se['tutor_name']} ({today})</p>
+        <img alt='QR code' src='{qr_src}' width='256' height='256' style='margin:14px auto;display:block;border-radius:8px;border:1px solid var(--border);background:#fff' />
+        <div class='muted'><a class='links' target='_blank' href='{attend_url}'>Open check-in link</a></div>
+      </section>
+    """
+    return page("Session QR", body)
+
+# --- PNG QR endpoint (reliable) ---
+
+@app.get('/qr.png')
+def qr_png():
+    text = request.args.get('text', '')
+    if not text:
+        return make_response('Missing text', 400)
+    if qrcode is None:
+        return make_response('QR library not installed. Run: pip install qrcode[pil]', 500)
+    img = qrcode.make(text)
+    buf = BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    resp = make_response(buf.read())
+    resp.headers['Content-Type'] = 'image/png'
+    return resp
+
+# --- Attendance (QR landing for students) ---
+
+@app.get('/attend')
+def attend_get():
+    code = request.args.get('code', '')
+    if not code:
+        return page("Error", card_msg("Missing code."))
+    body = f"""
+      <section class='wrap small'>
+        <div class='card'>
+          <h1>Pasco Attendance</h1>
+          <form method='post' action='{url_for('attend_post')}' class='grid'>
+            <input type='hidden' name='code' value='{code}' />
+            <div><label>Enter your WhatsApp number (e.g. 2782...)</label><input name='phone' required /></div>
+            <button class='btn success'>Check in</button>
+          </form>
+        </div>
+      </section>
+    """
+    return page("Attendance", body)
+
+@app.post('/attend')
+def attend_post():
+    code = request.form.get('code', '')
+    phone = request.form.get('phone', '').strip()
+    if not (code and phone):
+        return page("Error", card_msg("Missing code or phone."))
+    try:
+        payload = literal_eval(b64url_decode(code).decode('utf-8'))
+        session_id = int(payload['session_id'])
+        date = payload['date']
+    except Exception:
+        return page("Error", card_msg("Bad code."))
+
+    month = get_setting('current_month')
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM students WHERE phone_whatsapp=?", (phone,))
+    srow = cur.fetchone()
+    if not srow:
+        conn.close()
+        return page("Not found", card_msg("We couldn't find your number. Please register first."))
+    student_id = srow['id']
+
+    cur.execute("SELECT subject_id FROM sessions WHERE id=?", (session_id,))
+    ses = cur.fetchone()
+    if not ses:
+        conn.close()
+        return page("Not found", card_msg("Session not found."))
+    subject_id = ses['subject_id']
+
+    cur.execute("""
+      SELECT id FROM enrollments
+      WHERE student_id=? AND subject_id=? AND month=? AND status='ACTIVE'
+    """, (student_id, subject_id, month))
+    enr = cur.fetchone()
+    if not enr:
+        conn.close()
+        return page("Not Active", card_msg("No active enrollment for this month. Please renew to check in."))
+
+    now = now_utc_iso()
+    cur.execute(
+        "INSERT INTO attendance(session_id,student_id,date,created_at) VALUES(?,?,?,?)",
+        (session_id, student_id, date, now),
+    )
+    conn.commit()
+    conn.close()
+    return page("Checked in", card_msg("Checked in. Enjoy the session!"))
+
+# --- Admin: Messages (forgot PIN etc.) ---
+
+@app.get('/admin/messages')
+def admin_messages():
+    r = require_admin()
+    if r:
+        return r
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id,kind,payload,created_at,resolved FROM messages ORDER BY created_at DESC")
+    rows = cur.fetchall()
+    conn.close()
+    trs = []
+    for m in rows:
+        status = "<span class='chip active'>Open</span>" if m['resolved']==0 else "<span class='chip'>Resolved</span>"
+        action = "" if m['resolved'] else f"<form method='post' action='{url_for('admin_message_resolve', mid=m['id'])}' style='display:inline'><button class='btn success'>Mark resolved</button></form>"
+        trs.append(f"<tr><td>{m['kind']}</td><td>{m['payload']}</td><td>{m['created_at']}</td><td>{status}</td><td>{action}</td></tr>")
+
+    body = f"""
+      <a class='links' href='{url_for('admin_home')}'>← Back</a>
+      <section class='card'>
+        <h1>Admin inbox</h1>
+        <table>
+          <thead><tr><th>Type</th><th>Payload</th><th>When</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody>{''.join(trs) if trs else "<tr><td colspan='5'><div class='empty'>No messages.</div></td></tr>"}</tbody>
+        </table>
+      </section>
+    """
+    return page("Messages", body)
+
+@app.post('/admin/messages/<int:mid>/resolve')
+def admin_message_resolve(mid:int):
+    r = require_admin()
+    if r:
+        return r
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE messages SET resolved=1 WHERE id=?", (mid,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('admin_messages'))
+
+# --- Admin: Direct Messages (student/tutor DMs) ---
+
+@app.get('/admin/direct-messages')
+def admin_direct_messages():
+    r=require_admin()
+    if r: return r
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("""SELECT dm.*,
+                          CASE dm.from_role 
+                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
+                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
+                               ELSE 'Admin' END AS from_name,
+                          CASE dm.to_role 
+                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
+                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
+                               ELSE 'Admin' END AS to_name
+                   FROM direct_messages dm
+                   ORDER BY dm.created_at ASC LIMIT 80""")
+    dms=cur.fetchall()
+    # mark those to admin as read
+    cur.execute("UPDATE direct_messages SET is_read=1 WHERE to_role='admin'")
+    # lists for compose
+    cur.execute("SELECT id,full_name FROM tutors ORDER BY full_name"); tutors=cur.fetchall()
+    cur.execute("SELECT id,full_name FROM students ORDER BY full_name"); students=cur.fetchall()
+    conn.commit(); conn.close()
+
+    dm_list = "".join([f"<div class='msg {'me' if m['from_role']=='admin' else 'them'}'><div class='meta'>{m['from_name']} → {m['to_name']} • {m['created_at'][:16].replace('T',' ')}</div><div>{m['body']}</div></div>" for m in dms]) or "<div class='empty'>No messages yet.</div>"
+
+    tut_opts="".join([f"<option value='tutor|{t['id']}'>{t['full_name']}</option>" for t in tutors])
+    stu_opts="".join([f"<option value='student|{s['id']}'>{s['full_name']}</option>" for s in students])
+    body=fr"""
+      <a class='links' href='{url_for('admin_home')}'>← Back</a>
+      <section class='grid'>
+        <div class='card'><h1>Direct messages</h1>
+          <form method='post' action='{url_for('admin_send_dm')}' class='grid'>
+            <div><label>To (Tutor/Student)</label>
+              <select name='target' required>
+                <optgroup label='Tutors'>{tut_opts}</optgroup>
+                <optgroup label='Students'>{stu_opts}</optgroup>
+              </select>
+            </div>
+            <div><label>Message</label><textarea name='body' required placeholder='Type your message...'></textarea></div>
+            <button class='btn'>Send</button>
+          </form>
+          <div style='margin-top:10px'>{dm_list}</div>
+        </div>
+      </section>
+    """
+    return page("Direct Messages", body)
+
+@app.post('/admin/direct-messages/send')
+def admin_send_dm():
+    r=require_admin()
+    if r: return r
+    target=request.form.get('target','')
+    body=request.form.get('body','').strip()
+    if not (target and body): return page("Error", card_msg("Select a recipient and write a message."))
+    try:
+        role, id_str = target.split('|',1)
+        rid = int(id_str)
+    except Exception:
+        return page("Error", card_msg("Bad recipient."))
+    if role not in ('student','tutor'): return page("Error", card_msg("Bad role."))
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("INSERT INTO direct_messages(from_role,from_id,to_role,to_id,subject_id,body,created_at) VALUES('admin',0,?,?,NULL,?,?)",
+                (role, rid, body, now_utc_iso()))
+    conn.commit(); conn.close()
+    return redirect(url_for('admin_direct_messages'))
+
+# --- Admin: Analytics dashboard ---
+
+@app.get('/admin/analytics')
+def admin_analytics():
+    r = require_admin()
+    if r: return r
+    month = get_setting('current_month')
+    conn = get_db(); cur = conn.cursor()
+
+    # High-level: enrollments by status
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,)); total = cur.fetchone()['c']
+    def count_status(s):
+        cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status=?", (month,s))
+        return cur.fetchone()['c']
+    pending, active, lapsed = count_status('PENDING'), count_status('ACTIVE'), count_status('LAPSED')
+
+    # Per subject aggregates (attendance, submissions, marks, ratings)
+    cur.execute("SELECT id, name, grade FROM subjects ORDER BY grade, name")
+    subs = cur.fetchall()
+
+    rows = []
+    for s in subs:
+        # active students
+        cur.execute("""SELECT COUNT(*) AS c FROM enrollments 
+                       WHERE subject_id=? AND month=? AND status='ACTIVE'""", (s['id'], month))
+        active_students = cur.fetchone()['c'] or 0
+
+        # sessions recorded days
+        cur.execute("""SELECT COUNT(DISTINCT a.date) AS d
+                       FROM attendance a JOIN sessions se ON se.id=a.session_id
+                       WHERE se.subject_id=? AND strftime('%Y-%m', a.date)=?""", (s['id'], month))
+        days = cur.fetchone()['d'] or 0
+
+        # total attendance rows
+        cur.execute("""SELECT COUNT(*) AS c
+                       FROM attendance a JOIN sessions se ON se.id=a.session_id
+                       WHERE se.subject_id=? AND strftime('%Y-%m', a.date)=?""", (s['id'], month))
+        att_rows = cur.fetchone()['c'] or 0
+        # overall attendance rate: present count over (days * active_students)
+        att_rate = (int(round((att_rows / (days*active_students))*100)) if days>0 and active_students>0 else 0)
+
+        # assignments this month
+        cur.execute("""SELECT COUNT(*) AS c FROM materials 
+                       WHERE subject_id=? AND month=? AND (is_assignment=1 OR kind='assignment')""", (s['id'], month))
+        asg_count = cur.fetchone()['c'] or 0
+
+        # submissions + avg mark
+        cur.execute("""SELECT COUNT(*) AS c, AVG(sub.mark) AS avgm
+                       FROM submissions sub JOIN materials m ON m.id=sub.material_id
+                       WHERE m.subject_id=? AND m.month=? AND (m.is_assignment=1 OR m.kind='assignment')""", (s['id'], month))
+        subrow = cur.fetchone(); submissions = subrow['c'] or 0; avgm = subrow['avgm']
+        avgm_txt = "-" if avgm is None else f"{int(round(avgm))}"
+
+        # submission completion: divide by (#assignments * #active_students)
+        denom = (asg_count * active_students) if asg_count and active_students else 0
+        completion = int(round((submissions/denom)*100)) if denom else 0
+
+        # ratings avg
+        cur.execute("""SELECT AVG(rating) AS r, COUNT(*) AS n
+                       FROM lesson_ratings WHERE subject_id=? AND month=?""", (s['id'], month))
+        rrow = cur.fetchone(); rating_avg = (round(rrow['r'],1) if rrow['r'] else None); rating_n = rrow['n'] or 0
+        rating_txt = "—" if rating_avg is None else f"{rating_avg} ★ ({rating_n})"
+
+        rows.append(f"""
+          <tr>
+            <td>{grade_label(s['grade'])} — {s['name']}</td>
+            <td>{active_students}</td>
+            <td>{att_rate}%</td>
+            <td>{asg_count}</td>
+            <td>{submissions}</td>
+            <td>{completion}%</td>
+            <td>{avgm_txt}</td>
+            <td>{rating_txt}</td>
+          </tr>
+        """)
+
+    conn.close()
+
+    table = f"""
+      <table>
+        <thead>
+          <tr>
+            <th>Subject</th><th>Active</th><th>Attendance</th>
+            <th>#Assign</th><th>#Submissions</th><th>Completion</th>
+            <th>Avg mark</th><th>Rating</th>
+          </tr>
+        </thead>
+        <tbody>{''.join(rows) if rows else "<tr><td colspan='8'><div class='empty'>No data.</div></td></tr>"}</tbody>
+      </table>
+    """
+
+    body = f"""
+      <a class='links' href='{url_for('admin_home')}'>← Back</a>
+      <section class='grid'>
+        <div class='stats'>
+          {stat('Current month', month)}
+          {stat('Enrollments', total)}
+          {stat('Pending', pending)}
+          {stat('Active', active)}
+          {stat('Lapsed', lapsed)}
+        </div>
+        <div class='card'><h1>Subject Analytics — {month}</h1>
+          <p class='muted mini'>Completion = submissions ÷ (assignments × active students). Ratings are learner feedback captured between the 24th and month end.</p>
+          {table}
+        </div>
+      </section>
+    """
+    return page("Analytics", body)
+
+# --- Export remove list ---
+
+@app.get('/api/export/remove-list')
+def export_remove_list():
+    r = require_admin()
+    if r:
+        return r
+
+    month = get_setting('current_month')
+    y, m = map(int, month.split('-'))
+    ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
+    next_month = f"{ny:04d}-{nm:02d}"
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT e.id, e.student_id, e.subject_id, st.full_name, st.phone_whatsapp, st.grade, sub.name AS subject_name
+        FROM enrollments e
+        JOIN students st ON st.id=e.student_id
+        JOIN subjects sub ON sub.id=e.subject_id
+        WHERE e.month=? AND e.status='ACTIVE'
+    """, (month,))
+    active_this = cur.fetchall()
+
+    cur.execute(
+        "SELECT student_id, subject_id FROM enrollments WHERE month=? AND status='ACTIVE'",
+        (next_month,),
+    )
+    next_active = {(row['student_id'], row['subject_id']) for row in cur.fetchall()}
+    conn.close()
+
+    out = ["Student,Phone,Grade,Subject"]
+    for r in active_this:
+        if (r['student_id'], r['subject_id']) not in next_active:
+            full = str(r['full_name']).replace(',', ' ')
+            phone = str(r['phone_whatsapp'])
+            grade = str(r['grade'])
+            subject = str(r['subject_name']).replace(',', ' ')
+            out.append(f"{full},{phone},{grade},{subject}")
+
+    csv_data = "\n".join(out)
+    resp = make_response(csv_data)
+    resp.headers['Content-Type'] = 'text/csv; charset=utf-8'
+    resp.headers['Content-Disposition'] = 'attachment; filename=remove-list.csv'
+    return resp
+
+# --- Payfast IPN stub ---
+
+@app.post('/payfast/ipn')
+def payfast_ipn():
+    body = request.get_data(as_text=True)
+    print("[Payfast IPN]", body)
+    return {"ok": True}
+
+
+# ===================== MAIN =====================
+
+if __name__ == '__main__':
+    init_db()
+    port = int(os.environ.get('PORT', '5000'))
+    app.run(host='127.0.0.1', port=port, debug=True)
+
+
+
+# ===================== QUIZ SYSTEM: lightweight integration layer =====================
+# This section adds a complete quizzes module WITHOUT touching your existing routes.
+# - We override init_db() to call your original init and then create quiz tables.
+# - We add QUIZ_IMG_DIR and ensure it exists.
+# - We add tutor/student/analytics routes under /tutor/quizzes, /student/quizzes, /admin/analytics/quizzes.
+
+# keep a handle to the original init_db
+try:
+    _EBTA_ORIG_INIT_DB = init_db
+except NameError:
+    _EBTA_ORIG_INIT_DB = None
+
+# New directory for question images
+from pathlib import Path as _Path
+QUIZ_IMG_DIR = (_Path(__file__).resolve().parent) / "quiz_images"
+QUIZ_IMG_DIR.mkdir(exist_ok=True)
+
+# Re-define init_db so __main__ calls this one
+def init_db():
+    if _EBTA_ORIG_INIT_DB:
+        _EBTA_ORIG_INIT_DB()
+    conn = get_db(); c = conn.cursor()
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quizzes(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          subject_id INTEGER NOT NULL,
+          tutor_id INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          mode TEXT NOT NULL,             -- 'mcq' | 'mixed' | 'written'
+          duration_seconds INTEGER NOT NULL DEFAULT 600,
+          month TEXT NOT NULL,
+          is_published INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+          FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE
+        );
+        """
+    )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quiz_questions(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          quiz_id INTEGER NOT NULL,
+          qtext TEXT NOT NULL,
+          qtype TEXT NOT NULL,            -- 'mcq' | 'short' | 'long'
+          points INTEGER NOT NULL DEFAULT 1,
+          image_path TEXT,
+          position INTEGER NOT NULL DEFAULT 1,
+          FOREIGN KEY(quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE
+        );
+        """
+    )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quiz_options(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          question_id INTEGER NOT NULL,
+          opt_text TEXT NOT NULL,
+          is_correct INTEGER NOT NULL DEFAULT 0,
+          FOREIGN KEY(question_id) REFERENCES quiz_questions(id) ON DELETE CASCADE
+        );
+        """
+    )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quiz_attempts(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          quiz_id INTEGER NOT NULL,
+          student_id INTEGER NOT NULL,
+          started_at TEXT NOT NULL,
+          submitted_at TEXT,
+          status TEXT NOT NULL DEFAULT 'in_progress', -- in_progress|submitted|graded
+          auto_score REAL,
+          manual_score REAL,
+          total_score REAL,
+          FOREIGN KEY(quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE,
+          FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+          UNIQUE(quiz_id, student_id)
+        );
+        """
+    )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quiz_answers(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          attempt_id INTEGER NOT NULL,
+          question_id INTEGER NOT NULL,
+          chosen_option_id INTEGER,       -- for MCQ
+          answer_text TEXT,               -- for short/long
+          is_correct INTEGER,             -- nullable until auto-grade or manual grade
+          awarded_points REAL,            -- null until graded
+          FOREIGN KEY(attempt_id) REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+          FOREIGN KEY(question_id) REFERENCES quiz_questions(id) ON DELETE CASCADE,
+          FOREIGN KEY(chosen_option_id) REFERENCES quiz_options(id) ON DELETE SET NULL
+        );
+        """
+    )
+    # Seed month if missing
+    c.execute("SELECT value FROM settings WHERE key='current_month'")
+    if not c.fetchone():
+        import datetime as _dt
+        c.execute("INSERT INTO settings(key,value) VALUES(?,?)", ("current_month", _dt.date.today().strftime("%Y-%m")))
+    conn.commit(); conn.close()
+
+# Serve quiz images
+@app.route('/quiz-images/<path:filename>')
+def quiz_images(filename):
+    return send_from_directory(QUIZ_IMG_DIR, filename)
+
+# ---------------------- Tutor: Quizzes CRUD ----------------------
+@app.get('/tutor/quizzes')
+def tutor_quizzes():
+    r = require_tutor()
+    if r: return r
+    tid = is_tutor()
+    month = get_setting('current_month')
+    conn = get_db(); c = conn.cursor()
+    c.execute(
+        """
+      SELECT q.*, s.name AS subject_name, s.grade
+      FROM quizzes q JOIN subjects s ON s.id=q.subject_id
+      WHERE q.tutor_id=? AND q.month=? ORDER BY q.created_at DESC
+    """, (tid, month))
+    rows = c.fetchall(); conn.close()
+    items = []
+    for r0 in rows:
+        pub = '<span class=\"badge\">published</span>' if r0['is_published'] else '<span class=\"badge\">draft</span>'
+        items.append(
+            f"<tr><td>Grade {r0['grade'].replace('G','')}</td><td>{r0['subject_name']}</td><td>{r0['title']}</td>"
+            f"<td>{r0['mode']}</td><td>{int(r0['duration_seconds']/60)} min</td><td>{pub}</td>"
+            f"<td><a href='{url_for('tutor_edit_quiz', qid=r0['id'])}'>Edit</a> · "
+            f"<a href='{url_for('tutor_quiz_results', qid=r0['id'])}'>Responses</a></td></tr>"
+        )
+
+        table = (
+        "<div class='empty'>No quizzes yet.</div>"
+        if not items
+        else (
+            "<table class='table'><thead><tr><th>Grade</th><th>Subject</th><th>Title</th>"
+            "<th>Mode</th><th>Time</th><th>Status</th><th>Manage</th></tr></thead><tbody>"
+            + "".join(items)
+            + "</tbody></table>"
+        )
+    )
+
+    body = f"""
+    <div class='card'>
+      <h2>My Quizzes ({month})</h2>
+      <div style='margin:10px 0'><a class='btn' href='{url_for('tutor_new_quiz')}'>New quiz</a></div>
+      {table}
+    </div>"""
+    return page("Tutor Quizzes", body)
+
+@app.get('/tutor/quiz/new')
+def tutor_new_quiz():
+    r = require_tutor()
+    if r: return r
+    tid = is_tutor()
+    conn = get_db(); c = conn.cursor()
+    c.execute(
+        """
+      SELECT s.id, s.name, s.grade
+      FROM tutor_subjects ts JOIN subjects s ON s.id=ts.subject_id
+      WHERE ts.tutor_id=? ORDER BY s.grade, s.name
+    """, (tid,))
+    subs = c.fetchall(); conn.close()
+    opts = (
+        "".join(
+            [
+                f"<option value='{s['id']}'>Grade {s['grade'].replace('G','')} — {s['name']}</option>"
+                for s in subs
+            ]
+        )
+        or "<option value=''>No subjects assigned</option>"
+    )
+
+    body = f"""
+    <div class='card'>
+      <h2>Create quiz</h2>
+      <form method='post' action='{url_for('tutor_new_quiz_post')}' class='grid'>
+        <div><label>Subject</label><select name='subject_id' required>{opts}</select></div>
+        <div><label>Title</label><input name='title' required/></div>
+        <div><label>Mode</label>
+          <select name='mode' required>
+            <option value='mcq'>Multiple choice only (auto-graded)</option>
+            <option value='mixed'>Mixed (MCQ + written)</option>
+            <option value='written'>Written only (manual)</option>
+          </select>
+        </div>
+        <div><label>Duration (minutes)</label><input name='minutes' type='number' min='1' max='180' value='15' required/></div>
+        <button class='btn'>Create</button>
+      </form>
+    </div>"""
+    return page("New Quiz", body)
+
+@app.post('/tutor/quiz/new')
+def tutor_new_quiz_post():
+    r = require_tutor()
+    if r: return r
+    tid = is_tutor()
+    subject_id = request.form.get('subject_id')
+    title = request.form.get('title', '').strip()
+    mode = request.form.get('mode', 'mcq')
+    minutes = int(request.form.get('minutes', '15') or 15)
+    if not subject_id or not title:
+        return abort(400)
+    month = get_setting('current_month')
+    conn = get_db(); c = conn.cursor()
+    c.execute(
+        """
+      INSERT INTO quizzes(subject_id,tutor_id,title,mode,duration_seconds,month,is_published,created_at)
+      VALUES(?,?,?,?,?,?,0,?)
+    """, (subject_id, tid, title, mode, minutes * 60, month, now_utc_iso()))
+    qid = c.lastrowid
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_edit_quiz', qid=qid))
+
+@app.get('/tutor/quiz/<int:qid>/edit')
+def tutor_edit_quiz(qid: int):
+    r = require_tutor()
+    if r: return r
+    tid = is_tutor()
+    conn = get_db(); c = conn.cursor()
+    c.execute(
+        """
+      SELECT q.*, s.name AS subject_name, s.grade
+      FROM quizzes q JOIN subjects s ON s.id=q.subject_id
+      WHERE q.id=? AND q.tutor_id=?
+    """, (qid, tid))
+    q = c.fetchone()
+    if not q:
+        conn.close()
+        return page("Not found", "<div class='card'>Quiz not found.</div>")
+    c.execute("SELECT * FROM quiz_questions WHERE quiz_id=? ORDER BY position,id", (qid,))
+    qs = c.fetchall()
+    # options per question
+    qopts = {}
+    for row in qs:
+        c.execute("SELECT * FROM quiz_options WHERE question_id=?", (row['id'],))
+        qopts[row['id']] = c.fetchall()
+    conn.close()
+
+    # build UI
+    qrows = []
+    for qn in qs:
+        img = (f"<div><img src='{qn['image_path']}' alt='' style='max-width:240px;border-radius:10px;border:1px solid #e5e7eb'/></div>" if qn['image_path'] else "")
+        if qn['qtype'] == 'mcq':
+            opts = "<ul>" + "".join([f"<li>{o['opt_text']} {'✅' if o['is_correct'] else ''}</li>" for o in qopts.get(qn['id'], [])]) + "</ul>"
+        else:
+            opts = "<div class='muted'>Written response</div>"
+        qrows.append(
+            f"<div class='card'><div><b>Q{qn['position']} ({qn['qtype']}, {qn['points']} pt)</b></div>"
+            f"<div>{qn['qtext']}</div>{img}{opts}"
+            f"<form method='post' action='{url_for('tutor_delete_question', qid=qid, qnid=qn['id'])}' onsubmit='return confirm(\"Delete question?\")' style='margin-top:8px'><button class='btn secondary'>Delete</button></form>"
+            f"</div>"
+        )
+
+    pub_btn = (f"<form method='post' action='{url_for('tutor_toggle_publish_quiz', qid=qid)}'><button class='btn'>{'Unpublish' if q['is_published'] else 'Publish'}</button></form>")
+
+    add_mcq_block = f"""
+      <div class='card'>
+        <h3>Add MCQ</h3>
+        <form method='post' action='{url_for('tutor_add_mcq', qid=qid)}' enctype='multipart/form-data'>
+          <label>Question text</label><textarea name='qtext' required></textarea>
+          <label>Points</label><input name='points' type='number' min='1' value='1' required/>
+          <label>Image (optional)</label><input type='file' name='image' accept='.png,.jpg,.jpeg,.webp,.gif'/>
+          <label>Options (mark the correct one)</label>
+          <div class='card' style='padding:12px'>
+            <div><input name='opt_1' placeholder='Option 1' required/> <label><input type='radio' name='correct' value='1' required/> correct</label></div>
+            <div><input name='opt_2' placeholder='Option 2' required/> <label><input type='radio' name='correct' value='2'/> correct</label></div>
+            <div><input name='opt_3' placeholder='Option 3'/> <label><input type='radio' name='correct' value='3'/> correct</label></div>
+            <div><input name='opt_4' placeholder='Option 4'/> <label><input type='radio' name='correct' value='4'/> correct</label></div>
+          </div>
+          <button class='btn'>Add MCQ</button>
+        </form>
+      </div>
+    """
+
+    add_written_block = f"""
+      <div class='card'>
+        <h3>Add Written Question (short/long)</h3>
+        <form method='post' action='{url_for('tutor_add_written', qid=qid)}' enctype='multipart/form-data'>
+          <label>Question text</label><textarea name='qtext' required></textarea>
+          <label>Type</label>
+          <select name='qtype' required>
+            <option value='short'>Short answer</option>
+            <option value='long'>Long answer</option>
+          </select>
+          <label>Points</label><input name='points' type='number' min='1' value='2' required/>
+          <label>Image (optional)</label><input type='file' name='image' accept='.png,.jpg,.jpeg,.webp,.gif'/>
+          <button class='btn'>Add</button>
+        </form>
+      </div>
+    """
+
+    body = f"""
+    <div class='card'>
+      <h2>Edit quiz · {q['title']} · Grade {q['grade'].replace('G','')} {q['subject_name']}</h2>
+      <div class='badge'>Mode: {q['mode']}</div>
+      <div style='margin:10px 0'>Duration: <b>{int(q['duration_seconds']/60)} minutes</b></div>
+      <div style='display:flex;gap:10px'>{pub_btn}<a class='btn secondary' href='{url_for('tutor_quizzes')}'>Back</a></div>
+    </div>
+    {''.join(qrows) if qrows else "<div class='card empty'>No questions yet.</div>"}
+    {add_mcq_block}
+    {add_written_block}
+    """
+    return page("Edit Quiz", body)
+
+@app.post('/tutor/quiz/<int:qid>/toggle')
+def tutor_toggle_publish_quiz(qid: int):
+    r = require_tutor()
+    if r: return r
+    tid = is_tutor()
+    conn = get_db(); c = conn.cursor()
+    c.execute("SELECT is_published FROM quizzes WHERE id=? AND tutor_id=?", (qid, tid))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return abort(404)
+    newv = 0 if row['is_published'] else 1
+    c.execute("UPDATE quizzes SET is_published=? WHERE id=?", (newv, qid))
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_edit_quiz', qid=qid))
+
+@app.post('/tutor/quiz/<int:qid>/mcq')
+def tutor_add_mcq(qid: int):
+    r = require_tutor()
+    if r: return r
+    qtext = request.form.get('qtext', '').strip()
+    points = int(request.form.get('points', '1') or 1)
+    correct = request.form.get('correct')
+    if not qtext or not correct:
+        return abort(400)
+    # image
+    img = request.files.get('image')
+    img_path = None
+    if img and img.filename:
+        safe = f"q_{int(datetime.datetime.now().timestamp())}_" + ''.join(ch if ch.isalnum() or ch in '._-' else '_' for ch in img.filename)
+        dest = QUIZ_IMG_DIR / safe
+        img.save(dest)
+        img_path = f"/quiz-images/{safe}"
+
+    conn = get_db(); c = conn.cursor()
+    # position
+    c.execute("SELECT COALESCE(MAX(position),0)+1 AS p FROM quiz_questions WHERE quiz_id=?", (qid,))
+    pos = (c.fetchone()["p"]) or 1
+    c.execute(
+        """
+      INSERT INTO quiz_questions(quiz_id,qtext,qtype,points,image_path,position)
+      VALUES(?,?,?,?,?,?)
+    """, (qid, qtext, 'mcq', points, img_path, pos))
+    qnid = c.lastrowid
+    # options
+    opts = []
+    for i in range(1, 5):
+        text = request.form.get(f'opt_{i}', '').strip()
+        if text:
+            opts.append((qnid, text, 1 if str(i) == str(correct) else 0))
+    if len(opts) < 2:
+        conn.rollback(); conn.close()
+        return page("Error", "<div class='card'>At least two options required.</div>")
+    c.executemany("INSERT INTO quiz_options(question_id,opt_text,is_correct) VALUES(?,?,?)", opts)
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_edit_quiz', qid=qid))
+
+@app.post('/tutor/quiz/<int:qid>/written')
+def tutor_add_written(qid: int):
+    r = require_tutor()
+    if r: return r
+    qtext = request.form.get('qtext', '').strip()
+    qtype = request.form.get('qtype', 'short')
+    points = int(request.form.get('points', '2') or 2)
+    if qtype not in ('short', 'long') or not qtext:
+        return abort(400)
+    img = request.files.get('image')
+    img_path = None
+    if img and img.filename:
+        safe = f"q_{int(datetime.datetime.now().timestamp())}_" + ''.join(ch if ch.isalnum() or ch in '._-' else '_' for ch in img.filename)
+        dest = QUIZ_IMG_DIR / safe
+        img.save(dest)
+        img_path = f"/quiz-images/{safe}"
+    conn = get_db(); c = conn.cursor()
+    c.execute("SELECT COALESCE(MAX(position),0)+1 AS p FROM quiz_questions WHERE quiz_id=?", (qid,))
+    pos = (c.fetchone()["p"]) or 1
+    c.execute(
+        """
+      INSERT INTO quiz_questions(quiz_id,qtext,qtype,points,image_path,position)
+      VALUES(?,?,?,?,?,?)
+    """, (qid, qtext, qtype, points, img_path, pos))
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_edit_quiz', qid=qid))
+
+@app.post('/tutor/quiz/<int:qid>/question/<int:qnid>/delete')
+def tutor_delete_question(qid: int, qnid: int):
+    r = require_tutor()
+    if r: return r
+    tid = is_tutor()
+    conn = get_db(); c = conn.cursor()
+    c.execute("SELECT tutor_id FROM quizzes WHERE id=?", (qid,))
+    r0 = c.fetchone()
+    if not r0 or r0['tutor_id'] != tid:
+        conn.close()
+        return abort(403)
+    c.execute("DELETE FROM quiz_questions WHERE id=? AND quiz_id=?", (qnid, qid))
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_edit_quiz', qid=qid))
+
+# ---------------------- Student: take quiz ----------------------
+@app.get('/student/quizzes')
+def student_quizzes():
+    r = require_student()
+    if r: return r
+    sid = is_student(); month = get_setting('current_month')
+    conn = get_db(); c = conn.cursor()
+    # find subjects where student is ACTIVE this month
+    c.execute(
+        """
+      SELECT subject_id FROM enrollments
+      WHERE student_id=? AND month=? AND status='ACTIVE'
+    """, (sid, month))
+    subids = [str(r0['subject_id']) for r0 in c.fetchall()]
+    items = "<div class='card empty'>No active subjects yet.</div>"
+    if subids:
+        q = (
+            f"SELECT q.*, s.name AS subject_name, s.grade FROM quizzes q JOIN subjects s ON s.id=q.subject_id "
+            f"WHERE q.is_published=1 AND q.month=? AND q.subject_id IN ({','.join('?'*len(subids))}) ORDER BY q.created_at DESC"
+        )
+        c.execute(q, (month, *subids))
+        rows = c.fetchall()
+        if rows:
+            lis = []
+            for r0 in rows:
+                # attempt status
+                c.execute("SELECT status, total_score FROM quiz_attempts WHERE quiz_id=? AND student_id=?", (r0['id'], sid))
+                a = c.fetchone()
+                if not a:
+                    action = f"<a class='btn' href='{url_for('student_quiz_start', qid=r0['id'])}'>Start</a>"
+                elif a['status'] == 'in_progress':
+                    action = f"<a class='btn' href='{url_for('student_quiz_resume', qid=r0['id'])}'>Resume</a>"
+                else:
+                    sc = a['total_score'] if a['total_score'] is not None else '—'
+                    action = f"<span class='badge'>Submitted · Score: {sc}</span>"
+                lis.append(
+                    f"<tr><td>Grade {r0['grade'].replace('G','')}</td><td>{r0['subject_name']}</td><td>{r0['title']}</td><td>{r0['mode']}</td><td>{int(r0['duration_seconds']/60)} min</td><td>{action}</td></tr>"
+                )
+            items = (
+                "<table class='table'><thead><tr><th>Grade</th><th>Subject</th><th>Title</th><th>Mode</th><th>Time</th><th>Action</th></tr></thead><tbody>"
+                + "".join(lis) + "</tbody></table>"
+            )
+        else:
+            items = "<div class='card empty'>No published quizzes yet.</div>"
+    conn.close()
+    return page("Available Quizzes", f"<div class='card'><h2>Available quizzes ({month})</h2>{items}</div>")
+
+@app.get('/student/quiz/<int:qid>/start')
+def student_quiz_start(qid: int):
+    r = require_student()
+    if r: return r
+    sid = is_student()
+    month = get_setting('current_month')
+    conn = get_db(); c = conn.cursor()
+    # quiz must be published and in student's active subject
+    c.execute(
+        """SELECT q.*, s.name AS subject_name, s.grade FROM quizzes q JOIN subjects s ON s.id=q.subject_id WHERE q.id=? AND q.is_published=1""", (qid,))
+    q = c.fetchone()
+    if not q:
+        conn.close()
+        return page("Not available", "<div class='card'>Quiz not available.</div>")
+    c.execute(
+        """SELECT 1 FROM enrollments WHERE student_id=? AND subject_id=? AND month=? AND status='ACTIVE'""", (sid, q['subject_id'], month))
+    if not c.fetchone():
+        conn.close()
+        return page("Not enrolled", "<div class='card'>You are not ACTIVE in this subject this month.</div>")
+    # create attempt if not exists
+    c.execute("SELECT id,status FROM quiz_attempts WHERE quiz_id=? AND student_id=?", (qid, sid))
+    a = c.fetchone()
+    if not a:
+        c.execute(
+            "INSERT INTO quiz_attempts(quiz_id,student_id,started_at,status) VALUES(?,?,?,?)",
+            (qid, sid, now_utc_iso(), 'in_progress'),
+        )
+        aid = c.lastrowid
+        conn.commit(); conn.close()
+    elif a['status'] == 'in_progress':
+        conn.close(); aid = a['id']
+    else:
+        conn.close(); return redirect(url_for('student_quizzes'))
+    return redirect(url_for('student_quiz_attempt', qid=qid, aid=aid))
+
+@app.get('/student/quiz/<int:qid>/resume')
+def student_quiz_resume(qid: int):
+    r = require_student()
+    if r: return r
+    sid = is_student()
+    conn = get_db(); c = conn.cursor()
+    c.execute(
+        "SELECT id FROM quiz_attempts WHERE quiz_id=? AND student_id=? AND status='in_progress'",
+        (qid, sid),
+    )
+    a = c.fetchone()
+    conn.close()
+    if not a:
+        return redirect(url_for('student_quizzes'))
+    return redirect(url_for('student_quiz_attempt', qid=qid, aid=a['id']))
+
+@app.get('/student/quiz/<int:qid>/attempt/<int:aid>')
+def student_quiz_attempt(qid: int, aid: int):
+    r = require_student()
+    if r: return r
+    sid = is_student()
+    conn = get_db(); c = conn.cursor()
+    c.execute(
+        """
+      SELECT a.*, q.title, q.mode, q.duration_seconds
+      FROM quiz_attempts a JOIN quizzes q ON q.id=a.quiz_id
+      WHERE a.id=? AND a.quiz_id=? AND a.student_id=?
+    """, (aid, qid, sid))
+    a = c.fetchone()
+    if not a or a['status'] != 'in_progress':
+        conn.close(); return redirect(url_for('student_quizzes'))
+    c.execute("SELECT * FROM quiz_questions WHERE quiz_id=? ORDER BY position,id", (qid,))
+    qs = c.fetchall()
+    qopts = {}
+    for qn in qs:
+        if qn['qtype'] == 'mcq':
+            c.execute("SELECT * FROM quiz_options WHERE question_id=?", (qn['id'],))
+            qopts[qn['id']] = c.fetchall()
+    conn.close()
+
+    # render one-page form
+    blocks = []
+    for i, qn in enumerate(qs, start=1):
+        img = (f"<div><img src='{qn['image_path']}' alt='' style='max-width:260px;border-radius:10px;border:1px solid #e5e7eb;margin-top:6px'/></div>" if qn['image_path'] else "")
+        if qn['qtype'] == 'mcq':
+            radios = []
+            for opt in qopts.get(qn['id'], []):
+                radios.append(
+                    f"<label style='display:flex;gap:8px;align-items:center'><input type='radio' name='q_{qn['id']}' value='{opt['id']}' required/> {opt['opt_text']}</label>"
+                )
+            inner = "".join(radios)
+        else:
+            ph = "Type your answer..."
+            rows = 2 if qn['qtype'] == 'short' else 5
+            inner = f"<textarea name='q_{qn['id']}' rows='{rows}' placeholder='{ph}' required></textarea>"
+        blocks.append(
+            f"<div class='card'><b>Q{i}</b> <span class='badge'>{qn['qtype']}</span> <span class='badge'>{qn['points']} pt</span><div style='margin-top:6px'>{qn['qtext']}</div>{img}<div style='margin-top:8px'>{inner}</div></div>"
+        )
+
+    body = f"""
+    <div class='card'>
+      <h2>Quiz</h2>
+      <div>Time left: <span id='timer' class='timer'></span></div>
+    </div>
+    <form id='quizform' method='post' action='{url_for('student_quiz_submit', qid=qid, aid=aid)}'>
+      {''.join(blocks)}
+      <div style='margin:12px 0'><button class='btn'>Submit</button></div>
+    </form>
+    """
+    extra = f"<script>startTimer({a['duration_seconds']}, 'timer', 'quizform');</script>"
+    return page("Quiz Attempt", body, extra_js=extra)
+
+@app.post('/student/quiz/<int:qid>/attempt/<int:aid>/submit')
+def student_quiz_submit(qid: int, aid: int):
+    r = require_student()
+    if r: return r
+    sid = is_student()
+    conn = get_db(); c = conn.cursor()
+    c.execute(
+        """
+      SELECT a.*, q.mode FROM quiz_attempts a JOIN quizzes q ON q.id=a.quiz_id
+      WHERE a.id=? AND a.quiz_id=? AND a.student_id=?
+    """, (aid, qid, sid))
+    a = c.fetchone()
+    if not a or a['status'] != 'in_progress':
+        conn.close(); return redirect(url_for('student_quizzes'))
+
+    # Read all questions
+    c.execute("SELECT * FROM quiz_questions WHERE quiz_id=? ORDER BY position,id", (qid,))
+    qs = c.fetchall()
+    total_auto = 0.0
+    total_manual = 0.0
+    # Insert answers
+    for qn in qs:
+        key = f"q_{qn['id']}"
+        if qn['qtype'] == 'mcq':
+            chosen = request.form.get(key)
+            if not chosen:
+                continue
+            c.execute(
+                "SELECT is_correct FROM quiz_options WHERE id=? AND question_id=?",
+                (chosen, qn['id']),
+            )
+            ro = c.fetchone()
+            correct = 1 if (ro and ro['is_correct']) else 0
+            awarded = float(qn['points']) if correct else 0.0
+            total_auto += awarded
+            c.execute(
+                """
+                INSERT INTO quiz_answers(attempt_id,question_id,chosen_option_id,answer_text,is_correct,awarded_points)
+                VALUES(?,?,?,?,?,?)
+                """,
+                (aid, qn['id'], chosen, None, correct, awarded),
+            )
+        else:
+            ans = request.form.get(key, '').strip()
+            # pending manual grading
+            c.execute(
+                """
+                INSERT INTO quiz_answers(attempt_id,question_id,answer_text,is_correct,awarded_points)
+                VALUES(?,?,?,?,NULL)
+                """,
+                (aid, qn['id'], ans, None),
+            )
+            total_manual += float(qn['points'])
+
+    # finalize attempt
+    c.execute(
+        "UPDATE quiz_attempts SET submitted_at=?, status='submitted', auto_score=? WHERE id=?",
+        (now_utc_iso(), total_auto, aid),
+    )
+    conn.commit(); conn.close()
+
+    # Instant results page (auto-part)
+    msg = f"You scored <b>{int(total_auto)}</b> on the auto-graded part."
+    if total_manual > 0:
+        msg += " Written answers will be marked by your tutor."
+    body = f"<div class='card'><h2>Submitted</h2><p>{msg}</p><a class='btn' href='{url_for('student_quizzes')}'>Back to quizzes</a></div>"
+    return page("Submitted", body)
+
+# ---------------------- Tutor: grade written answers & release ----------------------
+@app.get('/tutor/quiz/<int:qid>/responses')
+def tutor_quiz_results(qid: int):
+    r = require_tutor()
+    if r: return r
+    tid = is_tutor()
+    conn = get_db(); c = conn.cursor()
+    c.execute("SELECT * FROM quizzes WHERE id=? AND tutor_id=?", (qid, tid))
+    q = c.fetchone()
+    if not q:
+        conn.close(); return page("Not found", "<div class='card'>Quiz not found.</div>")
+
+    # attempts
+    c.execute(
+        """
+      SELECT a.*, st.full_name AS student_name
+      FROM quiz_attempts a JOIN students st ON st.id=a.student_id
+      WHERE a.quiz_id=? ORDER BY a.submitted_at DESC NULLS LAST, a.started_at DESC
+    """, (qid,))
+    attempts = c.fetchall()
+
+    rows = []
+    for a in attempts:
+        # pending written answers count
+        c.execute(
+            """
+          SELECT COUNT(*) AS pending
+          FROM quiz_answers qa JOIN quiz_questions qq ON qq.id=qa.question_id
+          WHERE qa.attempt_id=? AND qq.qtype IN ('short','long') AND qa.awarded_points IS NULL
+        """, (a['id'],))
+        pending = c.fetchone()['pending'] or 0
+        total = a['total_score'] if a['total_score'] is not None else (a['auto_score'] or 0)
+        action = f"<a href='{url_for('tutor_grade_attempt', qid=qid, aid=a['id'])}'>Open</a>"
+        rows.append(
+            f"<tr><td>{a['student_name']}</td><td>{a['status']}</td><td>{int(total)}</td><td>{pending}</td><td>{action}</td></tr>"
+        )
+
+    table = ("<div class='empty'>No attempts yet.</div>" if not rows else ("<table class='table'><thead><tr><th>Student</th><th>Status</th><th>Score</th><th>Pending</th><th>Action</th></tr></thead><tbody>" + "".join(rows) + "</tbody></table>"))
+    conn.close()
+    return page("Quiz Responses", f"<div class='card'><h2>Responses</h2>{table}<a class='btn secondary' style='margin-top:10px' href='{url_for('tutor_quizzes')}'>Back</a></div>")
+
+@app.get('/tutor/quiz/<int:qid>/attempt/<int:aid>')
+def tutor_grade_attempt(qid: int, aid: int):
+    r = require_tutor()
+    if r: return r
+    tid = is_tutor()
+    conn = get_db(); c = conn.cursor()
+    c.execute("SELECT * FROM quizzes WHERE id=? AND tutor_id=?", (qid, tid))
+    q = c.fetchone()
+    if not q:
+        conn.close(); return abort(404)
+    c.execute(
+        """
+      SELECT a.*, st.full_name AS student_name
+      FROM quiz_attempts a JOIN students st ON st.id=a.student_id
+      WHERE a.id=? AND a.quiz_id=?
+    """, (aid, qid))
+    a = c.fetchone()
+    if not a:
+        conn.close(); return abort(404)
+
+    # Pull answers joined to questions
+    c.execute(
+        """
+      SELECT qa.id AS ans_id, qa.answer_text, qa.chosen_option_id, qa.awarded_points, qa.is_correct,
+             qq.id AS qid, qq.qtext, qq.qtype, qq.points
+      FROM quiz_answers qa JOIN quiz_questions qq ON qq.id=qa.question_id
+      WHERE qa.attempt_id=? ORDER BY qq.position, qq.id
+    """, (aid,))
+    rows = c.fetchall(); conn.close()
+
+    blocks = []
+    for i, r0 in enumerate(rows, start=1):
+        if r0['qtype'] == 'mcq':
+            # MCQ already graded; show awarded_points
+            mark = int(r0['awarded_points'] or 0)
+            content = f"<div class='muted'>Auto-graded. Score: <b>{mark}</b> / {r0['points']}</div>"
+        else:
+            # Manual grading form
+            ap = '' if r0['awarded_points'] is None else str(int(r0['awarded_points']))
+            content = f"""
+              <div style='margin-top:6px'><b>Student answer:</b><div class='card'>{(r0['answer_text'] or '').replace('<','&lt;')}</div></div>
+              <form method='post' action='{url_for('tutor_grade_save', qid=qid, aid=aid, ans_id=r0['ans_id'])}' class='grid' style='grid-template-columns:1fr auto;gap:8px'>
+                <div><label>Award points (0..{r0['points']})</label><input name='points' type='number' min='0' max='{r0['points']}' value='{ap}' required/></div>
+                <button class='btn'>Save</button>
+              </form>
+            """
+        blocks.append(
+            f"<div class='card'><b>Q{i} ({r0['qtype']}, {r0['points']} pt)</b><div style='margin-top:6px'>{r0['qtext']}</div>{content}</div>"
+        )
+
+    finalize = f"<form method='post' action='{url_for('tutor_finalize_attempt', qid=qid, aid=aid)}'><button class='btn'>Finalize & release</button></form>"
+    body = (
+        f"<div class='card'><h2>Grade · {a['student_name']}</h2></div>"
+        + "".join(blocks)
+        + f"<div style='margin:10px 0'>{finalize} <a class='btn secondary' href='{url_for('tutor_quiz_results', qid=qid)}'>Back</a></div>"
+    )
+    return page("Grade Attempt", body)
+
+@app.post('/tutor/quiz/<int:qid>/attempt/<int:aid>/answer/<int:ans_id>/save')
+def tutor_grade_save(qid: int, aid: int, ans_id: int):
+    r = require_tutor()
+    if r: return r
+    points = float(request.form.get('points', '0') or 0)
+    conn = get_db(); c = conn.cursor()
+    # read max points
+    c.execute(
+        """
+      SELECT qa.question_id, qq.points
+      FROM quiz_answers qa JOIN quiz_questions qq ON qq.id=qa.question_id
+      WHERE qa.id=?
+    """, (ans_id,))
+    r0 = c.fetchone()
+    if not r0:
+        conn.close(); return abort(404)
+    m = float(r0['points'])
+    if points < 0:
+        points = 0
+    if points > m:
+        points = m
+    c.execute("UPDATE quiz_answers SET awarded_points=? WHERE id=?", (points, ans_id))
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_grade_attempt', qid=qid, aid=aid))
+
+@app.post('/tutor/quiz/<int:qid>/attempt/<int:aid>/finalize')
+def tutor_finalize_attempt(qid: int, aid: int):
+    r = require_tutor()
+    if r: return r
+    conn = get_db(); c = conn.cursor()
+    # Sum scores
+    c.execute("SELECT COALESCE(SUM(awarded_points),0) AS total FROM quiz_answers WHERE attempt_id=?", (aid,))
+    s_total = float(c.fetchone()['total'] or 0)
+    # Also track auto/manual split
+    c.execute("""
+      SELECT COALESCE(SUM(qa.awarded_points),0) AS auto_total
+      FROM quiz_answers qa JOIN quiz_questions qq ON qq.id=qa.question_id
+      WHERE qa.attempt_id=? AND qq.qtype='mcq'
+    """, (aid,))
+    auto_total = float(c.fetchone()['auto_total'] or 0)
+    manual_total = s_total - auto_total
+
+    c.execute("UPDATE quiz_attempts SET status='graded', total_score=?, auto_score=?, manual_score=? WHERE id=?", (s_total, auto_total, manual_total, aid))
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_quiz_results', qid=qid))
+
+# ---------------------- Admin analytics (quiz widgets) ----------------------
+def require_admin():
+    if not is_admin():
+        return redirect('/admin/login')
+
+@app.get('/admin/analytics/quizzes')
+def admin_quiz_analytics():
+    r = require_admin()
+    if r: return r
+    conn = get_db(); c = conn.cursor()
+    # 1) Attempts per day (last 14 days)
+    import datetime as _dt
+    since = (_dt.date.today() - _dt.timedelta(days=13)).isoformat()
+    c.execute("""
+      SELECT substr(COALESCE(submitted_at, started_at),1,10) AS d, COUNT(*) AS n
+      FROM quiz_attempts
+      WHERE date(COALESCE(submitted_at, started_at)) >= date(?)
+      GROUP BY d ORDER BY d
+    """, (since,))
+    d_rows = c.fetchall()
+    labels = [r['d'] for r in d_rows]
+    values = [r['n'] for r in d_rows]
+
+    # 2) Participation by subject (this month)
+    month = get_setting('current_month')
+    c.execute("""
+      SELECT s.name AS subject, COUNT(*) AS n
+      FROM quiz_attempts a JOIN quizzes q ON q.id=a.quiz_id
+           JOIN subjects s ON s.id=q.subject_id
+      WHERE q.month=?
+      GROUP BY s.name ORDER BY n DESC
+    """, (month,))
+    subj = c.fetchall()
+
+    # 3) Result distribution (graded attempts only)
+    c.execute("""
+      SELECT
+        SUM(CASE WHEN total_score >= 80 THEN 1 ELSE 0 END) AS g80,
+        SUM(CASE WHEN total_score BETWEEN 50 AND 79 THEN 1 ELSE 0 END) AS g50,
+        SUM(CASE WHEN total_score < 50 THEN 1 ELSE 0 END) AS l50
+      FROM quiz_attempts WHERE status='graded'
+    """)
+    dist = c.fetchone() or {"g80":0,"g50":0,"l50":0}
+    conn.close()
+
+    # Build charts
+    line_js = f"""
+      const ctx1 = document.getElementById('line').getContext('2d');
+      new Chart(ctx1, {{ type: 'line', data: {{ labels: {labels}, datasets: [{{ label:'Attempts', data:{values} }}] }} }});
+    """
+    bar_labels = [r['subject'] for r in subj]
+    bar_vals = [r['n'] for r in subj]
+    bar_js = f"""
+      const ctx2 = document.getElementById('bar').getContext('2d');
+      new Chart(ctx2, {{ type: 'bar', data: {{ labels: {bar_labels}, datasets: [{{ label:'Attempts', data:{bar_vals} }}] }} }});
+    """
+    pie_js = f"""
+      const ctx3 = document.getElementById('pie').getContext('2d');
+      new Chart(ctx3, {{ type: 'pie', data: {{ labels: ['≥80','50–79','<50'], datasets: [{{ data:[{dist['g80']},{dist['g50']},{dist['l50']}] }}] }} }});
+    """
+
+    body = f"""
+    <div class='card'><h2>Quiz Analytics</h2><div class='muted'>Live overview</div></div>
+    <div class='card'><h3>Attempts (last 14 days)</h3><canvas id='line' height='140'></canvas></div>
+    <div class='card'><h3>Participation by Subject ({month})</h3><canvas id='bar' height='160'></canvas></div>
+    <div class='card'><h3>Score Distribution (graded)</h3><canvas id='pie' height='160'></canvas></div>
+    """
+    extra = f"<script>{line_js}{bar_js}{pie_js}</script>"
+    return page("Quiz Analytics", body, extra_js=extra)
+# ===================== END QUIZ SYSTEM =====================
+
+
+# ===================== Quizzes: tutor & student =====================
+
+def quiz_time_window_ok(opens_at, closes_at):
+    """Return True if window is None or now is within [opens, closes]."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    try:
+        if opens_at:
+            o = datetime.datetime.fromisoformat(opens_at)
+            if now < o: return False
+        if closes_at:
+            c = datetime.datetime.fromisoformat(closes_at)
+            if now > c: return False
+    except Exception:
+        pass
+    return True
+
+@app.get('/tutor/quizzes')
+def tutor_quizzes():
+    r = require_tutor()
+    if r: return r
+    tid = is_tutor()
+    month = get_setting('current_month')
+    conn = get_db(); cur = conn.cursor()
+
+    # subjects for this tutor
+    cur.execute("""SELECT s.id AS subject_id, s.name, s.grade
+                   FROM tutor_subjects ts JOIN subjects s ON s.id=ts.subject_id
+                   WHERE ts.tutor_id=? ORDER BY s.grade,s.name""", (tid,))
+    subs = cur.fetchall()
+    opts = "".join([f"<option value='{s['subject_id']}'>{grade_label(s['grade'])} — {s['name']}</option>" for s in subs]) or "<option value=''>No subjects</option>"
+
+    # list quizzes by this tutor
+    cur.execute("""SELECT q.*, s.name AS subject_name, s.grade
+                   FROM quizzes q JOIN subjects s ON s.id=q.subject_id
+                   WHERE q.tutor_id=? ORDER BY q.created_at DESC""", (tid,))
+    rows = cur.fetchall()
+    table = "<div class='empty'>No quizzes yet.</div>"
+    if rows:
+        trs = []
+        for q in rows:
+            window = f"{(q['opens_at'] or '—')[:16].replace('T',' ')} → {(q['closes_at'] or '—')[:16].replace('T',' ')}"
+            pub = 'Yes' if q['is_published'] else 'No'
+            trs.append(f"<tr><td>{grade_label(q['grade'])} — {q['subject_name']}</td><td>{q['title']}</td><td>{window}</td><td>{q['duration_minutes']} min</td><td>{pub}</td><td><a class='links' href='{url_for('tutor_quiz_edit', qid=q['id'])}'>Open</a></td></tr>")
+        table = "<table><thead><tr><th>Subject</th><th>Title</th><th>Window</th><th>Duration</th><th>Published</th><th>Manage</th></tr></thead><tbody>"+"".join(trs)+"</tbody></table>"
+
+    conn.close()
+
+    body = f"""    <section class='grid'>
+      <div class='card'><h1>Quizzes — Manage</h1>
+        <form method='post' action='{url_for('tutor_quizzes_create')}' class='grid'>
+          <input type='hidden' name='create' value='1'/>
+          <div><label>Subject</label><select name='subject_id' required>{opts}</select></div>
+          <div><label>Title</label><input name='title' required/></div>
+          <div><label>Description</label><input name='description' placeholder='Optional'/></div>
+          <div class='grid' style='grid-template-columns:1fr 1fr 1fr;gap:10px'>
+            <div><label>Duration (minutes)</label><input type='number' min='1' name='duration' value='10' required/></div>
+            <div><label>Opens (UTC ISO)</label><input name='opens' placeholder='YYYY-MM-DDTHH:MM:SS+00:00'/></div>
+            <div><label>Closes (UTC ISO)</label><input name='closes' placeholder='YYYY-MM-DDTHH:MM:SS+00:00'/></div>
+          </div>
+          <div class='toolbar'><button class='btn'>Create quiz</button> <a class='btn secondary' href='{url_for('tutor_home')}'>← Back</a></div>
+        </form>
+      </div>
+      <div class='card'><h2>Your Quizzes</h2>{table}</div>
+    </section>
+    """
+    return page("Tutor Quizzes", body)
+
+@app.post('/tutor/quizzes')
+def tutor_quizzes_create():
+    r = require_tutor()
+    if r: return r
+    tid = is_tutor()
+    subject_id = request.form.get('subject_id')
+    title = (request.form.get('title') or '').strip()
+    description = (request.form.get('description') or '').strip() or None
+    duration = int(request.form.get('duration') or 10)
+    opens = request.form.get('opens') or None
+    closes = request.form.get('closes') or None
+    if not (subject_id and title):
+        return page('Error', card_msg('Subject and Title are required.'))
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("""INSERT INTO quizzes(subject_id,tutor_id,title,description,duration_minutes,opens_at,closes_at,is_published,created_at)
+                   VALUES(?,?,?,?,?,?,?,?,?)""", (subject_id, tid, title, description, duration, opens, closes, 0, now_utc_iso()))
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_quizzes'))
+
+@app.get('/tutor/quiz/<int:qid>')
+def tutor_quiz_edit(qid:int):
+    r = require_tutor()
+    if r: return r
+    tid = is_tutor()
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("""SELECT q.*, s.name AS subject_name, s.grade
+                   FROM quizzes q JOIN subjects s ON s.id=q.subject_id
+                   WHERE q.id=? AND q.tutor_id=?""", (qid, tid))
+    q = cur.fetchone()
+    if not q:
+        conn.close(); return page('Not found', card_msg('Quiz not found.'))
+    cur.execute("SELECT * FROM quiz_questions WHERE quiz_id=? ORDER BY id", (qid,))
+    qs = cur.fetchall()
+    rows = []
+    for row in qs:
+        opts = json.loads(row['options_json'])
+        opts_html = "<ol>" + "".join([f"<li>{o}</li>" for o in opts]) + "</ol>"
+        rows.append(f"<tr><td>{row['question_text']}{opts_html}<div class='mini muted'>Answer index: {row['correct_index']}</div></td><td>{row['points']}</td><td><form method='post' action='{url_for('tutor_quiz_delete_question', qid=qid, qqid=row['id'])}' onsubmit='return confirm(\"Delete question?\")'><button class='btn danger mini'>Delete</button></form></td></tr>")
+    qtable = "<div class='empty'>No questions yet.</div>" if not rows else "<table><thead><tr><th>Question</th><th>Points</th><th>Action</th></tr></thead><tbody>"+"".join(rows)+"</tbody></table>"
+    conn.close()
+
+    pub = 'Yes' if q['is_published'] else 'No'
+    toggle_label = 'Unpublish' if q['is_published'] else 'Publish'
+
+    body = f"""    <section class='grid'>
+      <div class='card'><h1>Edit Quiz</h1>
+        <div class='muted mini'>{grade_label(q['grade'])} — {q['subject_name']} • Duration: {q['duration_minutes']} min • Published: {pub}</div>
+        <form method='post' action='{url_for('tutor_quiz_update', qid=qid)}' class='grid'>
+          <div><label>Title</label><input name='title' value="{(q['title'] or '').replace('"','&quot;')}" required/></div>
+          <div><label>Description</label><input name='description' value="{(q['description'] or '').replace('"','&quot;')}"/></div>
+          <div class='grid' style='grid-template-columns:1fr 1fr 1fr;gap:10px'>
+            <div><label>Duration (minutes)</label><input type='number' name='duration' min='1' value='{q['duration_minutes']}'/></div>
+            <div><label>Opens (UTC ISO)</label><input name='opens' value='{q['opens_at'] or ''}'/></div>
+            <div><label>Closes (UTC ISO)</label><input name='closes' value='{q['closes_at'] or ''}'/></div>
+          </div>
+          <div class='toolbar'>
+            <button class='btn'>Save</button>
+            <form method='post' action='{url_for('tutor_quiz_toggle_publish', qid=qid)}' style='display:inline'><button class='btn secondary'>{toggle_label}</button></form>
+            <form method='post' action='{url_for('tutor_quiz_delete', qid=qid)}' style='display:inline' onsubmit='return confirm(\"Delete quiz and all questions?\")'><button class='btn danger'>Delete</button></form>
+            <a class='btn secondary' href='{url_for('tutor_quizzes')}'>← Back</a>
+          </div>
+        </form>
+      </div>
+      <div class='card'><h2>Add Question</h2>
+        <form method='post' action='{url_for('tutor_quiz_add_question', qid=qid)}' class='grid'>
+          <div><label>Question text</label><textarea name='question' required></textarea></div>
+          <div><label>Options (one per line)</label><textarea name='options' required placeholder='Option A\nOption B\nOption C'></textarea></div>
+          <div class='grid' style='grid-template-columns:1fr 1fr;gap:10px'>
+            <div><label>Correct option index (0-based)</label><input type='number' name='correct' min='0' value='0' required/></div>
+            <div><label>Points</label><input type='number' name='points' min='1' value='1' required/></div>
+          </div>
+          <button class='btn'>Add question</button>
+        </form>
+      </div>
+      <div class='card'><h2>Questions</h2>{qtable}</div>
+      <div class='card'><h2>Attempts</h2><a class='btn secondary' href='{url_for('tutor_quiz_attempts', qid=qid)}'>View attempts</a></div>
+    </section>
+    """
+    return page('Edit Quiz', body)
+
+@app.post('/tutor/quiz/<int:qid>/update')
+def tutor_quiz_update(qid:int):
+    r=require_tutor()
+    if r: return r
+    tid=is_tutor()
+    title = (request.form.get('title') or '').strip()
+    description = (request.form.get('description') or '').strip() or None
+    duration = int(request.form.get('duration') or 10)
+    opens = request.form.get('opens') or None
+    closes = request.form.get('closes') or None
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("UPDATE quizzes SET title=?,description=?,duration_minutes=?,opens_at=?,closes_at=? WHERE id=? AND tutor_id=?", (title,description,duration,opens,closes,qid,tid))
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_quiz_edit', qid=qid))
+
+@app.post('/tutor/quiz/<int:qid>/toggle')
+def tutor_quiz_toggle_publish(qid:int):
+    r=require_tutor()
+    if r: return r
+    tid=is_tutor()
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("UPDATE quizzes SET is_published=CASE is_published WHEN 1 THEN 0 ELSE 1 END WHERE id=? AND tutor_id=?", (qid, tid))
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_quiz_edit', qid=qid))
+
+@app.post('/tutor/quiz/<int:qid>/delete')
+def tutor_quiz_delete(qid:int):
+    r=require_tutor()
+    if r: return r
+    tid=is_tutor()
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("DELETE FROM quizzes WHERE id=? AND tutor_id=?", (qid, tid))
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_quizzes'))
+
+@app.post('/tutor/quiz/<int:qid>/question/add')
+def tutor_quiz_add_question(qid:int):
+    r=require_tutor()
+    if r: return r
+    tid=is_tutor()
+    question = (request.form.get('question') or '').strip()
+    options_raw = (request.form.get('options') or '').strip()
+    correct = int(request.form.get('correct') or 0)
+    points = int(request.form.get('points') or 1)
+    if not question or not options_raw:
+        return page('Error', card_msg('Question and options are required.'))
+    options = [o.strip() for o in options_raw.splitlines() if o.strip()]
+    if correct < 0 or correct >= len(options):
+        return page('Error', card_msg('Correct index is out of range for provided options.'))
+    conn=get_db(); cur=conn.cursor()
+    # ensure tutor owns quiz
+    cur.execute("SELECT 1 FROM quizzes WHERE id=? AND tutor_id=?", (qid, tid))
+    if not cur.fetchone():
+        conn.close(); return page('Forbidden', card_msg('Not your quiz.'))
+    cur.execute("INSERT INTO quiz_questions(quiz_id,question_text,options_json,correct_index,points) VALUES(?,?,?,?,?)",
+                (qid, question, json.dumps(options), correct, points))
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_quiz_edit', qid=qid))
+
+@app.post('/tutor/quiz/<int:qid>/question/<int:qqid>/delete')
+def tutor_quiz_delete_question(qid:int, qqid:int):
+    r=require_tutor()
+    if r: return r
+    tid=is_tutor()
+    conn=get_db(); cur=conn.cursor()
+    # verify ownership
+    cur.execute("SELECT 1 FROM quizzes WHERE id=? AND tutor_id=?", (qid, tid))
+    if not cur.fetchone():
+        conn.close(); return page('Forbidden', card_msg('Not your quiz.'))
+    cur.execute("DELETE FROM quiz_questions WHERE id=? AND quiz_id=?", (qqid, qid))
+    conn.commit(); conn.close()
+    return redirect(url_for('tutor_quiz_edit', qid=qid))
+
+@app.get('/tutor/quiz/<int:qid>/attempts')
+def tutor_quiz_attempts(qid:int):
+    r=require_tutor()
+    if r: return r
+    tid=is_tutor()
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("""SELECT q.id AS qid, q.title, s2.name AS subject_name, s2.grade
+                   FROM quizzes q JOIN subjects s2 ON s2.id=q.subject_id
+                   WHERE q.id=? AND q.tutor_id=?""", (qid, tid))
+    meta = cur.fetchone()
+    if not meta:
+        conn.close(); return page('Not found', card_msg('Quiz not found.'))
+    cur.execute("""SELECT a.*, st.full_name FROM quiz_attempts a
+                   JOIN students st ON st.id=a.student_id
+                   WHERE a.quiz_id=? ORDER BY a.submitted_at DESC NULLS LAST, a.started_at DESC""", (qid,))
+    atts = cur.fetchall()
+    conn.close()
+    table = "<div class='empty'>No attempts yet.</div>"
+    if atts:
+        trs = []
+        for a in atts:
+            status = 'Submitted' if a['submitted_at'] else 'In progress'
+            score = a['score'] if a['score'] is not None else '—'
+            trs.append(f"<tr><td>{a['full_name']}</td><td>{a['started_at'][:16].replace('T',' ')}</td><td>{(a['submitted_at'] or '—')[:16].replace('T',' ')}</td><td>{score}</td><td>{status}</td></tr>")
+        table = "<table><thead><tr><th>Student</th><th>Started</th><th>Submitted</th><th>Score</th><th>Status</th></tr></thead><tbody>"+"".join(trs)+"</tbody></table>"
+    body = f"""    <section class='grid'><div class='card'>
+      <h1>Attempts — {grade_label(meta['grade'])} {meta['subject_name']} — {meta['title']}</h1>
+      {table}
+      <div class='toolbar'><a class='btn secondary' href='{url_for('tutor_quiz_edit', qid=qid)}'>← Back</a></div>
+    </div></section>"""
+    return page('Quiz Attempts', body)
+
+# -------- Student side --------
+
+@app.get('/student/quizzes')
+def student_quizzes():
+    r=require_student()
+    if r: return r
+    sid=is_student(); month=get_setting('current_month')
+    conn=get_db(); cur=conn.cursor()
+    # active subjects for this student this month
+    cur.execute("SELECT subject_id FROM enrollments WHERE student_id=? AND month=? AND status='ACTIVE'", (sid, month))
+    subids=[row['subject_id'] for row in cur.fetchall()]
+    table = "<div class='empty'>No quizzes available.</div>"
+    if subids:
+        qmarks = ",".join(["?"]*len(subids))
+        cur.execute(f"""SELECT q.*, s.name AS subject_name, s.grade
+                         FROM quizzes q JOIN subjects s ON s.id=q.subject_id
+                         WHERE q.is_published=1 AND q.subject_id IN ({qmarks})
+                         ORDER BY q.created_at DESC""", (*subids,))
+        rows = cur.fetchall()
+        if rows:
+            trs=[]
+            for q in rows:
+                if not quiz_time_window_ok(q['opens_at'], q['closes_at']):
+                    continue
+                # get attempt if any
+                cur.execute("SELECT submitted_at, score FROM quiz_attempts WHERE quiz_id=? AND student_id=?", (q['id'], sid))
+                a = cur.fetchone()
+                status = 'Done' if (a and a['submitted_at']) else 'Open'
+                action = (f"<a class='btn secondary' href='{url_for('student_quiz_take', qid=q['id'])}'>Open</a>"
+                          if status=='Open' else f"<span class='chip'>{status}</span>")
+                trs.append(f"<tr><td>{grade_label(q['grade'])} — {q['subject_name']}</td><td>{q['title']}</td><td>{q['duration_minutes']} min</td><td>{status}</td><td>{action}</td></tr>")
+            table = "<table><thead><tr><th>Subject</th><th>Title</th><th>Duration</th><th>Status</th><th></th></tr></thead><tbody>"+"".join(trs)+"</tbody></table>"
+    conn.close()
+    body=fr"""    <section class='grid'><div class='card'>
+      <h1>Participation Quizzes</h1>
+      {table}
+      <div class='toolbar'><a class='btn secondary' href='{url_for('student_home')}'>← Back</a></div>
+    </div></section>"""
+    return page('Quizzes', body)
+
+@app.get('/student/quiz/<int:qid>')
+def student_quiz_take(qid:int):
+    r=require_student()
+    if r: return r
+    sid=is_student(); month=get_setting('current_month')
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("""SELECT q.*, s.name AS subject_name, s.grade
+                   FROM quizzes q JOIN subjects s ON s.id=q.subject_id
+                   WHERE q.id=? AND q.is_published=1""", (qid,))
+    q = cur.fetchone()
+    if not q or not quiz_time_window_ok(q['opens_at'], q['closes_at']):
+        conn.close(); return page('Unavailable', card_msg('Quiz not available.'))
+    # student must be ACTIVE in subject
+    cur.execute("SELECT 1 FROM enrollments WHERE student_id=? AND subject_id=? AND month=? AND status='ACTIVE'", (sid, q['subject_id'], month))
+    if not cur.fetchone():
+        conn.close(); return page('Forbidden', card_msg('You are not ACTIVE in this subject.'))
+    # fetch questions
+    cur.execute("SELECT * FROM quiz_questions WHERE quiz_id=? ORDER BY id", (qid,))
+    qs = cur.fetchall()
+    # check if submitted
+    cur.execute("SELECT submitted_at, detail_json, score FROM quiz_attempts WHERE quiz_id=? AND student_id=?", (qid, sid))
+    a = cur.fetchone()
+    if a and a['submitted_at']:
+        # read-only results
+        detail = json.loads(a['detail_json'] or '{}')
+        rows=[]
+        for row in qs:
+            opts = json.loads(row['options_json'])
+            pick = detail.get(str(row['id']), -1)
+            rows.append(f"<div class='card'><b>{row['question_text']}</b><ol>"+"".join([f"<li>{o}</li>" for o in opts])+f"</ol><div class='mini muted'>Your answer: {pick}</div></div>")
+        body = f"""        <section class='grid'>
+          <div class='card'><h1>{q['title']}</h1><div class='muted mini'>{grade_label(q['grade'])} — {q['subject_name']}</div>
+          <p class='chip'>Score: {a['score']}</p>
+          </div>
+          {''.join(rows)}
+          <div class='toolbar'><a class='btn secondary' href='{url_for('student_quizzes')}'>← Back</a></div>
+        </section>"""
+        conn.close()
+        return page('Quiz', body)
+
+    # start attempt if not exists
+    if not a:
+        cur.execute("INSERT INTO quiz_attempts(quiz_id,student_id,started_at) VALUES(?,?,?)", (qid, sid, now_utc_iso()))
+        conn.commit()
+    # render form
+    qrows=[]
+    for row in qs:
+        opts = json.loads(row['options_json'])
+        radios = "".join([f"<label style='display:flex;gap:8px;align-items:center'><input type='radio' name='q_{row['id']}' value='{i}' required/> {o}</label>" for i,o in enumerate(opts)])
+        qrows.append(f"<div class='card'><b>{row['question_text']}</b><div class='grid' style='grid-template-columns:1fr;gap:6px;margin-top:6px'>{radios}</div></div>")
+    conn.close()
+    body = f"""    <section class='grid'>
+      <div class='card'><h1>{q['title']}</h1><div class='muted mini'>{grade_label(q['grade'])} — {q['subject_name']} • Duration: {q['duration_minutes']} min</div></div>
+      <form method='post' action='{url_for('student_quiz_submit', qid=qid)}' class='grid'>
+        {''.join(qrows)}
+        <div class='toolbar'><button class='btn'>Submit</button> <a class='btn secondary' href='{url_for('student_quizzes')}'>Cancel</a></div>
+      </form>
+    </section>
+    """
+    return page('Quiz', body)
+
+@app.post('/student/quiz/<int:qid>')
+def student_quiz_submit(qid:int):
+    r=require_student()
+    if r: return r
+    sid=is_student()
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("SELECT id, duration_minutes FROM quizzes WHERE id=? AND is_published=1", (qid,))
+    q = cur.fetchone()
+    if not q:
+        conn.close(); return page('Unavailable', card_msg('Quiz not available.'))
+    cur.execute("SELECT * FROM quiz_questions WHERE quiz_id=? ORDER BY id", (qid,))
+    qs = cur.fetchall()
+    total = 0; score = 0; detail = {}
+    for row in qs:
+        total += row['points']
+        val = request.form.get(f"q_{row['id']}")
+        if val is None:
+            continue
+        try:
+            pick = int(val)
+        except Exception:
+            pick = -1
+        detail[str(row['id'])] = pick
+        if pick == row['correct_index']:
+            score += row['points']
+    cur.execute("UPDATE quiz_attempts SET submitted_at=?, score=?, detail_json=? WHERE quiz_id=? AND student_id=?",
+                (now_utc_iso(), score, json.dumps(detail), qid, sid))
+    conn.commit(); conn.close()
+    return redirect(url_for('student_quiz_take', qid=qid))
+
+# === UI enhancements appended by ChatGPT on build ===
+
+BASE_CSS = """
+<style>
+:root{
+  --primary:#1b5e20;
+  --primary-600:#2e7d32;
+  --primary-700:#1f5e25;
+  --accent:#ffd54f;
+  --bg:#f6f8fb;
+  --card:#ffffff;
+  --text:#0f172a;
+  --muted:#64748b;
+  --border:#e2e8f0;
+  --border-strong:#cbd5e1;
+  --shadow-sm:0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow:0 1px 3px rgb(0 0 0 / 0.1), 0 1px 2px rgb(0 0 0 / 0.06);
+  --shadow-md:0 4px 6px rgb(0 0 0 / 0.1), 0 2px 4px rgb(0 0 0 / 0.06);
+  --radius:12px;
+  --radius-lg:16px;
+  --transition:all .18s ease;
+}
+
+/* Dark mode */
+[data-theme="dark"]{
+  --bg:#0b1117;
+  --card:#0f1720;
+  --text:#e5edf5;
+  --muted:#9fb0c3;
+  --border:#1f2a36;
+  --border-strong:#2a3846;
+  --shadow:0 1px 3px rgb(0 0 0 / 0.5), 0 1px 2px rgb(0 0 0 / 0.4);
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  background:linear-gradient(135deg, #f0fdf4 0%, var(--bg) 100%);
+  color:var(--text);
+}
+
+/* Top bar */
+.header{
+  position:sticky; top:0; z-index:40;
+  backdrop-filter: blur(14px);
+  background:rgba(255,255,255,.9);
+  border-bottom:1px solid var(--border);
+}
+[data-theme="dark"] .header{ background:rgba(15,23,32,.8) }
+
+.nav{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px}
+.brand{display:flex;align-items:center;gap:10px}
+.brand-logo{width:40px;height:40px;border-radius:10px;border:2px solid rgba(27,94,32,.15);object-fit:cover}
+.brand-title{font-weight:800;letter-spacing:-.2px}
+.brand-title span{background:linear-gradient(135deg,var(--primary),var(--primary-700)); -webkit-background-clip:text; -webkit-text-fill-color:transparent}
+
+.top-actions{display:flex;align-items:center;gap:10px}
+.role-pill{font-size:12px;padding:6px 10px;border-radius:999px;border:1px solid var(--border);background:var(--card)}
+
+/* Shell layout */
+.app{
+  display:grid;
+  grid-template-columns: 260px 1fr;
+  gap:16px;
+  max-width:1300px;
+  margin:18px auto;
+  padding:0 16px;
+}
+@media (max-width: 980px){
+  .app{grid-template-columns:1fr}
+  .sidebar{position:fixed;inset:0 40% 0 0;max-width:320px;transform:translateX(-102%);transition:var(--transition);z-index:50}
+  .sidebar.open{transform:translateX(0)}
+  .backdrop{display:none}
+  .sidebar.open + .backdrop{display:block; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:40}
+}
+
+/* Sidebar */
+.sidebar{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  padding:14px;
+  box-shadow:var(--shadow);
+  height:fit-content;
+  align-self:start;
+}
+.side-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.side-title{font-weight:800}
+.nav-sec{margin-top:10px}
+.nav-sec h3{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:10px 8px}
+.nav-list{list-style:none;margin:0;padding:0}
+.nav-list a{
+  display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--text);
+  padding:10px 12px;border-radius:10px;border:1px solid transparent;
+}
+.nav-list a:hover{background:rgba(27,94,32,.06);border-color:var(--border)}
+[data-theme="dark"] .nav-list a:hover{background:rgba(255,255,255,.06)}
+
+/* Content area */
+.content{display:grid;gap:14px}
+.card{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  box-shadow:var(--shadow);
+  padding:16px;
+  transition:var(--transition);
+}
+.card:hover{transform:translateY(-2px)}
+h1{font-size:22px;margin:0 0 8px}
+h2{font-size:18px;margin:0 0 10px}
+.muted{color:var(--muted)} .mini{font-size:12px}
+
+/* Stats & progress */
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.stat{padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--card)}
+.stat .k{font-size:20px;font-weight:800;color:var(--primary)}
+@media (max-width: 800px){ .stats{grid-template-columns:repeat(2,minmax(0,1fr))} }
+
+.progress{height:10px;border-radius:999px;background:#e9eef5;border:1px solid var(--border);overflow:hidden}
+[data-theme="dark"] .progress{background:#15202b}
+.progress > div{height:100%; width:0%; background:linear-gradient(90deg,var(--primary),var(--accent))}
+
+/* Forms & tables */
+label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px;font-weight:600}
+input,select,textarea{
+  width:100%;padding:11px 12px;border:2px solid var(--border);border-radius:12px;background:#fff;color:var(--text);transition:var(--transition)
+}
+[data-theme="dark"] input,[data-theme="dark"] select,[data-theme="dark"] textarea{background:#0b1117;color:var(--text)}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(27,94,32,.15)}
+input::file-selector-button{padding:8px 10px;border:0;background:linear-gradient(135deg,var(--primary),var(--primary-700));color:#fff;border-radius:10px;margin-right:10px}
+
+.btn{
+  display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:12px;border:0;
+  background:linear-gradient(135deg,var(--primary),var(--primary-700));color:#fff;cursor:pointer;
+  font-weight:700;box-shadow:var(--shadow-md);transition:var(--transition);text-decoration:none
+}
+.btn:hover{transform:translateY(-2px)}
+.btn.secondary{background:#fff;color:var(--primary);border:2px solid var(--primary)}
+[data-theme="dark"] .btn.secondary{background:transparent}
+.btn.success{background:linear-gradient(135deg,#2e7d32,#1b5e20)}
+.btn.warn{background:linear-gradient(135deg,#f59e0b,#d97706)}
+.btn.danger{background:linear-gradient(135deg,#ef4444,#dc2626)}
+.btn.mini{padding:6px 10px;font-weight:600}
+
+/* Tables */
+table{width:100%;border-collapse:separate;border-spacing:0;border-radius:12px;overflow:hidden}
+thead th{background:rgba(27,94,32,.06);text-align:left;padding:10px;font-size:12px;border-bottom:1px solid var(--border)}
+tbody td{padding:10px;border-bottom:1px dashed var(--border-strong)}
+tbody tr:nth-child(even){background:rgba(0,0,0,.02)}
+
+/* Messages */
+.msg{border:1px solid var(--border);border-radius:12px;padding:12px;margin:8px 0;background:var(--card)}
+.msg.me{border-left:4px solid var(--primary)} .msg.them{border-left:4px solid var(--accent)}
+.msg .meta{font-size:12px;color:var(--muted);margin-bottom:4px}
+
+/* Footer */
+.footer{padding:28px 0;margin:10px 0 20px;color:var(--muted);font-size:12px;text-align:center;border-top:1px solid var(--border)}
+</style>
+"""
+
+
+BASE_JS = """
+<script>
+function filterTable(inputId, tableId){
+  const q=(document.getElementById(inputId)?.value||"").toLowerCase();
+  const rows=document.querySelectorAll('#'+tableId+' tbody tr');
+  rows.forEach(r=>{ r.style.display = r.innerText.toLowerCase().includes(q) ? '' : 'none'; });
+}
+
+function applyTheme(pref){
+  document.documentElement.setAttribute('data-theme', pref);
+  localStorage.setItem('pasco_theme', pref);
+}
+
+function initTheme(){
+  const saved = localStorage.getItem('pasco_theme');
+  if(saved){ applyTheme(saved); }
+}
+
+function toggleSidebar(open){
+  const sb=document.querySelector('.sidebar'); const bd=document.querySelector('.backdrop');
+  if(!sb) return;
+  if(open){ sb.classList.add('open'); bd?.classList.add('show'); }
+  else{ sb.classList.remove('open'); bd?.classList.remove('show'); }
+}
+
+function animateProgressBars(){
+  document.querySelectorAll('.progress[data-pct]').forEach(el=>{
+    const pct = Math.max(0, Math.min(100, parseInt(el.getAttribute('data-pct')||'0',10)));
+    requestAnimationFrame(()=>{ el.querySelector('div').style.width = pct+'%'; });
+  });
+}
+
+document.addEventListener('DOMContentLoaded',()=>{
+  initTheme();
+  animateProgressBars();
+
+  const themeBtn = document.getElementById('theme-toggle');
+  if(themeBtn){
+    themeBtn.addEventListener('click', ()=>{
+      const current = document.documentElement.getAttribute('data-theme') || 'light';
+      applyTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  const openBtn = document.getElementById('sidebar-open');
+  const closeBtn = document.getElementById('sidebar-close');
+  const backdrop = document.querySelector('.backdrop');
+  openBtn?.addEventListener('click', ()=>toggleSidebar(true));
+  closeBtn?.addEventListener('click', ()=>toggleSidebar(false));
+  backdrop?.addEventListener('click', ()=>toggleSidebar(false));
+});
+</script>
+"""
+
+
+def page(title, body_html, extra_head="", extra_js=""):
+    # Build auth links and role label without changing your session logic
+    role = "Guest"
+    if is_admin(): role = "Admin"
+    elif is_tutor(): role = "Tutor"
+    elif is_student(): role = "Student"
+
+    auth=[]
+    if not (is_student() or is_tutor() or is_admin()):
+        auth += [f"<a class='btn secondary' href='{url_for('student_login')}'>Student</a>",
+                 f"<a class='btn secondary' href='{url_for('tutor_login')}'>Tutor</a>",
+                 f"<a class='btn secondary' href='{url_for('admin_login')}'>Admin</a>"]
+    else:
+        if is_student():
+            auth += [f"<a class='btn secondary' href='{url_for('student_home')}'>My Portal</a>",
+                     f"<a class='btn secondary' href='{url_for('student_logout')}'>Logout</a>"]
+        if is_tutor():
+            auth += [f"<a class='btn secondary' href='{url_for('tutor_home')}'>Tutor</a>",
+                     f"<a class='btn secondary' href='{url_for('tutor_logout')}'>Logout</a>"]
+        if is_admin():
+            auth += [f"<a class='btn secondary' href='{url_for('admin_home')}'>Admin</a>",
+                     f"<a class='btn secondary' href='#logout'>Logout</a>"]
+
+    # Sidebar menus by role (routes already exist in your app)
+    student_menu = f"""
+      <div class='nav-sec'>
+        <h3>Student</h3>
+        <ul class='nav-list'>
+          <li><a href='{safe_url('student_home','/student') }'>Dashboard</a></li>
+          <li><a href='{safe_url('student_home','/student') }#materials'>Materials</a></li>
+          <li><a href='{safe_url('student_home','/student') }#assignments'>Assignments</a></li>
+          <li><a href='{safe_url('student_home','/student') }#messages'>Messages</a></li>
+          <li><a href='{safe_url('student_home','/student') }#sessions'>Sessions</a></li>
+        </ul>
+      </div>
+    """
+
+    tutor_menu = f"""
+      <div class='nav-sec'>
+        <h3>Tutor</h3>
+        <ul class='nav-list'>
+          <li><a href='{safe_url('tutor_home','/tutor')}'>Dashboard</a></li>
+          <li><a href='{safe_url('tutor_home','/tutor')}#sessions'>Sessions</a></li>
+          <li><a href='{safe_url('tutor_home','/tutor')}#uploads'>Uploads</a></li>
+          <li><a href='{safe_url('tutor_home','/tutor')}#assignments'>Assignments</a></li>
+          <li><a href='{safe_url('tutor_home','/tutor')}#messages'>Messages</a></li>
+        </ul>
+      </div>
+    """
+
+    admin_menu = f"""
+      <div class='nav-sec'>
+        <h3>Admin</h3>
+        <ul class='nav-list'>
+          <li><a href='{safe_url('admin_home','/admin') }'>Dashboard</a></li>
+          <li><a href='{safe_url('admin_home','/admin') }#students'>Students</a></li>
+          <li><a href='{safe_url('admin_home','/admin') }#tutors'>Tutors</a></li>
+          <li><a href='{safe_url('admin_home','/admin') }#groups'>Groups</a></li>
+          <li><a href='{safe_url('admin_home','/admin') }#messages'>Messages</a></li>
+          <li><a href='{safe_url('admin_home','/admin') }#analytics'>Analytics</a></li>
+        </ul>
+      </div>
+    """
+
+    role_blocks = ""
+    if is_student(): role_blocks += student_menu
+    if is_tutor(): role_blocks += tutor_menu
+    if is_admin(): role_blocks += admin_menu
+    if not role_blocks:
+        role_blocks = f"""
+        <div class='nav-sec'>
+          <h3>Welcome</h3>
+          <ul class='nav-list'>
+            <li><a href='{url_for('student_login')}'>Student login</a></li>
+            <li><a href='{url_for('tutor_login')}'>Tutor login</a></li>
+            <li><a href='{url_for('admin_login')}'>Admin login</a></li>
+          </ul>
+        </div>
+        """
+
+    return f"""
+    <html>
+    <head>
+      <meta name='viewport' content='width=device-width, initial-scale=1'/>
+      <title>{title}</title>
+      {GOOGLE_FONTS}{BASE_CSS}{BASE_JS}{extra_head}
+    </head>
+    <body>
+      <header class='header'>
+        <div class='nav'>
+          <div class='brand'>
+            <button id='sidebar-open' class='btn mini secondary' aria-label='Open menu' style='display:none'>Menu</button>
+            <img class='brand-logo' src='/logo' alt='Pasco logo'/>
+            <div class='brand-title'><span>Pasco Portal</span></div>
+          </div>
+          <div class='top-actions'>
+            <span class='role-pill'>{role}</span>
+            <a class='btn secondary' href='/'>Home</a>
+            {''.join(auth)}
+            <button id='theme-toggle' class='btn mini secondary' aria-label='Toggle theme'>Theme</button>
+          </div>
+        </div>
+      </header>
+
+      <div class='app'>
+        <aside class='sidebar'>
+          <div class='side-head'>
+            <div class='side-title'>Navigation</div>
+            <button id='sidebar-close' class='btn mini secondary' aria-label='Close' style='display:none'>Close</button>
+          </div>
+          {role_blocks}
+          <div class='nav-sec'>
+            <h3>General</h3>
+            <ul class='nav-list'>
+              <li><a href='/'>Enrollment</a></li>
+            </ul>
+          </div>
+        </aside>
+        <div class='backdrop'></div>
+
+        <main class='content'>
+          {body_html}
+        </main>
+      </div>
+
+      <footer class='footer'>⚡ Powered by Pasca Ragophala</footer>
+      {extra_js}
+      <script>
+        // Show sidebar toggles only on small screens
+        if (window.matchMedia('(max-width: 980px)').matches) {{
+          document.getElementById('sidebar-open')?.setAttribute('style','');
+          document.getElementById('sidebar-close')?.setAttribute('style','');
+        }}
+      </script>
+    </body>
+    </html>
+    """
+
+
+@app.get('/student')
+def student_home():
+    r=require_student()
+    if r: return r
+    sid=is_student(); month=get_setting('current_month')
+    conn=get_db(); cur=conn.cursor()
+
+    # Enrollments this month
+    cur.execute("""
+      SELECT e.subject_id, e.status, s.name AS subject_name, s.grade
+      FROM enrollments e JOIN subjects s ON s.id=e.subject_id
+      WHERE e.student_id=? AND e.month=? ORDER BY s.grade,s.name
+    """,(sid,month))
+    enrolls=cur.fetchall()
+    active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status']=='ACTIVE']
+
+    # WhatsApp links for enrolled subjects
+    group_html="<div class='card empty'>No group links yet.</div>"
+    if active_sub_ids:
+        q=f"SELECT g.subject_id, g.invite_link, s.name, s.grade FROM groups g JOIN subjects s ON s.id=g.subject_id WHERE g.month=? AND g.subject_id IN ({','.join('?'*len(active_sub_ids))}) ORDER BY s.grade,s.name"
+        cur.execute(q,(month,*active_sub_ids)); gs=cur.fetchall()
+        if gs:
+            rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['name']}</td><td><a class='links' target='_blank' href='{r['invite_link']}'>Open WhatsApp</a></td></tr>" for r in gs])
+            group_html=f"<div id='sessions' class='card'><h2>WhatsApp Links</h2><table><thead><tr><th>Subject</th><th>Link</th></tr></thead><tbody>{rows}</tbody></table></div>"
+
+    # Sessions + Meet link for enrolled subjects
+    sessions_html="<div class='card empty'>No sessions yet.</div>"
+    if active_sub_ids:
+        q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link
+              FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
+              WHERE s.subject_id IN ({','.join('?'*len(active_sub_ids))})
+              ORDER BY s.day_of_week, s.start_time"""
+        cur.execute(q, (*active_sub_ids,))
+        sess=cur.fetchall()
+        if sess:
+            rows=[]
+            for r in sess:
+                meet = f"<a class='links' target='_blank' href='{r['meet_link']}'>Join</a>" if r['meet_link'] else "—"
+                rows.append(f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td><td>{DOW[r['day_of_week']]} {r['start_time']}-{r['end_time']}</td><td>{meet}</td></tr>")
+            sessions_html=f"<div class='card' id='sessions'><h2>Sessions</h2><table><thead><tr><th>Subject</th><th>When</th><th>Meet</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+
+    # Materials & Assignments list (with upload timestamp)
+    materials_html="<div class='card empty'>No materials yet.</div>"
+    assignments=[]; normal=[]
+    tutors_for_subject={}
+    mat_count=0; asg_count=0
+    if active_sub_ids:
+        # get tutors for each active subject (for messaging)
+        cur.execute(f"""SELECT ts.subject_id, t.id AS tutor_id, t.full_name
+                        FROM tutor_subjects ts JOIN tutors t ON t.id=ts.tutor_id
+                        WHERE ts.subject_id IN ({','.join('?'*len(active_sub_ids))})""", (*active_sub_ids,))
+        for row in cur.fetchall():
+            tutors_for_subject.setdefault(row['subject_id'], []).append((row['tutor_id'], row['full_name']))
+
+        q=f"""SELECT m.*, sub.name AS subject_name, sub.grade, t.full_name AS tutor_name
+              FROM materials m
+              JOIN subjects sub ON sub.id=m.subject_id
+              JOIN tutors t ON t.id=m.tutor_id
+              WHERE m.month=? AND m.subject_id IN ({','.join('?'*len(active_sub_ids))})
+              ORDER BY m.created_at DESC"""
+        cur.execute(q,(month,*active_sub_ids)); mats=cur.fetchall()
+        if mats:
+            mat_count = len(mats)
+            for m in mats:
+                is_ass = (m['is_assignment']==1 or m['kind']=='assignment')
+                if is_ass: asg_count += 1
+                when = m['created_at'][:16].replace('T',' ')
+                link = f"<a class='links' target='_blank' href='{m['file_path']}'>Download</a>" if m['kind'] in ('file','assignment') and m['file_path'] else f"<a class='links' target='_blank' href='{m['youtube_url']}'>Open</a>"
+                row = (m, f"<tr><td>{grade_label(m['grade'])} — {m['subject_name']}</td><td>{m['title']} {'<span class=\"badge\">assignment</span>' if is_ass else ''}</td><td>{m['tutor_name']}</td><td>{when}</td><td>{link}</td></tr>")
+                (assignments if is_ass else normal).append(row)
+            def pack(rows):
+                return "<table><thead><tr><th>Subject</th><th>Title</th><th>Tutor</th><th>Uploaded</th><th>Link</th></tr></thead><tbody>"+''.join([r[1] for r in rows])+"</tbody></table>"
+            materials_html = (("<h3>Assignments</h3>"+pack(assignments)) if assignments else "") + (("<h3>Materials</h3>"+pack(normal)) if normal else "")
+            materials_html = f"<div id='materials' class='card'><h2>Materials & Assignments</h2>{materials_html}</div>"
+
+    # Assignment submission blocks (top priority)
+    submit_blocks=[]; submit_open=0
+    if assignments:
+        for m,_ in assignments:
+            due = m['due_date'] or ''
+            cur.execute("SELECT id,file_path,mark,feedback,submitted_at FROM submissions WHERE material_id=? AND student_id=?", (m['id'], sid))
+            sub = cur.fetchone()
+            maxp = m['max_points'] if m['max_points'] else 100
+            if sub:
+                mark = f" • Mark: {sub['mark']} / {maxp}" if sub['mark'] is not None else ""
+                fb = f"<div class='muted mini'>Feedback: {sub['feedback']}</div>" if sub['feedback'] else ""
+                submit_blocks.append(f"<div class='card'><b>{m['title']}</b> — {grade_label(m['grade'])} {m['subject_name']} • Due: {due or '—'}<br/>Submitted: {sub['submitted_at'][:16].replace('T',' ')}{mark}{fb} <a class='links' href='{sub['file_path']}' target='_blank'>Download your file</a></div>")
+            else:
+                allow=True
+                if due:
+                    try:
+                        end=datetime.datetime.fromisoformat(due+"T23:59:59+00:00")
+                        allow = datetime.datetime.now(datetime.timezone.utc) <= end
+                    except Exception: pass
+                if allow:
+                    submit_open += 1
+                    submit_blocks.append(f"""
+                      <div class='card' id='assignments'>
+                        <b>{m['title']}</b> — {grade_label(m['grade'])} {m['subject_name']} • Due: {due or '—'} • Total: {maxp}
+                        <form method='post' action='{url_for('student_submit_assignment', mid=m['id'])}' enctype='multipart/form-data' class='grid' style='grid-template-columns:1fr auto;gap:10px;margin-top:8px'>
+                          <input type='file' name='file' required accept='.pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.txt'/>
+                          <button class='btn'>Submit</button>
+                        </form>
+                      </div>""")
+                else:
+                    submit_blocks.append(f"<div class='card'><b>{m['title']}</b> — Due: {due} <span class='chip'>Closed</span></div>")
+
+    # Feedback & Results (graded items)
+    feedback_card = ""
+    cur.execute("""SELECT m.title, m.max_points, s2.name AS subject_name, s2.grade,
+                          sub.mark, sub.feedback, sub.evaluated_at
+                   FROM submissions sub
+                   JOIN materials m ON m.id=sub.material_id
+                   JOIN subjects s2 ON s2.id=m.subject_id
+                   WHERE sub.student_id=? AND sub.mark IS NOT NULL
+                   ORDER BY sub.evaluated_at DESC LIMIT 50""", (sid,))
+    graded = cur.fetchall()
+    avg_pct = 0
+    if graded:
+        total=0; denom=0
+        items = []
+        for g in graded:
+            when = (g['evaluated_at'] or '')[:16].replace('T',' ')
+            maxp = g['max_points'] if g['max_points'] else 100
+            total += (g['mark'] or 0)
+            denom += (maxp or 100)
+            fb = f"<div class='muted mini' style='margin-top:4px'>{g['feedback']}</div>" if g['feedback'] else ""
+            items.append(
+                f"<div class='feedback-item'><div class='feedback-title'>{g['title']} — "
+                f"{grade_label(g['grade'])} {g['subject_name']}</div>"
+                f"<div>Mark: <span class='badge'>{g['mark']} / {maxp}</span> <span class='muted mini'>• {when}</span></div>"
+                f"{fb}</div>"
+            )
+        avg_pct = round((total/denom)*100, 1) if denom else 0
+        feedback_card = f"<div class='card'><h2>Feedback & Results</h2><div class='progress' data-pct='{avg_pct}'><div></div></div><div class='mini muted' style='margin-top:6px'>Average performance: {avg_pct}%</div><div class='feedback-list' style='margin-top:10px'>{''.join(items)}</div></div>"
+
+    # Messages (compose to tutor + inbox)
+    options=[]
+    for subid in active_sub_ids:
+        sid_int = int(subid)
+        for (tid, tname) in tutors_for_subject.get(sid_int, []):
+            subj = next((f"{grade_label(e['grade'])} {e['subject_name']}" for e in enrolls if e['subject_id']==sid_int), "Subject")
+            options.append((tid, sid_int, f"{tname} — {subj}"))
+    msg_opts = "".join([f"<option value='{tid}|{sid_int}'>{label}</option>" for tid,sid_int,label in options]) or "<option value=''>No tutors available</option>"
+
+    cur.execute("""SELECT dm.*, 
+                          CASE dm.from_role 
+                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
+                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
+                               ELSE 'Admin' END AS from_name,
+                          CASE dm.to_role 
+                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
+                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
+                               ELSE 'Admin' END AS to_name
+                   FROM direct_messages dm
+                   WHERE (to_role='student' AND to_id=?) OR (from_role='student' AND from_id=?)
+                   ORDER BY created_at ASC LIMIT 30""",(sid,sid))
+    msgs = cur.fetchall()
+    msg_list = "".join([f"<div class='msg {'me' if m['from_role']=='student' else 'them'}'><div class='meta'>{m['from_name']} → {m['to_name']} • {m['created_at'][:16].replace('T',' ')}</div><div>{m['body']}</div></div>" for m in msgs]) or "<div class='empty'>No messages yet.</div>"
+
+    conn.close()
+
+    # Enrollment list UI
+    if enrolls:
+        e_rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td><td><span class='chip {r['status'].lower()}'>{r['status']}</span></td></tr>" for r in enrolls])
+        enr_html=f"<table><thead><tr><th>Subject</th><th>Status</th></tr></thead><tbody>{e_rows}</tbody></table>"
+    else:
+        enr_html="<div class='empty'>No enrollments yet.</div>"
+
+    # Ratings block
+    rate_card = ""
+    if rating_window_open(month) and active_sub_ids:
+        cur2 = get_db().cursor()
+        cur2.execute("""SELECT subject_id, rating, comment FROM lesson_ratings
+                       WHERE student_id=? AND month=?""", (sid, month))
+        previous = {r["subject_id"]:(r["rating"], r["comment"]) for r in cur2.fetchall()}
+        cur2.connection.close()
+
+        rows=[]
+        for e in enrolls:
+            if e['status'] != 'ACTIVE':
+                continue
+            sid_int = int(e['subject_id'])
+            r0, c0 = previous.get(sid_int, (None, "")) if sid_int in previous else (None, "")
+            rows.append(f"""
+              <tr>
+                <td>{grade_label(e['grade'])} — {e['subject_name']}</td>
+                <td>
+                  <select name='rating_{sid_int}' required>
+                    <option value='' {'selected' if not r0 else ''}>Select</option>
+                    {''.join([f"<option value='{k}' {'selected' if r0==k else ''}>{k} ★</option>" for k in range(1,6)])}
+                  </select>
+                </td>
+                <td><input name='comment_{sid_int}' placeholder='Optional comment' value="{(c0 or '').replace('"','&quot;')}"/></td>
+              </tr>
+            """)
+
+        rate_card = f"""
+          <div class='card'>
+            <h2>Rate your classes for {month}</h2>
+            <p class='muted mini'>This is open from the 24th to the end of the month. 1 ★ (poor) → 5 ★ (excellent).</p>
+            <form method='post' action='{url_for('student_submit_ratings')}'>
+              <table>
+                <thead><tr><th>Subject</th><th>Rating</th><th>Comment</th></tr></thead>
+                <tbody>{''.join(rows)}</tbody>
+              </table>
+              <div class='toolbar'><button class='btn'>Save ratings</button></div>
+            </form>
+          </div>
+        """
+
+    # Dashboard stats
+    active_count = len(active_sub_ids)
+    pending_asg = submit_open
+    avg_display = f"{avg_pct}%" if graded else "—"
+    mat_display = mat_count
+
+    stats_html = f"""
+    <section class='stats'>
+      <div class='stat'><div class='mini muted'>Active subjects</div><div class='k'>{active_count}</div></div>
+      <div class='stat'><div class='mini muted'>Open assignments</div><div class='k'>{pending_asg}</div></div>
+      <div class='stat'><div class='mini muted'>Average score</div><div class='k'>{avg_display}</div></div>
+      <div class='stat'><div class='mini muted'>New materials</div><div class='k'>{mat_display}</div></div>
+    </section>
+    """
+
+    compose_block = f"""
+      <div class='card' id='messages'><h2>Messages</h2>
+        <form method='post' action='{url_for('student_send_message')}' class='grid'>
+          <div><label>To Tutor</label><select name='combo' required>{msg_opts}</select></div>
+          <div><label>Your message</label><textarea name='body' required placeholder='Type your message...'></textarea></div>
+          <button class='btn'>Send</button>
+        </form>
+        <div style='margin-top:10px'>{msg_list}</div>
+      </div>
+    """
+
+    body=fr"""
+    {stats_html}
+    <section class='grid'>
+      <div class='card'>
+        <h1>Welcome, {session.get('student_name','Student')}</h1>
+        <p class='muted'>Month: {month}</p>
+        <h2>Your Enrollments</h2>{enr_html}
+        <p class='mini muted'>To add more subjects, submit the Home form again with your phone number and the new subjects + PoP.</p>
+      </div>
+
+      {group_html}
+      {sessions_html}
+      {materials_html}
+{(''.join(submit_blocks)) if submit_blocks else ''}
+
+      {feedback_card}
+      {rate_card}
+      {compose_block}
+    </section>"""
+    return page("Student Portal", body)
+
+
+@app.get('/tutor')
+def tutor_home():
+    r=require_tutor()
+    if r: return r
+    tid=is_tutor(); month=get_setting('current_month')
+    conn=get_db(); cur=conn.cursor()
+
+    # Assigned subjects
+    cur.execute("""SELECT s.id AS subject_id, s.name AS subject_name, s.grade
+                   FROM tutor_subjects ts JOIN subjects s ON s.id=ts.subject_id
+                   WHERE ts.tutor_id=? ORDER BY s.grade,s.name""",(tid,))
+    subs=cur.fetchall()
+    assigned_list=", ".join([f"{grade_label(r['grade'])} — {r['subject_name']}" for r in subs]) or "<span class='muted'>No subjects assigned yet.</span>"
+
+    # WhatsApp links for current month
+    sub_ids=[str(x['subject_id']) for x in subs]
+    groups_html="<div class='card empty'>No group links yet.</div>"
+    if sub_ids:
+        q=f"""SELECT g.subject_id, g.invite_link, s.name, s.grade
+              FROM groups g JOIN subjects s ON s.id=g.subject_id
+              WHERE g.month=? AND g.subject_id IN ({','.join('?'*len(sub_ids))})
+              ORDER BY s.grade,s.name"""
+        cur.execute(q,(month,*sub_ids)); groups=cur.fetchall()
+        if groups:
+            rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['name']}</td><td><a class='links' target='_blank' href='{r['invite_link']}'>Open WhatsApp</a></td></tr>" for r in groups])
+            groups_html=f"<div class='card'><h2>WhatsApp Links</h2><table><thead><tr><th>Subject</th><th>Link</th></tr></thead><tbody>{rows}</tbody></table></div>"
+
+    # Sessions for this tutor
+    cur.execute("""SELECT se.id, se.subject_id, s.name AS subject_name, s.grade, se.day_of_week, se.start_time, se.end_time, se.meet_link
+                   FROM sessions se JOIN subjects s ON s.id=se.subject_id
+                   WHERE se.tutor_id=? ORDER BY se.day_of_week,se.start_time""",(tid,))
+    sess=cur.fetchall()
+    s_rows="".join([
+        f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td>"
+        f"<td>{DOW[r['day_of_week']]} {r['start_time']}-{r['end_time']}</td>"
+        f"<td>{('<a class=\"links\" target=\"_blank\" href=\"'+r['meet_link']+'\">Meet</a>') if r['meet_link'] else '—'}</td>"
+        f"<td><a class='links' href='{url_for('session_qr', id=r['id'])}'>QR</a> · "
+        f"<a class='links' href='{url_for('tutor_session_attendance', sid=r['id'])}'>Mark attendance</a></td></tr>"
+        for r in sess
+    ]) or "<tr><td colspan='4'><div class='empty'>No sessions yet.</div></td></tr>"
+    sessions_html = f"<div class='card' id='sessions'><h2>Sessions</h2><table><thead><tr><th>Subject</th><th>When</th><th>Meet</th><th>Actions</th></tr></thead><tbody>{s_rows}</tbody></table></div>"
+
+    # Upload form (assignments + due date + max points)
+    subjects_options="".join([f"<option value='{r['subject_id']}'>{grade_label(r['grade'])} — {r['subject_name']}</option>" for r in subs]) or "<option value=''>No assigned subjects</option>"
+
+    upload_block=f"""
+      <div class='card' id='uploads'>
+        <h2>Upload materials (Month: {month})</h2>
+        <form method='post' action='{url_for('tutor_upload')}' enctype='multipart/form-data' class='grid'>
+          <div><label>Subject</label><select name='subject_id' required>{subjects_options}</select></div>
+          <div><label>Title</label><input name='title' required/></div>
+          <div><label>Upload File</label><input type='file' name='file' accept='.pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.zip'/></div>
+          <div><label>YouTube URL</label><input name='youtube' placeholder='https://youtube.com/...'/></div>
+          <div class='grid' style='grid-template-columns:1fr 1fr 1fr;gap:10px'>
+            <label style='display:flex;align-items:center;gap:8px'><input type='checkbox' name='is_assignment'/> Mark as assignment</label>
+            <div><label>Due date (YYYY-MM-DD)</label><input name='due' placeholder='e.g. 2025-10-01'/></div>
+            <div><label>Out of (default 100)</label><input name='max_points' type='number' min='1' max='1000' placeholder='100'/></div>
+          </div>
+          <button class='btn'>Save</button>
+          <p class='muted mini'>Attach a file and/or paste a YouTube link. Assignments show first to students.</p>
+        </form>
+      </div>
+    """
+
+    # Your uploads (delete within 24h)
+    cur.execute("""SELECT m.*, s.name AS subject_name, s.grade
+                   FROM materials m JOIN subjects s ON s.id=m.subject_id
+                   WHERE m.tutor_id=? ORDER BY m.created_at DESC LIMIT 200""",(tid,))
+    mymats=cur.fetchall()
+    def can_delete(ts):
+        try:
+            created=datetime.datetime.fromisoformat(ts)
+            return (datetime.datetime.now(datetime.timezone.utc) - created) <= datetime.timedelta(hours=24)
+        except Exception:
+            return False
+    rows=[]
+    for m in mymats:
+        when=m['created_at'][:16].replace('T',' ')
+        delbtn=f"<form method='post' action='{url_for('tutor_delete_material', mid=m['id'])}' style='display:inline' onsubmit='return confirm(\"Delete this upload?\")'><button class='btn danger mini'>Delete</button></form>" if can_delete(m['created_at']) else "<span class='muted mini'>Locked</span>"
+        rows.append(f"<tr><td>{grade_label(m['grade'])} — {m['subject_name']}</td><td>{m['title']} {'<span class=\"badge\">assignment</span>' if (m['is_assignment']==1 or m['kind']=='assignment') else ''}</td><td>{when}</td><td>{delbtn}</td></tr>")
+    uploads_html = "<div class='card empty'>No uploads yet.</div>" if not rows else f"<div class='card'><h2>My uploads</h2><table><thead><tr><th>Subject</th><th>Title</th><th>Uploaded</th><th>Action</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+
+    # Assignments you posted (manage submissions)
+    cur.execute("""SELECT m.id, m.title, m.due_date, m.max_points, s.name AS subject_name, s.grade
+                   FROM materials m JOIN subjects s ON s.id=m.subject_id
+                   WHERE m.tutor_id=? AND (m.is_assignment=1 OR m.kind='assignment') ORDER BY m.created_at DESC""",(tid,))
+    asg=cur.fetchall()
+    asg_rows="".join([f"<tr><td>{grade_label(a['grade'])} — {a['subject_name']}</td><td>{a['title']}</td><td>Due: {a['due_date'] or '—'}</td><td>Total: {a['max_points'] or 100}</td><td><a class='links' href='{url_for('tutor_assignment_manage', mid=a['id'])}'>Manage</a></td></tr>" for a in asg]) or "<tr><td colspan='5'><div class='empty'>No assignments yet.</div></td></tr>"
+    assignments_html = f"<div class='card' id='assignments'><h2>Assignments</h2><table><thead><tr><th>Subject</th><th>Title</th><th>Due</th><th>Total</th><th>Action</th></tr></thead><tbody>{asg_rows}</tbody></table></div>"
+
+    # Simple messages view
+    cur.execute("""SELECT dm.*, 
+                          CASE dm.from_role 
+                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
+                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
+                               ELSE 'Admin' END AS from_name,
+                          CASE dm.to_role 
+                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
+                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
+                               ELSE 'Admin' END AS to_name
+                   FROM direct_messages dm
+                   WHERE (to_role='tutor' AND to_id=?) OR (from_role='tutor' AND from_id=?)
+                   ORDER BY created_at ASC LIMIT 30""",(tid,tid))
+    msgs = cur.fetchall()
+    msg_list = "".join([f"<div class='msg {'me' if m['from_role']=='tutor' else 'them'}'><div class='meta'>{m['from_name']} → {m['to_name']} • {m['created_at'][:16].replace('T',' ')}</div><div>{m['body']}</div></div>" for m in msgs]) or "<div class='empty'>No messages yet.</div>"
+    messages_html = f"<div class='card' id='messages'><h2>Messages</h2>{msg_list}</div>"
+
+    # Dashboard stats
+    active_subjects = len(subs)
+    total_sessions = len(sess)
+    total_uploads = len(mymats)
+    total_assignments = len(asg)
+
+    stats_html = f"""
+    <section class='stats'>
+      <div class='stat'><div class='mini muted'>Assigned subjects</div><div class='k'>{active_subjects}</div></div>
+      <div class='stat'><div class='mini muted'>Sessions this month</div><div class='k'>{total_sessions}</div></div>
+      <div class='stat'><div class='mini muted'>My uploads</div><div class='k'>{total_uploads}</div></div>
+      <div class='stat'><div class='mini muted'>Assignments posted</div><div class='k'>{total_assignments}</div></div>
+    </section>
+    """
+
+    conn.close()
+
+    body=fr"""
+    {stats_html}
+    <section class='grid'>
+      <div class='card'>
+        <h1>Welcome, {session.get('tutor_name','Tutor')}</h1>
+        <div class='muted'>Subjects: {assigned_list}</div>
+      </div>
+
+      {groups_html}
+      {sessions_html}
+      {upload_block}
+      {uploads_html}
+      {assignments_html}
+      {messages_html}
+    </section>"""
+    return page("Tutor Portal", body)
+
