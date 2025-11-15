@@ -1244,7 +1244,12 @@ def page(title, body_html, extra_head="", extra_js=""):
 
 
       <main class='wrap'>{content_wrapped}</main>
-      <footer class='footer'>⚡ Powered by Pasca Ragophala</footer>{extra_js}
+      <footer class='footer'>
+          <div class="copyright">
+            © <span id="year"></span> Early Bird Testimony Academy · All rights reserved.
+          </div>
+          ⚡ Powered by Pasca Ragophala
+      </footer>{extra_js}
     </body></html>
     """
 # ===================== File routes =====================
