@@ -4349,8 +4349,8 @@ def quiz_time_window_ok(opens_at, closes_at):
         pass
     return True
 
-@app.get('/tutor/quizzes')
-def tutor_quizzes():
+# @app.get('/tutor/quizzes')
+def tutor_quizzes_old():
     r = require_tutor()
     if r: return r
     tid = is_tutor()
@@ -5333,8 +5333,8 @@ def student_home():
     return page("Student Portal", body)
 
 
-# @app.get('/tutor')
-def tutor_home_old():
+@app.get('/tutor')
+def tutor_home():
     r=require_tutor()
     if r: return r
     tid=is_tutor(); month=get_setting('current_month')
