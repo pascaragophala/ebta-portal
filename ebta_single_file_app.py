@@ -1055,8 +1055,7 @@ def page(title, body_html, extra_head="", extra_js=""):
     auth = []
     if not (is_student() or is_tutor() or is_admin()):
         auth += [f"<a href='{url_for('student_login')}'>Student</a>",
-                 f"<a href='{url_for('tutor_login')}'>Tutor</a>",
-                 f"<a href='{url_for('admin_login')}'>Admin</a>"]
+                 f"<a href='{url_for('tutor_login')}'>Tutor</a>"]
     else:
         if is_student():
             auth += [f"<a href='{url_for('student_home')}'>My Portal</a>", f"<a href='{url_for('student_logout')}'>Logout</a>"]
@@ -1409,7 +1408,6 @@ def home():
             <button class='btn'>Submit registration</button>
             <a class='btn secondary' href='{url_for('student_login')}'>Student login</a>
             <a class='btn secondary' href='{url_for('tutor_login')}'>Tutor login</a>
-            <a class='btn secondary' href='{url_for('admin_login')}'>Admin</a>
           </div>
         </form>
       </div>
