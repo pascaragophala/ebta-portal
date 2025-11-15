@@ -1676,7 +1676,7 @@ def student_logout():
     return redirect(url_for('student_login'))
 
 @app.get('/student')
-def student_home():
+def student_home_context():
     r=require_student()
     if r: return r
     sid=is_student(); month=get_setting('current_month')
