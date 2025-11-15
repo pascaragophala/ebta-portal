@@ -5074,8 +5074,8 @@ def page(title, body_html, extra_head="", extra_js=""):
     """
 
 
-@app.get('/student')
-def student_home():
+# @app.get('/student')
+def student_home_old():
     r=require_student()
     if r: return r
     sid=is_student(); month=get_setting('current_month')
