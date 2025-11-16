@@ -631,9 +631,34 @@ tbody tr:hover{background:#f0f7f1}
 .feedback-item{background:#fff;border:1px solid var(--border);border-left:4px solid var(--primary);padding:12px;border-radius:14px}
 /* Responsive */
 @media (max-width: 768px){
-  .nav{padding:12px}
+  body{font-size:15px;}
+  .nav{
+    padding:10px 14px;
+    flex-direction:column;
+    align-items:flex-start;
+    gap:6px;
+  }
+  .brand .title{font-size:18px;}
+  .links{
+    width:100%;
+    display:flex;
+    flex-wrap:wrap;
+    gap:6px;
+    justify-content:flex-start;
+  }
+  .links a{
+    margin-left:0;
+    padding:6px 10px;
+    font-size:13px;
+  }
   .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .wrap{padding:0 14px}
+  .wrap{padding:0 12px}
+  .layout{grid-template-columns:1fr}
+  .sidebar{
+    position:relative;
+    top:auto;
+    max-height:none;
+  }
   .footer{padding:22px 0}
 }
 /* === Modern LMS Layout Additions === */
@@ -1063,7 +1088,7 @@ def page(title, body_html, extra_head="", extra_js=""):
             auth += [f"<a href='{url_for('tutor_home')}'>Tutor</a>", f"<a href='{url_for('tutor_logout')}'>Logout</a>"]
         if is_admin():
             auth += [f"<a href='{safe_url('admin_home','/admin')}'>Admin</a>", f"<a href='{url_for('admin_logout')}'>Logout</a>"]
-    right = " ".join(auth) if auth else "<a href='/admin/login'>Admin</a>"
+    right = " ".join(auth)
 
     # Build role-aware sidebar with compact stats
     sidebar_html = ""
