@@ -1420,17 +1420,33 @@ def home():
             </div>
           </div>
 
-          <!-- PIN + PoP -->
+          <!-- PIN + Payment + PoP -->
           <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
             <div>
               <label>Create a 5-digit PIN</label>
               <input name='pin' required minlength='5' maxlength='5' pattern='\d{{5}}'/>
             </div>
             <div>
-              <label>Proof of Payment (1–2 files)</label>
-              <input type='file' name='pop'
-                     accept='.pdf,.png,.jpg,.jpeg,.gif,.webp'
-                     required multiple/>
+              <label>Payment details</label>
+              <div class='mini'>
+                Please pay your monthly EBTA fees via EFT using the details below, then tick the box to confirm payment and upload your Proof of Payment.
+              </div>
+              <ul class='mini' style='margin:6px 0 4px 14px;padding:0;'>
+                <li>Account holder: Ms MCB MOHALE</li>
+                <li>Contact: 0649619653</li>
+                <li>Account number: 2062604285</li>
+                <li>Bank name: Capitec</li>
+              </ul>
+              <label style='margin-top:6px;display:flex;align-items:center;gap:8px;'>
+                <input type='checkbox' id='paid_check' name='paid_check'/>
+                <span class='mini'>I have already made payment and will upload my Proof of Payment now.</span>
+              </label>
+              <div id='pop_section' style='margin-top:8px;display:none;'>
+                <label>Proof of Payment (1–2 files)</label>
+                <input type='file' name='pop'
+                       accept='.pdf,.png,.jpg,.jpeg,.gif,.webp'
+                       multiple/>
+              </div>
             </div>
           </div>
 
@@ -1455,6 +1471,10 @@ def home():
         form.querySelectorAll("input[type='checkbox'][name='subject_ids']")
       );
 
+      const paidCheck = document.getElementById('paid_check');
+      const popSection = document.getElementById('pop_section');
+      const popInput = form.querySelector("input[type='file'][name='pop']");
+
       function updateSubjects() {
         const grade = gradeSelect.value;
         boxes.forEach(box => {
@@ -1478,6 +1498,19 @@ def home():
       gradeSelect.addEventListener('change', updateSubjects);
       updateSubjects(); // initial
 
+      if (paidCheck && popSection) {
+        paidCheck.addEventListener('change', function(){
+          if (this.checked) {
+            popSection.style.display = 'block';
+          } else {
+            popSection.style.display = 'none';
+            if (popInput) {
+              popInput.value = '';
+            }
+          }
+        });
+      }
+
       form.addEventListener('submit', function(e){
         const grade = gradeSelect.value;
         if (!grade) {
@@ -1489,6 +1522,18 @@ def home():
         if (!anyChecked) {
           e.preventDefault();
           alert('Please select at least one subject for the chosen grade.');
+          return;
+        }
+
+        if (!paidCheck || !paidCheck.checked) {
+          e.preventDefault();
+          alert('Please confirm that you have made payment before submitting, and then upload your Proof of Payment.');
+          return;
+        }
+
+        if (!popInput || !popInput.files || popInput.files.length < 1 || popInput.files.length > 2) {
+          e.preventDefault();
+          alert('Please upload 1 or 2 Proof of Payment files.');
         }
       });
     });
