@@ -730,6 +730,14 @@ body.wide-mode :root, body.wide-mode .wrap, body.wide-mode .container, body.wide
 .ui-controls .chip { cursor: pointer; padding: 6px 10px; border: 1px solid #cfd8d3; border-radius: 999px; background: #ffffffcc; backdrop-filter: blur(6px); font-size: 12px; }
 .sidebar-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
 .sidebar-head .collapse { font-size:12px; border:1px solid #cfd8d3; border-radius:8px; padding:6px 8px; cursor:pointer; background:#fff; }
+
+.scroll-x{
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+}
+.scroll-x table{
+  min-width:720px;
+}
 </style>
 """
 
@@ -1433,7 +1441,7 @@ def home():
               </div>
               <ul class='mini' style='margin:6px 0 4px 14px;padding:0;'>
                 <li>Account holder: Ms MCB MOHALE</li>
-                <li>Contact: 0649619653</li>
+                <li>Contact: &#x2B27;27649619653</li>
                 <li>Account number: 2062604285</li>
                 <li>Bank name: Capitec</li>
               </ul>
@@ -1975,7 +1983,7 @@ def student_home():
 
       <div class='card'><h2>WhatsApp Links</h2>{group_html}</div>
       <div class='card'><h2>Sessions</h2>{sessions_html}</div>
-      <div class='card'><h2>Materials & Assignments</h2>{materials_html}</div>
+      <div class='card'><h2>Materials & Assignments</h2><div class='scroll-x'>{materials_html}</div></div>
 {(''.join(submit_blocks)) if submit_blocks else ''}
 
       {feedback_card}
