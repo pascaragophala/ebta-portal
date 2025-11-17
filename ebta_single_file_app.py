@@ -1441,7 +1441,7 @@ def home():
               </div>
               <ul class='mini' style='margin:6px 0 4px 14px;padding:0;'>
                 <li>Account holder: Ms MCB MOHALE</li>
-                <li>Contact: &#x2B27;27649619653</li>
+                <li>Contact: 0649619653</li>
                 <li>Account number: 2062604285</li>
                 <li>Bank name: Capitec</li>
               </ul>
