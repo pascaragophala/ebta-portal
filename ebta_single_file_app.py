@@ -493,6 +493,118 @@ def pretty_month_label(month_str: str) -> str:
 
 
 
+
+
+# ===================== Notifications (Email & SMS) =====================
+
+def send_email_notification(to_email: str, subject: str, body: str):
+    # Best-effort email sender.
+    # Uses SMTP settings from environment if configured, otherwise logs into the messages table.
+    # Env vars for real sending:
+    #   EBTA_SMTP_HOST, EBTA_SMTP_PORT, EBTA_SMTP_USER, EBTA_SMTP_PASS, EBTA_SMTP_FROM (optional, falls back to user).
+    if not to_email:
+        return
+    host = os.environ.get("EBTA_SMTP_HOST")
+    port = int(os.environ.get("EBTA_SMTP_PORT", "587"))
+    user = os.environ.get("EBTA_SMTP_USER")
+    pwd = os.environ.get("EBTA_SMTP_PASS")
+    sender = os.environ.get("EBTA_SMTP_FROM", user)
+
+    # If SMTP is not configured, just log the outgoing email in the admin Messages page
+    if not (host and user and pwd and sender):
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+            payload = f"TO:{to_email} | SUBJECT:{subject} | BODY:{body}"
+            cur.execute(
+                "INSERT INTO messages(kind,payload,created_at,resolved) VALUES(?,?,?,0)",
+                ("email_log", payload, now_utc_iso()),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        return
+
+    try:
+        import smtplib
+        from email.message import EmailMessage
+
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = sender
+        msg["To"] = to_email
+        msg.set_content(body)
+
+        with smtplib.SMTP(host, port, timeout=15) as s:
+            s.starttls()
+            s.login(user, pwd)
+            s.send_message(msg)
+    except Exception as e:
+        # Log error so admin can see what went wrong
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+            payload = f"TO:{to_email} | SUBJECT:{subject} | ERROR:{e}"
+            cur.execute(
+                "INSERT INTO messages(kind,payload,created_at,resolved) VALUES(?,?,?,0)",
+                ("email_error", payload, now_utc_iso()),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+
+def send_sms_notification(to_phone: str, body: str):
+    # Best-effort SMS sender.
+    # Uses Twilio-style environment variables if available, otherwise logs into the messages table.
+    # Env vars for real sending:
+    #   EBTA_TWILIO_SID, EBTA_TWILIO_TOKEN, EBTA_TWILIO_FROM
+    if not to_phone:
+        return
+
+    account_sid = os.environ.get("EBTA_TWILIO_SID")
+    auth_token = os.environ.get("EBTA_TWILIO_TOKEN")
+    from_number = os.environ.get("EBTA_TWILIO_FROM")
+
+    # If Twilio not configured, log the SMS so it appears in Admin → Messages
+    if not (account_sid and auth_token and from_number):
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+            payload = f"TO:{to_phone} | BODY:{body}"
+            cur.execute(
+                "INSERT INTO messages(kind,payload,created_at,resolved) VALUES(?,?,?,0)",
+                ("sms_log", payload, now_utc_iso()),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        return
+
+    try:
+        from twilio.rest import Client  # type: ignore
+
+        client = Client(account_sid, auth_token)
+        client.messages.create(from_=from_number, to=to_phone, body=body)
+    except Exception as e:
+        # Log error so admin can see what went wrong
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+            payload = f"TO:{to_phone} | ERROR:{e}"
+            cur.execute(
+                "INSERT INTO messages(kind,payload,created_at,resolved) VALUES(?,?,?,0)",
+                ("sms_error", payload, now_utc_iso()),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+
 # ===================== Templating =====================
 
 GOOGLE_FONTS = "<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap' rel='stylesheet'>"
@@ -1646,6 +1758,41 @@ def register():
     conn.commit()
     conn.close()
 
+    # --- Notifications: registration received (pending approval) ---
+    try:
+        base_url = (request.url_root or '').rstrip('/')
+        portal_link = base_url
+        login_link = base_url + url_for('student_login')
+        month_label = pretty_month_label(month)
+
+        # Short first name for SMS
+        first_name = full_name.split()[0] if full_name else ''
+
+        email_subject = f"EBTA registration received ({month_label})"
+        email_body = (
+            f"Hi {full_name},\n\n"
+            f"Your EBTA registration for {month_label} was received and is waiting for approval.\n\n"
+            f"Login details (keep these safe):\n"
+            f"WhatsApp number: {phone}\n"
+            f"PIN: {pin}\n"
+            f"Portal: {portal_link}\n"
+            f"Student login: {login_link}\n\n"
+            f"You will receive another message once your enrollment is approved.\n\n"
+            f"If you did not request this registration, please contact EBTA support."
+        )
+        sms_body = (
+            f"EBTA: Hi {first_name}, your registration for {month_label} was received "
+            f"and is waiting for approval. Login later with WhatsApp {phone} and PIN {pin} at {login_link}."
+        )
+
+        if email:
+            send_email_notification(email, email_subject, email_body)
+        if phone:
+            send_sms_notification(phone, sms_body)
+    except Exception:
+        # Never break the flow if notifications fail
+        pass
+
     if not created:
         return page("No change", card_msg("Already enrolled for selected subjects this month."))
 
@@ -2688,25 +2835,116 @@ def enrollment_action(id: int, action: str):
         return r
     conn = get_db()
     cur = conn.cursor()
+
+    notify_email = None
+    notify_phone = None
+    notify_name = None
+    notify_pin = None
+    notify_subject = None
+    notify_grade = None
+    notify_month = None
+
     if action == 'approve':
+        # Activate enrollment
         cur.execute("UPDATE enrollments SET status='ACTIVE' WHERE id=?", (id,))
+
+        # Student details + current PIN
         cur.execute("""
-            SELECT st.id, st.pin FROM students st
-            JOIN enrollments e ON e.student_id=st.id WHERE e.id=?
+            SELECT st.id, st.full_name, st.phone_whatsapp, st.email, st.pin
+            FROM students st
+            JOIN enrollments e ON e.student_id = st.id
+            WHERE e.id = ?
         """, (id,))
         srow = cur.fetchone()
-        if srow and not srow['pin']:
-            pins = set()
-            cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
-            pins |= {r['pin'] for r in cur.fetchall()}
-            cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
-            pins |= {r['pin'] for r in cur.fetchall()}
-            new_pin = gen_pin(pins)
-            cur.execute("UPDATE students SET pin=? WHERE id=?", (new_pin, srow['id']))
+
+        # Enrollment + subject details for the notification
+        cur.execute("""
+            SELECT e.month, sub.name AS subject_name, sub.grade
+            FROM enrollments e
+            JOIN subjects sub ON sub.id = e.subject_id
+            WHERE e.id = ?
+        """, (id,))
+        erow = cur.fetchone()
+
+        if srow:
+            notify_name = srow["full_name"]
+            notify_phone = srow["phone_whatsapp"]
+            notify_email = srow["email"]
+            notify_pin = srow["pin"]
+            if erow:
+                notify_month = erow["month"]
+                notify_subject = erow["subject_name"]
+                notify_grade = erow["grade"]
+
+            # If the student does not have a PIN yet, generate one now
+            if not notify_pin:
+                pins = set()
+                cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
+                pins |= {r['pin'] for r in cur.fetchall()}
+                cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
+                pins |= {r['pin'] for r in cur.fetchall()}
+                new_pin = gen_pin(pins)
+                cur.execute("UPDATE students SET pin=? WHERE id=?", (new_pin, srow['id']))
+                notify_pin = new_pin
+
     elif action == 'lapse':
         cur.execute("UPDATE enrollments SET status='LAPSED' WHERE id=?", (id,))
+
     conn.commit()
     conn.close()
+
+    # --- Notifications: enrollment approved ---
+    try:
+        if action == 'approve' and notify_phone and notify_pin:
+            base_url = (request.url_root or '').rstrip('/')
+            portal_link = base_url
+            login_link = base_url + url_for('student_login')
+
+            month_label = pretty_month_label(notify_month) if notify_month else ""
+            grade_label_txt = grade_label(notify_grade) if notify_grade else ""
+            first_name = notify_name.split()[0] if notify_name else ""
+
+            email_subject = "EBTA enrollment approved"
+            email_body_lines = [
+                f"Hi {notify_name},",
+                "",
+                "Your EBTA enrollment has been approved.",
+            ]
+            if grade_label_txt or notify_subject or month_label:
+                detail = " ".join(x for x in [grade_label_txt, notify_subject, month_label] if x)
+                if detail.strip():
+                    email_body_lines.append(f"Subject/month: {detail}")
+                    email_body_lines.append("")
+            email_body_lines.extend([
+                "Login details (keep these safe):",
+                f"WhatsApp number: {notify_phone}",
+                f"PIN: {notify_pin}",
+                f"Portal: {portal_link}",
+                f"Student login: {login_link}",
+                "",
+                "You can now log in to your EBTA portal to access materials, assignments, and WhatsApp links (where available).",
+                "",
+                "If you did not request this change, please contact EBTA support.",
+            ])
+            email_body = "\n".join(email_body_lines)
+
+            sms_body_parts = [
+                f"EBTA: Hi {first_name}, your enrollment is APPROVED.",
+            ]
+            if month_label or grade_label_txt or notify_subject:
+                detail = " ".join(x for x in [grade_label_txt, notify_subject, month_label] if x)
+                sms_body_parts.append(detail + ".")
+            sms_body_parts.append(f"Login with WhatsApp {notify_phone} + PIN {notify_pin} at {login_link}.")
+            sms_body = " ".join(sms_body_parts)
+
+            if notify_email:
+                send_email_notification(notify_email, email_subject, email_body)
+            if notify_phone:
+                send_sms_notification(notify_phone, sms_body)
+    except Exception:
+        # Never break the admin flow if notifications fail
+        pass
+
     return redirect(url_for('admin_enrollments'))
 
 # --- Admin: Students (show Guardian & Email) ---
