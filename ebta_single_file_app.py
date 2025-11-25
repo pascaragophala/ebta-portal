@@ -111,14 +111,14 @@ def init_db():
     cur = conn.cursor()
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS settings(
+    CREATE TABLE IF NOT EXISTS settings(
         key TEXT PRIMARY KEY,
         value TEXT
-      );
+    );
     """)
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS students(
+    CREATE TABLE IF NOT EXISTS students(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         full_name TEXT NOT NULL,
         phone_whatsapp TEXT NOT NULL UNIQUE,
@@ -127,20 +127,20 @@ def init_db():
         grade TEXT NOT NULL,
         pin TEXT,
         created_at TEXT NOT NULL
-      );
+    );
     """)
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS subjects(
+    CREATE TABLE IF NOT EXISTS subjects(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         grade TEXT NOT NULL,
         UNIQUE(name,grade)
-      );
+    );
     """)
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS groups(
+    CREATE TABLE IF NOT EXISTS groups(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         subject_id INTEGER NOT NULL,
         month TEXT NOT NULL,
@@ -148,11 +148,11 @@ def init_db():
         created_at TEXT NOT NULL,
         UNIQUE(subject_id,month),
         FOREIGN KEY(subject_id) REFERENCES subjects(id)
-      );
+    );
     """)
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS enrollments(
+    CREATE TABLE IF NOT EXISTS enrollments(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         student_id INTEGER NOT NULL,
         subject_id INTEGER NOT NULL,
@@ -165,21 +165,21 @@ def init_db():
         created_at TEXT NOT NULL,
         FOREIGN KEY(student_id) REFERENCES students(id),
         FOREIGN KEY(subject_id) REFERENCES subjects(id)
-      );
+    );
     """)
 
     # Multiple PoP files per enrollment
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS enrollment_files(
+    CREATE TABLE IF NOT EXISTS enrollment_files(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         enrollment_id INTEGER NOT NULL,
         file_path TEXT NOT NULL,
         FOREIGN KEY(enrollment_id) REFERENCES enrollments(id) ON DELETE CASCADE
-      );
+    );
     """)
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS payments(
+    CREATE TABLE IF NOT EXISTS payments(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         enrollment_id INTEGER NOT NULL,
         amount INTEGER NOT NULL,
@@ -188,32 +188,32 @@ def init_db():
         result TEXT NOT NULL,
         timestamp TEXT NOT NULL,
         FOREIGN KEY(enrollment_id) REFERENCES enrollments(id)
-      );
+    );
     """)
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS tutors(
+    CREATE TABLE IF NOT EXISTS tutors(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         full_name TEXT NOT NULL,
         phone TEXT NOT NULL UNIQUE,
         pin TEXT,
         created_at TEXT NOT NULL
-      );
+    );
     """)
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS tutor_subjects(
+    CREATE TABLE IF NOT EXISTS tutor_subjects(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         tutor_id INTEGER NOT NULL,
         subject_id INTEGER NOT NULL,
         UNIQUE(tutor_id,subject_id),
         FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE,
         FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
-      );
+    );
     """)
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS sessions(
+    CREATE TABLE IF NOT EXISTS sessions(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         subject_id INTEGER NOT NULL,
         tutor_id INTEGER NOT NULL,
@@ -224,11 +224,11 @@ def init_db():
         active INTEGER NOT NULL DEFAULT 1,
         FOREIGN KEY(subject_id) REFERENCES subjects(id),
         FOREIGN KEY(tutor_id) REFERENCES tutors(id)
-      );
+    );
     """)
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS attendance(
+    CREATE TABLE IF NOT EXISTS attendance(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id INTEGER NOT NULL,
         student_id INTEGER NOT NULL,
@@ -236,11 +236,11 @@ def init_db():
         created_at TEXT NOT NULL,
         FOREIGN KEY(session_id) REFERENCES sessions(id),
         FOREIGN KEY(student_id) REFERENCES students(id)
-      );
+    );
     """)
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS materials(
+    CREATE TABLE IF NOT EXISTS materials(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         subject_id INTEGER NOT NULL,
         tutor_id INTEGER NOT NULL,
@@ -252,7 +252,7 @@ def init_db():
         created_at TEXT NOT NULL,
         FOREIGN KEY(subject_id) REFERENCES subjects(id),
         FOREIGN KEY(tutor_id) REFERENCES tutors(id)
-      );
+    );
     """)
     
     ensure_column(conn, "students", "guardian_name", "TEXT")
@@ -261,7 +261,7 @@ def init_db():
     ensure_column(conn, "materials", "max_points", "INTEGER NOT NULL DEFAULT 100")
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS submissions(
+    CREATE TABLE IF NOT EXISTS submissions(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         material_id INTEGER NOT NULL,
         student_id INTEGER NOT NULL,
@@ -273,12 +273,12 @@ def init_db():
         UNIQUE(material_id,student_id),
         FOREIGN KEY(material_id) REFERENCES materials(id) ON DELETE CASCADE,
         FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
-      );
+    );
     """)
 
     # Simple direct messages between roles
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS direct_messages(
+    CREATE TABLE IF NOT EXISTS direct_messages(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         from_role TEXT NOT NULL,     -- 'student'|'tutor'|'admin'
         from_id INTEGER,             -- null/0 for admin
@@ -288,22 +288,22 @@ def init_db():
         body TEXT NOT NULL,
         created_at TEXT NOT NULL,
         is_read INTEGER NOT NULL DEFAULT 0
-      );
+    );
     """)
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS messages(
+    CREATE TABLE IF NOT EXISTS messages(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         kind TEXT NOT NULL,
         payload TEXT NOT NULL,
         created_at TEXT NOT NULL,
         resolved INTEGER NOT NULL DEFAULT 0
-      );
+    );
     """)
 
     # Students rate their classes monthly (24th to end-of-month)
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS lesson_ratings(
+    CREATE TABLE IF NOT EXISTS lesson_ratings(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         student_id INTEGER NOT NULL,
         subject_id INTEGER NOT NULL,
@@ -314,7 +314,7 @@ def init_db():
         UNIQUE(student_id, subject_id, month),
         FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
         FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
-      );
+    );
     """)
 
     # Defaults & seed
@@ -355,7 +355,7 @@ def init_db():
     
     # --- Quizzes ---
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS quizzes(
+    CREATE TABLE IF NOT EXISTS quizzes(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         subject_id INTEGER NOT NULL,
         tutor_id INTEGER NOT NULL,
@@ -368,11 +368,11 @@ def init_db():
         created_at TEXT NOT NULL,
         FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
         FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE
-      );
+    );
     """)
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS quiz_questions(
+    CREATE TABLE IF NOT EXISTS quiz_questions(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         quiz_id INTEGER NOT NULL,
         question_text TEXT NOT NULL,
@@ -380,11 +380,11 @@ def init_db():
         correct_index INTEGER NOT NULL,
         points INTEGER NOT NULL DEFAULT 1,
         FOREIGN KEY(quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE
-      );
+    );
     """)
 
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS quiz_attempts(
+    CREATE TABLE IF NOT EXISTS quiz_attempts(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         quiz_id INTEGER NOT NULL,
         student_id INTEGER NOT NULL,
@@ -395,12 +395,43 @@ def init_db():
         UNIQUE(quiz_id,student_id),
         FOREIGN KEY(quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE,
         FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
-      );
+    );
     """)
     conn.commit()
     conn.close()
 
 
+
+
+
+# ===================== Registration helper/table =====================
+def ensure_registration_table(conn=None):
+    """Ensure registrations table exists. If conn provided, use it; otherwise open a new connection."""
+    own_conn = False
+    if conn is None:
+        conn = get_db()
+        own_conn = True
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS registrations(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id INTEGER NOT NULL,
+        year TEXT NOT NULL,
+        amount INTEGER NOT NULL DEFAULT 50,
+        payment_ref TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(student_id, year),
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
+    conn.commit()
+    if own_conn:
+        conn.close()
+
+def student_registered_for_year(conn, student_id, year):
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM registrations WHERE student_id=? AND year=? LIMIT 1", (student_id, year))
+    return cur.fetchone() is not None
 
 # ===================== Helpers =====================
 
@@ -612,41 +643,41 @@ GOOGLE_FONTS = "<link href='https://fonts.googleapis.com/css2?family=Inter:wght@
 BASE_CSS = """
 <style>
 :root{
-  --primary:#1b5e20;            /* Pasco green */
-  --primary-dark:#0f3d14;
-  --primary-light:#43a047;
-  --primary-bg:#f0fdf4;
-  --accent:#ffd54f;             /* Pasco gold */
-  --accent-light:#ffec99;
-  --bg:#f8fafc;
-  --card:#ffffff;
-  --text:#0f172a;
-  --muted:#64748b;
-  --border:#e2e8f0;
-  --border-light:#f1f5f9;
-  --table-stripe:#f8fafc;
-  --radius-sm:6px; --radius:10px; --radius-lg:14px; --radius-xl:18px; --radius-full:9999px;
-  --shadow-sm:0 1px 2px rgb(0 0 0 / 0.05);
-  --shadow:0 1px 3px rgb(0 0 0 / 0.1), 0 1px 2px rgb(0 0 0 / 0.06);
-  --shadow-md:0 4px 6px rgb(0 0 0 / 0.1), 0 2px 4px rgb(0 0 0 / 0.06);
-  --shadow-lg:0 10px 15px rgb(0 0 0 / 0.1), 0 4px 6px rgb(0 0 0 / 0.05);
-  --transition:all .2s ease;
+--primary:#1b5e20;            /* Pasco green */
+--primary-dark:#0f3d14;
+--primary-light:#43a047;
+--primary-bg:#f0fdf4;
+--accent:#ffd54f;             /* Pasco gold */
+--accent-light:#ffec99;
+--bg:#f8fafc;
+--card:#ffffff;
+--text:#0f172a;
+--muted:#64748b;
+--border:#e2e8f0;
+--border-light:#f1f5f9;
+--table-stripe:#f8fafc;
+--radius-sm:6px; --radius:10px; --radius-lg:14px; --radius-xl:18px; --radius-full:9999px;
+--shadow-sm:0 1px 2px rgb(0 0 0 / 0.05);
+--shadow:0 1px 3px rgb(0 0 0 / 0.1), 0 1px 2px rgb(0 0 0 / 0.06);
+--shadow-md:0 4px 6px rgb(0 0 0 / 0.1), 0 2px 4px rgb(0 0 0 / 0.06);
+--shadow-lg:0 10px 15px rgb(0 0 0 / 0.1), 0 4px 6px rgb(0 0 0 / 0.05);
+--transition:all .2s ease;
 }
 *{box-sizing:border-box}
 html,body{height:100%}
 body{
-  margin:0;
-  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-  background:linear-gradient(135deg, var(--primary-bg) 0%, var(--bg) 100%);
-  color:var(--text);
-  line-height:1.55;
+margin:0;
+font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+background:linear-gradient(135deg, var(--primary-bg) 0%, var(--bg) 100%);
+color:var(--text);
+line-height:1.55;
 }
 /* Header */
 .header{
-  position:sticky; top:0; z-index:20;
-  background:rgba(255,255,255,.95); backdrop-filter: blur(14px);
-  border-bottom:1px solid var(--border-light);
-  box-shadow:0 1px 3px rgba(0,0,0,.05);
+position:sticky; top:0; z-index:20;
+background:rgba(255,255,255,.95); backdrop-filter: blur(14px);
+border-bottom:1px solid var(--border-light);
+box-shadow:0 1px 3px rgba(0,0,0,.05);
 }
 .nav{max-width:1200px;margin:0 auto; padding:14px 18px; display:flex; align-items:center; justify-content:space-between}
 .brand{display:flex;align-items:center;gap:12px}
@@ -660,18 +691,18 @@ body{
 .grid{display:grid;grid-template-columns:1fr;gap:14px}
 /* Cards */
 .card{
-  background:var(--card);
-  border:1px solid var(--border);
-  border-radius:var(--radius-xl);
-  padding:16px;
-  box-shadow:var(--shadow);
-  position:relative; overflow:hidden; transition:var(--transition);
+background:var(--card);
+border:1px solid var(--border);
+border-radius:var(--radius-xl);
+padding:16px;
+box-shadow:var(--shadow);
+position:relative; overflow:hidden; transition:var(--transition);
 }
 .card.soft{background:linear-gradient(180deg,rgba(255,255,255,.92),rgba(255,255,255,.75))}
 .card:hover{box-shadow:var(--shadow-lg); transform:translateY(-2px)}
 .card::before{
-  content:""; position:absolute; inset:0 0 auto 0; height:3px;
-  background:linear-gradient(90deg,var(--primary),var(--accent)); opacity:.0; transition:var(--transition)
+content:""; position:absolute; inset:0 0 auto 0; height:3px;
+background:linear-gradient(90deg,var(--primary),var(--accent)); opacity:.0; transition:var(--transition)
 }
 .card:hover::before{opacity:1}
 /* Headings */
@@ -683,17 +714,17 @@ h3{font-size:16px;margin:0 0 8px}
 /* Forms */
 label{font-size:13px;color:var(--muted); display:block; margin-bottom:6px; font-weight:600}
 input,select,textarea{
-  width:100%; padding:11px 12px; border:2px solid var(--border);
-  border-radius:12px; background:#fff; color:var(--text); transition:var(--transition)
+width:100%; padding:11px 12px; border:2px solid var(--border);
+border-radius:12px; background:#fff; color:var(--text); transition:var(--transition)
 }
 input:focus,select:focus,textarea:focus{outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(27,94,32,.12)}
 textarea{min-height:96px; resize:vertical}
 input::file-selector-button{padding:8px 10px;border:0;background:linear-gradient(135deg,var(--primary),var(--primary-dark));color:#fff;border-radius:10px;margin-right:10px}
 /* Buttons */
 .btn{
-  display:inline-flex; align-items:center; gap:8px; padding:11px 16px;
-  border-radius:12px; border:0; background:linear-gradient(135deg,var(--primary),var(--primary-dark));
-  color:#fff; text-decoration:none; cursor:pointer; box-shadow:var(--shadow-md); font-weight:700; transition:var(--transition); position:relative; overflow:hidden
+display:inline-flex; align-items:center; gap:8px; padding:11px 16px;
+border-radius:12px; border:0; background:linear-gradient(135deg,var(--primary),var(--primary-dark));
+color:#fff; text-decoration:none; cursor:pointer; box-shadow:var(--shadow-md); font-weight:700; transition:var(--transition); position:relative; overflow:hidden
 }
 .btn:hover{transform:translateY(-2px); box-shadow:var(--shadow-lg)}
 .btn.secondary{background:#fff; color:var(--primary); border:2px solid var(--primary)}
@@ -705,8 +736,8 @@ input::file-selector-button{padding:8px 10px;border:0;background:linear-gradient
 .toolbar{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0}
 /* Chips/Badges */
 .chip{
-  display:inline-block; padding:6px 10px; border-radius:999px; font-size:12px;
-  background:#eef6ee; color:#14532d; border:1px solid rgba(20,83,45,.15); font-weight:700
+display:inline-block; padding:6px 10px; border-radius:999px; font-size:12px;
+background:#eef6ee; color:#14532d; border:1px solid rgba(20,83,45,.15); font-weight:700
 }
 .chip.pending{background:linear-gradient(135deg,#fef3c7,#fde68a); color:#92400e; border-color:#fbbf24}
 .chip.active{background:linear-gradient(135deg,#d1fae5,#a7f3d0); color:#065f46; border-color:#34d399}
@@ -715,8 +746,8 @@ input::file-selector-button{padding:8px 10px;border:0;background:linear-gradient
 /* Tables */
 table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border-radius:14px}
 thead th{
-  background:var(--bg); text-align:left; padding:12px; font-size:12px; color:#1b441c;
-  text-transform:uppercase; letter-spacing:.4px; border-bottom:1px solid var(--border)
+background:var(--bg); text-align:left; padding:12px; font-size:12px; color:#1b441c;
+text-transform:uppercase; letter-spacing:.4px; border-bottom:1px solid var(--border)
 }
 tbody td{padding:12px; border-bottom:1px dashed rgba(0,0,0,.06)}
 tbody tr:nth-child(even){background:var(--table-stripe)}
@@ -729,9 +760,9 @@ tbody tr:hover{background:#f0f7f1}
 .empty{padding:16px;border:1px dashed var(--border);border-radius:14px;color:var(--muted);text-align:center}
 /* Footer */
 .footer{
-  padding:28px 0; margin-top:36px; color:var(--muted); font-size:12px; text-align:center;
-  border-top:1px solid var(--border-light);
-  background:linear-gradient(180deg,transparent,var(--bg))
+padding:28px 0; margin-top:36px; color:var(--muted); font-size:12px; text-align:center;
+border-top:1px solid var(--border-light);
+background:linear-gradient(180deg,transparent,var(--bg))
 }
 /* Utilities */
 .small{max-width:760px;margin:0 auto}
@@ -743,83 +774,83 @@ tbody tr:hover{background:#f0f7f1}
 .feedback-item{background:#fff;border:1px solid var(--border);border-left:4px solid var(--primary);padding:12px;border-radius:14px}
 /* Responsive */
 @media (max-width: 768px){
-  body{font-size:15px;}
-  .nav{
+body{font-size:15px;}
+.nav{
     padding:10px 14px;
     flex-direction:column;
     align-items:flex-start;
     gap:6px;
-  }
-  .brand .title{font-size:18px;}
-  .links{
+}
+.brand .title{font-size:18px;}
+.links{
     width:100%;
     display:flex;
     flex-wrap:wrap;
     gap:6px;
     justify-content:flex-start;
-  }
-  .links a{
+}
+.links a{
     margin-left:0;
     padding:6px 10px;
     font-size:13px;
-  }
-  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .wrap{padding:0 12px}
-  .layout{grid-template-columns:1fr}
-  .sidebar{
+}
+.stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+.wrap{padding:0 12px}
+.layout{grid-template-columns:1fr}
+.sidebar{
     position:relative;
     top:auto;
     max-height:none;
-  }
-  .footer{padding:22px 0}
+}
+.footer{padding:22px 0}
 }
 /* === Modern LMS Layout Additions === */
 .layout{display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start}
 .sidebar{
-  position:sticky; top:76px;
-  background:var(--card);
-  border:1px solid var(--border);
-  border-radius:var(--radius-xl);
-  box-shadow:var(--shadow);
-  padding:14px;
-  max-height: calc(100vh - 100px);
-  overflow:auto;
+position:sticky; top:76px;
+background:var(--card);
+border:1px solid var(--border);
+border-radius:var(--radius-xl);
+box-shadow:var(--shadow);
+padding:14px;
+max-height: calc(100vh - 100px);
+overflow:auto;
 }
 .sidebar .role{font-weight:800; font-size:14px; margin-bottom:6px}
 .sidebar .user{font-size:13px;color:var(--muted); margin-bottom:12px}
 .side-links{display:grid;gap:8px;margin:8px 0 14px}
 .side-links a{
-  display:block; text-decoration:none; padding:10px 12px;
-  border:1px solid var(--border); border-radius:12px; font-weight:600;
-  color:var(--text); background:#fff; transition:var(--transition)
+display:block; text-decoration:none; padding:10px 12px;
+border:1px solid var(--border); border-radius:12px; font-weight:600;
+color:var(--text); background:#fff; transition:var(--transition)
 }
 .side-links a:hover{transform:translateY(-1px); box-shadow:var(--shadow-sm); border-color:var(--primary)}
 .stats-mini{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px}
 .stats-mini .s{
-  background:#fff; border:1px solid var(--border);
-  border-radius:12px; padding:10px; box-shadow:var(--shadow-sm)
+background:#fff; border:1px solid var(--border);
+border-radius:12px; padding:10px; box-shadow:var(--shadow-sm)
 }
 .stats-mini .s .k{font-size:18px; font-weight:800; color:var(--primary)}
 .stats-mini .s .t{font-size:11px; color:var(--muted)}
 .announce{background:#fffaf0; border:1px solid #fde68a; padding:12px; border-radius:12px; margin-bottom:12px}
 .announce h3{margin:0 0 6px; font-size:14px}
 @media (max-width: 1024px){
-  .layout{grid-template-columns:1fr}
-  .sidebar{position:relative; top:auto; max-height:none}
+.layout{grid-template-columns:1fr}
+.sidebar{position:relative; top:auto; max-height:none}
 }
 /* Hash navigation highlight */
 .flash-highlight{animation: flashBorder 2.8s ease-in-out; box-shadow: 0 0 0 4px rgba(255,215,0,.25); position: relative;}
 @keyframes flashBorder{
-  0%{box-shadow: 0 0 0 0 rgba(255,215,0,.0)}
-  10%{box-shadow: 0 0 0 4px rgba(255,215,0,.35)}
-  55%{box-shadow: 0 0 0 4px rgba(46,125,50,.35)}
-  100%{box-shadow: 0 0 0 0 rgba(46,125,50,.0)}
+0%{box-shadow: 0 0 0 0 rgba(255,215,0,.0)}
+10%{box-shadow: 0 0 0 4px rgba(255,215,0,.35)}
+55%{box-shadow: 0 0 0 4px rgba(46,125,50,.35)}
+100%{box-shadow: 0 0 0 0 rgba(46,125,50,.0)}
 }
 .flash-highlight::before{
-  content:""; position:absolute; inset:-1px; border-radius:inherit; padding:1px;
-  background: linear-gradient(135deg,#ffd54f,#2e7d32);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor; mask-composite: exclude;
+content:""; position:absolute; inset:-1px; border-radius:inherit; padding:1px;
+background: linear-gradient(135deg,#ffd54f,#2e7d32);
+-webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+-webkit-mask-composite: xor; mask-composite: exclude;
 }
 .side-links a.active{ outline:2px solid #2e7d32; background:#f0fff4; }
 
@@ -844,11 +875,11 @@ body.wide-mode :root, body.wide-mode .wrap, body.wide-mode .container, body.wide
 .sidebar-head .collapse { font-size:12px; border:1px solid #cfd8d3; border-radius:8px; padding:6px 8px; cursor:pointer; background:#fff; }
 
 .scroll-x{
-  overflow-x:auto;
-  -webkit-overflow-scrolling:touch;
+overflow-x:auto;
+-webkit-overflow-scrolling:touch;
 }
 .scroll-x table{
-  min-width:720px;
+min-width:720px;
 }
 </style>
 """
@@ -857,68 +888,68 @@ body.wide-mode :root, body.wide-mode .wrap, body.wide-mode .container, body.wide
 BASE_JS = """
 <script>
 function filterTable(inputId, tableId){
-  const q=(document.getElementById(inputId)?.value||"").toLowerCase();
-  const rows=document.querySelectorAll('#'+tableId+' tbody tr');
-  rows.forEach(r=>{ r.style.display = r.innerText.toLowerCase().includes(q) ? '' : 'none'; });
+const q=(document.getElementById(inputId)?.value||"").toLowerCase();
+const rows=document.querySelectorAll('#'+tableId+' tbody tr');
+rows.forEach(r=>{ r.style.display = r.innerText.toLowerCase().includes(q) ? '' : 'none'; });
 }
 document.addEventListener('DOMContentLoaded',()=> {
-  const appear = new IntersectionObserver((entries)=>{
+const appear = new IntersectionObserver((entries)=>{
     entries.forEach(e=>{
-      if(e.isIntersecting){ e.target.style.transition='transform .4s, opacity .4s'; e.target.style.transform='translateY(0)'; e.target.style.opacity='1'; appear.unobserve(e.target); }
+    if(e.isIntersecting){ e.target.style.transition='transform .4s, opacity .4s'; e.target.style.transform='translateY(0)'; e.target.style.opacity='1'; appear.unobserve(e.target); }
     });
-  }, {threshold:.12});
-  document.querySelectorAll('.card').forEach(el=>{ el.style.transform='translateY(8px)'; el.style.opacity='.0'; appear.observe(el); });
+}, {threshold:.12});
+document.querySelectorAll('.card').forEach(el=>{ el.style.transform='translateY(8px)'; el.style.opacity='.0'; appear.observe(el); });
 });
 
 function smoothScrollIntoView(el){
-  if(!el) return;
-  const y = el.getBoundingClientRect().top + window.scrollY - 90;
-  window.scrollTo({top:y, behavior:'smooth'});
-  el.classList.add('flash-highlight');
-  setTimeout(()=>el.classList.remove('flash-highlight'), 3000);
+if(!el) return;
+const y = el.getBoundingClientRect().top + window.scrollY - 90;
+window.scrollTo({top:y, behavior:'smooth'});
+el.classList.add('flash-highlight');
+setTimeout(()=>el.classList.remove('flash-highlight'), 3000);
 }
 function findCardByHeadingText(keywords){
-  const cards=[...document.querySelectorAll('.card')];
-  for(const card of cards){
+const cards=[...document.querySelectorAll('.card')];
+for(const card of cards){
     const h = card.querySelector('h1,h2,h3');
     if(!h) continue;
     const t = (h.textContent||'').toLowerCase();
     for(const k of keywords){
-      if(t.includes(k.toLowerCase())) return card;
+    if(t.includes(k.toLowerCase())) return card;
     }
-  }
-  return null;
+}
+return null;
 }
 function highlightSectionByHash(hash){
-  if(!hash) return;
-  let el=null;
-  switch(hash){
+if(!hash) return;
+let el=null;
+switch(hash){
     case '#dashboard':
-      // Try to find "Your Enrollments"
-      el = findCardByHeadingText(['your enrollments','welcome']);
-      if(el){
+    // Try to find "Your Enrollments"
+    el = findCardByHeadingText(['your enrollments','welcome']);
+    if(el){
         // also lightly highlight next siblings
         const next1 = el.nextElementSibling, next2 = next1 && next1.nextElementSibling;
         [el,next1,next2].forEach(x=>{ if(x && x.classList.contains('card')) { x.classList.add('flash-highlight'); setTimeout(()=>x.classList.remove('flash-highlight'),3000);} });
         smoothScrollIntoView(el);
         return;
-      }
-      break;
+    }
+    break;
     case '#upload':
-      el = findCardByHeadingText(['upload materials','upload'])
-      break;
+    el = findCardByHeadingText(['upload materials','upload'])
+    break;
     case '#assignments':
-      el = findCardByHeadingText(['assignments','materials & assignments','materials']);
-      break;
+    el = findCardByHeadingText(['assignments','materials & assignments','materials']);
+    break;
     case '#materials':
-      el = findCardByHeadingText(['materials']);
-      break;
+    el = findCardByHeadingText(['materials']);
+    break;
     case '#messages':
-      el = findCardByHeadingText(['messages','inbox']);
-      break;
+    el = findCardByHeadingText(['messages','inbox']);
+    break;
     case '#status':
-      el = document.getElementById('status-banner') || findCardByHeadingText(['status']);
-      break;
+    el = document.getElementById('status-banner') || findCardByHeadingText(['status']);
+    break;
     case '#students':
     case '#tutors':
     case '#subjects':
@@ -931,28 +962,28 @@ function highlightSectionByHash(hash){
     case '#analytics':
     case '#settings':
     case '#export':
-      el = findCardByHeadingText([hash.replace('#','')]);
-      break;
+    el = findCardByHeadingText([hash.replace('#','')]);
+    break;
     default:
-      // Fall back: try id
-      el = document.querySelector(hash);
-  }
-  if(el){ smoothScrollIntoView(el); }
+    // Fall back: try id
+    el = document.querySelector(hash);
+}
+if(el){ smoothScrollIntoView(el); }
 }
 window.addEventListener('hashchange', ()=>highlightSectionByHash(location.hash));
 document.addEventListener('DOMContentLoaded', ()=>{
-  // intercept sidebar hash clicks for immediate action
-  document.body.addEventListener('click', (e)=>{
+// intercept sidebar hash clicks for immediate action
+document.body.addEventListener('click', (e)=>{
     const a = e.target.closest('a[href^="#"]');
     if(a){ e.preventDefault(); const h=a.getAttribute('href'); history.pushState(null,"",h); highlightSectionByHash(h); }
-  });
-  // if page loaded with a hash
-  if(location.hash){ setTimeout(()=>highlightSectionByHash(location.hash), 50); }
+});
+// if page loaded with a hash
+if(location.hash){ setTimeout(()=>highlightSectionByHash(location.hash), 50); }
 });
 
 function mapAdminAnchors(){
-  // Add stable IDs to common admin sections by heading text
-  const pairs = [
+// Add stable IDs to common admin sections by heading text
+const pairs = [
     {id:'enrollments', keys:['manage enrollments','enrollments']},
     {id:'students', keys:['students']},
     {id:'tutors', keys:['tutors']},
@@ -963,232 +994,232 @@ function mapAdminAnchors(){
     {id:'analytics', keys:['analytics','dashboard']},
     {id:'settings', keys:['settings']},
     {id:'export', keys:['export remove list','export','remove list']},
-  ];
-  const cards=[...document.querySelectorAll('.card')];
-  for(const {id,keys} of pairs){
+];
+const cards=[...document.querySelectorAll('.card')];
+for(const {id,keys} of pairs){
     for(const card of cards){
-      const h=card.querySelector('h1,h2,h3'); if(!h) continue;
-      const t=(h.textContent||'').toLowerCase();
-      if(keys.some(k=>t.includes(k))){
+    const h=card.querySelector('h1,h2,h3'); if(!h) continue;
+    const t=(h.textContent||'').toLowerCase();
+    if(keys.some(k=>t.includes(k))){
         card.setAttribute('id', id);
         break;
-      }
     }
-  }
+    }
+}
 }
 
 function smoothScrollIntoView(el){
-  if(!el) return;
-  const y = el.getBoundingClientRect().top + window.scrollY - 90;
-  window.scrollTo({top:y, behavior:'smooth'});
-  el.classList.add('flash-highlight');
-  setTimeout(()=>el.classList.remove('flash-highlight'), 3000);
+if(!el) return;
+const y = el.getBoundingClientRect().top + window.scrollY - 90;
+window.scrollTo({top:y, behavior:'smooth'});
+el.classList.add('flash-highlight');
+setTimeout(()=>el.classList.remove('flash-highlight'), 3000);
 }
 function findCardByHeadingText(keywords){
-  const cards=[...document.querySelectorAll('.card')];
-  for(const card of cards){
+const cards=[...document.querySelectorAll('.card')];
+for(const card of cards){
     const h = card.querySelector('h1,h2,h3');
     if(!h) continue;
     const t = (h.textContent||'').toLowerCase();
     for(const k of keywords){
-      if(t.includes(k.toLowerCase())) return card;
+    if(t.includes(k.toLowerCase())) return card;
     }
-  }
-  return null;
+}
+return null;
 }
 function highlightSectionByHash(hash){
-  if(!hash) return;
-  let el=null;
-  switch(hash){
+if(!hash) return;
+let el=null;
+switch(hash){
     case '#dashboard':
-      el = findCardByHeadingText(['your enrollments','welcome','overview','analytics']); 
-      if(el){
+    el = findCardByHeadingText(['your enrollments','welcome','overview','analytics']); 
+    if(el){
         const next1 = el.nextElementSibling, next2 = next1 && next1.nextElementSibling;
         [el,next1,next2].forEach(x=>{ if(x && x.classList.contains('card')) { x.classList.add('flash-highlight'); setTimeout(()=>x.classList.remove('flash-highlight'),3000);} });
         smoothScrollIntoView(el); return;
-      }
-      break;
+    }
+    break;
     case '#upload':
-      el = findCardByHeadingText(['upload materials','upload']); break;
+    el = findCardByHeadingText(['upload materials','upload']); break;
     case '#assignments':
-      el = findCardByHeadingText(['assignments','materials & assignments','materials']); break;
+    el = findCardByHeadingText(['assignments','materials & assignments','materials']); break;
     case '#materials':
-      el = findCardByHeadingText(['materials']); break;
+    el = findCardByHeadingText(['materials']); break;
     case '#messages':
-      el = findCardByHeadingText(['messages','inbox','direct messages']); break;
+    el = findCardByHeadingText(['messages','inbox','direct messages']); break;
     case '#status':
-      el = document.getElementById('status-banner') || findCardByHeadingText(['status']); break;
+    el = document.getElementById('status-banner') || findCardByHeadingText(['status']); break;
     case '#enrollments':
-      el = document.getElementById('enrollments') || findCardByHeadingText(['manage enrollments','enrollments']); break;
+    el = document.getElementById('enrollments') || findCardByHeadingText(['manage enrollments','enrollments']); break;
     case '#students':
-      el = document.getElementById('students') || findCardByHeadingText(['students']); break;
+    el = document.getElementById('students') || findCardByHeadingText(['students']); break;
     case '#tutors':
-      el = document.getElementById('tutors') || findCardByHeadingText(['tutors']); break;
+    el = document.getElementById('tutors') || findCardByHeadingText(['tutors']); break;
     case '#groups':
-      el = document.getElementById('groups') || findCardByHeadingText(['group links','whatsapp links']); break;
+    el = document.getElementById('groups') || findCardByHeadingText(['group links','whatsapp links']); break;
     case '#sessions':
-      el = document.getElementById('sessions') || findCardByHeadingText(['sessions & qr','sessions','qr']); break;
+    el = document.getElementById('sessions') || findCardByHeadingText(['sessions & qr','sessions','qr']); break;
     case '#inbox':
-      el = document.getElementById('inbox') || findCardByHeadingText(['inbox']); break;
+    el = document.getElementById('inbox') || findCardByHeadingText(['inbox']); break;
     case '#analytics':
-      el = document.getElementById('analytics') || findCardByHeadingText(['analytics','dashboard']); break;
+    el = document.getElementById('analytics') || findCardByHeadingText(['analytics','dashboard']); break;
     case '#settings':
-      el = document.getElementById('settings') || findCardByHeadingText(['settings']); break;
+    el = document.getElementById('settings') || findCardByHeadingText(['settings']); break;
     case '#export':
-      el = document.getElementById('export') || findCardByHeadingText(['export remove list','export','remove list']); break;
+    el = document.getElementById('export') || findCardByHeadingText(['export remove list','export','remove list']); break;
     default:
-      el = document.querySelector(hash);
-  }
-  if(el){ smoothScrollIntoView(el); }
+    el = document.querySelector(hash);
+}
+if(el){ smoothScrollIntoView(el); }
 }
 window.addEventListener('hashchange', ()=>highlightSectionByHash(location.hash));
 document.addEventListener('DOMContentLoaded', ()=>{
-  mapAdminAnchors();
-  document.body.addEventListener('click', (e)=>{
+mapAdminAnchors();
+document.body.addEventListener('click', (e)=>{
     const a = e.target.closest('a[href^=\"#\"]');
     if(a){ e.preventDefault(); const h=a.getAttribute('href'); history.pushState(null,\"\",h); highlightSectionByHash(h); }
-  });
-  if(location.hash){ setTimeout(()=>{ mapAdminAnchors(); highlightSectionByHash(location.hash); }, 50); }
+});
+if(location.hash){ setTimeout(()=>{ mapAdminAnchors(); highlightSectionByHash(location.hash); }, 50); }
 });
 
 // --- Admin sidebar -> real content navigation (robust) ---
 const ADMIN_MAP = {
-  '#enrollments': ['manage enrollments','enrollments','manage enrollment','enrollment'],
-  '#students': ['students','student list'],
-  '#tutors': ['tutors','tutor list'],
-  '#groups': ['group links','whatsapp links','links','groups'],
-  '#sessions': ['sessions & qr','sessions','qr'],
-  '#inbox': ['inbox'],
-  '#messages': ['direct messages','messages'],
-  '#analytics': ['analytics','dashboard','reports'],
-  '#settings': ['settings','configuration'],
-  '#export': ['export remove list','export','remove list']
+'#enrollments': ['manage enrollments','enrollments','manage enrollment','enrollment'],
+'#students': ['students','student list'],
+'#tutors': ['tutors','tutor list'],
+'#groups': ['group links','whatsapp links','links','groups'],
+'#sessions': ['sessions & qr','sessions','qr'],
+'#inbox': ['inbox'],
+'#messages': ['direct messages','messages'],
+'#analytics': ['analytics','dashboard','reports'],
+'#settings': ['settings','configuration'],
+'#export': ['export remove list','export','remove list']
 };
 
 function normalizeText(t){ return (t||'').replace(/\\s+/g,' ').trim().toLowerCase(); }
 
 function findToolbarElementByLabels(labels){
-  const scope = document.querySelector('.dashboard-main') || document;
-  const candidates = [...scope.querySelectorAll('a,button')]
+const scope = document.querySelector('.dashboard-main') || document;
+const candidates = [...scope.querySelectorAll('a,button')]
     .filter(el => !el.closest('.side-links')); // exclude sidebar itself
-  for(const el of candidates){
+for(const el of candidates){
     const txt = normalizeText(el.textContent);
     for(const lbl of labels){
-      const l = normalizeText(lbl);
-      if(txt === l || txt.includes(l)) return el;
+    const l = normalizeText(lbl);
+    if(txt === l || txt.includes(l)) return el;
     }
-  }
-  return null;
+}
+return null;
 }
 
 function gotoAdminSection(hash){
-  const labels = ADMIN_MAP[hash];
-  if(!labels) return false;
-  const el = findToolbarElementByLabels(labels);
-  if(!el) return false;
+const labels = ADMIN_MAP[hash];
+if(!labels) return false;
+const el = findToolbarElementByLabels(labels);
+if(!el) return false;
 
-  // Prefer native navigation if it's a link
-  const href = el.getAttribute('href');
-  if(href){
+// Prefer native navigation if it's a link
+const href = el.getAttribute('href');
+if(href){
     if(href.startsWith('#')){
-      // intra-page: emulate natural click so existing handlers fire
-      el.dispatchEvent(new MouseEvent('click', {bubbles:true}));
-    }else{
-      window.location.href = href;
-    }
-  }else{
+    // intra-page: emulate natural click so existing handlers fire
     el.dispatchEvent(new MouseEvent('click', {bubbles:true}));
-  }
-  return true;
+    }else{
+    window.location.href = href;
+    }
+}else{
+    el.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+}
+return true;
 }
 
 function setActiveSidebar(hash){
-  document.querySelectorAll('.side-links a').forEach(a=>a.classList.remove('active'));
-  const link = document.querySelector(`.side-links a[href="${hash}"]`);
-  if(link){ link.classList.add('active'); }
+document.querySelectorAll('.side-links a').forEach(a=>a.classList.remove('active'));
+const link = document.querySelector(`.side-links a[href="${hash}"]`);
+if(link){ link.classList.add('active'); }
 }
 
 document.addEventListener('DOMContentLoaded', ()=>{
-  document.body.addEventListener('click', (e)=>{
+document.body.addEventListener('click', (e)=>{
     const a = e.target.closest('.side-links a[href^="#"]');
     if(!a) return;
     const hash = a.getAttribute('href');
     setActiveSidebar(hash);
     if(ADMIN_MAP[hash]){
-      e.preventDefault();
-      const ok = gotoAdminSection(hash);
-      if(!ok){
+    e.preventDefault();
+    const ok = gotoAdminSection(hash);
+    if(!ok){
         // fallback to hash highlight
         history.pushState(null,"",hash);
         highlightSectionByHash(hash);
-      }
     }
-  });
+    }
+});
 
-  if(location.hash && ADMIN_MAP[location.hash]){
+if(location.hash && ADMIN_MAP[location.hash]){
     setActiveSidebar(location.hash);
     // try to open the section on load too
     gotoAdminSection(location.hash);
-  }
+}
 });
 // --- end robust admin nav ---
 
 /* EBTA UI toggles */
 (function(){
-  const LS = window.localStorage;
-  const apply = () => {
+const LS = window.localStorage;
+const apply = () => {
     if (LS.getItem('ebta-wide') === '1') document.body.classList.add('wide-mode'); else document.body.classList.remove('wide-mode');
     if (LS.getItem('ebta-sidebar-collapsed') === '1') document.body.classList.add('sidebar-collapsed'); else document.body.classList.remove('sidebar-collapsed');
-  };
-  apply();
-  document.addEventListener('DOMContentLoaded', ()=>{
+};
+apply();
+document.addEventListener('DOMContentLoaded', ()=>{
     apply();
     const tWide = document.getElementById('toggleWide');
     const tSide = document.getElementById('toggleSidebar');
     const collapseBtn = document.getElementById('collapseSidebar');
     const toggleSide = ()=>{
-      const v = LS.getItem('ebta-sidebar-collapsed') === '1' ? '0':'1';
-      LS.setItem('ebta-sidebar-collapsed', v); apply();
+    const v = LS.getItem('ebta-sidebar-collapsed') === '1' ? '0':'1';
+    LS.setItem('ebta-sidebar-collapsed', v); apply();
     };
     if (tWide) tWide.addEventListener('click', ()=>{
-      const v = LS.getItem('ebta-wide') === '1' ? '0':'1';
-      LS.setItem('ebta-wide', v); apply();
+    const v = LS.getItem('ebta-wide') === '1' ? '0':'1';
+    LS.setItem('ebta-wide', v); apply();
     });
     if (tSide) tSide.addEventListener('click', toggleSide);
     if (collapseBtn) collapseBtn.addEventListener('click', toggleSide);
-  });
+});
 })();
 
 
 document.addEventListener('DOMContentLoaded', function () {
-  const LS = window.localStorage;
-  const body = document.body;
-  const collapseBtn = document.getElementById('collapseSidebar');
-  const toggleBtn = document.getElementById('toggleSidebar');
-  const wideBtn = document.getElementById('toggleWide');
+const LS = window.localStorage;
+const body = document.body;
+const collapseBtn = document.getElementById('collapseSidebar');
+const toggleBtn = document.getElementById('toggleSidebar');
+const wideBtn = document.getElementById('toggleWide');
 
-  function applyState() {
+function applyState() {
     body.classList.toggle('sidebar-collapsed', LS.getItem('sidebarCollapsed') === '1');
     body.classList.toggle('wide-mode', LS.getItem('wideMode') === '1');
-  }
+}
 
-  function toggleSidebar() {
+function toggleSidebar() {
     const newState = LS.getItem('sidebarCollapsed') === '1' ? '0' : '1';
     LS.setItem('sidebarCollapsed', newState);
     applyState();
-  }
+}
 
-  function toggleWide() {
+function toggleWide() {
     const newState = LS.getItem('wideMode') === '1' ? '0' : '1';
     LS.setItem('wideMode', newState);
     applyState();
-  }
+}
 
-  if (collapseBtn) collapseBtn.addEventListener('click', toggleSidebar);
-  if (toggleBtn) toggleBtn.addEventListener('click', toggleSidebar);
-  if (wideBtn) wideBtn.addEventListener('click', toggleWide);
+if (collapseBtn) collapseBtn.addEventListener('click', toggleSidebar);
+if (toggleBtn) toggleBtn.addEventListener('click', toggleSidebar);
+if (wideBtn) wideBtn.addEventListener('click', toggleWide);
 
-  applyState();
+applyState();
 });
 
 
@@ -1200,7 +1231,7 @@ def page(title, body_html, extra_head="", extra_js=""):
     auth = []
     if not (is_student() or is_tutor() or is_admin()):
         auth += [f"<a href='{url_for('student_login')}'>Student</a>",
-                 f"<a href='{url_for('tutor_login')}'>Tutor</a>"]
+                f"<a href='{url_for('tutor_login')}'>Tutor</a>"]
     else:
         if is_student():
             auth += [f"<a href='{url_for('student_home')}'>My Portal</a>", f"<a href='{url_for('student_logout')}'>Logout</a>"]
@@ -1223,10 +1254,10 @@ def page(title, body_html, extra_head="", extra_js=""):
             active_subjects = cur.fetchone()[0] or 0
             cur.execute("""
                 SELECT COUNT(*)
-                  FROM materials m
-                 WHERE (m.is_assignment=1 OR m.kind='assignment') AND m.month=?
-                   AND m.subject_id IN (SELECT subject_id FROM enrollments WHERE student_id=? AND month=? AND status='ACTIVE')
-                   AND NOT EXISTS (SELECT 1 FROM submissions s WHERE s.material_id=m.id AND s.student_id=?)
+                FROM materials m
+                WHERE (m.is_assignment=1 OR m.kind='assignment') AND m.month=?
+                AND m.subject_id IN (SELECT subject_id FROM enrollments WHERE student_id=? AND month=? AND status='ACTIVE')
+                AND NOT EXISTS (SELECT 1 FROM submissions s WHERE s.material_id=m.id AND s.student_id=?)
             """, (month, sid, month, sid))
             pending = cur.fetchone()[0] or 0
             cur.execute("SELECT COUNT(*) FROM submissions WHERE student_id=? AND mark IS NOT NULL", (sid,))
@@ -1244,10 +1275,10 @@ def page(title, body_html, extra_head="", extra_js=""):
             ]
             stats_grid = f"""
             <div class='stats-mini'>
-              <div class='s'><div class='k'>{active_subjects}</div><div class='t'>Active subjects</div></div>
-              <div class='s'><div class='k'>{pending}</div><div class='t'>Pending tasks</div></div>
-              <div class='s'><div class='k'>{graded}</div><div class='t'>Marks released</div></div>
-              <div class='s'><div class='k'>{unread}</div><div class='t'>Unread messages</div></div>
+            <div class='s'><div class='k'>{active_subjects}</div><div class='t'>Active subjects</div></div>
+            <div class='s'><div class='k'>{pending}</div><div class='t'>Pending tasks</div></div>
+            <div class='s'><div class='k'>{graded}</div><div class='t'>Marks released</div></div>
+            <div class='s'><div class='k'>{unread}</div><div class='t'>Unread messages</div></div>
             </div>"""
         elif is_tutor():
             tid = is_tutor()
@@ -1255,16 +1286,16 @@ def page(title, body_html, extra_head="", extra_js=""):
             subs = cur.fetchone()[0] or 0
             cur.execute("""
                 SELECT COUNT(*)
-                  FROM submissions s
-                  JOIN materials m ON m.id=s.material_id
-                 WHERE m.tutor_id=? AND (s.mark IS NULL OR s.mark='')
+                FROM submissions s
+                JOIN materials m ON m.id=s.material_id
+                WHERE m.tutor_id=? AND (s.mark IS NULL OR s.mark='')
             """, (tid,))
             to_mark = cur.fetchone()[0] or 0
             cur.execute("""
                 SELECT COUNT(DISTINCT e.student_id)
-                  FROM enrollments e
-                 WHERE e.month=? AND e.status='ACTIVE'
-                   AND e.subject_id IN (SELECT subject_id FROM tutor_subjects WHERE tutor_id=?)
+                FROM enrollments e
+                WHERE e.month=? AND e.status='ACTIVE'
+                AND e.subject_id IN (SELECT subject_id FROM tutor_subjects WHERE tutor_id=?)
             """, (month, tid))
             active_students = cur.fetchone()[0] or 0
             cur.execute("SELECT COUNT(*) FROM direct_messages WHERE to_role='tutor' AND to_id=? AND is_read=0", (tid,))
@@ -1280,10 +1311,10 @@ def page(title, body_html, extra_head="", extra_js=""):
             ]
             stats_grid = f"""
             <div class='stats-mini'>
-              <div class='s'><div class='k'>{subs}</div><div class='t'>Subjects</div></div>
-              <div class='s'><div class='k'>{to_mark}</div><div class='t'>To mark</div></div>
-              <div class='s'><div class='k'>{active_students}</div><div class='t'>Active students</div></div>
-              <div class='s'><div class='k'>{unread}</div><div class='t'>Unread messages</div></div>
+            <div class='s'><div class='k'>{subs}</div><div class='t'>Subjects</div></div>
+            <div class='s'><div class='k'>{to_mark}</div><div class='t'>To mark</div></div>
+            <div class='s'><div class='k'>{active_students}</div><div class='t'>Active students</div></div>
+            <div class='s'><div class='k'>{unread}</div><div class='t'>Unread messages</div></div>
             </div>"""
         elif is_admin():
             cur.execute("SELECT COUNT(*) FROM enrollments WHERE status='PENDING'")
@@ -1298,6 +1329,7 @@ def page(title, body_html, extra_head="", extra_js=""):
             links = [
                 ("Manage enrollments", "#enrollments"),
                 ("Students", "#students"),
+                ("Annual registrations", url_for('admin_annual_registrations')),   # <- NEW
                 ("Tutors", "#tutors"),
                 ("Group links", "#groups"),
                 ("Sessions & QR", "#sessions"),
@@ -1310,10 +1342,10 @@ def page(title, body_html, extra_head="", extra_js=""):
             ]
             stats_grid = f"""
             <div class='stats-mini'>
-              <div class='s'><div class='k'>{pend}</div><div class='t'>PoPs pending</div></div>
-              <div class='s'><div class='k'>{resets}</div><div class='t'>PIN resets</div></div>
-              <div class='s'><div class='k'>{students}</div><div class='t'>Students</div></div>
-              <div class='s'><div class='k'>{tutors}</div><div class='t'>Tutors</div></div>
+            <div class='s'><div class='k'>{pend}</div><div class='t'>PoPs pending</div></div>
+            <div class='s'><div class='k'>{resets}</div><div class='t'>PIN resets</div></div>
+            <div class='s'><div class='k'>{students}</div><div class='t'>Students</div></div>
+            <div class='s'><div class='k'>{tutors}</div><div class='t'>Tutors</div></div>
             </div>"""
         else:
             role_title = ""
@@ -1341,12 +1373,12 @@ def page(title, body_html, extra_head="", extra_js=""):
         ])
         sidebar_html = f"""
         <aside class='sidebar'>
-          <div class='role'>{role_title}</div>
-          <div class='user'>{user_name}</div>
-          
+        <div class='role'>{role_title}</div>
+        <div class='user'>{user_name}</div>
+        
 
 <div class='side-links'>{links_html}</div>
-          {stats_grid}
+        {stats_grid}
         </aside>
         """
 
@@ -1369,32 +1401,32 @@ def page(title, body_html, extra_head="", extra_js=""):
 
     return f"""
     <html><head>
-      <meta name='viewport' content='width=device-width, initial-scale=1'/>
-      <title>{title}</title>
-      {GOOGLE_FONTS}{BASE_CSS}{BASE_JS}{extra_head}
+    <meta name='viewport' content='width=device-width, initial-scale=1'/>
+    <title>{title}</title>
+    {GOOGLE_FONTS}{BASE_CSS}{BASE_JS}{extra_head}
     </head><body>
-      <header class='header'>
+    <header class='header'>
         <div class='nav'>
-          <div class='brand'>
+        <div class='brand'>
             <img class='brand-logo'
-                 src="/uploads/ebta_logo.png"
-                 alt="EBTA logo"/>
+                src="/uploads/ebta_logo.png"
+                alt="EBTA logo"/>
             <div class='title'>EBTA Portal</div>
-          </div>
-          <div class='links'>
-            <a href='/'>Home</a>{right}
-          </div>
         </div>
-      </header>
+        <div class='links'>
+            <a href='/'>Home</a>{right}
+        </div>
+        </div>
+    </header>
 
 
-      <main class='wrap'>{content_wrapped}</main>
-      <footer class='footer'>
-          <div class="copyright">
+    <main class='wrap'>{content_wrapped}</main>
+    <footer class='footer'>
+        <div class="copyright">
             © <span id="year"></span> Early Bird Testimony Academy · All rights reserved.
-          </div>
-          ⚡ Powered by Pasca Ragophala
-      </footer>{extra_js}
+        </div>
+        ⚡ Powered by Pasca Ragophala
+    </footer>{extra_js}
     </body></html>
     """
 # ===================== File routes =====================
@@ -1424,9 +1456,9 @@ def logo():
                 resp=make_response(data); resp.headers['Content-Type']=ct; return resp
     except Exception: pass
     svg=("<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'>"
-         "<rect width='48' height='48' rx='8' fill='#2e7d32'/>"
-         "<text x='24' y='28' text-anchor='middle' font-family='Poppins, Arial' font-size='20' font-weight='700' fill='#ffeb3b'>PA</text>"
-         "</svg>")
+        "<rect width='48' height='48' rx='8' fill='#2e7d32'/>"
+        "<text x='24' y='28' text-anchor='middle' font-family='Poppins, Arial' font-size='20' font-weight='700' fill='#ffeb3b'>PA</text>"
+        "</svg>")
     resp=make_response(svg); resp.headers['Content-Type']='image/svg+xml'; return resp
 
 
@@ -1466,7 +1498,7 @@ def home():
 
     # Build grade dropdown options (only grades that have subjects)
     available_grades = sorted({row['grade'] for row in subjects if row['grade'] in order},
-                              key=lambda g: order.index(g))
+                            key=lambda g: order.index(g))
     grade_options = "<option value=''>Select grade…</option>" + "".join(
         f"<option value='{g}'>{grade_names.get(g, g)}</option>"
         for g in available_grades
@@ -1488,286 +1520,508 @@ def home():
 
     body = fr"""
     <section class='grid' style='margin-top:10px'>
-      <div class='card soft'>
-        <h1>Register for {month_label}</h1>
+    <div class='card soft'>
+        <h1>Enroll for {month_label}</h1>
         <p class='muted'>All required fields are marked. Upload 1–2 Proof of Payment files.</p>
 
         <form id='reg_form' method='post' action='{url_for('register')}' enctype='multipart/form-data' class='grid'>
 
-          <!-- Student & guardian details -->
-          <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
+        <!-- Student & guardian details -->
+        <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
             <div>
-              <label>Student Name</label>
-              <input name='full_name' required/>
+            <label>Student Name</label>
+            <input name='full_name' required/>
             </div>
             <div>
-              <label>Student WhatsApp Number</label>
-              <input name='phone' required/>
+            <label>Student WhatsApp Number</label>
+            <input name='phone' required/>
             </div>
             <div>
-              <label>Guardian Name</label>
-              <input name='guardian_name' required/>
+            <label>Guardian Name</label>
+            <input name='guardian_name' required/>
             </div>
             <div>
-              <label>Guardian WhatsApp Number</label>
-              <input name='guardian' required/>
+            <label>Guardian WhatsApp Number</label>
+            <input name='guardian' required/>
             </div>
             <div>
-              <label>Student Email (optional)</label>
-              <input name='email'/>
+            <label>Student Email (optional)</label>
+            <input name='email'/>
             </div>
-          </div>
+        </div>
 
-          <!-- Grade & subjects -->
-          <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
+        <!-- Grade & subjects -->
+        <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
             <div>
-              <label>Choose grade</label>
-              <select id='grade_select' name='grade'>
+            <label>Choose grade</label>
+            <select id='grade_select' name='grade'>
                 {grade_options}
-              </select>
+            </select>
             </div>
             <div class='mini muted' style='align-self:end'>
-              Select a grade first, then choose subject(s) for that grade.
+            Select a grade first, then choose subject(s) for that grade.
             </div>
-          </div>
+        </div>
 
-          <div class='grid'>
+        <div class='grid'>
             <label>Choose subject(s) for selected grade</label>
             <div id='subject_list'
-                 class='grid'
-                 style='gap:8px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))'>
-              {subject_items}
+                class='grid'
+                style='gap:8px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))'>
+            {subject_items}
             </div>
-          </div>
+        </div>
 
-          <!-- PIN + Payment + PoP -->
-          <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
+        <!-- PIN + Payment + PoP -->
+        <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
             <div>
-              <label>Create a 5-digit PIN</label>
-              <input name='pin' required minlength='5' maxlength='5' pattern='\d{{5}}'/>
+            <label>Create a 5-digit PIN</label>
+            <input name='pin' required minlength='5' maxlength='5' pattern='\d{{5}}'/>
             </div>
             <div>
-              <label>Payment details</label>
-              <div class='mini'>
+            <label>Payment details</label>
+            <div class='mini'>
                 Please pay your monthly EBTA fees via EFT using the details below, then tick the box to confirm payment and upload your Proof of Payment.
-              </div>
-              <ul class='mini' style='margin:6px 0 4px 14px;padding:0;'>
+            </div>
+            <ul class='mini' style='margin:6px 0 4px 14px;padding:0;'>
                 <li>Account holder: Ms MCB MOHALE</li>
                 <li>Contact: 0649619653</li>
                 <li>Account number: 2062604285</li>
                 <li>Bank name: Capitec</li>
-              </ul>
-              <label style='margin-top:6px;display:flex;align-items:center;gap:8px;'>
+            </ul>
+            <label style='margin-top:6px;display:flex;align-items:center;gap:8px;'>
                 <input type='checkbox' id='paid_check' name='paid_check'/>
                 <span class='mini'>I have already made payment and will upload my Proof of Payment now.</span>
-              </label>
-              <div id='pop_section' style='margin-top:8px;display:none;'>
+            </label>
+            <div id='pop_section' style='margin-top:8px;display:none;'>
                 <label>Proof of Payment (1–2 files)</label>
                 <input type='file' name='pop'
-                       accept='.pdf,.png,.jpg,.jpeg,.gif,.webp'
-                       multiple/>
-              </div>
+                    accept='.pdf,.png,.jpg,.jpeg,.gif,.webp'
+                    multiple/>
             </div>
-          </div>
+            </div>
+        </div>
 
-          <div class='toolbar'>
+        <div class='toolbar'>
             <button class='btn'>Submit registration</button>
             <a class='btn secondary' href='{url_for('student_login')}'>Student login</a>
             <a class='btn secondary' href='{url_for('tutor_login')}'>Tutor login</a>
-          </div>
+        </div>
         </form>
-      </div>
+    </div>
     </section>
     """
 
-    extra_js = """
-    <script>
+    extra_js = '''<script>
     document.addEventListener('DOMContentLoaded', function(){
-      const form = document.getElementById('reg_form');
-      if (!form) return;
+    const form = document.getElementById('reg_form');
+    if (!form) return;
 
-      const gradeSelect = document.getElementById('grade_select');
-      const boxes = Array.from(
+    const gradeSelect = document.getElementById('grade_select');
+    const boxes = Array.from(
         form.querySelectorAll("input[type='checkbox'][name='subject_ids']")
-      );
+    );
 
-      const paidCheck = document.getElementById('paid_check');
-      const popSection = document.getElementById('pop_section');
-      const popInput = form.querySelector("input[type='file'][name='pop']");
+    const paidCheck = document.getElementById('paid_check');
+    const popSection = document.getElementById('pop_section');
+    const popInput = form.querySelector("input[type='file'][name='pop']");
 
-      function updateSubjects() {
+    function updateSubjects() {
         const grade = gradeSelect.value;
         boxes.forEach(box => {
-          const label = box.closest('label');
-          if (!label) return;
-          const g = label.getAttribute('data-grade');
+        const label = box.closest('label');
+        if (!label) return;
+        const g = label.getAttribute('data-grade');
 
-          if (!grade) {
+        if (!grade) {
             // No grade selected: hide all and clear
             label.style.display = 'none';
             box.checked = false;
-          } else if (g === grade) {
+        } else if (g === grade) {
             label.style.display = 'flex';
-          } else {
+        } else {
             label.style.display = 'none';
             box.checked = false;
-          }
+        }
         });
-      }
+    }
 
-      gradeSelect.addEventListener('change', updateSubjects);
-      updateSubjects(); // initial
+    gradeSelect.addEventListener('change', updateSubjects);
+    updateSubjects(); // initial
 
-      if (paidCheck && popSection) {
+    if (paidCheck && popSection) {
         paidCheck.addEventListener('change', function(){
-          if (this.checked) {
+        if (this.checked) {
             popSection.style.display = 'block';
-          } else {
+        } else {
             popSection.style.display = 'none';
             if (popInput) {
-              popInput.value = '';
+            popInput.value = '';
             }
-          }
+        }
         });
-      }
+    }
 
-      form.addEventListener('submit', function(e){
+    form.addEventListener('submit', function(e){
         const grade = gradeSelect.value;
         if (!grade) {
-          e.preventDefault();
-          alert('Please choose a grade first.');
-          return;
+        e.preventDefault();
+        alert('Please choose a grade first.');
+        return;
         }
         const anyChecked = boxes.some(b => b.checked);
         if (!anyChecked) {
-          e.preventDefault();
-          alert('Please select at least one subject for the chosen grade.');
-          return;
+        e.preventDefault();
+        alert('Please select at least one subject for the chosen grade.');
+        return;
         }
 
         if (!paidCheck || !paidCheck.checked) {
-          e.preventDefault();
-          alert('Please confirm that you have made payment before submitting, and then upload your Proof of Payment.');
-          return;
+        e.preventDefault();
+        alert('Please confirm that you have made payment before submitting, and then upload your Proof of Payment.');
+        return;
         }
 
         if (!popInput || !popInput.files || popInput.files.length < 1 || popInput.files.length > 2) {
-          e.preventDefault();
-          alert('Please upload 1 or 2 Proof of Payment files.');
+        e.preventDefault();
+        alert('Please upload 1 or 2 Proof of Payment files.');
         }
-      });
     });
-    </script>
-    """
+    });
 
+    // --- Fee calculation: display per-subject fee and total dynamically ---
+    (function(){
+    function feeForGrade(g){
+        if(!g) return 0;
+        if(g==='G12') return 250;
+        if(g==='G10' || g==='G11') return 200;
+        if(g==='G8' || g==='G9') return 200;
+        return 200;
+    }
+    function updateFees(){
+        const grade = document.getElementById('grade_select')?.value || '';
+        const boxes = Array.from(document.querySelectorAll("input[type='checkbox'][name='subject_ids']"));
+        const selected = boxes.filter(b => b.checked && b.closest('label') && b.closest('label').getAttribute('data-grade')===grade);
+        const count = selected.length;
+        const per = feeForGrade(grade);
+        const total = per * count;
+        let feeBox = document.getElementById('fee_summary');
+        if(!feeBox){
+        feeBox = document.createElement('div');
+        feeBox.id = 'fee_summary';
+        feeBox.style.marginTop = '8px';
+        const parent = document.getElementById('reg_form')?.querySelector('div.grid[style*="grid-template-columns:1fr 1fr"]') || document.getElementById('reg_form');
+        if(parent) parent.appendChild(feeBox);
+        }
+        feeBox.innerHTML = `<div class='mini muted'>Per-subject fee for selected grade: R${per}. Total subjects: ${count}. Total due for enrollment (this month): <strong>R${total}</strong>.</div>`;
+    }
+    document.addEventListener('change', function(e){
+        if(e.target && (e.target.name==='subject_ids' || e.target.id==='grade_select')) updateFees();
+    });
+    document.addEventListener('DOMContentLoaded', updateFees);
+    })();
+
+    
+    </script>'''
+
+    
+
+    # small helper to show a modal message instead of alert()
+    extra_js += '''
+    <script>
+    function showProceedModal(message){
+      // create simple centered modal
+      if(document.getElementById('ebta-proceed-modal')) return;
+      const ov = document.createElement('div');
+      ov.id = 'ebta-proceed-modal';
+        ov.style.position='fixed';
+        ov.style.inset='0';
+        ov.style.display='flex';
+        ov.style.alignItems='center';
+        ov.style.justifyContent='center';
+        ov.style.background='rgba(0,0,0,0.35)';
+        ov.style.zIndex='10000';
+        const box = document.createElement('div');
+        box.style.maxWidth='480px';
+        box.style.padding='16px';
+        box.style.borderRadius='10px';
+        box.style.background='#fff';
+        box.style.boxShadow='0 10px 30px rgba(0,0,0,0.2)';
+        const h = document.createElement('div');
+        h.style.marginBottom='12px';
+        h.style.fontSize='16px';
+        h.textContent = message || '';
+        const btn = document.createElement('button');
+        btn.textContent='OK';
+        btn.className='btn';
+        btn.onclick = function(){ document.getElementById('ebta-proceed-modal')?.remove(); };
+        box.appendChild(h);
+        box.appendChild(btn);
+        ov.appendChild(box);
+        document.body.appendChild(ov);
+    }
+    </script>
+    '''
+
+# --- Auto-inserted: 2026 registration popup (Yes / No) ---
+    extra_js += '''<script>
+    document.addEventListener('DOMContentLoaded', function(){
+      // Create modal
+      if (document.getElementById('ebta-reg-2026-modal')) return;
+      const overlay = document.createElement('div');
+      overlay.id = 'ebta-reg-2026-modal';
+      overlay.style.position = 'fixed';
+      overlay.style.inset = '0';
+      overlay.style.background = 'rgba(0,0,0,0.45)';
+      overlay.style.display = 'flex';
+      overlay.style.alignItems = 'center';
+      overlay.style.justifyContent = 'center';
+      overlay.style.zIndex = '9999';
+
+      const box = document.createElement('div');
+      box.style.maxWidth = '520px';
+      box.style.width = '92%';
+      box.style.padding = '18px';
+      box.style.borderRadius = '12px';
+      box.style.boxShadow = '0 8px 32px rgba(0,0,0,0.25)';
+      box.style.background = '#fff';
+      box.style.fontFamily = 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
+      box.style.color = '#0f172a';
+
+      const h = document.createElement('h2');
+      h.textContent = 'Annual registration (2026)';
+      h.style.margin = '0 0 8px';
+      h.style.fontSize = '18px';
+
+      const p = document.createElement('div');
+      p.className = 'muted mini';
+      p.style.marginBottom = '14px';
+      p.textContent = 'Have you already paid the R50 once-off annual registration for 2026?';
+
+      const btnRow = document.createElement('div');
+      btnRow.style.display = 'flex';
+      btnRow.style.gap = '10px';
+      btnRow.style.justifyContent = 'flex-end';
+
+      const noBtn = document.createElement('button');
+      noBtn.className = 'btn secondary';
+      noBtn.textContent = 'NO';
+      noBtn.style.background = '#fff';
+      noBtn.style.color = '#0f172a';
+      noBtn.onclick = function(){
+        // Redirect to registration form
+        window.location.href = '/annual-registration';
+      };
+
+      const yesBtn = document.createElement('button');
+      yesBtn.className = 'btn success';
+      yesBtn.textContent = 'YES';
+      yesBtn.onclick = function(){
+        if (typeof showProceedModal === 'function') showProceedModal('You may proceed with the monthly enrollment.');
+        const modal = document.getElementById('ebta-reg-2026-modal');
+        if(modal) modal.remove();
+      };
+
+      btnRow.appendChild(noBtn);
+      btnRow.appendChild(yesBtn);
+      box.appendChild(h);
+      box.appendChild(p);
+      box.appendChild(btnRow);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+    });
+    </script>'''
     return page("EBTA Enrollment", body, extra_js=extra_js)
 
 
 
 @app.post('/register')
 def register():
-    full_name = request.form.get('full_name','').strip()
-    phone     = request.form.get('phone','').strip()
-    guardian  = request.form.get('guardian','').strip()
-    email     = request.form.get('email','').strip()
-    guardian_name = request.form.get('guardian_name','').strip()
-    subject_ids = request.form.getlist('subject_ids')
-    pin       = request.form.get('pin','').strip()
-    pops      = request.files.getlist('pop')
+    import datetime as _dt
+    # helper to pick a filename sanitizer available in your file
+    try:
+        secure_fn = secure_name  # your project uses secure_name elsewhere
+    except NameError:
+        try:
+            from werkzeug.utils import secure_filename as secure_fn
+        except Exception:
+            # last-resort: very small sanitizer
+            import re
+            def secure_fn(n):
+                n = n or "file"
+                n = re.sub(r'[^A-Za-z0-9_.-]', '_', n)
+                return n
 
-    # Validate required fields
+    # collect form
+    full_name = request.form.get('full_name', '').strip()
+    phone = request.form.get('phone', '').strip()
+    guardian = request.form.get('guardian', '').strip()
+    email = request.form.get('email', '').strip()
+    guardian_name = request.form.get('guardian_name', '').strip()
+    subject_ids = request.form.getlist('subject_ids')
+    pin = request.form.get('pin', '').strip()
+    pops_files = request.files.getlist('pop')
+
+    # basic validation
     if not (full_name and phone and guardian_name and guardian and subject_ids and pin):
         return page("Error", card_msg("All fields are required."))
     if not is_valid_pin(pin):
         return page("Error", card_msg("PIN must be exactly 5 digits."))
 
-    # Validate PoP files: 1–2 files required
-    pops = [f for f in pops if (f and f.filename)]
-    if len(pops) < 1 or len(pops) > 2:
+    # normalize subject_ids (keep as strings if DB stores ids as strings)
+    subject_ids = [str(s).strip() for s in subject_ids if str(s).strip()]
+    if not subject_ids:
+        return page("Error", card_msg("Please select at least one subject."))
+
+    # validate PoP files: require 1-2 files
+    pops_files = [f for f in pops_files if (f and getattr(f, 'filename', '').strip())]
+    if len(pops_files) < 1 or len(pops_files) > 2:
         return page("Error", card_msg("Upload 1 or 2 Proof of Payment files."))
 
-    conn = get_db()
-    if pin_in_use(conn, pin):
-        conn.close()
-        return page("Error", card_msg("PIN already in use. Pick another."))
+    # Start DB work with one connection for the whole handler
+    conn = None
+    try:
+        conn = get_db()
+        cur = conn.cursor()
 
-    cur = conn.cursor()
+        # Ensure helper tables exist (best-effort)
+        try:
+            ensure_registration_table(conn)
+        except Exception:
+            pass
+        try:
+            ensure_annual_table(conn)
+        except Exception:
+            pass
 
-    # derive grade from the first subject selected
-    cur.execute("SELECT grade FROM subjects WHERE id=?", (subject_ids[0],))
-    r0 = cur.fetchone()
-    if not r0:
-        conn.close()
-        return page("Error", card_msg("Invalid subject selection."))
-    derived_grade = r0['grade']
+        # Check PIN uniqueness
+        if pin_in_use(conn, pin):
+            return page("Error", card_msg("PIN already in use. Pick another."))
 
-    cur.execute("SELECT id,pin FROM students WHERE phone_whatsapp=?", (phone,))
-    srow = cur.fetchone()
-    already = bool(srow)
+        # derive grade from first selected subject (validate subject exists)
+        try:
+            cur.execute("SELECT grade FROM subjects WHERE id=?", (subject_ids[0],))
+            r0 = cur.fetchone()
+        except Exception:
+            r0 = None
+        if not r0:
+            return page("Error", card_msg("Invalid subject selection."))
+        derived_grade = r0['grade']
 
-    # Save PoP files
-    saved_paths = []
-    ts = int(datetime.datetime.now().timestamp())
-    for idx, pop in enumerate(pops, start=1):
-        safe = f"{ts}_{idx}_{secure_name(pop.filename)}"
-        dest = UPLOAD_DIR / safe
-        pop.save(dest)
-        saved_paths.append(f"/uploads/{safe}")
+        # find existing student by phone
+        cur.execute("SELECT id, pin FROM students WHERE phone_whatsapp=?", (phone,))
+        srow = cur.fetchone()
+        sid = srow['id'] if srow else None
+        created_at = now_utc_iso()
 
-    created_at = now_utc_iso()
-    if srow:
-        sid = srow['id']
-        if not srow['pin']:
-            cur.execute(
-                "UPDATE students SET pin=?,full_name=?,guardian_name=?,guardian_phone=?,email=?,grade=? WHERE id=?",
-                (pin, full_name, guardian_name, guardian, email, derived_grade, sid)
-            )
+        # save uploaded PoP files into uploads directory (store filenames only)
+        saved_filenames = []
+        ts = int(_dt.datetime.utcnow().timestamp())
+        for idx, f in enumerate(pops_files, start=1):
+            original = getattr(f, 'filename', '') or f"file_{idx}"
+            safe_name = f"{ts}_{idx}_{secure_fn(original)}"
+            dest = UPLOAD_DIR / safe_name
+            try:
+                f.save(dest)
+            except Exception as e:
+                # if saving fails, rollback and inform admin/user
+                conn.rollback()
+                return page("Error", card_msg(f"Failed to save uploaded file: {e}"))
+            saved_filenames.append(safe_name)  # keep relative filename
+
+        # create or update student
+        if srow:
+            if not srow.get('pin'):
+                cur.execute(
+                    "UPDATE students SET pin=?, full_name=?, guardian_name=?, guardian_phone=?, email=?, grade=? WHERE id=?",
+                    (pin, full_name, guardian_name, guardian, email, derived_grade, sid)
+                )
+            else:
+                cur.execute(
+                    "UPDATE students SET full_name=?, guardian_name=?, guardian_phone=?, email=? WHERE id=?",
+                    (full_name, guardian_name, guardian, email, sid)
+                )
         else:
             cur.execute(
-                "UPDATE students SET full_name=?,guardian_name=?,guardian_phone=?,email=? WHERE id=?",
-                (full_name, guardian_name, guardian, email, sid)
+                "INSERT INTO students(full_name, phone_whatsapp, guardian_name, guardian_phone, email, grade, pin, created_at) VALUES(?,?,?,?,?,?,?,?)",
+                (full_name, phone, guardian_name, guardian, email, derived_grade, pin, created_at)
             )
-    else:
-        cur.execute(
-            "INSERT INTO students(full_name,phone_whatsapp,guardian_name,guardian_phone,email,grade,pin,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            (full_name, phone, guardian_name, guardian, email, derived_grade, pin, created_at)
-        )
-        sid = cur.lastrowid
+            sid = cur.lastrowid
 
-    month = get_setting('current_month', datetime.date.today().strftime('%Y-%m'))
-    cur.execute("SELECT subject_id FROM enrollments WHERE student_id=? AND month=?", (sid, month))
-    existing = {str(x['subject_id']) for x in cur.fetchall()}
+        # Annual registration: if paid_check present and not already registered this year
+        paid_check = request.form.get('paid_check')
+        year = _dt.date.today().strftime('%Y')
+        try:
+            if paid_check and not student_registered_for_year(conn, sid, year):
+                reg_created_at = now_utc_iso()
+                # try to keep legacy registrations table in sync
+                try:
+                    cur.execute("INSERT OR IGNORE INTO registrations(student_id, year, amount, created_at) VALUES(?,?,?,?)", (sid, year, 50, reg_created_at))
+                except Exception:
+                    pass
+                # write to annual_registrations if table exists (use first uploaded file as proof_path)
+                try:
+                    proof_fname = saved_filenames[0] if saved_filenames else None
+                    cur.execute(
+                        "INSERT INTO annual_registrations(student_id, full_name, grade, phone, proof_path, amount, year, created_at) VALUES(?,?,?,?,?,?,?,?)",
+                        (sid, full_name, derived_grade, phone or "", proof_fname or "", 50, year, reg_created_at)
+                    )
+                except Exception:
+                    # silent if table missing or insert fails
+                    pass
+        except Exception:
+            # don't break main flow if any issue here
+            pass
 
-    created = []
-    for subid in subject_ids:
-        if subid in existing:
-            continue
-        token = secrets.token_urlsafe(16)
-        # legacy single PoP column + full list in enrollment_files
-        pop_url_legacy = saved_paths[0]
-        cur.execute(
-            """INSERT INTO enrollments(student_id,subject_id,month,status,payment_method,payment_ref,pop_url,status_token,created_at)
-               VALUES(?,?,?,?,?,?,?,?,?)""",
-            (sid, subid, month, 'PENDING', 'EFT', None, pop_url_legacy, token, created_at)
-        )
-        eid = cur.lastrowid
-        for pth in saved_paths:
-            cur.execute("INSERT INTO enrollment_files(enrollment_id,file_path) VALUES(?,?)", (eid, pth))
-        created.append((eid, token))
+        # Enrollments for current month
+        month = get_setting('current_month', _dt.date.today().strftime('%Y-%m'))
+        try:
+            cur.execute("SELECT subject_id FROM enrollments WHERE student_id = ? AND month = ?", (sid, month))
+            existing = {str(x['subject_id']) for x in cur.fetchall()}
+        except Exception:
+            existing = set()
 
-    conn.commit()
-    conn.close()
+        created = []
+        for subid in subject_ids:
+            if str(subid) in existing:
+                continue
+            token = secrets.token_urlsafe(16)
+            pop_url_legacy = (f"/uploads/{saved_filenames[0]}" if saved_filenames else None)
+            cur.execute(
+                """INSERT INTO enrollments(student_id, subject_id, month, status, payment_method, payment_ref, pop_url, status_token, created_at)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                (sid, subid, month, 'PENDING', 'EFT', None, pop_url_legacy, token, created_at)
+            )
+            eid = cur.lastrowid
+            # insert each uploaded file into enrollment_files (store filename)
+            for fname in saved_filenames:
+                cur.execute("INSERT INTO enrollment_files(enrollment_id,file_path) VALUES(?,?)", (eid, fname))
+            created.append((eid, token))
 
-    # --- Notifications: registration received (pending approval) ---
+        conn.commit()
+
+    except Exception as e:
+        try:
+            if conn:
+                conn.rollback()
+        except Exception:
+            pass
+        return page("Error", card_msg("Failed to process registration. Please try again."))
+
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+    # notifications (best-effort)
     try:
         base_url = (request.url_root or '').rstrip('/')
         portal_link = base_url
         login_link = base_url + url_for('student_login')
         month_label = pretty_month_label(month)
-
-        # Short first name for SMS
         first_name = full_name.split()[0] if full_name else ''
-
         email_subject = f"EBTA registration received ({month_label})"
         email_body = (
             f"Hi {full_name},\n\n"
@@ -1784,13 +2038,11 @@ def register():
             f"EBTA: Hi {first_name}, your registration for {month_label} was received "
             f"and is waiting for approval. Login later with WhatsApp {phone} and PIN {pin} at {login_link}."
         )
-
         if email:
             send_email_notification(email, email_subject, email_body)
         if phone:
             send_sms_notification(phone, sms_body)
     except Exception:
-        # Never break the flow if notifications fail
         pass
 
     if not created:
@@ -1800,26 +2052,67 @@ def register():
         eid, tok = created[0]
         return redirect(url_for('status', id=eid) + '?' + urlencode({'token': tok}))
 
-    # Multiple enrollments: show links
+    # multiple enrollments: show status links
     links = [
         f"<li><a class='links' target='_blank' href='{url_for('status', id=e)}?{urlencode({'token': t})}'>Status for enrollment #{e}</a></li>"
         for e, t in created
     ]
-
     body = f"""
     <section class='wrap small'>
       <div class='card'>
         <h1>Registration submitted</h1>
-        <div class='ui-controls'>
-          <button class='chip' id='toggleSidebar' title='Collapse/expand sidebar'>Toggle sidebar</button>
-          <button class='chip' id='toggleWide' title='Toggle wider layout'>Wide mode</button>
-        </div>
         <ul>{''.join(links)}</ul>
       </div>
     </section>
     """
     return page("Submitted", body)
 
+
+
+@app.get('/admin/registered')
+def admin_registered():
+    r = require_admin()
+    if r: return r
+    conn = get_db(); cur = conn.cursor()
+    ensure_registration_table(conn)
+    # get distinct years from registrations, fallback to current year
+    cur.execute("SELECT DISTINCT year FROM registrations ORDER BY year DESC")
+    years = [r['year'] for r in cur.fetchall()] or [datetime.date.today().strftime('%Y')]
+    selected_year = request.args.get('year') or (years[0] if years else datetime.date.today().strftime('%Y'))
+    # counts and listing
+    cur.execute("SELECT COUNT(*) AS c FROM registrations WHERE year=?", (selected_year,))
+    total = cur.fetchone()['c']
+    cur.execute("SELECT r.id, r.student_id, r.amount, r.created_at, s.full_name, s.phone_whatsapp, s.grade FROM registrations r JOIN students s ON s.id=r.student_id WHERE r.year=? ORDER BY s.full_name", (selected_year,))
+    rows = cur.fetchall()
+    conn.close()
+    year_options = ''.join([f"<option value='{y}' {'selected' if y==selected_year else ''}>{y}</option>" for y in years])
+    rows_html = ''
+    if not rows:
+        rows_html = "<div class='empty'>No registrations for this year.</div>"
+    else:
+        rrows = []
+        for rr in rows:
+            when = rr['created_at'][:16].replace('T',' ')
+            rrows.append(f"<tr><td>{rr['full_name']}</td><td>{rr['phone_whatsapp']}</td><td>{grade_label(rr['grade'])}</td><td>R{rr['amount']}</td><td>{when}</td></tr>")
+        rows_html = f"<table><thead><tr><th>Student</th><th>Phone</th><th>Grade</th><th>Amount</th><th>Registered at</th></tr></thead><tbody>{''.join(rrows)}</tbody></table>"
+    body = f"""
+    <section class='grid'>
+    <div class='card'>
+        <h1>Registered students — {selected_year}</h1>
+        <div class='toolbar'>
+        <form method='get' action='{url_for('admin_registered')}' style='display:inline-block;margin-right:12px'>
+            <label class='mini muted'>Filter by year</label>
+            <select name='year' onchange='this.form.submit()'>
+            {year_options}
+            </select>
+        </form>
+        <div class='chip'>Total: {total}</div>
+        </div>
+        <div style='margin-top:12px'>{rows_html}</div>
+    </div>
+    </section>
+    """
+    return page('Registered students', body)
 
 # ===================== Status page =====================
 
@@ -1828,11 +2121,11 @@ def status(id:int):
     token=request.args.get('token')
     conn=get_db(); cur=conn.cursor()
     cur.execute("""
-      SELECT e.*, s.full_name, s.phone_whatsapp, sub.name AS subject_name, sub.id AS subject_id
-      FROM enrollments e
-      JOIN students s ON s.id=e.student_id
-      JOIN subjects sub ON sub.id=e.subject_id
-      WHERE e.id=?""",(id,))
+    SELECT e.*, s.full_name, s.phone_whatsapp, sub.name AS subject_name, sub.id AS subject_id
+    FROM enrollments e
+    JOIN students s ON s.id=e.student_id
+    JOIN subjects sub ON sub.id=e.subject_id
+    WHERE e.id=?""",(id,))
     e=cur.fetchone()
     if not e:
         conn.close(); return page("Not found", card_msg("Enrollment not found."))
@@ -1845,7 +2138,7 @@ def status(id:int):
     conn.close()
     gl=g['invite_link'] if g else None
     join=(f"<a class='btn success' target='_blank' href='{gl}'>Join WhatsApp Group</a>"
-          if (e['status']=='ACTIVE' and gl) else "<div class='muted'>Link appears once ACTIVE.</div>")
+        if (e['status']=='ACTIVE' and gl) else "<div class='muted'>Link appears once ACTIVE.</div>")
     pop_list = " • ".join([f"<a class='links' href='{p}' target='_blank'>PoP</a>" for p in pops]) if pops else "—"
     body=fr"""
     <a class='links' href='/'>← Back</a>
@@ -1864,16 +2157,16 @@ def student_login():
     if is_student(): return redirect(url_for('student_home'))
     body=fr"""
     <section class='wrap small'><div class='card auth-card'><h1>Student login</h1>
-      <form method='post' action='{url_for('student_login_post')}' class='grid'>
+    <form method='post' action='{url_for('student_login_post')}' class='grid'>
         <div><label>WhatsApp number</label><input name='phone' required/></div>
         <div><label>5-digit PIN</label><input name='pin' required maxlength='5' minlength='5'/></div>
         <button class='btn success'>Login</button>
-      </form><hr/>
-      <form method='post' action='{url_for('student_forgot_pin')}' class='grid'>
+    </form><hr/>
+    <form method='post' action='{url_for('student_forgot_pin')}' class='grid'>
         <div class='muted'>Forgot your PIN?</div>
         <div><label>Enter your WhatsApp number</label><input name='phone' required/></div>
         <button class='btn secondary'>Notify Admin</button>
-      </form></div></section>"""
+    </form></div></section>"""
     return page("Student Login", body)
 
 @app.post('/student/login')
@@ -1912,9 +2205,9 @@ def student_home():
 
     # Enrollments this month
     cur.execute("""
-      SELECT e.subject_id, e.status, s.name AS subject_name, s.grade
-      FROM enrollments e JOIN subjects s ON s.id=e.subject_id
-      WHERE e.student_id=? AND e.month=? ORDER BY s.grade,s.name
+    SELECT e.subject_id, e.status, s.name AS subject_name, s.grade
+    FROM enrollments e JOIN subjects s ON s.id=e.subject_id
+    WHERE e.student_id=? AND e.month=? ORDER BY s.grade,s.name
     """,(sid,month))
     enrolls=cur.fetchall()
     active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status']=='ACTIVE']
@@ -1932,9 +2225,9 @@ def student_home():
     sessions_html="<div class='empty'>No sessions yet.</div>"
     if active_sub_ids:
         q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link
-              FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
-              WHERE s.subject_id IN ({','.join('?'*len(active_sub_ids))})
-              ORDER BY s.day_of_week, s.start_time"""
+            FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
+            WHERE s.subject_id IN ({','.join('?'*len(active_sub_ids))})
+            ORDER BY s.day_of_week, s.start_time"""
         cur.execute(q, (*active_sub_ids,))
         sess=cur.fetchall()
         if sess:
@@ -1957,11 +2250,11 @@ def student_home():
             tutors_for_subject.setdefault(row['subject_id'], []).append((row['tutor_id'], row['full_name']))
 
         q=f"""SELECT m.*, sub.name AS subject_name, sub.grade, t.full_name AS tutor_name
-              FROM materials m
-              JOIN subjects sub ON sub.id=m.subject_id
-              JOIN tutors t ON t.id=m.tutor_id
-              WHERE m.month=? AND m.subject_id IN ({','.join('?'*len(active_sub_ids))})
-              ORDER BY m.created_at DESC"""
+            FROM materials m
+            JOIN subjects sub ON sub.id=m.subject_id
+            JOIN tutors t ON t.id=m.tutor_id
+            WHERE m.month=? AND m.subject_id IN ({','.join('?'*len(active_sub_ids))})
+            ORDER BY m.created_at DESC"""
         cur.execute(q,(month,*active_sub_ids)); mats=cur.fetchall()
         if mats:
             for m in mats:
@@ -1996,25 +2289,25 @@ def student_home():
                     except Exception: pass
                 if allow:
                     submit_blocks.append(f"""
-                      <div class='card'>
+                    <div class='card'>
                         <b>{m['title']}</b> — {grade_label(m['grade'])} {m['subject_name']} • Due: {due or '—'} • Total: {maxp}
                         <form method='post' action='{url_for('student_submit_assignment', mid=m['id'])}' enctype='multipart/form-data' class='grid' style='grid-template-columns:1fr auto;gap:10px;margin-top:8px'>
-                          <input type='file' name='file' required accept='.pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.txt'/>
-                          <button class='btn'>Submit</button>
+                        <input type='file' name='file' required accept='.pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.txt'/>
+                        <button class='btn'>Submit</button>
                         </form>
-                      </div>""")
+                    </div>""")
                 else:
                     submit_blocks.append(f"<div class='card'><b>{m['title']}</b> — Due: {due} <span class='chip'>Closed</span></div>")
 
     # Feedback & Results (graded items)
     feedback_card = ""
     cur.execute("""SELECT m.title, m.max_points, s2.name AS subject_name, s2.grade,
-                          sub.mark, sub.feedback, sub.evaluated_at
-                   FROM submissions sub
-                   JOIN materials m ON m.id=sub.material_id
-                   JOIN subjects s2 ON s2.id=m.subject_id
-                   WHERE sub.student_id=? AND sub.mark IS NOT NULL
-                   ORDER BY sub.evaluated_at DESC LIMIT 50""", (sid,))
+                        sub.mark, sub.feedback, sub.evaluated_at
+                FROM submissions sub
+                JOIN materials m ON m.id=sub.material_id
+                JOIN subjects s2 ON s2.id=m.subject_id
+                WHERE sub.student_id=? AND sub.mark IS NOT NULL
+                ORDER BY sub.evaluated_at DESC LIMIT 50""", (sid,))
     graded = cur.fetchall()
     if graded:
         items = []
@@ -2042,17 +2335,17 @@ def student_home():
     msg_opts = "".join([f"<option value='{tid}|{sid_int}'>{label}</option>" for tid,sid_int,label in options]) or "<option value=''>No tutors available</option>"
 
     cur.execute("""SELECT dm.*, 
-                          CASE dm.from_role 
-                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
-                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
-                               ELSE 'Admin' END AS from_name,
-                          CASE dm.to_role 
-                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
-                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
-                               ELSE 'Admin' END AS to_name
-                   FROM direct_messages dm
-                   WHERE (to_role='student' AND to_id=?) OR (from_role='student' AND from_id=?)
-                   ORDER BY created_at ASC LIMIT 30""",(sid,sid))
+                        CASE dm.from_role 
+                            WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
+                            WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
+                            ELSE 'Admin' END AS from_name,
+                        CASE dm.to_role 
+                            WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
+                            WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
+                            ELSE 'Admin' END AS to_name
+                FROM direct_messages dm
+                WHERE (to_role='student' AND to_id=?) OR (from_role='student' AND from_id=?)
+                ORDER BY created_at ASC LIMIT 30""",(sid,sid))
     msgs = cur.fetchall()
     msg_list = "".join([f"<div class='msg {'me' if m['from_role']=='student' else 'them'}'><div class='meta'>{m['from_name']} → {m['to_name']} • {m['created_at'][:16].replace('T',' ')}</div><div>{m['body']}</div></div>" for m in msgs]) or "<div class='empty'>No messages yet.</div>"
 
@@ -2071,7 +2364,7 @@ def student_home():
         # Fetch existing ratings this month for prefill
         cur2 = get_db().cursor()
         cur2.execute("""SELECT subject_id, rating, comment FROM lesson_ratings
-                       WHERE student_id=? AND month=?""", (sid, month))
+                    WHERE student_id=? AND month=?""", (sid, month))
         previous = {r["subject_id"]:(r["rating"], r["comment"]) for r in cur2.fetchall()}
         cur2.connection.close()
 
@@ -2082,60 +2375,60 @@ def student_home():
             sid_int = int(e['subject_id'])
             r0, c0 = previous.get(sid_int, (None, "")) if sid_int in previous else (None, "")
             rows.append(f"""
-              <tr>
+            <tr>
                 <td>{grade_label(e['grade'])} — {e['subject_name']}</td>
                 <td>
-                  <select name='rating_{sid_int}' required>
+                <select name='rating_{sid_int}' required>
                     <option value='' {'selected' if not r0 else ''}>Select</option>
                     {''.join([f"<option value='{k}' {'selected' if r0==k else ''}>{k} ★</option>" for k in range(1,6)])}
-                  </select>
+                </select>
                 </td>
                 <td><input name='comment_{sid_int}' placeholder='Optional comment' value="{(c0 or '').replace('"','&quot;')}"/></td>
-              </tr>
+            </tr>
             """)
 
         rate_card = f"""
-          <div class='card'>
+        <div class='card'>
             <h2>Rate your classes for {month}</h2>
             <p class='muted mini'>This is open from the 24th to the end of the month. 1 ★ (poor) → 5 ★ (excellent).</p>
             <form method='post' action='{url_for('student_submit_ratings')}'>
-              <table>
+            <table>
                 <thead><tr><th>Subject</th><th>Rating</th><th>Comment</th></tr></thead>
                 <tbody>{''.join(rows)}</tbody>
-              </table>
-              <div class='toolbar'><button class='btn'>Save ratings</button></div>
+            </table>
+            <div class='toolbar'><button class='btn'>Save ratings</button></div>
             </form>
-          </div>
+        </div>
         """
 
     compose_block = f"""
-      <div class='card'><h2>Messages</h2>
+    <div class='card'><h2>Messages</h2>
         <form method='post' action='{url_for('student_send_message')}' class='grid'>
-          <div><label>To Tutor</label><select name='combo' required>{msg_opts}</select></div>
-          <div><label>Your message</label><textarea name='body' required placeholder='Type your message...'></textarea></div>
-          <button class='btn'>Send</button>
+        <div><label>To Tutor</label><select name='combo' required>{msg_opts}</select></div>
+        <div><label>Your message</label><textarea name='body' required placeholder='Type your message...'></textarea></div>
+        <button class='btn'>Send</button>
         </form>
         <div style='margin-top:10px'>{msg_list}</div>
-      </div>
+    </div>
     """
 
     body=fr"""
     <section class='grid'>
-      <div class='card'>
+    <div class='card'>
         <h1>Welcome, {session.get('student_name','Student')}</h1>
         <p class='muted'>Month: {month}</p>
         <h2>Your Enrollments</h2>{enr_html}
         <p class='mini muted'>To add more subjects, submit the Home form again with your phone number and the new subjects + PoP.</p>
-      </div>
+    </div>
 
-      <div class='card'><h2>WhatsApp Links</h2>{group_html}</div>
-      <div class='card'><h2>Sessions</h2>{sessions_html}</div>
-      <div class='card'><h2>Materials & Assignments</h2><div class='scroll-x'>{materials_html}</div></div>
+    <div class='card'><h2>WhatsApp Links</h2>{group_html}</div>
+    <div class='card'><h2>Sessions</h2>{sessions_html}</div>
+    <div class='card'><h2>Materials & Assignments</h2><div class='scroll-x'>{materials_html}</div></div>
 {(''.join(submit_blocks)) if submit_blocks else ''}
 
-      {feedback_card}
-      {rate_card}
-      {compose_block}
+    {feedback_card}
+    {rate_card}
+    {compose_block}
     </section>"""
     return page("Student Portal", body)
 
@@ -2208,7 +2501,7 @@ def student_submit_ratings():
         return page("Closed", card_msg("The rating window is not open."))
     conn = get_db(); cur = conn.cursor()
     cur.execute("""SELECT subject_id FROM enrollments
-                   WHERE student_id=? AND month=? AND status='ACTIVE'""", (sid, month))
+                WHERE student_id=? AND month=? AND status='ACTIVE'""", (sid, month))
     subids = [row['subject_id'] for row in cur.fetchall()]
     now = now_utc_iso()
     for subid in subids:
@@ -2225,9 +2518,9 @@ def student_submit_ratings():
             continue
         comment = request.form.get(ckey, "").strip() or None
         cur.execute("""INSERT INTO lesson_ratings(student_id,subject_id,month,rating,comment,created_at)
-                       VALUES(?,?,?,?,?,?)
-                       ON CONFLICT(student_id,subject_id,month)
-                       DO UPDATE SET rating=excluded.rating, comment=excluded.comment, created_at=excluded.created_at""",
+                    VALUES(?,?,?,?,?,?)
+                    ON CONFLICT(student_id,subject_id,month)
+                    DO UPDATE SET rating=excluded.rating, comment=excluded.comment, created_at=excluded.created_at""",
                     (sid, subid, month, rating, comment, now))
     conn.commit(); conn.close()
     return page("Thanks!", card_msg("Your ratings were saved."))
@@ -2240,16 +2533,16 @@ def tutor_login():
     if is_tutor(): return redirect(url_for('tutor_home'))
     body=fr"""
     <section class='wrap small'><div class='card auth-card'><h1>Tutor login</h1>
-      <form method='post' action='{url_for('tutor_login_post')}' class='grid'>
+    <form method='post' action='{url_for('tutor_login_post')}' class='grid'>
         <div><label>Phone</label><input name='phone' required/></div>
         <div><label>5-digit PIN</label><input name='pin' required maxlength='5' minlength='5'/></div>
         <button class='btn success'>Login</button>
-      </form><hr/>
-      <form method='post' action='{url_for('tutor_forgot_pin')}' class='grid'>
+    </form><hr/>
+    <form method='post' action='{url_for('tutor_forgot_pin')}' class='grid'>
         <div class='muted'>Forgot your PIN?</div>
         <div><label>Enter your phone</label><input name='phone' required/></div>
         <button class='btn secondary'>Notify Admin</button>
-      </form></div></section>"""
+    </form></div></section>"""
     return page("Tutor Login", body)
 
 @app.post('/tutor/login')
@@ -2287,8 +2580,8 @@ def tutor_home():
 
     # Assigned subjects
     cur.execute("""SELECT s.id AS subject_id, s.name AS subject_name, s.grade
-                   FROM tutor_subjects ts JOIN subjects s ON s.id=ts.subject_id
-                   WHERE ts.tutor_id=? ORDER BY s.grade,s.name""",(tid,))
+                FROM tutor_subjects ts JOIN subjects s ON s.id=ts.subject_id
+                WHERE ts.tutor_id=? ORDER BY s.grade,s.name""",(tid,))
     subs=cur.fetchall()
     assigned_list=", ".join([f"{grade_label(r['grade'])} — {r['subject_name']}" for r in subs]) or "<span class='muted'>No subjects assigned yet.</span>"
 
@@ -2297,9 +2590,9 @@ def tutor_home():
     groups_html="<div class='empty'>No group links yet.</div>"
     if sub_ids:
         q=f"""SELECT g.subject_id, g.invite_link, s.name, s.grade
-              FROM groups g JOIN subjects s ON s.id=g.subject_id
-              WHERE g.month=? AND g.subject_id IN ({','.join('?'*len(sub_ids))})
-              ORDER BY s.grade,s.name"""
+            FROM groups g JOIN subjects s ON s.id=g.subject_id
+            WHERE g.month=? AND g.subject_id IN ({','.join('?'*len(sub_ids))})
+            ORDER BY s.grade,s.name"""
         cur.execute(q,(month,*sub_ids)); groups=cur.fetchall()
         if groups:
             rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['name']}</td><td><a class='links' target='_blank' href='{r['invite_link']}'>Open WhatsApp</a></td></tr>" for r in groups])
@@ -2307,8 +2600,8 @@ def tutor_home():
 
     # Sessions for this tutor
     cur.execute("""SELECT se.id, se.subject_id, s.name AS subject_name, s.grade, se.day_of_week, se.start_time, se.end_time, se.meet_link
-                   FROM sessions se JOIN subjects s ON s.id=se.subject_id
-                   WHERE se.tutor_id=? ORDER BY se.day_of_week,se.start_time""",(tid,))
+                FROM sessions se JOIN subjects s ON s.id=se.subject_id
+                WHERE se.tutor_id=? ORDER BY se.day_of_week,se.start_time""",(tid,))
     sess=cur.fetchall()
     s_rows="".join([
         f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td>"
@@ -2323,28 +2616,28 @@ def tutor_home():
     subjects_options="".join([f"<option value='{r['subject_id']}'>{grade_label(r['grade'])} — {r['subject_name']}</option>" for r in subs]) or "<option value=''>No assigned subjects</option>"
 
     upload_block=f"""
-      <div class='card'>
+    <div class='card'>
         <h2>Upload materials (Month: {month})</h2>
         <form method='post' action='{url_for('tutor_upload')}' enctype='multipart/form-data' class='grid'>
-          <div><label>Subject</label><select name='subject_id' required>{subjects_options}</select></div>
-          <div><label>Title</label><input name='title' required/></div>
-          <div><label>Upload File</label><input type='file' name='file' accept='.pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.zip'/></div>
-          <div><label>YouTube URL</label><input name='youtube' placeholder='https://youtube.com/...'/></div>
-          <div class='grid' style='grid-template-columns:1fr 1fr 1fr;gap:10px'>
+        <div><label>Subject</label><select name='subject_id' required>{subjects_options}</select></div>
+        <div><label>Title</label><input name='title' required/></div>
+        <div><label>Upload File</label><input type='file' name='file' accept='.pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.zip'/></div>
+        <div><label>YouTube URL</label><input name='youtube' placeholder='https://youtube.com/...'/></div>
+        <div class='grid' style='grid-template-columns:1fr 1fr 1fr;gap:10px'>
             <label style='display:flex;align-items:center;gap:8px'><input type='checkbox' name='is_assignment'/> Mark as assignment</label>
             <div><label>Due date (YYYY-MM-DD)</label><input name='due' placeholder='e.g. 2025-10-01'/></div>
             <div><label>Out of (default 100)</label><input name='max_points' type='number' min='1' max='1000' placeholder='100'/></div>
-          </div>
-          <button class='btn'>Save</button>
-          <p class='muted mini'>Attach a file and/or paste a YouTube link. Assignments show first to students.</p>
+        </div>
+        <button class='btn'>Save</button>
+        <p class='muted mini'>Attach a file and/or paste a YouTube link. Assignments show first to students.</p>
         </form>
-      </div>
+    </div>
     """
 
     # Your uploads (delete within 24h)
     cur.execute("""SELECT m.*, s.name AS subject_name, s.grade
-                   FROM materials m JOIN subjects s ON s.id=m.subject_id
-                   WHERE m.tutor_id=? ORDER BY m.created_at DESC LIMIT 200""",(tid,))
+                FROM materials m JOIN subjects s ON s.id=m.subject_id
+                WHERE m.tutor_id=? ORDER BY m.created_at DESC LIMIT 200""",(tid,))
     mymats=cur.fetchall()
     def can_delete(ts):
         try:
@@ -2361,8 +2654,8 @@ def tutor_home():
 
     # Assignments you posted (manage submissions)
     cur.execute("""SELECT m.id, m.title, m.due_date, m.max_points, s.name AS subject_name, s.grade
-                   FROM materials m JOIN subjects s ON s.id=m.subject_id
-                   WHERE m.tutor_id=? AND (m.is_assignment=1 OR m.kind='assignment') ORDER BY m.created_at DESC""",(tid,))
+                FROM materials m JOIN subjects s ON s.id=m.subject_id
+                WHERE m.tutor_id=? AND (m.is_assignment=1 OR m.kind='assignment') ORDER BY m.created_at DESC""",(tid,))
     asg=cur.fetchall()
     asg_rows="".join([f"<tr><td>{grade_label(a['grade'])} — {a['subject_name']}</td><td>{a['title']}</td><td>Due: {a['due_date'] or '—'}</td><td>Total: {a['max_points'] or 100}</td><td><a class='links' href='{url_for('tutor_assignment_manage', mid=a['id'])}'>Manage</a></td></tr>" for a in asg]) or "<tr><td colspan='5'><div class='empty'>No assignments yet.</div></td></tr>"
 
@@ -2371,21 +2664,21 @@ def tutor_home():
     message_student_options=[]
     for s in subs:
         cur.execute("""SELECT st.id, st.full_name
-                       FROM enrollments e JOIN students st ON st.id=e.student_id
-                       WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
-                       ORDER BY st.full_name""",(s['subject_id'], month))
+                    FROM enrollments e JOIN students st ON st.id=e.student_id
+                    WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
+                    ORDER BY st.full_name""",(s['subject_id'], month))
         studs=cur.fetchall()
         cur.execute("SELECT COUNT(DISTINCT date) AS c FROM attendance a JOIN sessions se ON se.id=a.session_id WHERE se.subject_id=? AND strftime('%Y-%m', a.date)=?", (s['subject_id'], month))
         total_days = cur.fetchone()['c'] or 0
         rows=[]
         for st in studs:
             cur.execute("""SELECT COUNT(*) AS c FROM attendance a JOIN sessions se ON se.id=a.session_id
-                           WHERE a.student_id=? AND se.subject_id=? AND strftime('%Y-%m', a.date)=?""",(st['id'], s['subject_id'], month))
+                        WHERE a.student_id=? AND se.subject_id=? AND strftime('%Y-%m', a.date)=?""",(st['id'], s['subject_id'], month))
             c=cur.fetchone()['c'] or 0
             rate = f"{int(round((c/total_days)*100))}%" if total_days>0 else "—"
             cur.execute("""SELECT AVG(mark) AS avgm FROM submissions sub
-                           JOIN materials m ON m.id=sub.material_id
-                           WHERE sub.student_id=? AND m.subject_id=? AND m.month=? AND sub.mark IS NOT NULL""",(st['id'], s['subject_id'], month))
+                        JOIN materials m ON m.id=sub.material_id
+                        WHERE sub.student_id=? AND m.subject_id=? AND m.month=? AND sub.mark IS NOT NULL""",(st['id'], s['subject_id'], month))
             avgm = cur.fetchone()['avgm']
             rows.append(f"<tr><td>{st['full_name']}</td><td>{c}</td><td>{rate}</td><td>{'-' if avgm is None else int(round(avgm))}</td></tr>")
             message_student_options.append((st['id'], s['subject_id'], f"{st['full_name']} — {grade_label(s['grade'])} {s['subject_name']}"))
@@ -2394,17 +2687,17 @@ def tutor_home():
 
     # Tutor inbox
     cur.execute("""SELECT dm.*,
-                          CASE dm.from_role 
-                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
-                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
-                               ELSE 'Admin' END AS from_name,
-                          CASE dm.to_role 
-                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
-                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
-                               ELSE 'Admin' END AS to_name
-                   FROM direct_messages dm
-                   WHERE (to_role='tutor' AND to_id=?) OR (from_role='tutor' AND from_id=?)
-                   ORDER BY created_at ASC LIMIT 40""",(tid,tid))
+                        CASE dm.from_role 
+                            WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
+                            WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
+                            ELSE 'Admin' END AS from_name,
+                        CASE dm.to_role 
+                            WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
+                            WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
+                            ELSE 'Admin' END AS to_name
+                FROM direct_messages dm
+                WHERE (to_role='tutor' AND to_id=?) OR (from_role='tutor' AND from_id=?)
+                ORDER BY created_at ASC LIMIT 40""",(tid,tid))
     inbox = cur.fetchall()
     inbox_list = "".join([f"<div class='msg {'me' if m['from_role']=='tutor' else 'them'}'><div class='meta'>{m['from_name']} → {m['to_name']} • {m['created_at'][:16].replace('T',' ')}</div><div>{m['body']}</div></div>" for m in inbox]) or "<div class='empty'>No messages yet.</div>"
 
@@ -2412,45 +2705,45 @@ def tutor_home():
     stud_opts = "".join([f"<option value='{sid}|{subid}'>{label}</option>" for sid,subid,label in message_student_options]) or "<option value=''>No students</option>"
 
     inbox_card = f"""
-      <div class='card'><h2>Inbox & Messages</h2>
+    <div class='card'><h2>Inbox & Messages</h2>
         <div class='grid' style='grid-template-columns:1fr;gap:8px'>
-          <form method='post' action='{url_for('tutor_message_student')}' class='grid'>
+        <form method='post' action='{url_for('tutor_message_student')}' class='grid'>
             <div><label>Message a student</label><select name='combo' required>{stud_opts}</select></div>
             <div><label>Your message</label><textarea name='body' required placeholder='Type your message...'></textarea></div>
             <button class='btn'>Send</button>
-          </form>
-          <form method='post' action='{url_for('tutor_message_admin')}' class='grid'>
+        </form>
+        <form method='post' action='{url_for('tutor_message_admin')}' class='grid'>
             <div><label>Message Admin</label><textarea name='body' required placeholder='Type your message for Admin...'></textarea></div>
             <button class='btn secondary'>Send to Admin</button>
-          </form>
+        </form>
         </div>
         <div style='margin-top:10px'>{inbox_list}</div>
-      </div>
+    </div>
     """
 
     conn.close()
 
     body=fr"""
     <section class='grid'>
-      <div class='card'><h1>Welcome, {session.get('tutor_name','Tutor')}</h1><p class='muted'>Your subjects</p><div>{assigned_list}</div></div>
+    <div class='card'><h1>Welcome, {session.get('tutor_name','Tutor')}</h1><p class='muted'>Your subjects</p><div>{assigned_list}</div></div>
 
-      <div class='card'><h2>WhatsApp Links — {month}</h2>{groups_html}</div>
+    <div class='card'><h2>WhatsApp Links — {month}</h2>{groups_html}</div>
 
-      <div class='card'><h2>Your sessions</h2>
+    <div class='card'><h2>Your sessions</h2>
         <table><thead><tr><th>Subject</th><th>When</th><th>Meet</th><th>Tools</th></tr></thead><tbody>{s_rows}</tbody></table>
-      </div>
+    </div>
 
-      {upload_block}
+    {upload_block}
 
-      <div class='card'><h2>Your uploads</h2>{uploads_html}</div>
+    <div class='card'><h2>Your uploads</h2>{uploads_html}</div>
 
-      <div class='card'><h2>Your assignments</h2>
+    <div class='card'><h2>Your assignments</h2>
         <table><thead><tr><th>Subject</th><th>Title</th><th>Due</th><th>Total</th><th>Manage</th></tr></thead><tbody>{asg_rows}</tbody></table>
-      </div>
+    </div>
 
-      {inbox_card}
+    {inbox_card}
 
-      {''.join(stu_sections)}
+    {''.join(stu_sections)}
     </section>
     """
     return page("Tutor Portal", body)
@@ -2489,7 +2782,7 @@ def tutor_upload():
     now=now_utc_iso()
     kind = 'assignment' if is_assignment else ('file' if file_path else 'youtube')
     cur.execute("""INSERT INTO materials(subject_id,tutor_id,month,title,kind,file_path,youtube_url,created_at,is_assignment,due_date,max_points)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                 (subject_id, tid, month, title, kind, file_path, youtube if youtube else None, now, is_assignment, due, max_points))
     conn.commit(); conn.close()
     return page("Uploaded", card_msg("Saved. Students with ACTIVE enrollments will see it."))
@@ -2523,8 +2816,8 @@ def tutor_assignment_manage(mid:int):
     saved = request.args.get('saved')
     conn=get_db(); cur=conn.cursor()
     cur.execute("""SELECT m.*, s.name AS subject_name, s.grade
-                   FROM materials m JOIN subjects s ON s.id=m.subject_id
-                   WHERE m.id=? AND m.tutor_id=?""",(mid,tid))
+                FROM materials m JOIN subjects s ON s.id=m.subject_id
+                WHERE m.id=? AND m.tutor_id=?""",(mid,tid))
     m=cur.fetchone()
     if not m:
         conn.close()
@@ -2534,9 +2827,9 @@ def tutor_assignment_manage(mid:int):
     # active students in subject (this month)
     month=get_setting('current_month')
     cur.execute("""SELECT st.id, st.full_name
-                   FROM enrollments e JOIN students st ON st.id=e.student_id
-                   WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
-                   ORDER BY st.full_name""",(m['subject_id'], month))
+                FROM enrollments e JOIN students st ON st.id=e.student_id
+                WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
+                ORDER BY st.full_name""",(m['subject_id'], month))
     studs=cur.fetchall()
     rows=[]
     for st in studs:
@@ -2548,11 +2841,11 @@ def tutor_assignment_manage(mid:int):
             rows.append(f"""
             <tr><td>{st['full_name']}</td><td>{filelink} <span class='muted mini'>({sub['submitted_at'][:16].replace('T',' ')})</span></td>
                 <td>
-                  <form method='post' action='{url_for('tutor_assignment_grade', mid=mid, sid=st['id'])}' class='inlineform'>
+                <form method='post' action='{url_for('tutor_assignment_grade', mid=mid, sid=st['id'])}' class='inlineform'>
                     <input type='number' name='mark' min='0' max='{total}' placeholder='0..{total}' value='{mark if mark else ""}' style='width:100px'/>
                     <input name='feedback' placeholder='Feedback' value='{sub['feedback'] or ""}'/>
                     <button class='btn mini'>Save</button>
-                  </form>
+                </form>
                 </td></tr>""")
         else:
             rows.append(f"<tr><td>{st['full_name']}</td><td><span class='muted'>No submission</span></td><td>—</td></tr>")
@@ -2561,13 +2854,13 @@ def tutor_assignment_manage(mid:int):
 
     js_alert = "<script>alert('Grade saved');</script>" if saved else ""
     body=fr"""
-      <a class='links' href='{url_for('tutor_home')}'>← Back</a>
-      <section class='grid'>
+    <a class='links' href='{url_for('tutor_home')}'>← Back</a>
+    <section class='grid'>
         <div class='card'><h1>{m['title']}</h1>
-          <p class='muted'>{grade_label(m['grade'])} — {m['subject_name']} • Due: {m['due_date'] or '—'} • Total: {total}</p>
-          {table}
+        <p class='muted'>{grade_label(m['grade'])} — {m['subject_name']} • Due: {m['due_date'] or '—'} • Total: {total}</p>
+        {table}
         </div>
-      </section>
+    </section>
     """
     return page("Manage Assignment", body, extra_js=js_alert)
 
@@ -2651,18 +2944,18 @@ def tutor_session_attendance(sid:int):
 
     # Session + subject
     cur.execute("""SELECT se.*, s.name AS subject_name, s.grade
-                   FROM sessions se JOIN subjects s ON s.id=se.subject_id
-                   WHERE se.id=? AND se.tutor_id=?""", (sid, tid))
+                FROM sessions se JOIN subjects s ON s.id=se.subject_id
+                WHERE se.id=? AND se.tutor_id=?""", (sid, tid))
     se = cur.fetchone()
     if not se:
         conn.close(); return page("Not found", card_msg("Session not found."))
 
-    month = get_setting('current_month')
+        month = get_setting('current_month')
     # Which students are ACTIVE in this subject this month?
     cur.execute("""SELECT st.id, st.full_name
-                   FROM enrollments e JOIN students st ON st.id=e.student_id
-                   WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
-                   ORDER BY st.full_name""", (se['subject_id'], month))
+                FROM enrollments e JOIN students st ON st.id=e.student_id
+                WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
+                ORDER BY st.full_name""", (se['subject_id'], month))
     studs = cur.fetchall()
 
     # Date (default today)
@@ -2676,7 +2969,7 @@ def tutor_session_attendance(sid:int):
         for st in studs:
             if st['id'] in present_ids:
                 cur.execute("""INSERT INTO attendance(session_id,student_id,date,created_at)
-                               VALUES(?,?,?,?)""", (sid, st['id'], date_str, now))
+                            VALUES(?,?,?,?)""", (sid, st['id'], date_str, now))
         conn.commit()
         conn.close()
         return page("Saved", card_msg("Attendance saved."))
@@ -2693,15 +2986,15 @@ def tutor_session_attendance(sid:int):
     table = "<div class='empty'>No students.</div>" if not rows else f"<table><thead><tr><th>Student</th><th>Present</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
 
     body = f"""
-      <a class='links' href='{url_for('tutor_home')}'>← Back</a>
-      <section class='card'>
+    <a class='links' href='{url_for('tutor_home')}'>← Back</a>
+    <section class='card'>
         <h1>Mark attendance — {grade_label(se['grade'])} {se['subject_name']}</h1>
         <form method='post' class='grid'>
-          <div><label>Date (YYYY-MM-DD)</label><input name='date' value='{date_str}' required/></div>
-          {table}
-          <button class='btn'>Save</button>
+        <div><label>Date (YYYY-MM-DD)</label><input name='date' value='{date_str}' required/></div>
+        {table}
+        <button class='btn'>Save</button>
         </form>
-      </section>
+    </section>
     """
     return page("Attendance", body)
 
@@ -2715,10 +3008,10 @@ def stat(title,value): return f"<div class='stat'><div class='muted'>{title}</di
 def admin_login():
     if is_admin(): return redirect(url_for('admin_home'))
     body=fr"""<section class='wrap small'><div class='card auth-card'><h1>Admin login</h1>
-      <form method='post' action='{url_for('admin_login_post')}' class='grid'>
+    <form method='post' action='{url_for('admin_login_post')}' class='grid'>
         <div><label>Password</label><input type='password' name='pwd' required/></div>
         <button class='btn'>Login</button>
-      </form></div></section>"""
+    </form></div></section>"""
     return page("Admin Login", body)
 
 @app.post('/admin/login')
@@ -2746,22 +3039,22 @@ def admin_home():
     conn.close()
     body=fr"""
     <section class='grid'><div class='stats'>
-      {stat('Current month', month)}{stat('Total enrollments', str(total))}
-      {stat('Pending', str(counts.get('PENDING',0)))}{stat('Active', str(counts.get('ACTIVE',0)))}
-      {stat('Admin inbox', str(msg_count))}{stat('Direct msgs (unread)', str(dm_unread))}
+    {stat('Current month', month)}{stat('Total enrollments', str(total))}
+    {stat('Pending', str(counts.get('PENDING',0)))}{stat('Active', str(counts.get('ACTIVE',0)))}
+    {stat('Admin inbox', str(msg_count))}{stat('Direct msgs (unread)', str(dm_unread))}
     </div>
     <div class='toolbar'>
-      <a class='btn secondary' href='{url_for('admin_enrollments')}'>Manage enrollments</a>
-      <a class='btn secondary' href='{url_for('admin_students')}'>Students</a>
-      <a class='btn secondary' href='{url_for('admin_tutors')}'>Tutors</a>
-      <a class='btn secondary' href='{url_for('admin_groups')}'>Group links</a>
-      <a class='btn secondary' href='{url_for('admin_sessions')}'>Sessions & QR</a>
-      <a class='btn secondary' href='{url_for('admin_messages')}'>Inbox</a>
-      <a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct messages</a>
-      <a class='btn secondary' href='{url_for('admin_analytics')}'>Analytics</a>
-      <a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>
-      <a class='btn secondary' href='{url_for('export_remove_list')}'>Export remove list</a>
-      <a class='btn danger' href='#logout'>Logout</a>
+    <a class='btn secondary' href='{url_for('admin_enrollments')}'>Manage enrollments</a>
+    <a class='btn secondary' href='{url_for('admin_students')}'>Students</a>
+    <a class='btn secondary' href='{url_for('admin_tutors')}'>Tutors</a>
+    <a class='btn secondary' href='{url_for('admin_groups')}'>Group links</a>
+    <a class='btn secondary' href='{url_for('admin_sessions')}'>Sessions & QR</a>
+    <a class='btn secondary' href='{url_for('admin_messages')}'>Inbox</a>
+    <a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct messages</a>
+    <a class='btn secondary' href='{url_for('admin_analytics')}'>Analytics</a>
+    <a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>
+    <a class='btn secondary' href='{url_for('export_remove_list')}'>Export remove list</a>
+    <a class='btn danger' href='#logout'>Logout</a>
     </div></section>"""
     return page("Admin", body)
 
@@ -2813,18 +3106,18 @@ def admin_enrollments():
     conn.close()
 
     body = f"""
-      <a class='links' href='{url_for('admin_home')}'>← Back</a>
-      <section class='card'>
+    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    <section class='card'>
         <h1>Enrollments — {month}</h1>
         <div class='toolbar'>
-          <input id='enr_q' class='pill' placeholder='Search by name, phone, subject' oninput="filterTable('enr_q','enr_tbl')"/>
-          <a class='btn secondary' href='{url_for('export_remove_list')}'>Download remove list</a>
+        <input id='enr_q' class='pill' placeholder='Search by name, phone, subject' oninput="filterTable('enr_q','enr_tbl')"/>
+        <a class='btn secondary' href='{url_for('export_remove_list')}'>Download remove list</a>
         </div>
         <table id='enr_tbl'>
-          <thead><tr><th>Student</th><th>Subject</th><th>Status</th><th>PoP</th><th>Actions</th><th>Status link</th></tr></thead>
-          <tbody>{table_rows}</tbody>
+        <thead><tr><th>Student</th><th>Subject</th><th>Status</th><th>PoP</th><th>Actions</th><th>Status link</th></tr></thead>
+        <tbody>{table_rows}</tbody>
         </table>
-      </section>
+    </section>
     """
     return page("Enrollments", body)
 
@@ -2949,55 +3242,162 @@ def enrollment_action(id: int, action: str):
 
 # --- Admin: Students (show Guardian & Email) ---
 
+
 @app.get('/admin/students')
 def admin_students():
     r = require_admin()
     if r:
         return r
+
     conn = get_db()
     cur = conn.cursor()
+
+    # fetch students
     cur.execute("SELECT id, full_name, phone_whatsapp, guardian_phone, email, grade, pin FROM students ORDER BY created_at DESC")
     rows = cur.fetchall()
-    conn.close()
 
-    def nz(v): return v if (v and str(v).strip()) else "N/A"
+    def nz(v):
+        return v if (v and str(v).strip()) else "N/A"
+
+    # determine month/year for lookups
+    try:
+        import datetime as _dt
+        month = get_setting('current_month', _dt.date.today().strftime('%Y-%m'))
+        year = _dt.date.today().strftime('%Y')
+    except Exception:
+        month = get_setting('current_month', '')
+        year = ''
 
     trs = []
     for s in rows:
+        # PIN display
         pin = s['pin'] if s['pin'] else "<span class='muted'>not set</span>"
-        trs.append(
-            f"<tr><td>{s['full_name']}<div class='muted'>{s['phone_whatsapp']}</div></td>"
+
+        # --- Annual PoR: latest annual_registrations proof for the student/year ---
+        try:
+            cur.execute(
+                "SELECT proof_path FROM annual_registrations WHERE student_id=? AND year=? ORDER BY id DESC LIMIT 1",
+                (s['id'], year)
+            )
+            ar = cur.fetchone()
+            if ar and ar.get('proof_path'):
+                p = ar['proof_path']
+                # If annual proofs are stored in the special uploads/annual_2026 route use that handler:
+                # support either a stored filename (saved_path) or a stored path like 'uploads/annual_2026/xxx' or '/uploads/annual_2026/xxx'
+                if isinstance(p, str) and (p.startswith('/uploads/annual_') or p.startswith('uploads/annual_')):
+                    fname = p.split('/')[-1]
+                    try:
+                        proof_url = url_for('uploaded_file', filename=fname)
+                    except Exception:
+                        proof_url = f"/uploads/annual_2026/{fname}"
+                elif isinstance(p, str) and p and not (p.startswith('http://') or p.startswith('https://')) and ('annual_' in p):
+                    # contains annual folder name but not a full path
+                    fname = p.split('/')[-1]
+                    try:
+                        proof_url = url_for('uploaded_file', filename=fname)
+                    except Exception:
+                        proof_url = f"/uploads/annual_2026/{fname}"
+                elif isinstance(p, str) and (p.startswith('http://') or p.startswith('https://')):
+                    proof_url = p
+                else:
+                    # fallback: assume filename saved under uploads/
+                    fname = p.split('/uploads/')[-1] if '/uploads/' in p else p
+                    try:
+                        proof_url = url_for('uploads', filename=fname)
+                    except Exception:
+                        proof_url = f"/uploads/{fname}"
+                annual_html = f"<a class='links' href='{proof_url}' target='_blank' download>Download annual PoR</a>"
+            else:
+                annual_html = "—"
+        except Exception:
+            annual_html = "—"
+
+        # --- Monthly Enrollment PoP: gather enrollment_files for current month ---
+        try:
+            cur.execute("""
+                SELECT DISTINCT ef.file_path
+                FROM enrollment_files ef
+                JOIN enrollments e ON ef.enrollment_id = e.id
+                WHERE e.student_id=? AND e.month=?
+            """, (s['id'], month))
+            pops = [r['file_path'] for r in cur.fetchall() if r.get('file_path')]
+            if pops:
+                links = []
+                for p in pops:
+                    # handle absolute URL
+                    if isinstance(p, str) and (p.startswith('http://') or p.startswith('https://')):
+                        u = p
+                    else:
+                        # strip any leading '/uploads/' or 'uploads/' so url_for builds correctly
+                        fname = p.split('/uploads/')[-1] if isinstance(p, str) and '/uploads/' in p else (p.split('uploads/')[-1] if isinstance(p, str) and 'uploads/' in p else p)
+                        try:
+                            u = url_for('uploads', filename=fname)
+                        except Exception:
+                            u = f"/uploads/{fname}"
+                    links.append(f"<a class='links' href='{u}' target='_blank' download>Download PoP</a>")
+                # join links with a compact separator so the table stays tidy
+                monthly_html = " &nbsp;|&nbsp; ".join(links)
+            else:
+                monthly_html = "—"
+        except Exception:
+            monthly_html = "—"
+
+        # build row (Student, Grade, Guardian, Email, Annual PoR, Monthly PoP, PIN, Actions)
+        row = (
+            "<tr>"
+            f"<td>{s['full_name']}<div class='muted'>{s['phone_whatsapp']}</div></td>"
             f"<td>{grade_label(s['grade'])}</td>"
             f"<td>{nz(s['guardian_phone'])}</td>"
             f"<td>{nz(s['email'])}</td>"
+            f"<td>{annual_html}</td>"
+            f"<td>{monthly_html}</td>"
             f"<td>{pin}</td>"
-            f"<td>"
-            f"<form method='post' action='{url_for('admin_student_reset_pin', sid=s['id'])}' style='display:inline'><button class='btn success'>Reset PIN</button></form> "
-            f"<form method='post' action='{url_for('admin_student_delete', sid=s['id'])}' style='display:inline' onsubmit='return confirm(\"Delete this student?\")'><button class='btn danger'>Delete</button></form>"
-            f"</td></tr>"
+            "<td>"
+            f"<form method='post' action='{url_for('admin_student_reset_pin', sid=s['id'])}' style='display:inline'>"
+            "<button class='btn success'>Reset PIN</button></form> "
+            f"<form method='post' action='{url_for('admin_student_delete', sid=s['id'])}' style='display:inline' onsubmit=\"return confirm('Delete this student?')\">"
+            "<button class='btn danger'>Delete</button></form>"
+            "</td>"
+            "</tr>"
         )
+        trs.append(row)
 
     body = f"""
-      <a class='links' href='{url_for('admin_home')}'>← Back</a>
-      <section class='card'>
+    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    <section class='card'>
         <h1>Students</h1>
         <div class='toolbar'>
-          <input id='stu_q' class='pill' placeholder='Search students' oninput="filterTable('stu_q','stu_tbl')"/>
-          <form method='post' action='{url_for('admin_student_add')}' class='grid' style='grid-template-columns:1fr 160px 120px 1fr auto;gap:10px;margin-left:auto'>
-            <input name='full_name' placeholder='Full name' required />
-            <input name='phone' placeholder='Phone/WhatsApp' required />
-            <input name='grade' placeholder='G8..G12' required />
-            <input name='email' placeholder='Email (optional)' />
-            <button class='btn'>Add</button>
-          </form>
+            <input id='stu_q' class='pill' placeholder='Search students' oninput="filterTable('stu_q','stu_tbl')"/>
+            <form method='post' action='{url_for('admin_student_add')}' class='grid' style='grid-template-columns:1fr 160px 120px 1fr auto;gap:10px;margin-left:auto'>
+                <input name='full_name' placeholder='Full name' required />
+                <input name='phone' placeholder='Phone/WhatsApp' required />
+                <input name='grade' placeholder='G8.G12' required />
+                <input name='email' placeholder='Email (optional)' />
+                <button class='btn'>Add</button>
+            </form>
         </div>
+
+        <div class='scroll-x'>
         <table id='stu_tbl'>
-          <thead><tr><th>Student</th><th>Grade</th><th>Guardian</th><th>Email</th><th>PIN</th><th>Actions</th></tr></thead>
-          <tbody>{''.join(trs) if trs else "<tr><td colspan='6'><div class='empty'>No students yet.</div></td></tr>"}</tbody>
+        <thead><tr>
+            <th>Student</th>
+            <th>Grade</th>
+            <th>Guardian</th>
+            <th>Email</th>
+            <th>Annual PoR</th>
+            <th>Monthly Enrollment PoP</th>
+            <th>PIN</th>
+            <th>Actions</th>
+        </tr></thead>
+        <tbody>{''.join(trs) if trs else "<tr><td colspan='8'><div class='empty'>No students yet.</div></td></tr>"}</tbody>
         </table>
-      </section>
+        </div>
+    </section>
     """
+
+    conn.close()
     return page("Students", body)
+
 
 @app.post('/admin/students/add')
 def admin_student_add():
@@ -3079,7 +3479,7 @@ def admin_tutors():
     subjects = cur.fetchall()
     # existing mappings
     cur.execute("""SELECT ts.tutor_id, s.name||' ('||s.grade||')' AS label
-                   FROM tutor_subjects ts JOIN subjects s ON s.id=ts.subject_id ORDER BY s.grade,s.name""")
+                FROM tutor_subjects ts JOIN subjects s ON s.id=ts.subject_id ORDER BY s.grade,s.name""")
     maps = {}
     for rmap in cur.fetchall():
         maps.setdefault(rmap['tutor_id'], []).append(rmap['label'])
@@ -3104,22 +3504,22 @@ def admin_tutors():
         )
 
     body = f"""
-      <a class='links' href='{url_for('admin_home')}'>← Back</a>
-      <section class='card'>
+    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    <section class='card'>
         <h1>Tutors</h1>
         <div class='toolbar'>
-          <input id='tut_q' class='pill' placeholder='Search tutors' oninput="filterTable('tut_q','tut_tbl')"/>
-          <form method='post' action='{url_for('admin_tutor_add')}' class='grid' style='grid-template-columns:1fr 160px auto;gap:10px;margin-left:auto'>
+        <input id='tut_q' class='pill' placeholder='Search tutors' oninput="filterTable('tut_q','tut_tbl')"/>
+        <form method='post' action='{url_for('admin_tutor_add')}' class='grid' style='grid-template-columns:1fr 160px auto;gap:10px;margin-left:auto'>
             <input name='full_name' placeholder='Full name' required />
             <input name='phone' placeholder='Phone' required />
             <button class='btn'>Add</button>
-          </form>
+        </form>
         </div>
         <table id='tut_tbl'>
-          <thead><tr><th>Tutor</th><th>PIN</th><th>Subjects</th><th>Actions</th></tr></thead>
-          <tbody>{''.join(trs) if trs else "<tr><td colspan='4'><div class='empty'>No tutors yet.</div></td></tr>"}</tbody>
+        <thead><tr><th>Tutor</th><th>PIN</th><th>Subjects</th><th>Actions</th></tr></thead>
+        <tbody>{''.join(trs) if trs else "<tr><td colspan='4'><div class='empty'>No tutors yet.</div></td></tr>"}</tbody>
         </table>
-      </section>
+    </section>
     """
     return page("Tutors", body)
 
@@ -3213,9 +3613,9 @@ def admin_groups():
     cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
     subjects = cur.fetchall()
     cur.execute("""
-       SELECT g.id, g.invite_link, s.name, s.grade
-       FROM groups g JOIN subjects s ON s.id=g.subject_id
-       WHERE g.month=? ORDER BY s.grade, s.name
+    SELECT g.id, g.invite_link, s.name, s.grade
+    FROM groups g JOIN subjects s ON s.id=g.subject_id
+    WHERE g.month=? ORDER BY s.grade, s.name
     """, (month,))
     groups = cur.fetchall()
     conn.close()
@@ -3237,19 +3637,19 @@ def admin_groups():
     )
 
     body = f"""
-      <a class='links' href='{url_for('admin_home')}'>← Back</a>
-      <section class='card'>
+    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    <section class='card'>
         <h1>Group links — {month}</h1>
         <form class='grid' method='post' action='{url_for('admin_groups_post')}'>
-          <div style='display:grid;grid-template-columns:1fr 130px 1fr auto;gap:10px'>
+        <div style='display:grid;grid-template-columns:1fr 130px 1fr auto;gap:10px'>
             <select name='subject_id'>{options}</select>
             <input name='month' value='{month}' placeholder='YYYY-MM' />
             <input name='link' placeholder='WhatsApp invite link' />
             <button class='btn'>Save</button>
-          </div>
+        </div>
         </form>
         <div style='margin-top:10px'>{group_list}</div>
-      </section>
+    </section>
     """
     return page("Groups", body)
 
@@ -3285,14 +3685,14 @@ def admin_settings():
         return r
     cur_month = get_setting('current_month')
     body = f"""
-      <a class='links' href='{url_for('admin_home')}'>← Back</a>
-      <section class='card'>
+    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    <section class='card'>
         <h1>Settings</h1>
         <form class='grid' method='post' action='{url_for('admin_settings_post')}'>
-          <div><label>Current month (YYYY-MM)</label><input name='month' value='{cur_month}' /></div>
-          <button class='btn'>Save</button>
+        <div><label>Current month (YYYY-MM)</label><input name='month' value='{cur_month}' /></div>
+        <button class='btn'>Save</button>
         </form>
-      </section>
+    </section>
     """
     return page("Settings", body)
 
@@ -3319,11 +3719,11 @@ def admin_sessions():
     cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
     subjects = cur.fetchall()
     cur.execute("""
-      SELECT se.*, s.name AS subject_name, s.grade, t.full_name AS tutor_name, t.phone AS tutor_phone
-      FROM sessions se
-      JOIN subjects s ON s.id=se.subject_id
-      JOIN tutors t ON t.id=se.tutor_id
-      ORDER BY se.day_of_week, se.start_time
+    SELECT se.*, s.name AS subject_name, s.grade, t.full_name AS tutor_name, t.phone AS tutor_phone
+    FROM sessions se
+    JOIN subjects s ON s.id=se.subject_id
+    JOIN tutors t ON t.id=se.tutor_id
+    ORDER BY se.day_of_week, se.start_time
     """)
     sessions_rows = cur.fetchall()
     conn.close()
@@ -3341,11 +3741,11 @@ def admin_sessions():
     ) or "<tr><td colspan='4'><div class='empty'>No sessions.</div></td></tr>"
 
     body = f"""
-      <a class='links' href='{url_for('admin_home')}'>← Back</a>
-      <section class='card'>
+    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    <section class='card'>
         <h1>Sessions</h1>
         <form class='grid' method='post' action='{url_for('admin_sessions_post')}'>
-          <div style='display:grid;grid-template-columns:1fr 1fr 110px 110px 1fr auto;gap:10px'>
+        <div style='display:grid;grid-template-columns:1fr 1fr 110px 110px 1fr auto;gap:10px'>
             <select name='subject_id'>{options}</select>
             <input name='tutor_name' placeholder='Tutor name' required />
             <select name='dow'>{dow_opts}</select>
@@ -3354,10 +3754,10 @@ def admin_sessions():
             <input name='tutor_phone' placeholder='Tutor phone' required />
             <input name='meet' placeholder='Meet link (optional)' />
             <button class='btn'>Add</button>
-          </div>
+        </div>
         </form>
         <table><thead><tr><th>Subject</th><th>Tutor</th><th>When</th><th>QR</th></tr></thead><tbody>{rows}</tbody></table>
-      </section>
+    </section>
     """
     return page("Sessions", body)
 
@@ -3390,8 +3790,8 @@ def admin_sessions_post():
         cur.execute("INSERT INTO tutors(full_name,phone,pin,created_at) VALUES(?,?,?,?)", (tutor_name, tutor_phone, pin, now))
         tutor_id = cur.lastrowid
     cur.execute("""
-      INSERT INTO sessions(subject_id,tutor_id,day_of_week,start_time,end_time,meet_link)
-      VALUES(?,?,?,?,?,?)
+    INSERT INTO sessions(subject_id,tutor_id,day_of_week,start_time,end_time,meet_link)
+    VALUES(?,?,?,?,?,?)
     """, (subject_id, tutor_id, dow, start, end, meet))
     # Ensure tutor-subject mapping exists for uploads and messaging
     cur.execute("INSERT OR IGNORE INTO tutor_subjects(tutor_id,subject_id) VALUES(?,?)",(tutor_id,subject_id))
@@ -3409,9 +3809,9 @@ def session_qr(id: int):
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
-      SELECT se.*, s.name AS subject_name, s.grade, t.full_name AS tutor_name
-      FROM sessions se JOIN subjects s ON s.id=se.subject_id
-      JOIN tutors t ON t.id=se.tutor_id WHERE se.id=?
+    SELECT se.*, s.name AS subject_name, s.grade, t.full_name AS tutor_name
+    FROM sessions se JOIN subjects s ON s.id=se.subject_id
+    JOIN tutors t ON t.id=se.tutor_id WHERE se.id=?
     """, (id,))
     se = cur.fetchone()
     conn.close()
@@ -3424,13 +3824,13 @@ def session_qr(id: int):
     qr_src = url_for('qr_png') + '?' + urlencode({'text': attend_url})
 
     body = f"""
-      <a class='links' href='{url_for('admin_sessions')}'>← Back</a>
-      <section class='card' style='text-align:center'>
+    <a class='links' href='{url_for('admin_sessions')}'>← Back</a>
+    <section class='card' style='text-align:center'>
         <h1>Scan to check in</h1>
         <p class='muted'>{grade_label(se['grade'])} — {se['subject_name']} with {se['tutor_name']} ({today})</p>
         <img alt='QR code' src='{qr_src}' width='256' height='256' style='margin:14px auto;display:block;border-radius:8px;border:1px solid var(--border);background:#fff' />
         <div class='muted'><a class='links' target='_blank' href='{attend_url}'>Open check-in link</a></div>
-      </section>
+    </section>
     """
     return page("Session QR", body)
 
@@ -3459,16 +3859,16 @@ def attend_get():
     if not code:
         return page("Error", card_msg("Missing code."))
     body = f"""
-      <section class='wrap small'>
+    <section class='wrap small'>
         <div class='card'>
-          <h1>Pasco Attendance</h1>
-          <form method='post' action='{url_for('attend_post')}' class='grid'>
+        <h1>Pasco Attendance</h1>
+        <form method='post' action='{url_for('attend_post')}' class='grid'>
             <input type='hidden' name='code' value='{code}' />
             <div><label>Enter your WhatsApp number (e.g. 2782...)</label><input name='phone' required /></div>
             <button class='btn success'>Check in</button>
-          </form>
+        </form>
         </div>
-      </section>
+    </section>
     """
     return page("Attendance", body)
 
@@ -3485,7 +3885,7 @@ def attend_post():
     except Exception:
         return page("Error", card_msg("Bad code."))
 
-    month = get_setting('current_month')
+        month = get_setting('current_month')
 
     conn = get_db()
     cur = conn.cursor()
@@ -3504,8 +3904,8 @@ def attend_post():
     subject_id = ses['subject_id']
 
     cur.execute("""
-      SELECT id FROM enrollments
-      WHERE student_id=? AND subject_id=? AND month=? AND status='ACTIVE'
+    SELECT id FROM enrollments
+    WHERE student_id=? AND subject_id=? AND month=? AND status='ACTIVE'
     """, (student_id, subject_id, month))
     enr = cur.fetchone()
     if not enr:
@@ -3540,14 +3940,14 @@ def admin_messages():
         trs.append(f"<tr><td>{m['kind']}</td><td>{m['payload']}</td><td>{m['created_at']}</td><td>{status}</td><td>{action}</td></tr>")
 
     body = f"""
-      <a class='links' href='{url_for('admin_home')}'>← Back</a>
-      <section class='card'>
+    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    <section class='card'>
         <h1>Admin inbox</h1>
         <table>
-          <thead><tr><th>Type</th><th>Payload</th><th>When</th><th>Status</th><th>Action</th></tr></thead>
-          <tbody>{''.join(trs) if trs else "<tr><td colspan='5'><div class='empty'>No messages.</div></td></tr>"}</tbody>
+        <thead><tr><th>Type</th><th>Payload</th><th>When</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>{''.join(trs) if trs else "<tr><td colspan='5'><div class='empty'>No messages.</div></td></tr>"}</tbody>
         </table>
-      </section>
+    </section>
     """
     return page("Messages", body)
 
@@ -3571,16 +3971,16 @@ def admin_direct_messages():
     if r: return r
     conn=get_db(); cur=conn.cursor()
     cur.execute("""SELECT dm.*,
-                          CASE dm.from_role 
-                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
-                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
-                               ELSE 'Admin' END AS from_name,
-                          CASE dm.to_role 
-                               WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
-                               WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
-                               ELSE 'Admin' END AS to_name
-                   FROM direct_messages dm
-                   ORDER BY dm.created_at ASC LIMIT 80""")
+                        CASE dm.from_role 
+                            WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
+                            WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
+                            ELSE 'Admin' END AS from_name,
+                        CASE dm.to_role 
+                            WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
+                            WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
+                            ELSE 'Admin' END AS to_name
+                FROM direct_messages dm
+                ORDER BY dm.created_at ASC LIMIT 80""")
     dms=cur.fetchall()
     # mark those to admin as read
     cur.execute("UPDATE direct_messages SET is_read=1 WHERE to_role='admin'")
@@ -3594,22 +3994,22 @@ def admin_direct_messages():
     tut_opts="".join([f"<option value='tutor|{t['id']}'>{t['full_name']}</option>" for t in tutors])
     stu_opts="".join([f"<option value='student|{s['id']}'>{s['full_name']}</option>" for s in students])
     body=fr"""
-      <a class='links' href='{url_for('admin_home')}'>← Back</a>
-      <section class='grid'>
+    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    <section class='grid'>
         <div class='card'><h1>Direct messages</h1>
-          <form method='post' action='{url_for('admin_send_dm')}' class='grid'>
+        <form method='post' action='{url_for('admin_send_dm')}' class='grid'>
             <div><label>To (Tutor/Student)</label>
-              <select name='target' required>
+            <select name='target' required>
                 <optgroup label='Tutors'>{tut_opts}</optgroup>
                 <optgroup label='Students'>{stu_opts}</optgroup>
-              </select>
+            </select>
             </div>
             <div><label>Message</label><textarea name='body' required placeholder='Type your message...'></textarea></div>
             <button class='btn'>Send</button>
-          </form>
-          <div style='margin-top:10px'>{dm_list}</div>
+        </form>
+        <div style='margin-top:10px'>{dm_list}</div>
         </div>
-      </section>
+    </section>
     """
     return page("Direct Messages", body)
 
@@ -3656,32 +4056,32 @@ def admin_analytics():
     for s in subs:
         # active students
         cur.execute("""SELECT COUNT(*) AS c FROM enrollments 
-                       WHERE subject_id=? AND month=? AND status='ACTIVE'""", (s['id'], month))
+                    WHERE subject_id=? AND month=? AND status='ACTIVE'""", (s['id'], month))
         active_students = cur.fetchone()['c'] or 0
 
         # sessions recorded days
         cur.execute("""SELECT COUNT(DISTINCT a.date) AS d
-                       FROM attendance a JOIN sessions se ON se.id=a.session_id
-                       WHERE se.subject_id=? AND strftime('%Y-%m', a.date)=?""", (s['id'], month))
+                    FROM attendance a JOIN sessions se ON se.id=a.session_id
+                    WHERE se.subject_id=? AND strftime('%Y-%m', a.date)=?""", (s['id'], month))
         days = cur.fetchone()['d'] or 0
 
         # total attendance rows
         cur.execute("""SELECT COUNT(*) AS c
-                       FROM attendance a JOIN sessions se ON se.id=a.session_id
-                       WHERE se.subject_id=? AND strftime('%Y-%m', a.date)=?""", (s['id'], month))
+                    FROM attendance a JOIN sessions se ON se.id=a.session_id
+                    WHERE se.subject_id=? AND strftime('%Y-%m', a.date)=?""", (s['id'], month))
         att_rows = cur.fetchone()['c'] or 0
         # overall attendance rate: present count over (days * active_students)
         att_rate = (int(round((att_rows / (days*active_students))*100)) if days>0 and active_students>0 else 0)
 
         # assignments this month
         cur.execute("""SELECT COUNT(*) AS c FROM materials 
-                       WHERE subject_id=? AND month=? AND (is_assignment=1 OR kind='assignment')""", (s['id'], month))
+                    WHERE subject_id=? AND month=? AND (is_assignment=1 OR kind='assignment')""", (s['id'], month))
         asg_count = cur.fetchone()['c'] or 0
 
         # submissions + avg mark
         cur.execute("""SELECT COUNT(*) AS c, AVG(sub.mark) AS avgm
-                       FROM submissions sub JOIN materials m ON m.id=sub.material_id
-                       WHERE m.subject_id=? AND m.month=? AND (m.is_assignment=1 OR m.kind='assignment')""", (s['id'], month))
+                    FROM submissions sub JOIN materials m ON m.id=sub.material_id
+                    WHERE m.subject_id=? AND m.month=? AND (m.is_assignment=1 OR m.kind='assignment')""", (s['id'], month))
         subrow = cur.fetchone(); submissions = subrow['c'] or 0; avgm = subrow['avgm']
         avgm_txt = "-" if avgm is None else f"{int(round(avgm))}"
 
@@ -3691,12 +4091,12 @@ def admin_analytics():
 
         # ratings avg
         cur.execute("""SELECT AVG(rating) AS r, COUNT(*) AS n
-                       FROM lesson_ratings WHERE subject_id=? AND month=?""", (s['id'], month))
+                    FROM lesson_ratings WHERE subject_id=? AND month=?""", (s['id'], month))
         rrow = cur.fetchone(); rating_avg = (round(rrow['r'],1) if rrow['r'] else None); rating_n = rrow['n'] or 0
         rating_txt = "—" if rating_avg is None else f"{rating_avg} ★ ({rating_n})"
 
         rows.append(f"""
-          <tr>
+        <tr>
             <td>{grade_label(s['grade'])} — {s['name']}</td>
             <td>{active_students}</td>
             <td>{att_rate}%</td>
@@ -3705,39 +4105,39 @@ def admin_analytics():
             <td>{completion}%</td>
             <td>{avgm_txt}</td>
             <td>{rating_txt}</td>
-          </tr>
+        </tr>
         """)
 
     conn.close()
 
     table = f"""
-      <table>
+    <table>
         <thead>
-          <tr>
+        <tr>
             <th>Subject</th><th>Active</th><th>Attendance</th>
             <th>#Assign</th><th>#Submissions</th><th>Completion</th>
             <th>Avg mark</th><th>Rating</th>
-          </tr>
+        </tr>
         </thead>
         <tbody>{''.join(rows) if rows else "<tr><td colspan='8'><div class='empty'>No data.</div></td></tr>"}</tbody>
-      </table>
+    </table>
     """
 
     body = f"""
-      <a class='links' href='{url_for('admin_home')}'>← Back</a>
-      <section class='grid'>
+    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    <section class='grid'>
         <div class='stats'>
-          {stat('Current month', month)}
-          {stat('Enrollments', total)}
-          {stat('Pending', pending)}
-          {stat('Active', active)}
-          {stat('Lapsed', lapsed)}
+        {stat('Current month', month)}
+        {stat('Enrollments', total)}
+        {stat('Pending', pending)}
+        {stat('Active', active)}
+        {stat('Lapsed', lapsed)}
         </div>
         <div class='card'><h1>Subject Analytics — {month}</h1>
-          <p class='muted mini'>Completion = submissions ÷ (assignments × active students). Ratings are learner feedback captured between the 24th and month end.</p>
-          {table}
+        <p class='muted mini'>Completion = submissions ÷ (assignments × active students). Ratings are learner feedback captured between the 24th and month end.</p>
+        {table}
         </div>
-      </section>
+    </section>
     """
     return page("Analytics", body)
 
@@ -3749,7 +4149,7 @@ def export_remove_list():
     if r:
         return r
 
-    month = get_setting('current_month')
+        month = get_setting('current_month')
     y, m = map(int, month.split('-'))
     ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
     next_month = f"{ny:04d}-{nm:02d}"
@@ -3798,11 +4198,414 @@ def payfast_ipn():
 
 # ===================== MAIN =====================
 
+
+@app.get('/annual-registration')
+def annual_registration_form():
+    """
+    Simple annual registration page for 2026:
+    collects student full name, surname and target grade (G8..G12),
+    and submits to POST /annual-registration which records a lightweight registrations_2026 row.
+    """
+    grade_options = "".join([
+        "<option value='G8'>Grade 8</option>",
+        "<option value='G9'>Grade 9</option>",
+        "<option value='G10'>Grade 10</option>",
+        "<option value='G11'>Grade 11</option>",
+        "<option value='G12'>Grade 12</option>",
+    ])
+    body = f"""
+    <section class='grid' style='margin-top:10px'>
+      <div class='card auth-card'>
+        <h1>Annual registration — 2026</h1>
+        <p class='muted'>Enter the student's name and the grade they will be in for 2026. This records the one-time R50 registration.</p>
+
+        <form method='post' action='{url_for('annual_registration_submit')}' class='grid'>
+          <label>First / Given name</label>
+          <input name='first_name' required />
+
+          <label>Surname</label>
+          <input name='surname' required />
+
+          <label>Grade in 2026</label>
+          <select name='grade' required>
+            <option value=''>Select grade…</option>
+            {grade_options}
+          </select>
+
+          <label>Contact WhatsApp number (optional)</label>
+          <input name='phone' placeholder='e.g. 0821234567' />
+
+                    <label>Proof of payment (R50) — upload image or PDF</label>
+          <input type='file' name='proof' accept='image/*,application/pdf' required />
+
+<div class='toolbar' style='margin-top:12px'>
+            <button class='btn'>Submit registration</button>
+            <a class='btn secondary' href='/'>Back to home</a>
+          </div>
+        </form>
+      </div>
+    </section>
+    """
+    return page("Annual registration 2026", body)
+
+
+@app.post('/annual-registration')
+def annual_registration_submit():
+    # read form
+    first = request.form.get('first_name', '').strip()
+    surname = request.form.get('surname', '').strip()
+    grade = request.form.get('grade', '').strip()
+    phone = request.form.get('phone', '').strip()
+
+    if not (first and surname and grade):
+        return page("Error", "<div class='card'><h2>Error</h2><div class='msg'>Please complete all required fields.</div></div>")
+
+    # make sure the registrations helper table exists
+    conn = get_db()
+    try:
+        ensure_registration_table(conn)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    # Save a lightweight student + registration record:
+    conn = get_db()
+    cur = conn.cursor()
+    created_at = now_utc_iso()
+    full_name = f"{first} {surname}"
+
+    # If phone provided and student exists by phone, link; otherwise create a minimal student row.
+    sid = None
+    if phone:
+        cur.execute("SELECT id FROM students WHERE phone_whatsapp=?", (phone,))
+        r = cur.fetchone()
+        if r:
+            sid = r["id"]
+
+    if not sid:
+        # create a student placeholder (phone may be empty)
+        cur.execute(
+            "INSERT INTO students(full_name, phone_whatsapp, guardian_name, guardian_phone, email, grade, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (full_name, phone or "", "", "", "", grade, created_at),
+        )
+        sid = cur.lastrowid
+
+    # Add registrations row for 2026 (amount default 50)
+    year = "2026"
+    try:
+        cur.execute(
+            "INSERT OR IGNORE INTO registrations(student_id, year, amount, created_at) VALUES (?, ?, ?, ?)",
+            (sid, year, 50, created_at),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
+
+    # confirmation page
+    body = f"""
+    <section class='grid' style='margin-top:10px'>
+      <div class='card'>
+        <h1>Registered</h1>
+        <p>Thanks — {full_name} has been recorded for annual registration 2026 (grade: {grade}).</p>
+        <div class='toolbar'>
+          <a class='btn' href='/'>Go to home</a>
+          <a class='btn secondary' href='{url_for('annual_registration_form')}'>Register another</a>
+        </div>
+      </div>
+    </section>
+    """
+    return page("Registered — 2026", body)
+
+
+
+
+# --- Annual registration: proof of payment upload and admin view ---
+import os
+from werkzeug.utils import secure_filename
+from flask import send_from_directory
+
+UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads', 'annual_2026')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def ensure_annual_table(conn):
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS annual_registrations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER,
+            full_name TEXT,
+            grade TEXT,
+            phone TEXT,
+            proof_path TEXT,
+            amount INTEGER,
+            year TEXT,
+            created_at TEXT
+        )
+    """)
+    conn.commit()
+
+@app.get('/uploads/annual_2026/<path:filename>')
+def uploaded_file(filename):
+    return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=False)
+
+# Update the registration form to allow file upload by injecting a small JS fallback
+# (If the form already includes enctype multipart/form-data, this will still work)
+# The POST handler now accepts a file under the key 'proof' and saves it.
+@app.post('/annual-registration')
+def annual_registration_submit_with_proof():
+    # read form
+    first = request.form.get('first_name', '').strip()
+    surname = request.form.get('surname', '').strip()
+    grade = request.form.get('grade', '').strip()
+    phone = request.form.get('phone', '').strip()
+
+    if not (first and surname and grade):
+        return page("Error", "<div class='card'><h2>Error</h2><div class='msg'>Please complete all required fields.</div></div>")
+
+    # file handling: require proof file
+    proof_file = request.files.get('proof')
+    if not proof_file or not getattr(proof_file, 'filename', ''):
+        return page("Error", "<div class='card'><h2>Error</h2><div class='msg'>Please upload proof of payment (R50) to complete registration.</div></div>")
+
+    saved_path = None
+    # save uploaded file
+    try:
+        filename = secure_filename(proof_file.filename)
+        import time
+        ts = int(time.time())
+        filename = f"{ts}_{filename}"
+        dest = os.path.join(UPLOAD_FOLDER, filename)
+        proof_file.save(dest)
+        saved_path = filename  # store relative filename
+    except Exception as e:
+        # fail-safe: return error if saving failed
+        return page("Error", f"<div class='card'><h2>Error</h2><div class='msg'>Failed to save proof file: {e}</div></div>")
+
+    # make sure the registrations helper table exists and annual table
+    conn = get_db()
+    try:
+        ensure_registration_table(conn)
+        ensure_annual_table(conn)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    # Save a lightweight student + registration record:
+    conn = get_db()
+    cur = conn.cursor()
+    created_at = now_utc_iso()
+    full_name = f"{first} {surname}"
+
+    # If phone provided and student exists by phone, link; otherwise create a minimal student row.
+    sid = None
+    if phone:
+        cur.execute("SELECT id FROM students WHERE phone_whatsapp=?", (phone,))
+        r = cur.fetchone()
+        if r:
+            sid = r["id"]
+
+    if not sid:
+        # create a student placeholder (phone may be empty)
+        cur.execute(
+            "INSERT INTO students(full_name, phone_whatsapp, guardian_name, guardian_phone, email, grade, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (full_name, phone or "", "", "", "", grade, created_at),
+        )
+        sid = cur.lastrowid
+
+    # Add registrations row for 2026 (amount default 50)
+    year = "2026"
+    try:
+        # also add to annual_registrations for admin view
+        cur.execute(
+            "INSERT INTO annual_registrations(student_id, full_name, grade, phone, proof_path, amount, year, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (sid, full_name, grade, phone or "", saved_path or "", 50, year, created_at),
+        )
+        # also keep existing registrations table in sync if present
+        try:
+            cur.execute(
+                "INSERT OR IGNORE INTO registrations(student_id, year, amount, created_at) VALUES (?, ?, ?, ?)",
+                (sid, year, 50, created_at),
+            )
+        except Exception:
+            pass
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
+
+    # confirmation page with proof link if uploaded
+    proof_msg = ""
+    if saved_path:
+        proof_url = url_for('uploaded_file', filename=saved_path)
+        proof_msg = f"<p>Proof of payment uploaded: <a href='{proof_url}' target='_blank'>View file</a></p>"
+
+    body = f"""
+    <section class='grid' style='margin-top:10px'>
+      <div class='card'>
+        <h1>Registered</h1>
+        <p>Thanks — {full_name} has been recorded for annual registration 2026 (grade: {grade}).</p>
+        {proof_msg}
+        <div class='toolbar'>
+          <a class='btn' href='/'>Go to home</a>
+          <a class='btn secondary' href='{url_for('annual_registration_form')}'>Register another</a>
+        </div>
+      </div>
+    </section>
+    """
+    return page("Registered — 2026", body)
+
+
+# Admin view: list annual registrations for 2026
+@app.get('/admin/annual-registrations')
+def admin_annual_registrations():
+    """Admin view: list annual registrations with downloadable Proof of Registration (PoR)."""
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    try:
+        # Ensure table exists (best-effort)
+        try:
+            ensure_annual_table(conn)
+        except Exception:
+            pass
+
+        cur = conn.cursor()
+
+        # current year
+        import datetime as _dt
+        year = _dt.date.today().strftime('%Y')
+
+        # Attempt to fetch registrations (wrap so missing table doesn't crash)
+        rows = []
+        try:
+            cur.execute("""
+                SELECT r.id AS reg_id, r.student_id, r.year, r.amount, r.payment_ref, r.created_at,
+                       ar.proof_path AS proof_path,
+                       s.full_name, s.phone_whatsapp, s.guardian_name, s.email
+                FROM registrations r
+                LEFT JOIN annual_registrations ar ON ar.student_id = r.student_id AND ar.year = r.year
+                LEFT JOIN students s ON s.id = r.student_id
+                WHERE r.year = ?
+                ORDER BY r.created_at DESC
+            """, (year,))
+            rows = cur.fetchall()
+        except Exception:
+            conn.rollback()
+            rows = None
+
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    if rows is None:
+        body = f"""
+        <a class='links' href='{url_for('admin_home')}'>← Back</a>
+        <section class='card'>
+          <h1>Annual registrations — {year}</h1>
+          <div class='muted'>Unable to read annual registrations. The database table may be missing or inaccessible.</div>
+          <div style='margin-top:12px'>
+            <div class='card'>
+              <h3>Quick fixes</h3>
+              <ul>
+                <li>Run the app startup migration to create helper tables.</li>
+                <li>Or call <code>ensure_annual_table(get_db())</code> once.</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+        """
+        return page("Annual registrations", body)
+
+    def nz(v):
+        return v if (v and str(v).strip()) else "N/A"
+
+    trs = []
+    for rrow in rows:
+        # rrow is sqlite3.Row -> index by column name
+        try:
+            proof_path = rrow['proof_path']
+        except Exception:
+            proof_path = None
+
+        proof_html = "—"
+        if proof_path:
+            # build url from stored value; support full URLs or stored filenames
+            if isinstance(proof_path, str) and (proof_path.startswith('http://') or proof_path.startswith('https://')):
+                url = proof_path
+            else:
+                # extract filename if value contains uploads/ or is just a filename
+                fname = proof_path.split('/uploads/')[-1] if '/uploads/' in proof_path else (proof_path.split('uploads/')[-1] if 'uploads/' in proof_path else proof_path)
+                try:
+                    url = url_for('uploads', filename=fname)
+                except Exception:
+                    url = f"/uploads/{fname.split('/')[-1]}"
+            proof_html = f"<a class='links' href='{url}' target='_blank' download>Download PoR</a>"
+
+        # student columns - use index access and safe fallback
+        full_name = rrow['full_name'] if 'full_name' in rrow.keys() else None
+        phone = rrow['phone_whatsapp'] if 'phone_whatsapp' in rrow.keys() else None
+
+        student_col = f"{nz(full_name)}<div class='muted'>{nz(phone)}</div>"
+        year_col = rrow['year'] if 'year' in rrow.keys() else ""
+        amount_col = rrow['amount'] if 'amount' in rrow.keys() else ""
+        pref_col = rrow['payment_ref'] if 'payment_ref' in rrow.keys() else ""
+        created_col = rrow['created_at'] if 'created_at' in rrow.keys() else ""
+
+        trs.append(
+            "<tr>"
+            f"<td>{student_col}</td>"
+            f"<td>{nz(year_col)}</td>"
+            f"<td>{nz(amount_col)}</td>"
+            f"<td>{nz(pref_col)}</td>"
+            f"<td>{proof_html}</td>"
+            f"<td>{nz(created_col)}</td>"
+            "</tr>"
+        )
+
+    body = f"""
+    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    <section class='card'>
+        <h1>Annual registrations — {year}</h1>
+        <div class='toolbar'>
+            <input id='reg_q' class='pill' placeholder='Search by name, phone, year' oninput="filterTable('reg_q','reg_tbl')"/>
+        </div>
+        <div class='scroll-x'>
+        <table id='reg_tbl'>
+        <thead><tr>
+            <th>Student</th>
+            <th>Year</th>
+            <th>Amount</th>
+            <th>Payment ref</th>
+            <th>PoR</th>
+            <th>Registered at</th>
+        </tr></thead>
+        <tbody>{''.join(trs) if trs else "<tr><td colspan='6'><div class='empty'>No registrations this year.</div></td></tr>"}</tbody>
+        </table>
+        </div>
+    </section>
+    """
+    return page("Annual registrations", body)
+
+
+
+
 if __name__ == '__main__':
     init_db()
     port = int(os.environ.get('PORT', '5000'))
     app.run(host='127.0.0.1', port=port, debug=True)
-
 
 
 # ===================== QUIZ SYSTEM: lightweight integration layer =====================
@@ -3830,76 +4633,76 @@ def init_db():
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS quizzes(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          subject_id INTEGER NOT NULL,
-          tutor_id INTEGER NOT NULL,
-          title TEXT NOT NULL,
-          mode TEXT NOT NULL,             -- 'mcq' | 'mixed' | 'written'
-          duration_seconds INTEGER NOT NULL DEFAULT 600,
-          month TEXT NOT NULL,
-          is_published INTEGER NOT NULL DEFAULT 0,
-          created_at TEXT NOT NULL,
-          FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
-          FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        subject_id INTEGER NOT NULL,
+        tutor_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        duration_seconds INTEGER NOT NULL DEFAULT 600,
+        month TEXT NOT NULL,
+        is_published INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE
         );
         """
     )
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS quiz_questions(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          quiz_id INTEGER NOT NULL,
-          qtext TEXT NOT NULL,
-          qtype TEXT NOT NULL,            -- 'mcq' | 'short' | 'long'
-          points INTEGER NOT NULL DEFAULT 1,
-          image_path TEXT,
-          position INTEGER NOT NULL DEFAULT 1,
-          FOREIGN KEY(quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        quiz_id INTEGER NOT NULL,
+        qtext TEXT NOT NULL,
+        qtype TEXT NOT NULL,
+        points INTEGER NOT NULL DEFAULT 1,
+        image_path TEXT,
+        position INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY(quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE
         );
         """
     )
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS quiz_options(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          question_id INTEGER NOT NULL,
-          opt_text TEXT NOT NULL,
-          is_correct INTEGER NOT NULL DEFAULT 0,
-          FOREIGN KEY(question_id) REFERENCES quiz_questions(id) ON DELETE CASCADE
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        question_id INTEGER NOT NULL,
+        opt_text TEXT NOT NULL,
+        is_correct INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY(question_id) REFERENCES quiz_questions(id) ON DELETE CASCADE
         );
         """
     )
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS quiz_attempts(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          quiz_id INTEGER NOT NULL,
-          student_id INTEGER NOT NULL,
-          started_at TEXT NOT NULL,
-          submitted_at TEXT,
-          status TEXT NOT NULL DEFAULT 'in_progress', -- in_progress|submitted|graded
-          auto_score REAL,
-          manual_score REAL,
-          total_score REAL,
-          FOREIGN KEY(quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE,
-          FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
-          UNIQUE(quiz_id, student_id)
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        quiz_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        started_at TEXT NOT NULL,
+        submitted_at TEXT,
+        status TEXT NOT NULL DEFAULT 'in_progress',
+        auto_score REAL,
+        manual_score REAL,
+        total_score REAL,
+        FOREIGN KEY(quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+        UNIQUE(quiz_id, student_id)
         );
         """
     )
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS quiz_answers(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          attempt_id INTEGER NOT NULL,
-          question_id INTEGER NOT NULL,
-          chosen_option_id INTEGER,       -- for MCQ
-          answer_text TEXT,               -- for short/long
-          is_correct INTEGER,             -- nullable until auto-grade or manual grade
-          awarded_points REAL,            -- null until graded
-          FOREIGN KEY(attempt_id) REFERENCES quiz_attempts(id) ON DELETE CASCADE,
-          FOREIGN KEY(question_id) REFERENCES quiz_questions(id) ON DELETE CASCADE,
-          FOREIGN KEY(chosen_option_id) REFERENCES quiz_options(id) ON DELETE SET NULL
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        attempt_id INTEGER NOT NULL,
+        question_id INTEGER NOT NULL,
+        chosen_option_id INTEGER,
+        answer_text TEXT,
+        is_correct INTEGER,
+        awarded_points REAL,
+        FOREIGN KEY(attempt_id) REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+        FOREIGN KEY(question_id) REFERENCES quiz_questions(id) ON DELETE CASCADE,
+        FOREIGN KEY(chosen_option_id) REFERENCES quiz_options(id) ON DELETE SET NULL
         );
         """
     )
@@ -3914,5 +4717,3 @@ def init_db():
 @app.route('/quiz-images/<path:filename>')
 def quiz_images(filename):
     return send_from_directory(QUIZ_IMG_DIR, filename)
-
-# ---------------------- Tutor: Quizzes CRUD ----------------------
