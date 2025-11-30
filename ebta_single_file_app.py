@@ -1329,7 +1329,6 @@ def page(title, body_html, extra_head="", extra_js=""):
             links = [
                 ("Manage enrollments", "#enrollments"),
                 ("Students", "#students"),
-                ("Annual registrations", url_for('admin_annual_registrations')),   # <- NEW
                 ("Tutors", "#tutors"),
                 ("Group links", "#groups"),
                 ("Sessions & QR", "#sessions"),
@@ -1612,7 +1611,40 @@ def home():
     </section>
     """
 
-    extra_js = '''<script>
+    extra_js = '''
+<script>
+// Simple on-page popup function (toast/modal) used instead of alert()
+function showPopup(message, type='info', timeout=4000){
+    // type can be 'info','error','success'
+    let container = document.getElementById('ebta-popup-container');
+    if(!container){
+        container = document.createElement('div');
+        container.id = 'ebta-popup-container';
+        container.style.position = 'fixed';
+        container.style.right = '20px';
+        container.style.top = '20px';
+        container.style.zIndex = 99999;
+        container.style.maxWidth = '320px';
+        document.body.appendChild(container);
+    }
+    const el = document.createElement('div');
+    el.className = 'ebta-popup ebta-popup-' + type;
+    el.style.marginBottom = '10px';
+    el.style.padding = '12px 14px';
+    el.style.borderRadius = '8px';
+    el.style.boxShadow = '0 2px 10px rgba(0,0,0,0.12)';
+    el.style.background = type==='error' ? '#fdecea' : (type==='success' ? '#edf7ed' : '#eef3ff');
+    el.style.color = '#111';
+    el.textContent = message;
+    container.appendChild(el);
+    setTimeout(()=>{
+        el.style.transition = 'opacity 0.3s ease';
+        el.style.opacity = '0';
+        setTimeout(()=> container.removeChild(el), 400);
+    }, timeout);
+}
+</script>
+<script>
     document.addEventListener('DOMContentLoaded', function(){
     const form = document.getElementById('reg_form');
     if (!form) return;
@@ -1664,27 +1696,60 @@ def home():
 
     form.addEventListener('submit', function(e){
         const grade = gradeSelect.value;
-        if (!grade) {
+
+        // Validate phone numbers: ensure 10 digits for student and guardian WhatsApp numbers
+        const studentPhoneInput = form.querySelector("input[name='phone']") || form.querySelector("input[name='phone_whatsap']") || form.querySelector("input[name='phone_whatsapp']");
+        const guardianPhoneInput = form.querySelector("input[name='guardian_phone']") || form.querySelector("input[name='guardian']");
+        function digitsOnly(str){ return (str||'').replace(/\\D/g,''); }
+        if(studentPhoneInput){
+            const sdigits = digitsOnly(studentPhoneInput.value);
+            if(sdigits.length !== 10){
+                e.preventDefault();
+                showPopup('Student WhatsApp number must be exactly 10 digits.', 'error');
+                studentPhoneInput.focus();
+                return;
+            }
+        }
+        if(guardianPhoneInput){
+            const gdigits = digitsOnly(guardianPhoneInput.value);
+            if(gdigits.length !== 10){
+                e.preventDefault();
+                showPopup('Guardian WhatsApp number must be exactly 10 digits.', 'error');
+                guardianPhoneInput.focus();
+                return;
+            }
+        }
+        // Validate optional student email ends with @gmail.com if provided
+        const emailInput = form.querySelector("input[name='email']") || form.querySelector("input[name='student_email']");
+        if(emailInput && emailInput.value.trim() !== ''){
+            if(!emailInput.value.trim().toLowerCase().endsWith('@gmail.com')){
+                e.preventDefault();
+                showPopup('Student Email (optional) must end with @gmail.com', 'error');
+                emailInput.focus();
+                return;
+            }
+        }
+                if (!grade) {
         e.preventDefault();
-        alert('Please choose a grade first.');
+        showPopup('Please choose a grade first.', 'error');;
         return;
         }
         const anyChecked = boxes.some(b => b.checked);
         if (!anyChecked) {
         e.preventDefault();
-        alert('Please select at least one subject for the chosen grade.');
+        showPopup('Please select at least one subject for the chosen grade.', 'error');;
         return;
         }
 
         if (!paidCheck || !paidCheck.checked) {
         e.preventDefault();
-        alert('Please confirm that you have made payment before submitting, and then upload your Proof of Payment.');
+        showPopup('Please confirm that you have made payment before submitting, and then upload your Proof of Payment.', 'error');;
         return;
         }
 
         if (!popInput || !popInput.files || popInput.files.length < 1 || popInput.files.length > 2) {
         e.preventDefault();
-        alert('Please upload 1 or 2 Proof of Payment files.');
+        showPopup('Please upload 1 or 2 Proof of Payment files.', 'error');;
         }
     });
     });
@@ -1810,7 +1875,7 @@ def home():
       noBtn.style.color = '#0f172a';
       noBtn.onclick = function(){
         // Redirect to registration form
-        window.location.href = '/annual-registration';
+        window.location.href = 'https://ebta.netlify.app/';
       };
 
       const yesBtn = document.createElement('button');
@@ -1837,191 +1902,147 @@ def home():
 
 @app.post('/register')
 def register():
-    import datetime as _dt
-    # helper to pick a filename sanitizer available in your file
-    try:
-        secure_fn = secure_name  # your project uses secure_name elsewhere
-    except NameError:
-        try:
-            from werkzeug.utils import secure_filename as secure_fn
-        except Exception:
-            # last-resort: very small sanitizer
-            import re
-            def secure_fn(n):
-                n = n or "file"
-                n = re.sub(r'[^A-Za-z0-9_.-]', '_', n)
-                return n
-
-    # collect form
-    full_name = request.form.get('full_name', '').strip()
-    phone = request.form.get('phone', '').strip()
-    guardian = request.form.get('guardian', '').strip()
-    email = request.form.get('email', '').strip()
-    guardian_name = request.form.get('guardian_name', '').strip()
+    full_name = request.form.get('full_name','').strip()
+    phone     = request.form.get('phone','').strip()
+    guardian  = request.form.get('guardian','').strip()
+    email     = request.form.get('email','').strip()
+    guardian_name = request.form.get('guardian_name','').strip()
     subject_ids = request.form.getlist('subject_ids')
-    pin = request.form.get('pin', '').strip()
-    pops_files = request.files.getlist('pop')
+    pin       = request.form.get('pin','').strip()
+    pops      = request.files.getlist('pop')
 
-    # basic validation
+    # Validate required fields
     if not (full_name and phone and guardian_name and guardian and subject_ids and pin):
         return page("Error", card_msg("All fields are required."))
     if not is_valid_pin(pin):
         return page("Error", card_msg("PIN must be exactly 5 digits."))
 
-    # normalize subject_ids (keep as strings if DB stores ids as strings)
-    subject_ids = [str(s).strip() for s in subject_ids if str(s).strip()]
-    if not subject_ids:
-        return page("Error", card_msg("Please select at least one subject."))
-
-    # validate PoP files: require 1-2 files
-    pops_files = [f for f in pops_files if (f and getattr(f, 'filename', '').strip())]
-    if len(pops_files) < 1 or len(pops_files) > 2:
+    # Validate PoP files: 1–2 files required
+    pops = [f for f in pops if (f and f.filename)]
+    if len(pops) < 1 or len(pops) > 2:
         return page("Error", card_msg("Upload 1 or 2 Proof of Payment files."))
 
-    # Start DB work with one connection for the whole handler
-    conn = None
-    try:
-        conn = get_db()
-        cur = conn.cursor()
+    # Ensure registrations table exists
+    conn = get_db()
+    ensure_registration_table(conn)
+    conn.close()
 
-        # Ensure helper tables exist (best-effort)
-        try:
-            ensure_registration_table(conn)
-        except Exception:
-            pass
-        try:
-            ensure_annual_table(conn)
-        except Exception:
-            pass
+    # Check whether the user indicated they paid the registration fee (front-end checkbox 'paid_check')
+    paid_check = request.form.get('paid_check')
 
-        # Check PIN uniqueness
-        if pin_in_use(conn, pin):
-            return page("Error", card_msg("PIN already in use. Pick another."))
+    conn = get_db()
+    if pin_in_use(conn, pin):
+        conn.close()
+        return page("Error", card_msg("PIN already in use. Pick another."))
 
-        # derive grade from first selected subject (validate subject exists)
-        try:
-            cur.execute("SELECT grade FROM subjects WHERE id=?", (subject_ids[0],))
-            r0 = cur.fetchone()
-        except Exception:
-            r0 = None
-        if not r0:
-            return page("Error", card_msg("Invalid subject selection."))
-        derived_grade = r0['grade']
+    cur = conn.cursor()
 
-        # find existing student by phone
-        cur.execute("SELECT id, pin FROM students WHERE phone_whatsapp=?", (phone,))
-        srow = cur.fetchone()
-        sid = srow['id'] if srow else None
-        created_at = now_utc_iso()
+    # derive grade from the first subject selected
+    cur.execute("SELECT grade FROM subjects WHERE id=?", (subject_ids[0],))
+    r0 = cur.fetchone()
+    if not r0:
+        conn.close()
+        return page("Error", card_msg("Invalid subject selection."))
+    derived_grade = r0['grade']
 
-        # save uploaded PoP files into uploads directory (store filenames only)
-        saved_filenames = []
-        ts = int(_dt.datetime.utcnow().timestamp())
-        for idx, f in enumerate(pops_files, start=1):
-            original = getattr(f, 'filename', '') or f"file_{idx}"
-            safe_name = f"{ts}_{idx}_{secure_fn(original)}"
-            dest = UPLOAD_DIR / safe_name
-            try:
-                f.save(dest)
-            except Exception as e:
-                # if saving fails, rollback and inform admin/user
-                conn.rollback()
-                return page("Error", card_msg(f"Failed to save uploaded file: {e}"))
-            saved_filenames.append(safe_name)  # keep relative filename
+    cur.execute("SELECT id,pin FROM students WHERE phone_whatsapp=?", (phone,))
+    srow = cur.fetchone()
+    already = bool(srow)
 
-        # create or update student
-        if srow:
-            if not srow.get('pin'):
-                cur.execute(
-                    "UPDATE students SET pin=?, full_name=?, guardian_name=?, guardian_phone=?, email=?, grade=? WHERE id=?",
-                    (pin, full_name, guardian_name, guardian, email, derived_grade, sid)
-                )
-            else:
-                cur.execute(
-                    "UPDATE students SET full_name=?, guardian_name=?, guardian_phone=?, email=? WHERE id=?",
-                    (full_name, guardian_name, guardian, email, sid)
-                )
+    # Save PoP files
+    saved_paths = []
+    ts = int(datetime.datetime.now().timestamp())
+    for idx, pop in enumerate(pops, start=1):
+        safe = f"{ts}_{idx}_{secure_name(pop.filename)}"
+        dest = UPLOAD_DIR / safe
+        pop.save(dest)
+        saved_paths.append(f"/uploads/{safe}")
+
+    created_at = now_utc_iso()
+    if srow:
+        sid = srow['id']
+        if not srow['pin']:
+            cur.execute(
+                "UPDATE students SET pin=?,full_name=?,guardian_name=?,guardian_phone=?,email=?,grade=? WHERE id=?",
+                (pin, full_name, guardian_name, guardian, email, derived_grade, sid)
+            )
         else:
             cur.execute(
-                "INSERT INTO students(full_name, phone_whatsapp, guardian_name, guardian_phone, email, grade, pin, created_at) VALUES(?,?,?,?,?,?,?,?)",
-                (full_name, phone, guardian_name, guardian, email, derived_grade, pin, created_at)
+                "UPDATE students SET full_name=?,guardian_name=?,guardian_phone=?,email=? WHERE id=?",
+                (full_name, guardian_name, guardian, email, sid)
             )
-            sid = cur.lastrowid
+    else:
+        cur.execute(
+            "INSERT INTO students(full_name,phone_whatsapp,guardian_name,guardian_phone,email,grade,pin,created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (full_name, phone, guardian_name, guardian, email, derived_grade, pin, created_at)
+        )
+        sid = cur.lastrowid
 
-        # Annual registration: if paid_check present and not already registered this year
-        paid_check = request.form.get('paid_check')
-        year = _dt.date.today().strftime('%Y')
-        try:
-            if paid_check and not student_registered_for_year(conn, sid, year):
+    
+
+    # --- Registration: if student not registered for the current year and the form indicated registration payment,
+    # treat the first uploaded PoP as registration payment and record a registrations row.
+    try:
+        # Use a separate DB connection for registration bookkeeping so we don't close
+        # the main 'conn' or its 'cur' accidentally.
+        reg_conn = get_db()
+        ensure_registration_table(reg_conn)
+        reg_cur = reg_conn.cursor()
+        year = datetime.date.today().strftime('%Y')
+        if not student_registered_for_year(reg_conn, sid, year):
+            # If the form checkbox 'paid_check' was used, create a registration record for R50
+            paid_check = request.form.get('paid_check')
+            if paid_check:
                 reg_created_at = now_utc_iso()
-                # try to keep legacy registrations table in sync
-                try:
-                    cur.execute("INSERT OR IGNORE INTO registrations(student_id, year, amount, created_at) VALUES(?,?,?,?)", (sid, year, 50, reg_created_at))
-                except Exception:
-                    pass
-                # write to annual_registrations if table exists (use first uploaded file as proof_path)
-                try:
-                    proof_fname = saved_filenames[0] if saved_filenames else None
-                    cur.execute(
-                        "INSERT INTO annual_registrations(student_id, full_name, grade, phone, proof_path, amount, year, created_at) VALUES(?,?,?,?,?,?,?,?)",
-                        (sid, full_name, derived_grade, phone or "", proof_fname or "", 50, year, reg_created_at)
-                    )
-                except Exception:
-                    # silent if table missing or insert fails
-                    pass
-        except Exception:
-            # don't break main flow if any issue here
-            pass
-
-        # Enrollments for current month
-        month = get_setting('current_month', _dt.date.today().strftime('%Y-%m'))
-        try:
-            cur.execute("SELECT subject_id FROM enrollments WHERE student_id = ? AND month = ?", (sid, month))
-            existing = {str(x['subject_id']) for x in cur.fetchall()}
-        except Exception:
-            existing = set()
-
-        created = []
-        for subid in subject_ids:
-            if str(subid) in existing:
-                continue
-            token = secrets.token_urlsafe(16)
-            pop_url_legacy = (f"/uploads/{saved_filenames[0]}" if saved_filenames else None)
-            cur.execute(
-                """INSERT INTO enrollments(student_id, subject_id, month, status, payment_method, payment_ref, pop_url, status_token, created_at)
-                   VALUES(?,?,?,?,?,?,?,?,?)""",
-                (sid, subid, month, 'PENDING', 'EFT', None, pop_url_legacy, token, created_at)
-            )
-            eid = cur.lastrowid
-            # insert each uploaded file into enrollment_files (store filename)
-            for fname in saved_filenames:
-                cur.execute("INSERT INTO enrollment_files(enrollment_id,file_path) VALUES(?,?)", (eid, fname))
-            created.append((eid, token))
-
-        conn.commit()
-
-    except Exception as e:
-        try:
-            if conn:
-                conn.rollback()
-        except Exception:
-            pass
-        return page("Error", card_msg("Failed to process registration. Please try again."))
-
+                reg_cur.execute(
+                    "INSERT INTO registrations(student_id,year,amount,created_at) VALUES(?,?,?,?)",
+                    (sid, year, 50, reg_created_at)
+                )
+                reg_conn.commit()
+    except Exception:
+        # Do not fail the whole flow if registration insertion fails
+        pass
     finally:
         try:
-            if conn:
-                conn.close()
+            if 'reg_conn' in locals() and reg_conn:
+                reg_conn.close()
         except Exception:
             pass
 
-    # notifications (best-effort)
+    month = get_setting('current_month', datetime.date.today().strftime('%Y-%m'))
+    cur.execute("SELECT subject_id FROM enrollments WHERE student_id=? AND month=?", (sid, month))
+    existing = {str(x['subject_id']) for x in cur.fetchall()}
+
+    created = []
+    for subid in subject_ids:
+        if subid in existing:
+            continue
+        token = secrets.token_urlsafe(16)
+        # legacy single PoP column + full list in enrollment_files
+        pop_url_legacy = saved_paths[0]
+        cur.execute(
+            """INSERT INTO enrollments(student_id,subject_id,month,status,payment_method,payment_ref,pop_url,status_token,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?)""",
+            (sid, subid, month, 'PENDING', 'EFT', None, pop_url_legacy, token, created_at)
+        )
+        eid = cur.lastrowid
+        for pth in saved_paths:
+            cur.execute("INSERT INTO enrollment_files(enrollment_id,file_path) VALUES(?,?)", (eid, pth))
+        created.append((eid, token))
+
+    conn.commit()
+    conn.close()
+
+    # --- Notifications: registration received (pending approval) ---
     try:
         base_url = (request.url_root or '').rstrip('/')
         portal_link = base_url
         login_link = base_url + url_for('student_login')
         month_label = pretty_month_label(month)
+
+        # Short first name for SMS
         first_name = full_name.split()[0] if full_name else ''
+
         email_subject = f"EBTA registration received ({month_label})"
         email_body = (
             f"Hi {full_name},\n\n"
@@ -2038,11 +2059,13 @@ def register():
             f"EBTA: Hi {first_name}, your registration for {month_label} was received "
             f"and is waiting for approval. Login later with WhatsApp {phone} and PIN {pin} at {login_link}."
         )
+
         if email:
             send_email_notification(email, email_subject, email_body)
         if phone:
             send_sms_notification(phone, sms_body)
     except Exception:
+        # Never break the flow if notifications fail
         pass
 
     if not created:
@@ -2052,17 +2075,22 @@ def register():
         eid, tok = created[0]
         return redirect(url_for('status', id=eid) + '?' + urlencode({'token': tok}))
 
-    # multiple enrollments: show status links
+    # Multiple enrollments: show links
     links = [
         f"<li><a class='links' target='_blank' href='{url_for('status', id=e)}?{urlencode({'token': t})}'>Status for enrollment #{e}</a></li>"
         for e, t in created
     ]
+
     body = f"""
     <section class='wrap small'>
-      <div class='card'>
+    <div class='card'>
         <h1>Registration submitted</h1>
+        <div class='ui-controls'>
+        <button class='chip' id='toggleSidebar' title='Collapse/expand sidebar'>Toggle sidebar</button>
+        <button class='chip' id='toggleWide' title='Toggle wider layout'>Wide mode</button>
+        </div>
         <ul>{''.join(links)}</ul>
-      </div>
+    </div>
     </section>
     """
     return page("Submitted", body)
@@ -2852,7 +2880,7 @@ def tutor_assignment_manage(mid:int):
     table = "<div class='empty'>No students.</div>" if not rows else f"<table><thead><tr><th>Student</th><th>Submission</th><th>Grade (0..{total})</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
     conn.close()
 
-    js_alert = "<script>alert('Grade saved');</script>" if saved else ""
+    js_alert = "<script>showPopup('Grade saved', 'success');;</script>" if saved else ""
     body=fr"""
     <a class='links' href='{url_for('tutor_home')}'>← Back</a>
     <section class='grid'>
@@ -3242,162 +3270,55 @@ def enrollment_action(id: int, action: str):
 
 # --- Admin: Students (show Guardian & Email) ---
 
-
 @app.get('/admin/students')
 def admin_students():
     r = require_admin()
     if r:
         return r
-
     conn = get_db()
     cur = conn.cursor()
-
-    # fetch students
     cur.execute("SELECT id, full_name, phone_whatsapp, guardian_phone, email, grade, pin FROM students ORDER BY created_at DESC")
     rows = cur.fetchall()
+    conn.close()
 
-    def nz(v):
-        return v if (v and str(v).strip()) else "N/A"
-
-    # determine month/year for lookups
-    try:
-        import datetime as _dt
-        month = get_setting('current_month', _dt.date.today().strftime('%Y-%m'))
-        year = _dt.date.today().strftime('%Y')
-    except Exception:
-        month = get_setting('current_month', '')
-        year = ''
+    def nz(v): return v if (v and str(v).strip()) else "N/A"
 
     trs = []
     for s in rows:
-        # PIN display
         pin = s['pin'] if s['pin'] else "<span class='muted'>not set</span>"
-
-        # --- Annual PoR: latest annual_registrations proof for the student/year ---
-        try:
-            cur.execute(
-                "SELECT proof_path FROM annual_registrations WHERE student_id=? AND year=? ORDER BY id DESC LIMIT 1",
-                (s['id'], year)
-            )
-            ar = cur.fetchone()
-            if ar and ar.get('proof_path'):
-                p = ar['proof_path']
-                # If annual proofs are stored in the special uploads/annual_2026 route use that handler:
-                # support either a stored filename (saved_path) or a stored path like 'uploads/annual_2026/xxx' or '/uploads/annual_2026/xxx'
-                if isinstance(p, str) and (p.startswith('/uploads/annual_') or p.startswith('uploads/annual_')):
-                    fname = p.split('/')[-1]
-                    try:
-                        proof_url = url_for('uploaded_file', filename=fname)
-                    except Exception:
-                        proof_url = f"/uploads/annual_2026/{fname}"
-                elif isinstance(p, str) and p and not (p.startswith('http://') or p.startswith('https://')) and ('annual_' in p):
-                    # contains annual folder name but not a full path
-                    fname = p.split('/')[-1]
-                    try:
-                        proof_url = url_for('uploaded_file', filename=fname)
-                    except Exception:
-                        proof_url = f"/uploads/annual_2026/{fname}"
-                elif isinstance(p, str) and (p.startswith('http://') or p.startswith('https://')):
-                    proof_url = p
-                else:
-                    # fallback: assume filename saved under uploads/
-                    fname = p.split('/uploads/')[-1] if '/uploads/' in p else p
-                    try:
-                        proof_url = url_for('uploads', filename=fname)
-                    except Exception:
-                        proof_url = f"/uploads/{fname}"
-                annual_html = f"<a class='links' href='{proof_url}' target='_blank' download>Download annual PoR</a>"
-            else:
-                annual_html = "—"
-        except Exception:
-            annual_html = "—"
-
-        # --- Monthly Enrollment PoP: gather enrollment_files for current month ---
-        try:
-            cur.execute("""
-                SELECT DISTINCT ef.file_path
-                FROM enrollment_files ef
-                JOIN enrollments e ON ef.enrollment_id = e.id
-                WHERE e.student_id=? AND e.month=?
-            """, (s['id'], month))
-            pops = [r['file_path'] for r in cur.fetchall() if r.get('file_path')]
-            if pops:
-                links = []
-                for p in pops:
-                    # handle absolute URL
-                    if isinstance(p, str) and (p.startswith('http://') or p.startswith('https://')):
-                        u = p
-                    else:
-                        # strip any leading '/uploads/' or 'uploads/' so url_for builds correctly
-                        fname = p.split('/uploads/')[-1] if isinstance(p, str) and '/uploads/' in p else (p.split('uploads/')[-1] if isinstance(p, str) and 'uploads/' in p else p)
-                        try:
-                            u = url_for('uploads', filename=fname)
-                        except Exception:
-                            u = f"/uploads/{fname}"
-                    links.append(f"<a class='links' href='{u}' target='_blank' download>Download PoP</a>")
-                # join links with a compact separator so the table stays tidy
-                monthly_html = " &nbsp;|&nbsp; ".join(links)
-            else:
-                monthly_html = "—"
-        except Exception:
-            monthly_html = "—"
-
-        # build row (Student, Grade, Guardian, Email, Annual PoR, Monthly PoP, PIN, Actions)
-        row = (
-            "<tr>"
-            f"<td>{s['full_name']}<div class='muted'>{s['phone_whatsapp']}</div></td>"
+        trs.append(
+            f"<tr><td>{s['full_name']}<div class='muted'>{s['phone_whatsapp']}</div></td>"
             f"<td>{grade_label(s['grade'])}</td>"
             f"<td>{nz(s['guardian_phone'])}</td>"
             f"<td>{nz(s['email'])}</td>"
-            f"<td>{annual_html}</td>"
-            f"<td>{monthly_html}</td>"
             f"<td>{pin}</td>"
-            "<td>"
-            f"<form method='post' action='{url_for('admin_student_reset_pin', sid=s['id'])}' style='display:inline'>"
-            "<button class='btn success'>Reset PIN</button></form> "
-            f"<form method='post' action='{url_for('admin_student_delete', sid=s['id'])}' style='display:inline' onsubmit=\"return confirm('Delete this student?')\">"
-            "<button class='btn danger'>Delete</button></form>"
-            "</td>"
-            "</tr>"
+            f"<td>"
+            f"<form method='post' action='{url_for('admin_student_reset_pin', sid=s['id'])}' style='display:inline'><button class='btn success'>Reset PIN</button></form> "
+            f"<form method='post' action='{url_for('admin_student_delete', sid=s['id'])}' style='display:inline' onsubmit='return confirm(\"Delete this student?\")'><button class='btn danger'>Delete</button></form>"
+            f"</td></tr>"
         )
-        trs.append(row)
 
     body = f"""
     <a class='links' href='{url_for('admin_home')}'>← Back</a>
     <section class='card'>
         <h1>Students</h1>
         <div class='toolbar'>
-            <input id='stu_q' class='pill' placeholder='Search students' oninput="filterTable('stu_q','stu_tbl')"/>
-            <form method='post' action='{url_for('admin_student_add')}' class='grid' style='grid-template-columns:1fr 160px 120px 1fr auto;gap:10px;margin-left:auto'>
-                <input name='full_name' placeholder='Full name' required />
-                <input name='phone' placeholder='Phone/WhatsApp' required />
-                <input name='grade' placeholder='G8.G12' required />
-                <input name='email' placeholder='Email (optional)' />
-                <button class='btn'>Add</button>
-            </form>
+        <input id='stu_q' class='pill' placeholder='Search students' oninput="filterTable('stu_q','stu_tbl')"/>
+        <form method='post' action='{url_for('admin_student_add')}' class='grid' style='grid-template-columns:1fr 160px 120px 1fr auto;gap:10px;margin-left:auto'>
+            <input name='full_name' placeholder='Full name' required />
+            <input name='phone' placeholder='Phone/WhatsApp' required />
+            <input name='grade' placeholder='G8..G12' required />
+            <input name='email' placeholder='Email (optional)' />
+            <button class='btn'>Add</button>
+        </form>
         </div>
-
-        <div class='scroll-x'>
         <table id='stu_tbl'>
-        <thead><tr>
-            <th>Student</th>
-            <th>Grade</th>
-            <th>Guardian</th>
-            <th>Email</th>
-            <th>Annual PoR</th>
-            <th>Monthly Enrollment PoP</th>
-            <th>PIN</th>
-            <th>Actions</th>
-        </tr></thead>
-        <tbody>{''.join(trs) if trs else "<tr><td colspan='8'><div class='empty'>No students yet.</div></td></tr>"}</tbody>
+        <thead><tr><th>Student</th><th>Grade</th><th>Guardian</th><th>Email</th><th>PIN</th><th>Actions</th></tr></thead>
+        <tbody>{''.join(trs) if trs else "<tr><td colspan='6'><div class='empty'>No students yet.</div></td></tr>"}</tbody>
         </table>
-        </div>
     </section>
     """
-
-    conn.close()
     return page("Students", body)
-
 
 @app.post('/admin/students/add')
 def admin_student_add():
@@ -4198,414 +4119,11 @@ def payfast_ipn():
 
 # ===================== MAIN =====================
 
-
-@app.get('/annual-registration')
-def annual_registration_form():
-    """
-    Simple annual registration page for 2026:
-    collects student full name, surname and target grade (G8..G12),
-    and submits to POST /annual-registration which records a lightweight registrations_2026 row.
-    """
-    grade_options = "".join([
-        "<option value='G8'>Grade 8</option>",
-        "<option value='G9'>Grade 9</option>",
-        "<option value='G10'>Grade 10</option>",
-        "<option value='G11'>Grade 11</option>",
-        "<option value='G12'>Grade 12</option>",
-    ])
-    body = f"""
-    <section class='grid' style='margin-top:10px'>
-      <div class='card auth-card'>
-        <h1>Annual registration — 2026</h1>
-        <p class='muted'>Enter the student's name and the grade they will be in for 2026. This records the one-time R50 registration.</p>
-
-        <form method='post' action='{url_for('annual_registration_submit')}' class='grid'>
-          <label>First / Given name</label>
-          <input name='first_name' required />
-
-          <label>Surname</label>
-          <input name='surname' required />
-
-          <label>Grade in 2026</label>
-          <select name='grade' required>
-            <option value=''>Select grade…</option>
-            {grade_options}
-          </select>
-
-          <label>Contact WhatsApp number (optional)</label>
-          <input name='phone' placeholder='e.g. 0821234567' />
-
-                    <label>Proof of payment (R50) — upload image or PDF</label>
-          <input type='file' name='proof' accept='image/*,application/pdf' required />
-
-<div class='toolbar' style='margin-top:12px'>
-            <button class='btn'>Submit registration</button>
-            <a class='btn secondary' href='/'>Back to home</a>
-          </div>
-        </form>
-      </div>
-    </section>
-    """
-    return page("Annual registration 2026", body)
-
-
-@app.post('/annual-registration')
-def annual_registration_submit():
-    # read form
-    first = request.form.get('first_name', '').strip()
-    surname = request.form.get('surname', '').strip()
-    grade = request.form.get('grade', '').strip()
-    phone = request.form.get('phone', '').strip()
-
-    if not (first and surname and grade):
-        return page("Error", "<div class='card'><h2>Error</h2><div class='msg'>Please complete all required fields.</div></div>")
-
-    # make sure the registrations helper table exists
-    conn = get_db()
-    try:
-        ensure_registration_table(conn)
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-    # Save a lightweight student + registration record:
-    conn = get_db()
-    cur = conn.cursor()
-    created_at = now_utc_iso()
-    full_name = f"{first} {surname}"
-
-    # If phone provided and student exists by phone, link; otherwise create a minimal student row.
-    sid = None
-    if phone:
-        cur.execute("SELECT id FROM students WHERE phone_whatsapp=?", (phone,))
-        r = cur.fetchone()
-        if r:
-            sid = r["id"]
-
-    if not sid:
-        # create a student placeholder (phone may be empty)
-        cur.execute(
-            "INSERT INTO students(full_name, phone_whatsapp, guardian_name, guardian_phone, email, grade, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (full_name, phone or "", "", "", "", grade, created_at),
-        )
-        sid = cur.lastrowid
-
-    # Add registrations row for 2026 (amount default 50)
-    year = "2026"
-    try:
-        cur.execute(
-            "INSERT OR IGNORE INTO registrations(student_id, year, amount, created_at) VALUES (?, ?, ?, ?)",
-            (sid, year, 50, created_at),
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-    finally:
-        conn.close()
-
-    # confirmation page
-    body = f"""
-    <section class='grid' style='margin-top:10px'>
-      <div class='card'>
-        <h1>Registered</h1>
-        <p>Thanks — {full_name} has been recorded for annual registration 2026 (grade: {grade}).</p>
-        <div class='toolbar'>
-          <a class='btn' href='/'>Go to home</a>
-          <a class='btn secondary' href='{url_for('annual_registration_form')}'>Register another</a>
-        </div>
-      </div>
-    </section>
-    """
-    return page("Registered — 2026", body)
-
-
-
-
-# --- Annual registration: proof of payment upload and admin view ---
-import os
-from werkzeug.utils import secure_filename
-from flask import send_from_directory
-
-UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads', 'annual_2026')
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-def ensure_annual_table(conn):
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS annual_registrations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id INTEGER,
-            full_name TEXT,
-            grade TEXT,
-            phone TEXT,
-            proof_path TEXT,
-            amount INTEGER,
-            year TEXT,
-            created_at TEXT
-        )
-    """)
-    conn.commit()
-
-@app.get('/uploads/annual_2026/<path:filename>')
-def uploaded_file(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=False)
-
-# Update the registration form to allow file upload by injecting a small JS fallback
-# (If the form already includes enctype multipart/form-data, this will still work)
-# The POST handler now accepts a file under the key 'proof' and saves it.
-@app.post('/annual-registration')
-def annual_registration_submit_with_proof():
-    # read form
-    first = request.form.get('first_name', '').strip()
-    surname = request.form.get('surname', '').strip()
-    grade = request.form.get('grade', '').strip()
-    phone = request.form.get('phone', '').strip()
-
-    if not (first and surname and grade):
-        return page("Error", "<div class='card'><h2>Error</h2><div class='msg'>Please complete all required fields.</div></div>")
-
-    # file handling: require proof file
-    proof_file = request.files.get('proof')
-    if not proof_file or not getattr(proof_file, 'filename', ''):
-        return page("Error", "<div class='card'><h2>Error</h2><div class='msg'>Please upload proof of payment (R50) to complete registration.</div></div>")
-
-    saved_path = None
-    # save uploaded file
-    try:
-        filename = secure_filename(proof_file.filename)
-        import time
-        ts = int(time.time())
-        filename = f"{ts}_{filename}"
-        dest = os.path.join(UPLOAD_FOLDER, filename)
-        proof_file.save(dest)
-        saved_path = filename  # store relative filename
-    except Exception as e:
-        # fail-safe: return error if saving failed
-        return page("Error", f"<div class='card'><h2>Error</h2><div class='msg'>Failed to save proof file: {e}</div></div>")
-
-    # make sure the registrations helper table exists and annual table
-    conn = get_db()
-    try:
-        ensure_registration_table(conn)
-        ensure_annual_table(conn)
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-    # Save a lightweight student + registration record:
-    conn = get_db()
-    cur = conn.cursor()
-    created_at = now_utc_iso()
-    full_name = f"{first} {surname}"
-
-    # If phone provided and student exists by phone, link; otherwise create a minimal student row.
-    sid = None
-    if phone:
-        cur.execute("SELECT id FROM students WHERE phone_whatsapp=?", (phone,))
-        r = cur.fetchone()
-        if r:
-            sid = r["id"]
-
-    if not sid:
-        # create a student placeholder (phone may be empty)
-        cur.execute(
-            "INSERT INTO students(full_name, phone_whatsapp, guardian_name, guardian_phone, email, grade, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (full_name, phone or "", "", "", "", grade, created_at),
-        )
-        sid = cur.lastrowid
-
-    # Add registrations row for 2026 (amount default 50)
-    year = "2026"
-    try:
-        # also add to annual_registrations for admin view
-        cur.execute(
-            "INSERT INTO annual_registrations(student_id, full_name, grade, phone, proof_path, amount, year, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (sid, full_name, grade, phone or "", saved_path or "", 50, year, created_at),
-        )
-        # also keep existing registrations table in sync if present
-        try:
-            cur.execute(
-                "INSERT OR IGNORE INTO registrations(student_id, year, amount, created_at) VALUES (?, ?, ?, ?)",
-                (sid, year, 50, created_at),
-            )
-        except Exception:
-            pass
-        conn.commit()
-    except Exception:
-        conn.rollback()
-    finally:
-        conn.close()
-
-    # confirmation page with proof link if uploaded
-    proof_msg = ""
-    if saved_path:
-        proof_url = url_for('uploaded_file', filename=saved_path)
-        proof_msg = f"<p>Proof of payment uploaded: <a href='{proof_url}' target='_blank'>View file</a></p>"
-
-    body = f"""
-    <section class='grid' style='margin-top:10px'>
-      <div class='card'>
-        <h1>Registered</h1>
-        <p>Thanks — {full_name} has been recorded for annual registration 2026 (grade: {grade}).</p>
-        {proof_msg}
-        <div class='toolbar'>
-          <a class='btn' href='/'>Go to home</a>
-          <a class='btn secondary' href='{url_for('annual_registration_form')}'>Register another</a>
-        </div>
-      </div>
-    </section>
-    """
-    return page("Registered — 2026", body)
-
-
-# Admin view: list annual registrations for 2026
-@app.get('/admin/annual-registrations')
-def admin_annual_registrations():
-    """Admin view: list annual registrations with downloadable Proof of Registration (PoR)."""
-    r = require_admin()
-    if r:
-        return r
-
-    conn = get_db()
-    try:
-        # Ensure table exists (best-effort)
-        try:
-            ensure_annual_table(conn)
-        except Exception:
-            pass
-
-        cur = conn.cursor()
-
-        # current year
-        import datetime as _dt
-        year = _dt.date.today().strftime('%Y')
-
-        # Attempt to fetch registrations (wrap so missing table doesn't crash)
-        rows = []
-        try:
-            cur.execute("""
-                SELECT r.id AS reg_id, r.student_id, r.year, r.amount, r.payment_ref, r.created_at,
-                       ar.proof_path AS proof_path,
-                       s.full_name, s.phone_whatsapp, s.guardian_name, s.email
-                FROM registrations r
-                LEFT JOIN annual_registrations ar ON ar.student_id = r.student_id AND ar.year = r.year
-                LEFT JOIN students s ON s.id = r.student_id
-                WHERE r.year = ?
-                ORDER BY r.created_at DESC
-            """, (year,))
-            rows = cur.fetchall()
-        except Exception:
-            conn.rollback()
-            rows = None
-
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-    if rows is None:
-        body = f"""
-        <a class='links' href='{url_for('admin_home')}'>← Back</a>
-        <section class='card'>
-          <h1>Annual registrations — {year}</h1>
-          <div class='muted'>Unable to read annual registrations. The database table may be missing or inaccessible.</div>
-          <div style='margin-top:12px'>
-            <div class='card'>
-              <h3>Quick fixes</h3>
-              <ul>
-                <li>Run the app startup migration to create helper tables.</li>
-                <li>Or call <code>ensure_annual_table(get_db())</code> once.</li>
-              </ul>
-            </div>
-          </div>
-        </section>
-        """
-        return page("Annual registrations", body)
-
-    def nz(v):
-        return v if (v and str(v).strip()) else "N/A"
-
-    trs = []
-    for rrow in rows:
-        # rrow is sqlite3.Row -> index by column name
-        try:
-            proof_path = rrow['proof_path']
-        except Exception:
-            proof_path = None
-
-        proof_html = "—"
-        if proof_path:
-            # build url from stored value; support full URLs or stored filenames
-            if isinstance(proof_path, str) and (proof_path.startswith('http://') or proof_path.startswith('https://')):
-                url = proof_path
-            else:
-                # extract filename if value contains uploads/ or is just a filename
-                fname = proof_path.split('/uploads/')[-1] if '/uploads/' in proof_path else (proof_path.split('uploads/')[-1] if 'uploads/' in proof_path else proof_path)
-                try:
-                    url = url_for('uploads', filename=fname)
-                except Exception:
-                    url = f"/uploads/{fname.split('/')[-1]}"
-            proof_html = f"<a class='links' href='{url}' target='_blank' download>Download PoR</a>"
-
-        # student columns - use index access and safe fallback
-        full_name = rrow['full_name'] if 'full_name' in rrow.keys() else None
-        phone = rrow['phone_whatsapp'] if 'phone_whatsapp' in rrow.keys() else None
-
-        student_col = f"{nz(full_name)}<div class='muted'>{nz(phone)}</div>"
-        year_col = rrow['year'] if 'year' in rrow.keys() else ""
-        amount_col = rrow['amount'] if 'amount' in rrow.keys() else ""
-        pref_col = rrow['payment_ref'] if 'payment_ref' in rrow.keys() else ""
-        created_col = rrow['created_at'] if 'created_at' in rrow.keys() else ""
-
-        trs.append(
-            "<tr>"
-            f"<td>{student_col}</td>"
-            f"<td>{nz(year_col)}</td>"
-            f"<td>{nz(amount_col)}</td>"
-            f"<td>{nz(pref_col)}</td>"
-            f"<td>{proof_html}</td>"
-            f"<td>{nz(created_col)}</td>"
-            "</tr>"
-        )
-
-    body = f"""
-    <a class='links' href='{url_for('admin_home')}'>← Back</a>
-    <section class='card'>
-        <h1>Annual registrations — {year}</h1>
-        <div class='toolbar'>
-            <input id='reg_q' class='pill' placeholder='Search by name, phone, year' oninput="filterTable('reg_q','reg_tbl')"/>
-        </div>
-        <div class='scroll-x'>
-        <table id='reg_tbl'>
-        <thead><tr>
-            <th>Student</th>
-            <th>Year</th>
-            <th>Amount</th>
-            <th>Payment ref</th>
-            <th>PoR</th>
-            <th>Registered at</th>
-        </tr></thead>
-        <tbody>{''.join(trs) if trs else "<tr><td colspan='6'><div class='empty'>No registrations this year.</div></td></tr>"}</tbody>
-        </table>
-        </div>
-    </section>
-    """
-    return page("Annual registrations", body)
-
-
-
-
 if __name__ == '__main__':
     init_db()
     port = int(os.environ.get('PORT', '5000'))
     app.run(host='127.0.0.1', port=port, debug=True)
+
 
 
 # ===================== QUIZ SYSTEM: lightweight integration layer =====================
@@ -4637,7 +4155,7 @@ def init_db():
         subject_id INTEGER NOT NULL,
         tutor_id INTEGER NOT NULL,
         title TEXT NOT NULL,
-        mode TEXT NOT NULL,
+        mode TEXT NOT NULL,             -- 'mcq' | 'mixed' | 'written'
         duration_seconds INTEGER NOT NULL DEFAULT 600,
         month TEXT NOT NULL,
         is_published INTEGER NOT NULL DEFAULT 0,
@@ -4653,7 +4171,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         quiz_id INTEGER NOT NULL,
         qtext TEXT NOT NULL,
-        qtype TEXT NOT NULL,
+        qtype TEXT NOT NULL,            -- 'mcq' | 'short' | 'long'
         points INTEGER NOT NULL DEFAULT 1,
         image_path TEXT,
         position INTEGER NOT NULL DEFAULT 1,
@@ -4680,7 +4198,7 @@ def init_db():
         student_id INTEGER NOT NULL,
         started_at TEXT NOT NULL,
         submitted_at TEXT,
-        status TEXT NOT NULL DEFAULT 'in_progress',
+        status TEXT NOT NULL DEFAULT 'in_progress', -- in_progress|submitted|graded
         auto_score REAL,
         manual_score REAL,
         total_score REAL,
@@ -4696,10 +4214,10 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         attempt_id INTEGER NOT NULL,
         question_id INTEGER NOT NULL,
-        chosen_option_id INTEGER,
-        answer_text TEXT,
-        is_correct INTEGER,
-        awarded_points REAL,
+        chosen_option_id INTEGER,       -- for MCQ
+        answer_text TEXT,               -- for short/long
+        is_correct INTEGER,             -- nullable until auto-grade or manual grade
+        awarded_points REAL,            -- null until graded
         FOREIGN KEY(attempt_id) REFERENCES quiz_attempts(id) ON DELETE CASCADE,
         FOREIGN KEY(question_id) REFERENCES quiz_questions(id) ON DELETE CASCADE,
         FOREIGN KEY(chosen_option_id) REFERENCES quiz_options(id) ON DELETE SET NULL
@@ -4717,3 +4235,5 @@ def init_db():
 @app.route('/quiz-images/<path:filename>')
 def quiz_images(filename):
     return send_from_directory(QUIZ_IMG_DIR, filename)
+
+# ---------------------- Tutor: Quizzes CRUD ----------------------
