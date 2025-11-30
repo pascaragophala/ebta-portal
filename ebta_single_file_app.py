@@ -1875,7 +1875,7 @@ function showPopup(message, type='info', timeout=4000){
       noBtn.style.color = '#0f172a';
       noBtn.onclick = function(){
         // Redirect to registration form
-        window.location.href = 'https://ebta.netlify.app/';
+        window.location.href = 'https://docs.google.com/forms/d/e/1FAIpQLScCF4rLX81GxKDhuq2xk0rxYMEognlcytvqKqdLgvzpJ36I3A/viewform?usp=header';
       };
 
       const yesBtn = document.createElement('button');
