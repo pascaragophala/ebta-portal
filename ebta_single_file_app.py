@@ -1424,7 +1424,7 @@ def page(title, body_html, extra_head="", extra_js=""):
         <div class="copyright">
             © <span id="year"></span> Early Bird Testimony Academy · All rights reserved.
         </div>
-        ⚡ Powered by Pasca Ragophala
+        <div style="opacity:0.95;">⚡ Powered by <a href="https://pascalmindtech.netlify.app/" target="_blank" style="color:rgba(255,255,255,0.95);text-decoration:underline;font-weight:600;">Pasca Ragophala</a></div>
     </footer>{extra_js}
     </body></html>
     """
