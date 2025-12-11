@@ -1602,7 +1602,7 @@ def home():
         </div>
 
         <div class='toolbar'>
-            <button class='btn'>Submit registration</button>
+            <button class='btn'>Submit Enrollment</button>
             <a class='btn secondary' href='{url_for('student_login')}'>Student login</a>
             <a class='btn secondary' href='{url_for('tutor_login')}'>Tutor login</a>
         </div>
