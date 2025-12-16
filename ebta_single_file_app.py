@@ -401,17 +401,6 @@ def init_db():
     conn.close()
 
 
-# ===================== DB INIT HOOK =====================
-@app.before_first_request
-def _ensure_db():
-    try:
-        init_db()
-    except Exception as e:
-        print('DB init failed:', e)
-# ======================================================
-
-
-
 
 
 
@@ -2056,7 +2045,21 @@ def register():
 
         email_subject = f"EBTA registration received ({month_label})"
         email_body = (
-            f"Hi {full_name},\n\n"
+            f"Hi {full_name},\
+# ===================== DB INIT (FLASK 3 SAFE) =====================
+_db_initialized = False
+
+@app.before_request
+def _ensure_db_once():
+    global _db_initialized
+    if not _db_initialized:
+        try:
+            init_db()
+            _db_initialized = True
+        except Exception as e:
+            print("DB init failed:", e)
+# ================================================================
+n\n"
             f"Your EBTA registration for {month_label} was received and is waiting for approval.\n\n"
             f"Login details (keep these safe):\n"
             f"WhatsApp number: {phone}\n"
