@@ -74,15 +74,6 @@ for d in (UPLOAD_DIR, MATERIALS_DIR, SUBMISSIONS_DIR):
 DB_PATH = BASE_DIR / "ebta.db"
 LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/1nieF2O.jpg")
 
-# ===================== STARTUP DB INITIALISATION =====================
-try:
-    with app.app_context():
-        init_db()
-except Exception as e:
-    print("DB init warning:", e)
-# ===================================================================
-
-
 
 # ===================== DB =====================
 
@@ -408,6 +399,17 @@ def init_db():
     """)
     conn.commit()
     conn.close()
+
+
+# ===================== DB INIT HOOK =====================
+@app.before_first_request
+def _ensure_db():
+    try:
+        init_db()
+    except Exception as e:
+        print('DB init failed:', e)
+# ======================================================
+
 
 
 
