@@ -2045,17 +2045,7 @@ def register():
 
         email_subject = f"EBTA registration received ({month_label})"
         email_body = (
-            f"""Hi {full_name},
-
-Welcome to EBTA 🎓
-Your registration was successful.
-
-We will contact you shortly with your timetable.
-
-Regards,
-EBTA Team
-"""
-n\n"
+            f"Hi {full_name},\n\n"
             f"Your EBTA registration for {month_label} was received and is waiting for approval.\n\n"
             f"Login details (keep these safe):\n"
             f"WhatsApp number: {phone}\n"
