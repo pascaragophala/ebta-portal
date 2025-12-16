@@ -4237,3 +4237,11 @@ def quiz_images(filename):
     return send_from_directory(QUIZ_IMG_DIR, filename)
 
 # ---------------------- Tutor: Quizzes CRUD ----------------------
+
+
+
+@app.before_request
+def ensure_db():
+    if not hasattr(app, "_db_initialized"):
+        init_db()
+        app._db_initialized = True
