@@ -2045,20 +2045,16 @@ def register():
 
         email_subject = f"EBTA registration received ({month_label})"
         email_body = (
-            f"Hi {full_name},\
-# ===================== DB INIT (FLASK 3 SAFE) =====================
-_db_initialized = False
+            f"""Hi {full_name},
 
-@app.before_request
-def _ensure_db_once():
-    global _db_initialized
-    if not _db_initialized:
-        try:
-            init_db()
-            _db_initialized = True
-        except Exception as e:
-            print("DB init failed:", e)
-# ================================================================
+Welcome to EBTA 🎓
+Your registration was successful.
+
+We will contact you shortly with your timetable.
+
+Regards,
+EBTA Team
+"""
 n\n"
             f"Your EBTA registration for {month_label} was received and is waiting for approval.\n\n"
             f"Login details (keep these safe):\n"
