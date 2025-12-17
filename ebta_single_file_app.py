@@ -24,13 +24,13 @@ os.makedirs(BASE_DATA_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
 UPLOADS_DIR = Path(BASE_DATA_DIR) / "uploads"
-UPLOAD_DIR = UPLOADS_DIR       # PoP files
-MATERIALS_DIR = os.path.join(BASE_DATA_DIR, "materials")    # Tutor uploads
-SUBMISSIONS_DIR = os.path.join(BASE_DATA_DIR, "submissions") # Assignments
-QR_DIR = os.path.join(BASE_DATA_DIR, "qr")
+UPLOAD_DIR = UPLOADS_DIR
+MATERIALS_DIR = Path(BASE_DATA_DIR) / "materials"
+SUBMISSIONS_DIR = Path(BASE_DATA_DIR) / "submissions"
+QR_DIR = Path(BASE_DATA_DIR) / "qr"
 
 for d in (UPLOADS_DIR, MATERIALS_DIR, SUBMISSIONS_DIR, QR_DIR):
-    os.makedirs(d, exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True)
 
 LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/1nieF2O.jpg")
 # =============================================================
