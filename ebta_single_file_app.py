@@ -1,93 +1,24 @@
 import os
 import sqlite3
-# ===================== RENDER PERSISTENT STORAGE ==============BASE_DATA_DIR = os.environ.get("RENDER_DATA_DIR", "/var/data")
+
+# =============================================================
+# RENDER PERSISTENT STORAGE (SAFE + ORDERED)
+# =============================================================
+BASE_DATA_DIR = os.environ.get("RENDER_DATA_DIR", "/var/data")
+os.makedirs(BASE_DATA_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
-UPLOADS_DIR = os.path.join(BASE_DATA_DIR, "uploads")
+UPLOADS_DIR = os.path.join(BASE_DATA_DIR, "uploads")        # PoP files
+MATERIALS_DIR = os.path.join(BASE_DATA_DIR, "materials")    # Tutor uploads
+SUBMISSIONS_DIR = os.path.join(BASE_DATA_DIR, "submissions") # Assignments
 QR_DIR = os.path.join(BASE_DATA_DIR, "qr")
 
-os.makedirs(UPLOADS_DIR, exist_ok=True)
-os.makedirs(QR_DIR, exist_ok=True)
-# =============================================================
-import os
-# Pasco Single-File Web App (Flask + SQLite) – Admin + Student + Tutor portals
-# -----------------------------------------------------------------------------
-# - Pasco branding (green + gold), polished UI
-# - Reliable server-side QR PNGs
-# - CSV "remove list" export
-# - Student & Tutor portals with PIN login
-# - Admin can add/remove students & tutors, reset PINs
-# - Forgot-PIN inbox (admin can view/set/reset PINs)
-# - Tutors upload materials & YouTube links; students see after approval
-# - Students choose 5-digit PIN at registration
-# - Tutors ⇄ many Subjects; Students ⇄ many Subjects per month
-# - Tutors see WhatsApp links + sessions; can mark attendance (QR or manual)
-# - Tutors can delete their own uploads within 24h
-# - Assignments with due date, submissions, grading (marks/feedback)
-# - Grade save shows success alert; assignments support “Out of” totals
-# - Footer shows “⚡ Powered by Pasca Ragophala”; branding = “Pasco”
-# - Student portal has styled “Feedback & Results”
-# - Proof of Payment is REQUIRED (min 1, max 2 files)
-# - Guardian phone, Email, and Subjects are REQUIRED
-# - PoP supports multiple files via a new enrollment_files table
-# - Admin → Students table shows Guardian & Email (N/A if missing)
-# - Messaging: Student ↔ Tutor and Tutor ↔ Admin; Admin can message both
-# - Analytics dashboard (attendance, submissions, marks, ratings, completion)
-# - Monthly Ratings: Learners can rate each ACTIVE subject from the 24th → month-end
-#
-# How to run
-#   1) pip install flask qrcode[pil]
-#   2) python ebta_single_file_app.py
-#   3) Open http://127.0.0.1:5000
-#
-# Notes
-# - Admin password via ENV EBTA_ADMIN_PASSWORD (default: admin)
-# - Secret key via ENV EBTA_SECRET_KEY (auto-generated if missing)
-# - Files saved under ./uploads (PoP), ./materials (tutor files), ./submissions (student work)
-# - Change logo via ENV EBTA_LOGO_URL
-# -----------------------------------------------------------------------------
+for d in (UPLOADS_DIR, MATERIALS_DIR, SUBMISSIONS_DIR, QR_DIR):
+    os.makedirs(d, exist_ok=True)
 
-
-
-
-import os
-import sqlite3
-import secrets
-import datetime
-import base64
-import random
-import calendar
-from io import BytesIO
-import json
-try:
-    from zoneinfo import ZoneInfo
-except Exception:
-    ZoneInfo = None
-
-from ast import literal_eval
-from pathlib import Path
-from urllib.parse import urlencode
-import urllib.request as urlreq
-from flask import (
-    Flask, request, redirect, url_for, send_from_directory, session,
-    make_response
-)
-
-try:
-    import qrcode
-except Exception:
-    qrcode = None
-
-app = Flask(__name__)
-app.secret_key = os.environ.get("EBTA_SECRET_KEY", secrets.token_hex(16))
-BASE_DIR = Path(__file__).resolve().parent
-UPLOAD_DIR = BASE_DIR / "uploads"       # PoP
-MATERIALS_DIR = BASE_DIR / "materials"  # Tutor uploads
-SUBMISSIONS_DIR = BASE_DIR / "submissions"  # Student assignment submissions
-for d in (UPLOAD_DIR, MATERIALS_DIR, SUBMISSIONS_DIR):
-    d.mkdir(exist_ok=True)
-DB_PATH = BASE_DIR / "ebta.db"
 LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/1nieF2O.jpg")
+# =============================================================
+
 
 
 # ===================== DB ==============
