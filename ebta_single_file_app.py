@@ -15,7 +15,8 @@ BASE_DATA_DIR = os.environ.get("RENDER_DATA_DIR", "/var/data")
 os.makedirs(BASE_DATA_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
-UPLOADS_DIR = os.path.join(BASE_DATA_DIR, "uploads")        # PoP files
+UPLOADS_DIR = os.path.join(BASE_DATA_DIR, "uploads")
+UPLOAD_DIR = UPLOADS_DIR        # PoP files
 MATERIALS_DIR = os.path.join(BASE_DATA_DIR, "materials")    # Tutor uploads
 SUBMISSIONS_DIR = os.path.join(BASE_DATA_DIR, "submissions") # Assignments
 QR_DIR = os.path.join(BASE_DATA_DIR, "qr")
