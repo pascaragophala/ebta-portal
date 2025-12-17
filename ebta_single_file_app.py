@@ -1,6 +1,13 @@
 import os
 import sqlite3
 
+from flask import Flask, request, redirect, url_for, render_template_string, send_from_directory, session, flash, make_response
+
+app = Flask(__name__)
+app.secret_key = os.environ.get('EBTA_SECRET_KEY', 'ebta-dev-secret')
+
+
+
 # =============================================================
 # RENDER PERSISTENT STORAGE (SAFE + ORDERED)
 # =============================================================
