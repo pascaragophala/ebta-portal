@@ -54,6 +54,15 @@ def now_utc_iso():
 
 def ensure_column(conn, table, column, ddl_tail):
     cur = conn.cursor()
+    # -------- SAFE SUBJECTS GUARD --------
+    try:
+        cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='subjects'")
+        if not cur.fetchone():
+            init_db()
+    except Exception:
+        init_db()
+    # -----------------------------------
+
     cur.execute(f"PRAGMA table_info({table})")
     cols = [r[1] for r in cur.fetchall()]
     if column not in cols:
@@ -4180,3 +4189,12 @@ def quiz_images(filename):
     return send_from_directory(QUIZ_IMG_DIR, filename)
 
 # ---------------------- Tutor: Quizzes CRUD ----------------------
+# =============================================================
+# RENDER DB BOOTSTRAP (DO NOT REMOVE)
+# Ensures all tables exist before first request
+# =============================================================
+try:
+    init_db()
+except Exception as e:
+    print("DB init warning:", e)
+# =============================================================
