@@ -5,6 +5,7 @@ import calendar
 import random
 import base64
 from zoneinfo import ZoneInfo
+from pathlib import Path
 
 from flask import Flask, request, redirect, url_for, render_template_string, send_from_directory, session, flash, make_response
 
@@ -20,8 +21,8 @@ BASE_DATA_DIR = os.environ.get("RENDER_DATA_DIR", "/var/data")
 os.makedirs(BASE_DATA_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
-UPLOADS_DIR = os.path.join(BASE_DATA_DIR, "uploads")
-UPLOAD_DIR = UPLOADS_DIR        # PoP files
+UPLOADS_DIR = Path(BASE_DATA_DIR) / "uploads"
+UPLOAD_DIR = UPLOADS_DIR       # PoP files
 MATERIALS_DIR = os.path.join(BASE_DATA_DIR, "materials")    # Tutor uploads
 SUBMISSIONS_DIR = os.path.join(BASE_DATA_DIR, "submissions") # Assignments
 QR_DIR = os.path.join(BASE_DATA_DIR, "qr")
