@@ -1373,7 +1373,7 @@ def page(title, body_html, extra_head="", extra_js=""):
         <div class='nav'>
         <div class='brand'>
             <img class='brand-logo'
-                src="/uploads/ebta_logo.png"
+                src="https://i.imgur.com/1nieF2O.jpeg"
                 alt="EBTA logo"/>
             <div class='title'>EBTA Portal</div>
         </div>
