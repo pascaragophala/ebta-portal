@@ -1,7 +1,16 @@
 import os
 import sqlite3
+
 # ===================== RENDER PERSISTENT STORAGE =====================
 BASE_DATA_DIR = os.environ.get("RENDER_DATA_DIR", "/var/data")
+DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
+UPLOADS_DIR = os.path.join(BASE_DATA_DIR, "uploads")
+QR_DIR = os.path.join(BASE_DATA_DIR, "qr")
+os.makedirs(UPLOADS_DIR, exist_ok=True)
+os.makedirs(QR_DIR, exist_ok=True)
+# ====================================================================
+
+# ===================== RENDER PERSISTENT STORAGE ==============BASE_DATA_DIR = os.environ.get("RENDER_DATA_DIR", "/var/data")
 
 DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
 UPLOADS_DIR = os.path.join(BASE_DATA_DIR, "uploads")
@@ -9,8 +18,7 @@ QR_DIR = os.path.join(BASE_DATA_DIR, "qr")
 
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 os.makedirs(QR_DIR, exist_ok=True)
-# ====================================================================
-
+# =============================================================
 import os
 # Pasco Single-File Web App (Flask + SQLite) – Admin + Student + Tutor portals
 # -----------------------------------------------------------------------------
@@ -50,7 +58,6 @@ import os
 # -----------------------------------------------------------------------------
 
 
-=======
 
 
 import os
@@ -93,8 +100,7 @@ DB_PATH = BASE_DIR / "ebta.db"
 LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/1nieF2O.jpg")
 
 
-# ===================== DB =====================
-
+# ===================== DB ==============
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -422,8 +428,7 @@ def init_db():
 
 
 
-# ===================== Registration helper/table =====================
-def ensure_registration_table(conn=None):
+# ===================== Registration helper/table ==============def ensure_registration_table(conn=None):
     """Ensure registrations table exists. If conn provided, use it; otherwise open a new connection."""
     own_conn = False
     if conn is None:
@@ -451,8 +456,7 @@ def student_registered_for_year(conn, student_id, year):
     cur.execute("SELECT 1 FROM registrations WHERE student_id=? AND year=? LIMIT 1", (student_id, year))
     return cur.fetchone() is not None
 
-# ===================== Helpers =====================
-
+# ===================== Helpers ==============
 def safe_url(endpoint, fallback):
     """Return url_for(endpoint) if route exists, else fallback string."""
     try:
@@ -544,8 +548,7 @@ def pretty_month_label(month_str: str) -> str:
 
 
 
-# ===================== Notifications (Email & SMS) =====================
-
+# ===================== Notifications (Email & SMS) ==============
 def send_email_notification(to_email: str, subject: str, body: str):
     # Best-effort email sender.
     # Uses SMTP settings from environment if configured, otherwise logs into the messages table.
@@ -580,7 +583,6 @@ def send_email_notification(to_email: str, subject: str, body: str):
         from email.message import EmailMessage
 
 
-=======
 
         msg = EmailMessage()
         msg["Subject"] = subject
@@ -657,8 +659,7 @@ def send_sms_notification(to_phone: str, body: str):
             pass
 
 
-# ===================== Templating =====================
-
+# ===================== Templating ==============
 GOOGLE_FONTS = "<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap' rel='stylesheet'>"
 
 BASE_CSS = """
@@ -1449,8 +1450,7 @@ def page(title, body_html, extra_head="", extra_js=""):
     </footer>{extra_js}
     </body></html>
     """
-# ===================== File routes =====================
-
+# ===================== File routes ==============
 @app.route('/uploads/<path:filename>')
 def uploads(filename): return send_from_directory(UPLOAD_DIR, filename)
 
@@ -1482,8 +1482,7 @@ def logo():
     resp=make_response(svg); resp.headers['Content-Type']='image/svg+xml'; return resp
 
 
-# ===================== Home & Registration (multi-subject + PIN + PoP required) =====================
-
+# ===================== Home & Registration (multi-subject + PIN + PoP required) ==============
 
 
 @app.get('/')
@@ -2163,8 +2162,7 @@ def admin_registered():
     """
     return page('Registered students', body)
 
-# ===================== Status page =====================
-
+# ===================== Status page ==============
 @app.get('/status/<int:id>')
 def status(id:int):
     token=request.args.get('token')
@@ -2199,8 +2197,7 @@ def status(id:int):
     return page("Status", body)
 
 
-# ===================== Student Portal (includes messaging & monthly ratings) =====================
-
+# ===================== Student Portal (includes messaging & monthly ratings) ==============
 @app.get('/student/login')
 def student_login():
     if is_student(): return redirect(url_for('student_home'))
@@ -2575,8 +2572,7 @@ def student_submit_ratings():
     return page("Thanks!", card_msg("Your ratings were saved."))
 
 
-# ===================== Tutor Portal (includes messaging to student/admin) =====================
-
+# ===================== Tutor Portal (includes messaging to student/admin) ==============
 @app.get('/tutor/login')
 def tutor_login():
     if is_tutor(): return redirect(url_for('tutor_home'))
@@ -3048,8 +3044,7 @@ def tutor_session_attendance(sid:int):
     return page("Attendance", body)
 
 
-# ===================== Admin Portal (guardian/email in Students, DM, analytics) =====================
-
+# ===================== Admin Portal (guardian/email in Students, DM, analytics) ==============
 def card_msg(msg): return f"<section class='wrap small'><div class='card'><p>{msg}</p></div></section>"
 def stat(title,value): return f"<div class='stat'><div class='muted'>{title}</div><div class='k'>{value}</div></div>"
 
@@ -4138,8 +4133,7 @@ def payfast_ipn():
     return {"ok": True}
 
 
-# ===================== MAIN =====================
-
+# ===================== MAIN ==============
 if __name__ == '__main__':
     init_db()
     port = int(os.environ.get('PORT', '5000'))
@@ -4147,8 +4141,7 @@ if __name__ == '__main__':
 
 
 
-# ===================== QUIZ SYSTEM: lightweight integration layer =====================
-# This section adds a complete quizzes module WITHOUT touching your existing routes.
+# ===================== QUIZ SYSTEM: lightweight integration layer ==============# This section adds a complete quizzes module WITHOUT touching your existing routes.
 # - We override init_db() to call your original init and then create quiz tables.
 # - We add QUIZ_IMG_DIR and ensure it exists.
 # - We add tutor/student/analytics routes under /tutor/quizzes, /student/quizzes, /admin/analytics/quizzes.
