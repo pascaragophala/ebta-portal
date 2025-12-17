@@ -371,7 +371,8 @@ def init_db():
 
 
 
-# ===================== Registration helper/table ==============def ensure_registration_table(conn=None):
+# ===================== Registration helper/table ==============
+def ensure_registration_table(conn=None):
     """Ensure registrations table exists. If conn provided, use it; otherwise open a new connection."""
     own_conn = False
     if conn is None:
