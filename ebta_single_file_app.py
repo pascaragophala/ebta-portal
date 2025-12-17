@@ -1,4 +1,17 @@
 import os
+import sqlite3
+# ===================== RENDER PERSISTENT STORAGE =====================
+BASE_DATA_DIR = os.environ.get("RENDER_DATA_DIR", "/var/data")
+
+DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
+UPLOADS_DIR = os.path.join(BASE_DATA_DIR, "uploads")
+QR_DIR = os.path.join(BASE_DATA_DIR, "qr")
+
+os.makedirs(UPLOADS_DIR, exist_ok=True)
+os.makedirs(QR_DIR, exist_ok=True)
+# ====================================================================
+
+import os
 # Pasco Single-File Web App (Flask + SQLite) – Admin + Student + Tutor portals
 # -----------------------------------------------------------------------------
 # - Pasco branding (green + gold), polished UI
@@ -37,16 +50,7 @@ import os
 # -----------------------------------------------------------------------------
 
 
-# ===================== PERSISTENT STORAGE (RENDER SAFE) =====================
-BASE_DATA_DIR = os.environ.get("RENDER_DATA_DIR", "/var/data")
-
-DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
-UPLOADS_DIR = os.path.join(BASE_DATA_DIR, "uploads")
-QR_DIR = os.path.join(BASE_DATA_DIR, "qr")
-
-os.makedirs(UPLOADS_DIR, exist_ok=True)
-os.makedirs(QR_DIR, exist_ok=True)
-# ===========================================================================
+=======
 
 
 import os
@@ -576,16 +580,7 @@ def send_email_notification(to_email: str, subject: str, body: str):
         from email.message import EmailMessage
 
 
-# ===================== PERSISTENT STORAGE (RENDER SAFE) =====================
-BASE_DATA_DIR = os.environ.get("RENDER_DATA_DIR", "/var/data")
-
-DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
-UPLOADS_DIR = os.path.join(BASE_DATA_DIR, "uploads")
-QR_DIR = os.path.join(BASE_DATA_DIR, "qr")
-
-os.makedirs(UPLOADS_DIR, exist_ok=True)
-os.makedirs(QR_DIR, exist_ok=True)
-# ===========================================================================
+=======
 
         msg = EmailMessage()
         msg["Subject"] = subject
