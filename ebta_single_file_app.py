@@ -35,6 +35,19 @@
 # - Change logo via ENV EBTA_LOGO_URL
 # -----------------------------------------------------------------------------
 
+
+# ===================== PERSISTENT STORAGE (RENDER SAFE) =====================
+BASE_DATA_DIR = os.environ.get("RENDER_DATA_DIR", "/var/data")
+
+DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
+UPLOADS_DIR = os.path.join(BASE_DATA_DIR, "uploads")
+QR_DIR = os.path.join(BASE_DATA_DIR, "qr")
+
+os.makedirs(UPLOADS_DIR, exist_ok=True)
+os.makedirs(QR_DIR, exist_ok=True)
+# ===========================================================================
+
+
 import os
 import sqlite3
 import secrets
@@ -4237,11 +4250,3 @@ def quiz_images(filename):
     return send_from_directory(QUIZ_IMG_DIR, filename)
 
 # ---------------------- Tutor: Quizzes CRUD ----------------------
-
-
-
-@app.before_request
-def ensure_db():
-    if not hasattr(app, "_db_initialized"):
-        init_db()
-        app._db_initialized = True
