@@ -4335,3 +4335,41 @@ try:
 except Exception as e:
     print("DB init warning:", e)
 # =============================================================
+
+# ===================== Executive Dashboard =====================
+@app.get('/admin/executive')
+def admin_executive():
+    if not is_admin():
+        return redirect(url_for('admin_login'))
+
+    month = request.args.get('month') or get_setting('current_month')
+    dash = get_admin_dashboard_data(month)
+
+    body = f'''
+    <div class="card">
+        <h1>Executive Dashboard</h1>
+        <p class="muted">High-level overview for leadership · {dash['last_updated']}</p>
+    </div>
+
+    <div class="stats">
+        <div class="stat"><div class="k">{dash['total_enrollments']}</div><div>Total Enrollments</div></div>
+        <div class="stat"><div class="k">{dash['active']}</div><div>Active</div></div>
+        <div class="stat"><div class="k">{dash['pending_pops']}</div><div>Pending PoPs</div></div>
+        <div class="stat"><div class="k">R {dash['revenue_estimate']}</div><div>Estimated Revenue</div></div>
+        <div class="stat"><div class="k">{dash['growth_percent']}%</div><div>Growth vs Last Month</div></div>
+    </div>
+
+    <div class="card">
+        <h2>Tutor Load</h2>
+        <table>
+            <thead>
+                <tr><th>Tutor</th><th>Active Students</th></tr>
+            </thead>
+            <tbody>
+                {''.join(f"<tr><td>{t['full_name']}</td><td>{t['load']}</td></tr>" for t in dash['tutor_load'])}
+            </tbody>
+        </table>
+    </div>
+    '''
+
+    return page("Executive Dashboard", body)
