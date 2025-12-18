@@ -584,55 +584,6 @@ def pretty_month_label(month_str: str) -> str:
 
 
 
-
-
-# ===================== Admin Dashboard Helpers =====================
-def get_admin_dashboard_data(month):
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute('SELECT COUNT(*) FROM enrollments WHERE month=?', (month,))
-    total_enrollments = cur.fetchone()[0] or 0
-
-    cur.execute("SELECT COUNT(*) FROM enrollments WHERE month=? AND status='PENDING'", (month,))
-    pending_pops = cur.fetchone()[0] or 0
-
-    cur.execute("SELECT COUNT(*) FROM enrollments WHERE month=? AND status='ACTIVE'", (month,))
-    active = cur.fetchone()[0] or 0
-
-    revenue_estimate = total_enrollments * 200
-
-    growth_percent = 0
-    try:
-        y, m = map(int, month.split('-'))
-        prev = f"{y}-{m-1:02d}" if m > 1 else f"{y-1}-12"
-        cur.execute('SELECT COUNT(*) FROM enrollments WHERE month=?', (prev,))
-        prev_total = cur.fetchone()[0] or 0
-        if prev_total:
-            growth_percent = int(((total_enrollments - prev_total) / prev_total) * 100)
-    except Exception:
-        pass
-
-    cur.execute('SELECT t.full_name, COUNT(DISTINCT e.student_id) AS load '
-                'FROM tutors t '
-                'LEFT JOIN tutor_subjects ts ON ts.tutor_id=t.id '
-                'LEFT JOIN enrollments e ON e.subject_id=ts.subject_id AND e.month=? AND e.status="ACTIVE" '
-                'GROUP BY t.id ORDER BY load DESC', (month,))
-    tutor_load = [dict(r) for r in cur.fetchall()]
-
-    conn.close()
-
-    return {
-        'total_enrollments': total_enrollments,
-        'pending_pops': pending_pops,
-        'active': active,
-        'revenue_estimate': revenue_estimate,
-        'growth_percent': growth_percent,
-        'tutor_load': tutor_load,
-        'last_updated': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
-    }
-
-
 # ===================== Notifications (Email & SMS) ==============
 def send_email_notification(to_email: str, subject: str, body: str):
     # Best-effort email sender.
@@ -2069,39 +2020,29 @@ def register():
     # Ensure registrations table exists
     conn = get_db()
     ensure_registration_table(conn)
+    conn.close()
+
+    # Check whether the user indicated they paid the registration fee (front-end checkbox 'paid_check')
+    paid_check = request.form.get('paid_check')
+
+    conn = get_db()
+    if pin_in_use(conn, pin):
+        conn.close()
+        return page("Error", card_msg("PIN already in use. Pick another."))
+
     cur = conn.cursor()
 
-    # 🔑 STEP 1: Look up student by PHONE FIRST
-    cur.execute("SELECT id, pin FROM students WHERE phone_whatsapp=?", (phone,))
+    # derive grade from the first subject selected
+    cur.execute("SELECT grade FROM subjects WHERE id=?", (subject_ids[0],))
+    r0 = cur.fetchone()
+    if not r0:
+        conn.close()
+        return page("Error", card_msg("Invalid subject selection."))
+    derived_grade = r0['grade']
+
+    cur.execute("SELECT id,pin FROM students WHERE phone_whatsapp=?", (phone,))
     srow = cur.fetchone()
-
-    # 🔑 STEP 2: Handle PIN logic correctly
-    if srow:
-        # Existing student → PIN must match this phone
-        if srow['pin'] != pin:
-            conn.close()
-            return page("Error", card_msg("Incorrect PIN for this phone number."))
-        sid = srow['id']
-    else:
-        # New student → now enforce PIN uniqueness
-        if pin_in_use(conn, pin):
-            conn.close()
-            return page("Error", card_msg("PIN already in use. Pick another."))
-
-        # derive grade from the first subject selected
-        cur.execute("SELECT grade FROM subjects WHERE id=?", (subject_ids[0],))
-        r0 = cur.fetchone()
-        if not r0:
-            conn.close()
-            return page("Error", card_msg("Invalid subject selection."))
-        derived_grade = r0['grade']
-
-        created_at = now_utc_iso()
-        cur.execute(
-            "INSERT INTO students(full_name,phone_whatsapp,guardian_name,guardian_phone,email,grade,pin,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            (full_name, phone, guardian_name, guardian, email, derived_grade, pin, created_at)
-        )
-        sid = cur.lastrowid
+    already = bool(srow)
 
     # Save PoP files
     saved_paths = []
@@ -2112,13 +2053,39 @@ def register():
         pop.save(dest)
         saved_paths.append(f"/uploads/{safe}")
 
-    # --- Registration fee logic (unchanged) ---
+    created_at = now_utc_iso()
+    if srow:
+        sid = srow['id']
+        if not srow['pin']:
+            cur.execute(
+                "UPDATE students SET pin=?,full_name=?,guardian_name=?,guardian_phone=?,email=?,grade=? WHERE id=?",
+                (pin, full_name, guardian_name, guardian, email, derived_grade, sid)
+            )
+        else:
+            cur.execute(
+                "UPDATE students SET full_name=?,guardian_name=?,guardian_phone=?,email=? WHERE id=?",
+                (full_name, guardian_name, guardian, email, sid)
+            )
+    else:
+        cur.execute(
+            "INSERT INTO students(full_name,phone_whatsapp,guardian_name,guardian_phone,email,grade,pin,created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (full_name, phone, guardian_name, guardian, email, derived_grade, pin, created_at)
+        )
+        sid = cur.lastrowid
+
+    
+
+    # --- Registration: if student not registered for the current year and the form indicated registration payment,
+    # treat the first uploaded PoP as registration payment and record a registrations row.
     try:
+        # Use a separate DB connection for registration bookkeeping so we don't close
+        # the main 'conn' or its 'cur' accidentally.
         reg_conn = get_db()
         ensure_registration_table(reg_conn)
         reg_cur = reg_conn.cursor()
         year = datetime.date.today().strftime('%Y')
         if not student_registered_for_year(reg_conn, sid, year):
+            # If the form checkbox 'paid_check' was used, create a registration record for R50
             paid_check = request.form.get('paid_check')
             if paid_check:
                 reg_created_at = now_utc_iso()
@@ -2128,10 +2095,11 @@ def register():
                 )
                 reg_conn.commit()
     except Exception:
+        # Do not fail the whole flow if registration insertion fails
         pass
     finally:
         try:
-            if reg_conn:
+            if 'reg_conn' in locals() and reg_conn:
                 reg_conn.close()
         except Exception:
             pass
@@ -2141,12 +2109,11 @@ def register():
     existing = {str(x['subject_id']) for x in cur.fetchall()}
 
     created = []
-    created_at = now_utc_iso()
-
     for subid in subject_ids:
         if subid in existing:
             continue
         token = secrets.token_urlsafe(16)
+        # legacy single PoP column + full list in enrollment_files
         pop_url_legacy = saved_paths[0]
         cur.execute(
             """INSERT INTO enrollments(student_id,subject_id,month,status,payment_method,payment_ref,pop_url,status_token,created_at)
@@ -2155,14 +2122,46 @@ def register():
         )
         eid = cur.lastrowid
         for pth in saved_paths:
-            cur.execute(
-                "INSERT INTO enrollment_files(enrollment_id,file_path) VALUES(?,?)",
-                (eid, pth)
-            )
+            cur.execute("INSERT INTO enrollment_files(enrollment_id,file_path) VALUES(?,?)", (eid, pth))
         created.append((eid, token))
 
     conn.commit()
     conn.close()
+
+    # --- Notifications: registration received (pending approval) ---
+    try:
+        base_url = (request.url_root or '').rstrip('/')
+        portal_link = base_url
+        login_link = base_url + url_for('student_login')
+        month_label = pretty_month_label(month)
+
+        # Short first name for SMS
+        first_name = full_name.split()[0] if full_name else ''
+
+        email_subject = f"EBTA registration received ({month_label})"
+        email_body = (
+            f"Hi {full_name},\n\n"
+            f"Your EBTA registration for {month_label} was received and is waiting for approval.\n\n"
+            f"Login details (keep these safe):\n"
+            f"WhatsApp number: {phone}\n"
+            f"PIN: {pin}\n"
+            f"Portal: {portal_link}\n"
+            f"Student login: {login_link}\n\n"
+            f"You will receive another message once your enrollment is approved.\n\n"
+            f"If you did not request this registration, please contact EBTA support."
+        )
+        sms_body = (
+            f"EBTA: Hi {first_name}, your registration for {month_label} was received "
+            f"and is waiting for approval. Login later with WhatsApp {phone} and PIN {pin} at {login_link}."
+        )
+
+        if email:
+            send_email_notification(email, email_subject, email_body)
+        if phone:
+            send_sms_notification(phone, sms_body)
+    except Exception:
+        # Never break the flow if notifications fail
+        pass
 
     if not created:
         return page("No change", card_msg("Already enrolled for selected subjects this month."))
@@ -2171,6 +2170,7 @@ def register():
         eid, tok = created[0]
         return redirect(url_for('status', id=eid) + '?' + urlencode({'token': tok}))
 
+    # Multiple enrollments: show links
     links = [
         f"<li><a class='links' target='_blank' href='{url_for('status', id=e)}?{urlencode({'token': t})}'>Status for enrollment #{e}</a></li>"
         for e, t in created
@@ -2180,6 +2180,10 @@ def register():
     <section class='wrap small'>
     <div class='card'>
         <h1>Registration submitted</h1>
+        <div class='ui-controls'>
+        <button class='chip' id='toggleSidebar' title='Collapse/expand sidebar'>Toggle sidebar</button>
+        <button class='chip' id='toggleWide' title='Toggle wider layout'>Wide mode</button>
+        </div>
         <ul>{''.join(links)}</ul>
     </div>
     </section>
@@ -4336,40 +4340,120 @@ except Exception as e:
     print("DB init warning:", e)
 # =============================================================
 
-# ===================== Executive Dashboard =====================
-@app.get('/admin/executive')
-def admin_executive():
+
+# ===================== Dashboard Data API =====================
+@app.get('/admin/dashboard/data')
+def admin_dashboard_data():
+    if not is_admin():
+        return {'error': 'unauthorized'}, 403
+
+    months = request.args.get('months', '6')
+    try:
+        months = int(months)
+    except Exception:
+        months = 6
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    today = datetime.date.today()
+    labels = []
+    enrollments = []
+    revenue = []
+
+    for i in range(months-1, -1, -1):
+        d = today - datetime.timedelta(days=30*i)
+        m = d.strftime('%Y-%m')
+        labels.append(m)
+        cur.execute('SELECT COUNT(*) FROM enrollments WHERE month=?', (m,))
+        cnt = cur.fetchone()[0] or 0
+        enrollments.append(cnt)
+        revenue.append(cnt * 200)
+
+    # status breakdown (current month)
+    cur_month = labels[-1]
+    cur.execute("SELECT status, COUNT(*) c FROM enrollments WHERE month=? GROUP BY status", (cur_month,))
+    status = {r['status']: r['c'] for r in cur.fetchall()}
+
+    # subject distribution
+    cur.execute("""
+        SELECT s.name, COUNT(e.id) c
+        FROM subjects s
+        LEFT JOIN enrollments e ON e.subject_id=s.id AND e.month=?
+        GROUP BY s.id
+    """, (cur_month,))
+    subjects = {r['name']: r['c'] for r in cur.fetchall() if r['c']}
+
+    # tutor load
+    cur.execute("""
+        SELECT t.full_name, COUNT(DISTINCT e.student_id) c
+        FROM tutors t
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        LEFT JOIN enrollments e ON e.subject_id=ts.subject_id AND e.month=? AND e.status='ACTIVE'
+        GROUP BY t.id
+    """, (cur_month,))
+    tutors = {r['full_name']: r['c'] for r in cur.fetchall() if r['c']}
+
+    conn.close()
+
+    return {
+        'labels': labels,
+        'enrollments': enrollments,
+        'revenue': revenue,
+        'status': status,
+        'subjects': subjects,
+        'tutors': tutors
+    }
+
+
+# ===================== Visual Admin Dashboard =====================
+@app.get('/admin/dashboard')
+def admin_dashboard():
     if not is_admin():
         return redirect(url_for('admin_login'))
 
-    month = request.args.get('month') or get_setting('current_month')
-    dash = get_admin_dashboard_data(month)
+    body = '''
+    <section class='wrap'>
+      <div class='card'>
+        <h1>EBTA Data Dashboard</h1>
+        <p class='muted'>Real-time visual analytics for the portal</p>
+        <label>Range:
+          <select id='range'>
+            <option value='3'>Last 3 months</option>
+            <option value='6' selected>Last 6 months</option>
+            <option value='12'>Last 12 months</option>
+          </select>
+        </label>
+      </div>
 
-    body = f'''
-    <div class="card">
-        <h1>Executive Dashboard</h1>
-        <p class="muted">High-level overview for leadership · {dash['last_updated']}</p>
-    </div>
+      <div class='grid-2'>
+        <div class='card'><canvas id='enrollChart'></canvas></div>
+        <div class='card'><canvas id='revChart'></canvas></div>
+      </div>
 
-    <div class="stats">
-        <div class="stat"><div class="k">{dash['total_enrollments']}</div><div>Total Enrollments</div></div>
-        <div class="stat"><div class="k">{dash['active']}</div><div>Active</div></div>
-        <div class="stat"><div class="k">{dash['pending_pops']}</div><div>Pending PoPs</div></div>
-        <div class="stat"><div class="k">R {dash['revenue_estimate']}</div><div>Estimated Revenue</div></div>
-        <div class="stat"><div class="k">{dash['growth_percent']}%</div><div>Growth vs Last Month</div></div>
-    </div>
+      <div class='grid-3'>
+        <div class='card'><canvas id='statusChart'></canvas></div>
+        <div class='card'><canvas id='subjectChart'></canvas></div>
+        <div class='card'><canvas id='tutorChart'></canvas></div>
+      </div>
+    </section>
 
-    <div class="card">
-        <h2>Tutor Load</h2>
-        <table>
-            <thead>
-                <tr><th>Tutor</th><th>Active Students</th></tr>
-            </thead>
-            <tbody>
-                {''.join(f"<tr><td>{t['full_name']}</td><td>{t['load']}</td></tr>" for t in dash['tutor_load'])}
-            </tbody>
-        </table>
-    </div>
+    <script src='https://cdn.jsdelivr.net/npm/chart.js'></script>
+    <script>
+    let charts = [];
+    function loadDash(){
+      const m = document.getElementById('range').value;
+      fetch(`/admin/dashboard/data?months=${m}`)
+        .then(r=>r.json()).then(d=>{
+          charts.forEach(c=>c.destroy()); charts=[];
+          charts.push(new Chart(enrollChart,{type:'line',data:{labels:d.labels,datasets:[{label:'Enrollments',data:d.enrollments}]}}));
+          charts.push(new Chart(revChart,{type:'bar',data:{labels:d.labels,datasets:[{label:'Revenue (R)',data:d.revenue}]}}));
+          charts.push(new Chart(statusChart,{type:'doughnut',data:{labels:Object.keys(d.status),datasets:[{data:Object.values(d.status)}]}}));
+          charts.push(new Chart(subjectChart,{type:'pie',data:{labels:Object.keys(d.subjects),datasets:[{data:Object.values(d.subjects)}]}}));
+          charts.push(new Chart(tutorChart,{type:'bar',data:{labels:Object.keys(d.tutors),datasets:[{data:Object.values(d.tutors)}]}}));
+        });
+    }
+    range.onchange = loadDash; loadDash();
+    </script>
     '''
-
-    return page("Executive Dashboard", body)
+    return page('Dashboard', body)
