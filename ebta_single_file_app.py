@@ -2020,29 +2020,39 @@ def register():
     # Ensure registrations table exists
     conn = get_db()
     ensure_registration_table(conn)
-    conn.close()
-
-    # Check whether the user indicated they paid the registration fee (front-end checkbox 'paid_check')
-    paid_check = request.form.get('paid_check')
-
-    conn = get_db()
-    if pin_in_use(conn, pin):
-        conn.close()
-        return page("Error", card_msg("PIN already in use. Pick another."))
-
     cur = conn.cursor()
 
-    # derive grade from the first subject selected
-    cur.execute("SELECT grade FROM subjects WHERE id=?", (subject_ids[0],))
-    r0 = cur.fetchone()
-    if not r0:
-        conn.close()
-        return page("Error", card_msg("Invalid subject selection."))
-    derived_grade = r0['grade']
-
-    cur.execute("SELECT id,pin FROM students WHERE phone_whatsapp=?", (phone,))
+    # 🔑 STEP 1: Look up student by PHONE FIRST
+    cur.execute("SELECT id, pin FROM students WHERE phone_whatsapp=?", (phone,))
     srow = cur.fetchone()
-    already = bool(srow)
+
+    # 🔑 STEP 2: Handle PIN logic correctly
+    if srow:
+        # Existing student → PIN must match this phone
+        if srow['pin'] != pin:
+            conn.close()
+            return page("Error", card_msg("Incorrect PIN for this phone number."))
+        sid = srow['id']
+    else:
+        # New student → now enforce PIN uniqueness
+        if pin_in_use(conn, pin):
+            conn.close()
+            return page("Error", card_msg("PIN already in use. Pick another."))
+
+        # derive grade from the first subject selected
+        cur.execute("SELECT grade FROM subjects WHERE id=?", (subject_ids[0],))
+        r0 = cur.fetchone()
+        if not r0:
+            conn.close()
+            return page("Error", card_msg("Invalid subject selection."))
+        derived_grade = r0['grade']
+
+        created_at = now_utc_iso()
+        cur.execute(
+            "INSERT INTO students(full_name,phone_whatsapp,guardian_name,guardian_phone,email,grade,pin,created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (full_name, phone, guardian_name, guardian, email, derived_grade, pin, created_at)
+        )
+        sid = cur.lastrowid
 
     # Save PoP files
     saved_paths = []
@@ -2053,39 +2063,13 @@ def register():
         pop.save(dest)
         saved_paths.append(f"/uploads/{safe}")
 
-    created_at = now_utc_iso()
-    if srow:
-        sid = srow['id']
-        if not srow['pin']:
-            cur.execute(
-                "UPDATE students SET pin=?,full_name=?,guardian_name=?,guardian_phone=?,email=?,grade=? WHERE id=?",
-                (pin, full_name, guardian_name, guardian, email, derived_grade, sid)
-            )
-        else:
-            cur.execute(
-                "UPDATE students SET full_name=?,guardian_name=?,guardian_phone=?,email=? WHERE id=?",
-                (full_name, guardian_name, guardian, email, sid)
-            )
-    else:
-        cur.execute(
-            "INSERT INTO students(full_name,phone_whatsapp,guardian_name,guardian_phone,email,grade,pin,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            (full_name, phone, guardian_name, guardian, email, derived_grade, pin, created_at)
-        )
-        sid = cur.lastrowid
-
-    
-
-    # --- Registration: if student not registered for the current year and the form indicated registration payment,
-    # treat the first uploaded PoP as registration payment and record a registrations row.
+    # --- Registration fee logic (unchanged) ---
     try:
-        # Use a separate DB connection for registration bookkeeping so we don't close
-        # the main 'conn' or its 'cur' accidentally.
         reg_conn = get_db()
         ensure_registration_table(reg_conn)
         reg_cur = reg_conn.cursor()
         year = datetime.date.today().strftime('%Y')
         if not student_registered_for_year(reg_conn, sid, year):
-            # If the form checkbox 'paid_check' was used, create a registration record for R50
             paid_check = request.form.get('paid_check')
             if paid_check:
                 reg_created_at = now_utc_iso()
@@ -2095,11 +2079,10 @@ def register():
                 )
                 reg_conn.commit()
     except Exception:
-        # Do not fail the whole flow if registration insertion fails
         pass
     finally:
         try:
-            if 'reg_conn' in locals() and reg_conn:
+            if reg_conn:
                 reg_conn.close()
         except Exception:
             pass
@@ -2109,11 +2092,12 @@ def register():
     existing = {str(x['subject_id']) for x in cur.fetchall()}
 
     created = []
+    created_at = now_utc_iso()
+
     for subid in subject_ids:
         if subid in existing:
             continue
         token = secrets.token_urlsafe(16)
-        # legacy single PoP column + full list in enrollment_files
         pop_url_legacy = saved_paths[0]
         cur.execute(
             """INSERT INTO enrollments(student_id,subject_id,month,status,payment_method,payment_ref,pop_url,status_token,created_at)
@@ -2122,46 +2106,14 @@ def register():
         )
         eid = cur.lastrowid
         for pth in saved_paths:
-            cur.execute("INSERT INTO enrollment_files(enrollment_id,file_path) VALUES(?,?)", (eid, pth))
+            cur.execute(
+                "INSERT INTO enrollment_files(enrollment_id,file_path) VALUES(?,?)",
+                (eid, pth)
+            )
         created.append((eid, token))
 
     conn.commit()
     conn.close()
-
-    # --- Notifications: registration received (pending approval) ---
-    try:
-        base_url = (request.url_root or '').rstrip('/')
-        portal_link = base_url
-        login_link = base_url + url_for('student_login')
-        month_label = pretty_month_label(month)
-
-        # Short first name for SMS
-        first_name = full_name.split()[0] if full_name else ''
-
-        email_subject = f"EBTA registration received ({month_label})"
-        email_body = (
-            f"Hi {full_name},\n\n"
-            f"Your EBTA registration for {month_label} was received and is waiting for approval.\n\n"
-            f"Login details (keep these safe):\n"
-            f"WhatsApp number: {phone}\n"
-            f"PIN: {pin}\n"
-            f"Portal: {portal_link}\n"
-            f"Student login: {login_link}\n\n"
-            f"You will receive another message once your enrollment is approved.\n\n"
-            f"If you did not request this registration, please contact EBTA support."
-        )
-        sms_body = (
-            f"EBTA: Hi {first_name}, your registration for {month_label} was received "
-            f"and is waiting for approval. Login later with WhatsApp {phone} and PIN {pin} at {login_link}."
-        )
-
-        if email:
-            send_email_notification(email, email_subject, email_body)
-        if phone:
-            send_sms_notification(phone, sms_body)
-    except Exception:
-        # Never break the flow if notifications fail
-        pass
 
     if not created:
         return page("No change", card_msg("Already enrolled for selected subjects this month."))
@@ -2170,7 +2122,6 @@ def register():
         eid, tok = created[0]
         return redirect(url_for('status', id=eid) + '?' + urlencode({'token': tok}))
 
-    # Multiple enrollments: show links
     links = [
         f"<li><a class='links' target='_blank' href='{url_for('status', id=e)}?{urlencode({'token': t})}'>Status for enrollment #{e}</a></li>"
         for e, t in created
@@ -2180,10 +2131,6 @@ def register():
     <section class='wrap small'>
     <div class='card'>
         <h1>Registration submitted</h1>
-        <div class='ui-controls'>
-        <button class='chip' id='toggleSidebar' title='Collapse/expand sidebar'>Toggle sidebar</button>
-        <button class='chip' id='toggleWide' title='Toggle wider layout'>Wide mode</button>
-        </div>
         <ul>{''.join(links)}</ul>
     </div>
     </section>
