@@ -517,6 +517,13 @@ def secure_name(name):
     keep="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
     return ''.join(ch if ch in keep else '_' for ch in name)
 
+
+def normalize_phone(phone: str) -> str:
+    if not phone:
+        return ""
+    return ''.join(ch for ch in phone if ch.isdigit())
+
+
 def gen_pin(existing):
     while True:
         p = f"{random.randint(0,99999):05d}"
@@ -1991,7 +1998,7 @@ function showPopup(message, type='info', timeout=4000){
 @app.post('/register')
 def register():
     full_name = request.form.get('full_name','').strip()
-    phone     = request.form.get('phone','').strip()
+    phone = normalize_phone(request.form.get('phone',''))
     guardian  = request.form.get('guardian','').strip()
     email     = request.form.get('email','').strip()
     guardian_name = request.form.get('guardian_name','').strip()
@@ -2285,7 +2292,7 @@ def student_login():
 
 @app.post('/student/login')
 def student_login_post():
-    phone=request.form.get('phone','').strip()
+    phone = normalize_phone(request.form.get('phone',''))
     pin=request.form.get('pin','').strip()
     conn=get_db(); cur=conn.cursor()
     cur.execute("SELECT id,pin,full_name FROM students WHERE phone_whatsapp=?", (phone,))
@@ -2297,7 +2304,7 @@ def student_login_post():
 
 @app.post('/student/forgot-pin')
 def student_forgot_pin():
-    phone=request.form.get('phone','').strip()
+    phone = normalize_phone(request.form.get('phone',''))
     if not phone: return page("Error", card_msg("Phone required."))
     conn=get_db(); cur=conn.cursor()
     cur.execute("INSERT INTO messages(kind,payload,created_at) VALUES(?,?,?)",
@@ -2660,7 +2667,7 @@ def tutor_login():
 
 @app.post('/tutor/login')
 def tutor_login_post():
-    phone=request.form.get('phone','').strip(); pin=request.form.get('pin','').strip()
+    phone = normalize_phone(request.form.get('phone','')); pin=request.form.get('pin','').strip()
     conn=get_db(); cur=conn.cursor()
     cur.execute("SELECT id,pin,full_name FROM tutors WHERE phone=?", (phone,))
     row=cur.fetchone(); conn.close()
@@ -2671,7 +2678,7 @@ def tutor_login_post():
 
 @app.post('/tutor/forgot-pin')
 def tutor_forgot_pin():
-    phone=request.form.get('phone','').strip()
+    phone = normalize_phone(request.form.get('phone',''))
     if not phone: return page("Error", card_msg("Phone required."))
     conn=get_db(); cur=conn.cursor()
     cur.execute("INSERT INTO messages(kind,payload,created_at) VALUES(?,?,?)",
@@ -3410,7 +3417,7 @@ def admin_student_add():
     if r:
         return r
     full_name = request.form.get('full_name','').strip()
-    phone = request.form.get('phone','').strip()
+    phone = normalize_phone(request.form.get('phone',''))
     grade = request.form.get('grade','').strip()
     email = request.form.get('email','').strip() or None
     if not (full_name and phone and grade):
@@ -3534,7 +3541,7 @@ def admin_tutor_add():
     if r:
         return r
     full_name = request.form.get('full_name','').strip()
-    phone = request.form.get('phone','').strip()
+    phone = normalize_phone(request.form.get('phone',''))
     if not (full_name and phone):
         return page("Error", card_msg("Missing fields."))
     now = now_utc_iso()
