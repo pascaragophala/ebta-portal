@@ -296,21 +296,50 @@ def init_db():
     cur.execute("SELECT COUNT(*) AS c FROM subjects")
     if cur.fetchone()["c"] == 0:
         seed = [
-            ("Mathematics","G8"),("Mathematics","G9"),("Mathematics","G10"),
-            ("Mathematics","G11"),("Mathematics","G12"),
-            ("Physical Sciences","G10"),("Physical Sciences","G11"),("Physical Sciences","G12"),
-            ("Life Sciences","G10"),("Life Sciences","G11"),
-            ("Accounting","G10"),("Accounting","G12"),
-            ("Maths Lit","G12"),("Geography","G12"),
-            ("Business Studies","G10"),
-            ("Business Studies","G11"),
-            ("Business Studies","G12"),
+            # Mathematics
+            ("Mathematics","G8"), ("Mathematics","G9"),
+            ("Mathematics","G10"), ("Mathematics","G11"), ("Mathematics","G12"),
+
+            # Mathematical Literacy
+            ("Mathematical Literacy","G10"),
+            ("Mathematical Literacy","G11"),
+            ("Mathematical Literacy","G12"),
+
+            # Physical Sciences
+            ("Physical Sciences","G10"),
+            ("Physical Sciences","G11"),
+            ("Physical Sciences","G12"),
+
+            # Life Sciences
+            ("Life Sciences","G10"),
+            ("Life Sciences","G11"),
+            ("Life Sciences","G12"),
+
+            # Accounting
+            ("Accounting","G10"),
+            ("Accounting","G11"),
+            ("Accounting","G12"),
+
+            # Geography
+            ("Geography","G10"),
+            ("Geography","G11"),
+            ("Geography","G12"),
+
+            # Economics
             ("Economics","G10"),
             ("Economics","G11"),
             ("Economics","G12"),
-            ("Maths Lit","G10"),
-            ("Maths Lit","G11")
+
+            # Business Studies
+            ("Business Studies","G10"),
+            ("Business Studies","G11"),
+            ("Business Studies","G12"),
+
+            # Grades 8–9 subjects
+            ("EMS","G8"), ("EMS","G9"),
+            ("Natural Sciences","G8"), ("Natural Sciences","G9"),
         ]
+
         cur.executemany("INSERT OR IGNORE INTO subjects(name,grade) VALUES(?,?)", seed)
         # Ensure required subjects exist even if DB was previously seeded
         required_subjects = [
