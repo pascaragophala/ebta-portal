@@ -551,6 +551,20 @@ def rating_window_open(current_month: str) -> bool:
         return True
     return False
         
+
+def enrollment_exists(conn, student_id, subject_id, month):
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT 1 FROM enrollments
+        WHERE student_id=? AND subject_id=? AND month=?
+        LIMIT 1
+        """,
+        (student_id, subject_id, month)
+    )
+    return cur.fetchone() is not None
+
+
 def pretty_month_label(month_str: str) -> str:
     """Convert 'YYYY-MM' to 'Month YYYY' (e.g., '2025-10' -> 'October 2025')."""
     try:
