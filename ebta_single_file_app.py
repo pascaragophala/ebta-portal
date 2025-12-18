@@ -517,6 +517,13 @@ def secure_name(name):
     keep="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
     return ''.join(ch if ch in keep else '_' for ch in name)
 
+
+def normalize_phone(phone: str) -> str:
+    if not phone:
+        return ""
+    return ''.join(ch for ch in phone if ch.isdigit())
+
+
 def gen_pin(existing):
     while True:
         p = f"{random.randint(0,99999):05d}"
@@ -1991,7 +1998,7 @@ function showPopup(message, type='info', timeout=4000){
 @app.post('/register')
 def register():
     full_name = request.form.get('full_name','').strip()
-    phone     = request.form.get('phone','').strip()
+    phone = normalize_phone(request.form.get('phone',''))
     guardian  = request.form.get('guardian','').strip()
     email     = request.form.get('email','').strip()
     guardian_name = request.form.get('guardian_name','').strip()
@@ -2285,7 +2292,7 @@ def student_login():
 
 @app.post('/student/login')
 def student_login_post():
-    phone=request.form.get('phone','').strip()
+    phone = normalize_phone(request.form.get('phone',''))
     pin=request.form.get('pin','').strip()
     conn=get_db(); cur=conn.cursor()
     cur.execute("SELECT id,pin,full_name FROM students WHERE phone_whatsapp=?", (phone,))
@@ -2297,7 +2304,7 @@ def student_login_post():
 
 @app.post('/student/forgot-pin')
 def student_forgot_pin():
-    phone=request.form.get('phone','').strip()
+    phone = normalize_phone(request.form.get('phone',''))
     if not phone: return page("Error", card_msg("Phone required."))
     conn=get_db(); cur=conn.cursor()
     cur.execute("INSERT INTO messages(kind,payload,created_at) VALUES(?,?,?)",
@@ -2660,7 +2667,7 @@ def tutor_login():
 
 @app.post('/tutor/login')
 def tutor_login_post():
-    phone=request.form.get('phone','').strip(); pin=request.form.get('pin','').strip()
+    phone = normalize_phone(request.form.get('phone','')); pin=request.form.get('pin','').strip()
     conn=get_db(); cur=conn.cursor()
     cur.execute("SELECT id,pin,full_name FROM tutors WHERE phone=?", (phone,))
     row=cur.fetchone(); conn.close()
@@ -2671,7 +2678,7 @@ def tutor_login_post():
 
 @app.post('/tutor/forgot-pin')
 def tutor_forgot_pin():
-    phone=request.form.get('phone','').strip()
+    phone = normalize_phone(request.form.get('phone',''))
     if not phone: return page("Error", card_msg("Phone required."))
     conn=get_db(); cur=conn.cursor()
     cur.execute("INSERT INTO messages(kind,payload,created_at) VALUES(?,?,?)",
@@ -3135,92 +3142,65 @@ def admin_login_post():
 @app.get('/admin/logout')
 def admin_logout(): session.clear(); return redirect(url_for('admin_login'))
 
-
-
-def get_admin_dashboard_data(month):
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute("SELECT COUNT(*) FROM enrollments WHERE month=?", (month,))
-    total_enrollments = cur.fetchone()[0] or 0
-
-    cur.execute("SELECT COUNT(*) FROM enrollments WHERE month=? AND status='PENDING'", (month,))
-    pending_pops = cur.fetchone()[0] or 0
-
-    REVENUE_PER_SUBJECT = 200
-    revenue_estimate = total_enrollments * REVENUE_PER_SUBJECT
-
-    try:
-        y, m = map(int, month.split('-'))
-        prev_month = f"{y-1}-12" if m == 1 else f"{y}-{m-1:02d}"
-    except Exception:
-        prev_month = None
-
-    growth_percent = None
-    if prev_month:
-        cur.execute("SELECT COUNT(*) FROM enrollments WHERE month=?", (prev_month,))
-        prev_total = cur.fetchone()[0] or 0
-        if prev_total > 0:
-            growth_percent = round(((total_enrollments - prev_total) / prev_total) * 100, 1)
-        else:
-            growth_percent = 100.0 if total_enrollments > 0 else 0.0
-
-    cur.execute(
-        "SELECT t.full_name, COUNT(e.id) AS load "
-        "FROM tutors t "
-        "LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id "
-        "LEFT JOIN enrollments e ON e.subject_id = ts.subject_id "
-        "AND e.month = ? AND e.status = 'ACTIVE' "
-        "GROUP BY t.id ORDER BY load DESC",
-        (month,)
-    )
-    tutor_load = cur.fetchall()
-
-    conn.close()
-
-    return {
-        'month': month,
-        'total_enrollments': total_enrollments,
-        'pending_pops': pending_pops,
-        'revenue_estimate': revenue_estimate,
-        'growth_percent': growth_percent,
-        'tutor_load': tutor_load,
-        'last_updated': now_utc_iso(),
-    }
 @app.get('/admin')
 def admin_home():
-    r=require_admin()
-    if r: return r
-    month=get_setting('current_month')
-    conn=get_db(); cur=conn.cursor()
-    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,)); total=cur.fetchone()['c']
-    counts={}
-    for st in ["PENDING","ACTIVE","LAPSED"]:
-        cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status=?", (month,st)); counts[st]=cur.fetchone()['c']
-    cur.execute("SELECT COUNT(*) AS c FROM messages WHERE resolved=0"); msg_count=cur.fetchone()['c']
-    # direct messages count to admin (unread)
-    cur.execute("SELECT COUNT(*) AS c FROM direct_messages WHERE to_role='admin' AND is_read=0"); dm_unread = cur.fetchone()['c']
-    conn.close()
-    body=fr"""
-    <section class='grid'><div class='stats'>
-    {stat('Current month', month)}{stat('Total enrollments', str(total))}
-    {stat('Pending', str(counts.get('PENDING',0)))}{stat('Active', str(counts.get('ACTIVE',0)))}
-    {stat('Admin inbox', str(msg_count))}{stat('Direct msgs (unread)', str(dm_unread))}
-    </div>
-    <div class='toolbar'>
-    <a class='btn secondary' href='{url_for('admin_enrollments')}'>Manage enrollments</a>
-    <a class='btn secondary' href='{url_for('admin_students')}'>Students</a>
-    <a class='btn secondary' href='{url_for('admin_tutors')}'>Tutors</a>
-    <a class='btn secondary' href='{url_for('admin_groups')}'>Group links</a>
-    <a class='btn secondary' href='{url_for('admin_sessions')}'>Sessions & QR</a>
-    <a class='btn secondary' href='{url_for('admin_messages')}'>Inbox</a>
-    <a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct messages</a>
-    <a class='btn secondary' href='{url_for('admin_analytics')}'>Analytics</a>
-    <a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>
-    <a class='btn secondary' href='{url_for('export_remove_list')}'>Export remove list</a>
-    <a class='btn danger' href='#logout'>Logout</a>
-    </div></section>"""
-    return page("Admin", body)
+    if not is_admin():
+        return redirect(url_for('admin_login'))
+
+    month = request.args.get('month') or get_setting('current_month')
+    dash = get_admin_dashboard_data(month)
+    role = admin_role()
+    last_updated = now_readable()
+    month_label = pretty_month_label(month)
+
+    pending_alert = ""
+    if dash['pending'] >= PENDING_ALERT_THRESHOLD:
+        pending_alert = f"<span class='badge danger'>⚠ {dash['pending']} pending PoPs need approval</span>"
+
+    revenue_stat = ""
+    if role == 'CEO':
+        revenue_stat = f"""
+        <div class='stat'>
+            <div class='k'>R{dash['revenue']}</div>
+            <div class='t'>Est. Revenue</div>
+        </div>
+        """
+
+    body = f"""
+    <section class='wrap'>
+      <div class='card'>
+        <h1>Admin Dashboard</h1>
+        <p class='muted'>Overview for {month_label} · Last updated: {last_updated}</p>
+        {pending_alert}
+
+        <form method='get' style='margin:10px 0'>
+            <input type='month' name='month' value='{month}' onchange='this.form.submit()'>
+        </form>
+
+        <div class='stats'>
+            <div class='stat'><div class='k'>{dash['students']}</div><div class='t'>Students</div></div>
+            <div class='stat'><div class='k'>{dash['tutors']}</div><div class='t'>Tutors</div></div>
+            <div class='stat'><div class='k'>{dash['subjects']}</div><div class='t'>Subjects</div></div>
+            <div class='stat'><div class='k'>{dash['active']}</div><div class='t'>Active</div></div>
+            <div class='stat'><div class='k'>{dash['pending']}</div><div class='t'>Pending</div></div>
+            {revenue_stat}
+            <div class='stat'><div class='k'>{dash['growth']:+}</div><div class='t'>Growth vs last month</div></div>
+        </div>
+      </div>
+
+      <div class='card'>
+        <h2>Tutor Load</h2>
+        <table>
+          <thead><tr><th>Tutor</th><th>Enrollments</th></tr></thead>
+          <tbody>
+            {''.join(f"<tr><td>{r['full_name']}</td><td>{r['c']}</td></tr>" for r in dash['tutor_load'])}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    """
+
+    return page("Admin Dashboard", body)
 
 # --- Admin: Enrollments (show all PoP files) ---
 
@@ -3462,7 +3442,7 @@ def admin_student_add():
     if r:
         return r
     full_name = request.form.get('full_name','').strip()
-    phone = request.form.get('phone','').strip()
+    phone = normalize_phone(request.form.get('phone',''))
     grade = request.form.get('grade','').strip()
     email = request.form.get('email','').strip() or None
     if not (full_name and phone and grade):
@@ -3586,7 +3566,7 @@ def admin_tutor_add():
     if r:
         return r
     full_name = request.form.get('full_name','').strip()
-    phone = request.form.get('phone','').strip()
+    phone = normalize_phone(request.form.get('phone',''))
     if not (full_name and phone):
         return page("Error", card_msg("Missing fields."))
     now = now_utc_iso()
@@ -4384,3 +4364,60 @@ try:
 except Exception as e:
     print("DB init warning:", e)
 # =============================================================
+
+
+@app.get('/admin/executive')
+def admin_executive_dashboard():
+    if not is_admin():
+        return redirect(url_for('admin_login'))
+
+    role = session.get('admin_role', 'CEO')
+    if role != 'CEO':
+        return page('Access denied', card_msg('This dashboard is restricted to executive access.'))
+
+    month = request.args.get('month') or get_setting('current_month')
+    dash = get_admin_dashboard_data(month)
+
+    month_label = pretty_month_label(month)
+    last_updated = dash.get('last_updated')
+
+    pending_alert = ''
+    if dash.get('pending_pops', 0) >= 10:
+        pending_alert = (
+            "<div class='badge danger'>"
+            f"⚠ {dash['pending_pops']} pending PoPs require approval"
+            "</div>"
+        )
+
+    body = f"""
+    <section class='wrap'>
+      <div class='card'>
+        <h1>Executive Dashboard</h1>
+        <p class='muted'>Overview for {month_label} · Last updated: {last_updated}</p>
+        {pending_alert}
+
+        <form method='get' style='margin:10px 0'>
+            <input type='month' name='month' value='{month}' onchange='this.form.submit()'>
+        </form>
+
+        <div class='stats'>
+            <div class='stat'><div class='k'>{dash['total_enrollments']}</div><div class='t'>Total enrollments</div></div>
+            <div class='stat'><div class='k'>{dash['pending_pops']}</div><div class='t'>Pending PoPs</div></div>
+            <div class='stat'><div class='k'>R{dash['revenue_estimate']}</div><div class='t'>Est. Revenue</div></div>
+            <div class='stat'><div class='k'>{dash['growth_percent']}%</div><div class='t'>Growth vs last month</div></div>
+        </div>
+      </div>
+
+      <div class='card'>
+        <h2>Tutor Load (Top 3)</h2>
+        <table>
+          <thead><tr><th>Tutor</th><th>Active learners</th></tr></thead>
+          <tbody>
+            {''.join(f"<tr><td>{r['full_name']}</td><td>{r['load']}</td></tr>" for r in dash['tutor_load'][:3])}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    """
+
+    return page('Executive Dashboard', body)
