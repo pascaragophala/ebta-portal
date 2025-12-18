@@ -4216,6 +4216,10 @@ def init_db():
     if _EBTA_ORIG_INIT_DB:
         _EBTA_ORIG_INIT_DB()
     conn = get_db(); c = conn.cursor()
+    
+     # 🔧 ONE-TIME CLEANUP: remove legacy subject name
+    c.execute("DELETE FROM subjects WHERE name = 'Maths Lit'")
+    
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS quizzes(
