@@ -4457,3 +4457,113 @@ def admin_dashboard():
     </script>
     '''
     return page('Dashboard', body)
+
+# ===================== ANALYTICS EXTENSION =====================
+
+def analytics_data(month):
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT substr(created_at,1,10) d, COUNT(*) c FROM enrollments WHERE month=? GROUP BY d ORDER BY d",
+        (month,)
+    )
+    enrollments_by_day = cur.fetchall()
+
+    cur.execute(
+        "SELECT status, COUNT(*) c FROM enrollments WHERE month=? GROUP BY status",
+        (month,)
+    )
+    status_breakdown = cur.fetchall()
+
+    cur.execute(
+        "SELECT COUNT(*) FROM enrollments WHERE month=? AND status='ACTIVE'",
+        (month,)
+    )
+    active = cur.fetchone()[0] or 0
+    revenue = active * 200
+
+    cur.execute(
+        """
+        SELECT t.full_name, COUNT(DISTINCT e.student_id)
+        FROM tutors t
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        LEFT JOIN enrollments e ON e.subject_id=ts.subject_id AND e.month=? AND e.status='ACTIVE'
+        GROUP BY t.id
+        """
+        ,(month,)
+    )
+    tutor_load = cur.fetchall()
+
+    cur.execute("SELECT substr(date,1,10) d, COUNT(*) c FROM attendance GROUP BY d")
+    attendance = cur.fetchall()
+
+    cur.execute("SELECT COUNT(*) FROM materials WHERE month=?", (month,))
+    materials = cur.fetchone()[0] or 0
+
+    cur.execute(
+        "SELECT COUNT(*) FROM submissions WHERE material_id IN (SELECT id FROM materials WHERE month=?)",
+        (month,)
+    )
+    submissions = cur.fetchone()[0] or 0
+
+    conn.close()
+    return {
+        "enrollments": enrollments_by_day,
+        "status": status_breakdown,
+        "revenue": revenue,
+        "tutor_load": tutor_load,
+        "attendance": attendance,
+        "materials": materials,
+        "submissions": submissions,
+    }
+
+
+@app.route("/admin/analytics")
+def admin_analytics():
+    if not is_admin():
+        return redirect(url_for("admin_login"))
+
+    month = request.args.get("month", get_setting("current_month"))
+    d = analytics_data(month)
+
+    def split(rows):
+        return [r[0] for r in rows], [r[1] for r in rows]
+
+    el_l, el_v = split(d["enrollments"])
+    st_l, st_v = split(d["status"])
+    tl_l, tl_v = split(d["tutor_load"])
+    at_l, at_v = split(d["attendance"])
+
+    body = f"""
+    <div class='card'>
+      <h1>EBTA Analytics Dashboard</h1>
+      <p class='muted'>Live system analytics for {pretty_month_label(month)}</p>
+      <div class='stats'>
+        <div class='stat'><div class='k'>R {d['revenue']}</div><div class='t'>Revenue</div></div>
+        <div class='stat'><div class='k'>{d['materials']}</div><div class='t'>Materials</div></div>
+        <div class='stat'><div class='k'>{d['submissions']}</div><div class='t'>Submissions</div></div>
+      </div>
+    </div>
+
+    <div class='grid' style='grid-template-columns:1fr 1fr'>
+      <div class='card'><canvas id='c1'></canvas></div>
+      <div class='card'><canvas id='c2'></canvas></div>
+      <div class='card'><canvas id='c3'></canvas></div>
+      <div class='card'><canvas id='c4'></canvas></div>
+    </div>
+    """
+
+    js = f"""
+    <script src='https://cdn.jsdelivr.net/npm/chart.js'></script>
+    <script>
+    new Chart(c1,{{type:'line',data:{{labels:{el_l},datasets:[{{label:'Enrollments',data:{el_v}}}]}}}});
+    new Chart(c2,{{type:'pie',data:{{labels:{st_l},datasets:[{{data:{st_v}}}]}}}});
+    new Chart(c3,{{type:'bar',data:{{labels:{tl_l},datasets:[{{label:'Students',data:{tl_v}}}]}}}});
+    new Chart(c4,{{type:'line',data:{{labels:{at_l},datasets:[{{label:'Attendance',data:{at_v}}}]}}}});
+    </script>
+    """
+
+    return page("Analytics", body, extra_js=js)
+
+# ===================== END ANALYTICS =====================
