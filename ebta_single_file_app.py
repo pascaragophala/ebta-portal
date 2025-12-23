@@ -2674,6 +2674,7 @@ def tutor_home():
         f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td>"
         f"<td>{DOW[r['day_of_week']]} {r['start_time']}-{r['end_time']}</td>"
         f"<td>{('<a class=\"links\" target=\"_blank\" href=\"'+r['meet_link']+'\">Meet</a>') if r['meet_link'] else '—'}</td>"
+        f"<td><a class='links' href='{url_for('session_qr', id=r['id'])}'></a> · "
         f"<a class='links' href='{url_for('tutor_session_attendance', sid=r['id'])}'>Mark attendance</a></td></tr>"
         for r in sess
     ]) or "<tr><td colspan='4'><div class='empty'>No sessions yet.</div></td></tr>"
