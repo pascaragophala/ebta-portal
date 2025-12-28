@@ -3220,7 +3220,7 @@ def admin_enrollments():
         <a class='btn secondary' href='{url_for('export_remove_list')}'>Download remove list</a>
         </div>
         <table id='enr_tbl'>
-        <thead><tr><th>Student</th><th>Subject</th><th>Status</th><th>PoP</th><th>Actions</th><th>Status link</th></tr></thead>
+        <thead><tr><th>Student</th><th>Subject</th><th>Grade</th><th>Status</th><th>PoP</th><th>Actions</th><th>Status link</th></tr></thead>
         <tbody>{table_rows}</tbody>
         </table>
     </section>
