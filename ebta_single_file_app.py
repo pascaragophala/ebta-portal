@@ -39,12 +39,10 @@ LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/1nieF2O.jpg")
 
 # ===================== DB ==============
 def get_db():
-    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")
     except Exception:
         pass
     return conn
@@ -1306,7 +1304,7 @@ def page(title, body_html, extra_head="", extra_js=""):
     ann_html = ""
     try:
         conn = get_db(); cur = conn.cursor()
-        month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+        month = get_setting('current_month')
 
         if is_student():
             sid = is_student()
@@ -1621,12 +1619,6 @@ def home():
         <p class='muted'>All required fields are marked. Upload 1–2 Proof of Payment files.</p>
 
         <form id='reg_form' method='post' action='{url_for('register')}' enctype='multipart/form-data' class='grid'>
-        <input type='hidden' name='enrollment_month' value='{month_raw}'>
-        <details class='mini' style='margin-top:6px'>
-          <summary>Change enrollment month (optional)</summary>
-          <input type='month' name='override_month'>
-        </details>
-
 
         <!-- Student & guardian details -->
         <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
@@ -2572,7 +2564,7 @@ def student_submit_ratings():
     r = require_student()
     if r: return r
     sid = is_student()
-    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+    month = get_setting('current_month')
     if not rating_window_open(month):
         return page("Closed", card_msg("The rating window is not open."))
     conn = get_db(); cur = conn.cursor()
@@ -3021,7 +3013,7 @@ def tutor_session_attendance(sid:int):
     cur = conn.cursor()
 
     # Get current academic month (FIX)
-    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+    month = get_setting('current_month')
 
     # Session + subject
     cur.execute("""
@@ -3179,7 +3171,7 @@ def admin_enrollments():
     r = require_admin()
     if r:
         return r
-    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+    month = get_setting('current_month')
     conn = get_db()
     cur = conn.cursor()
     cur.execute(
@@ -3228,7 +3220,7 @@ def admin_enrollments():
         <a class='btn secondary' href='{url_for('export_remove_list')}'>Download remove list</a>
         </div>
         <table id='enr_tbl'>
-        <thead><tr><th>Student</th><th>Subject</th><th>Status</th><th>PoP</th><th>Actions</th><th>Status link</th></tr></thead>
+        <thead><tr><th>Student</th><th>Subject</th><th>Grade</th><th>Status</th><th>PoP</th><th>Actions</th><th>Status link</th></tr></thead>
         <tbody>{table_rows}</tbody>
         </table>
     </section>
@@ -3614,7 +3606,7 @@ def admin_groups():
     r = require_admin()
     if r:
         return r
-    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+    month = get_setting('current_month')
     conn = get_db()
     cur = conn.cursor()
     cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
@@ -3690,7 +3682,7 @@ def admin_settings():
     r = require_admin()
     if r:
         return r
-    cur_month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+    cur_month = get_setting('current_month')
     body = f"""
     <a class='links' href='{url_for('admin_home')}'>← Back</a>
     <section class='card'>
@@ -3892,7 +3884,7 @@ def attend_post():
     except Exception:
         return page("Error", card_msg("Bad code."))
 
-        month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+        month = get_setting('current_month')
 
     conn = get_db()
     cur = conn.cursor()
@@ -4045,7 +4037,7 @@ def admin_send_dm():
 def admin_analytics():
     r = require_admin()
     if r: return r
-    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+    month = get_setting('current_month')
     conn = get_db(); cur = conn.cursor()
 
     # High-level: enrollments by status
@@ -4156,7 +4148,7 @@ def export_remove_list():
     if r:
         return r
 
-        month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+        month = get_setting('current_month')
     y, m = map(int, month.split('-'))
     ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
     next_month = f"{ny:04d}-{nm:02d}"
