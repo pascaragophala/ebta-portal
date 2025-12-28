@@ -2731,7 +2731,7 @@ def tutor_home():
     message_student_options=[]
     for s in subs:
         cur.execute("""SELECT st.id, st.full_name
-                    FROM enrollments e JOIN students st ON st.phone = e.phone
+                    FROM enrollments e JOIN students st ON st.id=e.student_id
                     WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
                     ORDER BY st.full_name""",(s['subject_id'], month))
         studs=cur.fetchall()
@@ -2894,7 +2894,7 @@ def tutor_assignment_manage(mid:int):
     # active students in subject (this month)
     month=get_setting('current_month')
     cur.execute("""SELECT st.id, st.full_name
-                FROM enrollments e JOIN students st ON st.phone = e.phone
+                FROM enrollments e JOIN students st ON st.id=e.student_id
                 WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
                 ORDER BY st.full_name""",(m['subject_id'], month))
     studs=cur.fetchall()
@@ -3177,7 +3177,8 @@ def admin_enrollments():
     cur.execute(
         """
         SELECT e.*, st.full_name, st.phone_whatsapp, sub.name AS subject_name
-        FROM enrollments e JOIN students st ON st.phone = e.phone
+        FROM enrollments e
+        JOIN students st ON st.id=e.student_id
         JOIN subjects sub ON sub.id=e.subject_id
         WHERE e.month=?
         ORDER BY e.created_at ASC
@@ -4156,7 +4157,8 @@ def export_remove_list():
     cur = conn.cursor()
     cur.execute("""
         SELECT e.id, e.student_id, e.subject_id, st.full_name, st.phone_whatsapp, st.grade, sub.name AS subject_name
-        FROM enrollments e JOIN students st ON st.phone = e.phone
+        FROM enrollments e
+        JOIN students st ON st.id=e.student_id
         JOIN subjects sub ON sub.id=e.subject_id
         WHERE e.month=? AND e.status='ACTIVE'
     """, (month,))
