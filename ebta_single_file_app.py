@@ -4327,9 +4327,12 @@ except Exception as e:
     print("DB init warning:", e)
 # =============================================================
 
+# ===================== FINAL CONSOLIDATED ANNUAL REGISTRATION =====================
 
-# ===================== ANNUAL REGISTRATION (REAL IMPLEMENTATION) =====================
+# ===================== FINAL CONSOLIDATED ANNUAL REGISTRATION =====================
+# This block intentionally OVERRIDES any earlier legacy logic.
 
+# --- Ensure annual registrations table (single source of truth) ---
 def ensure_annual_reg_tables():
     conn = get_db()
     cur = conn.cursor()
@@ -4354,93 +4357,105 @@ def ensure_annual_reg_tables():
 ensure_annual_reg_tables()
 
 
-# ---------- HOME PAGE POPUP ----------
+# --- HOME override with popup ---
 _original_home = home
+@app.get('/')
 def home():
-    resp = _original_home()
-    popup = """
+    html = _original_home()
+    popup = '''
     <script>
     document.addEventListener('DOMContentLoaded',()=>{
-        if(sessionStorage.getItem('annualRegSeen')) return;
-        sessionStorage.setItem('annualRegSeen','1');
-        const m=document.createElement('div');
-        m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
-        m.innerHTML=`
-        <div style="background:#fff;padding:20px;border-radius:12px;max-width:420px;width:90%">
-            <h3>Annual Registration (2026)</h3>
-            <p>Have you already paid the R50 once-off annual registration for 2026?</p>
-            <div style="display:flex;gap:10px;justify-content:flex-end">
-                <button onclick="document.body.removeChild(this.closest('div').parentNode.parentNode)">Yes</button>
-                <button onclick="window.location='/annual-registration'">No</button>
-            </div>
+      if(sessionStorage.getItem('annualReg2026')) return;
+      sessionStorage.setItem('annualReg2026','1');
+      const m=document.createElement('div');
+      m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:center;justify-content:center';
+      m.innerHTML=`
+        <div style="background:#fff;padding:20px;border-radius:12px;max-width:420px;width:92%">
+          <h3>Annual Registration (2026)</h3>
+          <p>Have you already paid the R50 once-off annual registration for 2026?</p>
+          <div style="display:flex;gap:10px;justify-content:flex-end">
+            <button onclick="this.closest('div').parentNode.remove()">Yes</button>
+            <button onclick="window.location='/annual-registration'">No</button>
+          </div>
         </div>`;
-        document.body.appendChild(m);
+      document.body.appendChild(m);
     });
     </script>
-    """
-    return resp.replace('</body>', popup + '</body>')
+    '''
+    return html.replace('</body>', popup + '</body>')
 
 
-# ---------- STUDENT ANNUAL REGISTRATION ----------
+# --- STUDENT: Annual Registration (single route) ---
 @app.route('/annual-registration', methods=['GET','POST'])
 def annual_registration():
+    r = require_student()
+    if r: return r
+
     if request.method == 'POST':
         sid = is_student()
-        if not sid:
-            return redirect(url_for('student_login'))
-
         year = request.form['year']
         grade = request.form['grade']
         subjects = ",".join(request.form.getlist('subjects'))
         guardian = request.form['guardian']
-        f = request.files['pop']
+        pop = request.files['pop']
 
-        fname = secure_name(f.filename)
-        save_name = f'annual_{sid}_{year}_{fname}'
-        f.save(UPLOAD_DIR / save_name)
+        fname = secure_name(pop.filename)
+        save = f'annual_{sid}_{year}_{fname}'
+        pop.save(UPLOAD_DIR / save)
 
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT OR REPLACE INTO annual_registrations
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("""INSERT OR REPLACE INTO annual_registrations
             (student_id,year,grade,subjects,guardian_phone,pop_path,status,created_at)
-            VALUES (?,?,?,?,?,?, 'PENDING', ?)
-        """, (sid,year,grade,subjects,guardian,save_name,now_utc_iso()))
+            VALUES (?,?,?,?,?,?, 'PENDING', ?)""",
+            (sid,year,grade,subjects,guardian,save,now_utc_iso()))
         conn.commit(); conn.close()
 
         return page("Submitted",
-            "<div class='card'><h2>Annual registration submitted</h2><p>Pending admin approval.</p></div>")
+            "<div class='card'><h2>Annual registration submitted</h2><p>Awaiting admin approval.</p></div>")
 
     conn = get_db(); cur = conn.cursor()
-    cur.execute("SELECT DISTINCT grade FROM subjects")
+    cur.execute("SELECT DISTINCT grade FROM subjects ORDER BY grade")
     grades = [r['grade'] for r in cur.fetchall()]
     cur.execute("SELECT name,grade FROM subjects ORDER BY grade,name")
     subs = cur.fetchall()
     conn.close()
 
     subs_html = "".join(
-        f"<label><input type='checkbox' name='subjects' value='{s['name']}'/> {grade_label(s['grade'])} {s['name']}</label><br>"
+        f"<label><input type='checkbox' name='subjects' value='{s['name']}' required/> {grade_label(s['grade'])} {s['name']}</label><br>"
         for s in subs
     )
 
     body = f"""
     <div class='card'>
-    <h1>Annual Registration</h1>
-    <form method='post' enctype='multipart/form-data'>
-        <label>Year</label><input name='year' value='2026' required>
-        <label>Grade</label><select name='grade'>{''.join(f'<option>{g}</option>' for g in grades)}</select>
-        <label>Subjects</label>{subs_html}
-        <label>Guardian contact number</label><input name='guardian' required>
-        <label>Proof of payment</label><input type='file' name='pop' accept='.pdf,.png,.jpg,.jpeg,.webp' required>
-        <br><br><button class='btn'>Submit</button>
-    </form>
+      <h1>Annual Registration (2026)</h1>
+      <form method='post' enctype='multipart/form-data'>
+        <label>Year</label>
+        <input name='year' value='2026' required>
+
+        <label>Grade</label>
+        <select name='grade' required>
+          {''.join(f'<option value="{g}">{grade_label(g)}</option>' for g in grades)}
+        </select>
+
+        <label>Subjects</label>
+        {subs_html}
+
+        <label>Guardian contact number</label>
+        <input name='guardian' required>
+
+        <label>Proof of payment (PDF or image)</label>
+        <input type='file' name='pop' accept='.pdf,.png,.jpg,.jpeg,.webp' required>
+
+        <br><br>
+        <button class='btn'>Submit annual registration</button>
+      </form>
     </div>
     """
     return page("Annual Registration", body)
 
 
-# ---------- ADMIN: ANNUAL REGISTRATIONS ----------
-@app.route('/admin/annual-registrations')
+# --- ADMIN: Annual Registrations ---
+@app.get('/admin/annual-registrations')
 def admin_annual_registrations():
     r = require_admin()
     if r: return r
@@ -4449,7 +4464,7 @@ def admin_annual_registrations():
     cur.execute("""
         SELECT ar.*, s.full_name
         FROM annual_registrations ar
-        JOIN students s ON s.id=ar.student_id
+        JOIN students s ON s.id = ar.student_id
         ORDER BY ar.created_at DESC
     """)
     rows = cur.fetchall(); conn.close()
@@ -4458,79 +4473,42 @@ def admin_annual_registrations():
     for r in rows:
         trs += f"""
         <tr>
-            <td>{r['full_name']}</td>
-            <td>{r['grade']}</td>
-            <td>{r['year']}</td>
-            <td>{r['subjects']}</td>
-            <td>{r['guardian_phone']}</td>
-            <td><a href='/uploads/{r['pop_path']}' target='_blank'>View</a></td>
-            <td>{r['status']}</td>
-            <td>
-                <a href='/admin/annual-registrations/{r['id']}/APPROVED'>Approve</a> |
-                <a href='/admin/annual-registrations/{r['id']}/DECLINED'>Decline</a>
-            </td>
+          <td>{r['full_name']}</td>
+          <td>{grade_label(r['grade'])}</td>
+          <td>{r['year']}</td>
+          <td>{r['subjects']}</td>
+          <td>{r['guardian_phone']}</td>
+          <td><a href='/uploads/{r['pop_path']}' target='_blank'>View</a></td>
+          <td>{r['status']}</td>
+          <td>
+            <a href='/admin/annual-registrations/{r['id']}/APPROVED'>Approve</a> |
+            <a href='/admin/annual-registrations/{r['id']}/DECLINED'>Decline</a>
+          </td>
         </tr>
         """
 
-    return page("Annual Registrations",
-        f"""<div class='card'><h1>Annual Registrations</h1>
-        <table><tr>
-        <th>Student</th><th>Grade</th><th>Year</th><th>Subjects</th>
-        <th>Guardian</th><th>R-PoP</th><th>Status</th><th>Action</th>
-        </tr>{trs}</table></div>"""
-    )
+    body = f"""
+    <div class='card'>
+      <h1>Annual Registrations</h1>
+      <table>
+        <tr>
+          <th>Student</th><th>Grade</th><th>Year</th><th>Subjects</th>
+          <th>Guardian</th><th>R-PoP</th><th>Status</th><th>Action</th>
+        </tr>
+        {trs}
+      </table>
+    </div>
+    """
+    return page("Annual Registrations", body)
 
 
-@app.route('/admin/annual-registrations/<int:rid>/<status>')
-def admin_annual_reg_action(rid,status):
+@app.get('/admin/annual-registrations/<int:rid>/<status>')
+def admin_annual_reg_action(rid, status):
     r = require_admin()
     if r: return r
     conn = get_db(); cur = conn.cursor()
-    cur.execute("UPDATE annual_registrations SET status=? WHERE id=?", (status,rid))
+    cur.execute("UPDATE annual_registrations SET status=? WHERE id=?", (status, rid))
     conn.commit(); conn.close()
     return redirect(url_for('admin_annual_registrations'))
 
-# ===================== END ANNUAL REGISTRATION =====================
-
-# ===================== FINAL VISIBLE IMPLEMENTATION =====================
-
-@app.after_request
-def inject_popup(response):
-    if response.content_type.startswith('text/html') and request.path == '/':
-        body = response.get_data(as_text=True)
-        if 'Annual Registration (2026)' not in body:
-            popup = '''
-<script>
-document.addEventListener('DOMContentLoaded',()=>{
- if(sessionStorage.getItem('annualReg2026')) return;
- sessionStorage.setItem('annualReg2026','1');
- const m=document.createElement('div');
- m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center';
- m.innerHTML=`<div style="background:#fff;padding:20px;border-radius:14px;max-width:420px;width:92%">
- <h3>Annual Registration (2026)</h3>
- <p>Have you already paid the R50 once-off annual registration for 2026?</p>
- <div style="display:flex;gap:10px;justify-content:flex-end">
- <button onclick="document.body.removeChild(this.closest('div').parentNode.parentNode)">Yes</button>
- <button onclick="window.location='/annual-registration'">No</button>
- </div></div>`;
- document.body.appendChild(m);
-});
-</script>'''
-            body = body.replace('</body>', popup + '</body>')
-            response.set_data(body)
-    return response
-
-
-@app.route('/annual-registration', methods=['GET','POST'])
-def annual_registration():
-    if request.method == 'POST':
-        return page("Submitted","<div class='card'><h2>Annual registration submitted</h2></div>")
-    return page("Annual Registration","<div class='card'><h2>Annual Registration Form (Visible)</h2></div>")
-
-@app.route('/admin/annual-registrations')
-def admin_annual_registrations():
-    r=require_admin()
-    if r: return r
-    return page("Annual Registrations","<div class='card'><h2>Annual Registrations (Visible)</h2></div>")
-
-# ===================== END =====================
+# ===================== END FINAL CONSOLIDATED BLOCK =====================
