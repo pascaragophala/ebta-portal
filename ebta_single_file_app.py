@@ -4326,3 +4326,164 @@ try:
 except Exception as e:
     print("DB init warning:", e)
 # =============================================================
+
+
+
+# ===================== ADDITIONS: Enrollment Month, Annual Registration, Admin Controls =====================
+
+# ---- Settings helpers (admin-only vs global current month) ----
+def get_admin_month():
+    return session.get('admin_month_override') or get_setting('current_month')
+
+def set_admin_month(month):
+    session['admin_month_override'] = month
+
+# ---- DB extensions ----
+def ensure_annual_tables():
+    conn = get_db()
+    cur = conn.cursor()
+    # Annual registrations with PoP
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS annual_registrations(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id INTEGER NOT NULL,
+        year TEXT NOT NULL,
+        grade TEXT NOT NULL,
+        subjects TEXT NOT NULL, -- CSV of subject ids
+        guardian_phone TEXT NOT NULL,
+        pop_path TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING', -- PENDING|APPROVED|DECLINED
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+        UNIQUE(student_id, year)
+    );
+    """)
+    # Separate PoPs per enrollment
+    ensure_column(conn, 'enrollments', 'epop_path', 'TEXT')
+    ensure_column(conn, 'enrollments', 'rpop_path', 'TEXT')
+    conn.commit()
+    conn.close()
+
+ensure_annual_tables()
+
+# ---- Pretty month everywhere ----
+def display_month(month_str):
+    return pretty_month_label(month_str)
+
+# ---- Annual registration page ----
+@app.route('/annual-registration', methods=['GET','POST'])
+def annual_registration():
+    r = require_student()
+    if r: return r
+    sid = is_student()
+    conn = get_db(); cur = conn.cursor()
+
+    if request.method == 'POST':
+        year = request.form['year']
+        grade = request.form['grade']
+        subjects = ",".join(request.form.getlist('subjects'))
+        guardian_phone = request.form['guardian_phone']
+        f = request.files.get('pop')
+        if not f:
+            flash('Proof of payment required')
+            return redirect(url_for('annual_registration'))
+        fname = secure_name(f.filename)
+        p = UPLOAD_DIR / f"annual_{sid}_{year}_{fname}"
+        f.save(p)
+        cur.execute("""
+            INSERT OR REPLACE INTO annual_registrations
+            (student_id, year, grade, subjects, guardian_phone, pop_path, status, created_at)
+            VALUES (?,?,?,?,?,?, 'PENDING', ?)
+        """, (sid, year, grade, subjects, guardian_phone, str(p), now_utc_iso()))
+        conn.commit()
+        conn.close()
+        flash('Annual registration submitted')
+        return redirect(url_for('student_home'))
+
+    # GET
+    cur.execute("SELECT id,name FROM subjects ORDER BY grade,name")
+    subs = cur.fetchall()
+    conn.close()
+
+    body = """
+    <div class='card'>
+      <h1>Annual Registration</h1>
+      <form method='post' enctype='multipart/form-data' class='grid'>
+        <label>Year</label><input name='year' value='2026' required/>
+        <label>Grade</label><input name='grade' required/>
+        <label>Subjects</label>
+        <div class='grid'>
+          %s
+        </div>
+        <label>Guardian contact number</label><input name='guardian_phone' required/>
+        <label>Upload proof of payment</label><input type='file' name='pop' accept='.pdf,.png,.jpg,.jpeg' required/>
+        <button class='btn'>Submit</button>
+      </form>
+    </div>
+    """ % "".join([f"<label><input type='checkbox' name='subjects' value='{s['id']}'/> {s['name']}</label>" for s in subs])
+    return page("Annual Registration", body)
+
+# ---- Admin: Annual Registrations ----
+@app.route('/admin/annual-registrations', methods=['GET','POST'])
+def admin_annual_regs():
+    r = require_admin()
+    if r: return r
+    conn = get_db(); cur = conn.cursor()
+
+    if request.method == 'POST':
+        rid = request.form['rid']
+        action = request.form['action']
+        cur.execute("UPDATE annual_registrations SET status=? WHERE id=?", (action, rid))
+        conn.commit()
+
+    cur.execute("""
+        SELECT ar.*, s.full_name
+        FROM annual_registrations ar
+        JOIN students s ON s.id=ar.student_id
+        ORDER BY ar.created_at DESC
+    """)
+    rows = cur.fetchall()
+    conn.close()
+
+    body = """
+    <div class='card'>
+      <h1>Annual Registrations</h1>
+      <table>
+        <thead><tr>
+          <th>Student</th><th>Year</th><th>Grade</th><th>Subjects</th><th>Status</th><th>PoP</th><th>Action</th>
+        </tr></thead>
+        <tbody>
+        %s
+        </tbody>
+      </table>
+    </div>
+    """ % "".join([
+        f"""<tr>
+          <td>{r['full_name']}</td>
+          <td>{r['year']}</td>
+          <td>{r['grade']}</td>
+          <td>{r['subjects']}</td>
+          <td>{r['status']}</td>
+          <td><a href='/uploads/{Path(r['pop_path']).name}' target='_blank'>View</a></td>
+          <td>
+            <form method='post'>
+              <input type='hidden' name='rid' value='{r['id']}'/>
+              <button name='action' value='APPROVED' class='btn success mini'>Approve</button>
+              <button name='action' value='DECLINED' class='btn danger mini'>Decline</button>
+            </form>
+          </td>
+        </tr>""" for r in rows
+    ])
+
+    return page("Admin · Annual Registrations", body)
+
+# ---- Manage Enrollments: helpers for Registered status ----
+def registration_status(conn, student_id, year):
+    cur = conn.cursor()
+    cur.execute("SELECT status FROM annual_registrations WHERE student_id=? AND year=?", (student_id, year))
+    r = cur.fetchone()
+    if not r: return 'No'
+    if r['status'] == 'APPROVED': return 'Yes'
+    return 'Pending'
+
+# ===================== END ADDITIONS =====================
