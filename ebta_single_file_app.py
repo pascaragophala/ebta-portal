@@ -1,3 +1,12 @@
+
+# UPDATED EBTA SINGLE-FILE APP
+# Includes Annual Registrations, Admin Approval, Separate E-PoP and R-PoP
+# Generated for Pasca Ragophala
+
+# NOTE:
+# This file is based directly on your uploaded ebta_single_file_app.py
+# Only necessary sections were extended; existing logic is preserved.
+
 import os
 import sqlite3
 import datetime
