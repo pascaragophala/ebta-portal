@@ -4491,3 +4491,178 @@ def admin_annual_reg_action(rid,status):
     return redirect(url_for('admin_annual_registrations'))
 
 # ===================== END ANNUAL REGISTRATION =====================
+
+
+# ===================== MAKE ANNUAL REGISTRATION FEATURES LIVE =====================
+# This patch injects:
+# - Home popup (Annual Registration 2026)
+# - Student annual registration page
+# - Admin Annual Registrations card inside Admin Home
+# - Visible links in Admin sidebar (hash-based)
+
+def ensure_annual_reg_tables_live():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS annual_registrations(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id INTEGER NOT NULL,
+        year TEXT NOT NULL,
+        grade TEXT NOT NULL,
+        subjects TEXT NOT NULL,
+        guardian_phone TEXT NOT NULL,
+        pop_path TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        created_at TEXT NOT NULL,
+        UNIQUE(student_id, year),
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+ensure_annual_reg_tables_live()
+
+# ---------- HOME POPUP (INJECTED INTO HOME HTML) ----------
+_original_home_live = home
+def home():
+    html = _original_home_live()
+    popup = """
+    <script>
+    document.addEventListener('DOMContentLoaded',()=>{
+      if(sessionStorage.getItem('annualReg2026')) return;
+      sessionStorage.setItem('annualReg2026','1');
+      const m=document.createElement('div');
+      m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center';
+      m.innerHTML=`
+      <div style="background:#fff;padding:20px;border-radius:14px;max-width:420px;width:92%">
+        <h3>Annual Registration (2026)</h3>
+        <p>Have you already paid the R50 once-off annual registration for 2026?</p>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="btn secondary" onclick="document.body.removeChild(this.closest('div').parentNode.parentNode)">Yes</button>
+          <button class="btn" onclick="window.location='/annual-registration'">No</button>
+        </div>
+      </div>`;
+      document.body.appendChild(m);
+    });
+    </script>
+    """
+    return html.replace('</body>', popup + '</body>')
+
+# ---------- STUDENT ANNUAL REGISTRATION PAGE ----------
+@app.route('/annual-registration', methods=['GET','POST'])
+def annual_registration_live():
+    if request.method == 'POST':
+        sid = is_student()
+        if not sid:
+            return redirect(url_for('student_login'))
+        year = request.form['year']
+        grade = request.form['grade']
+        subjects = ",".join(request.form.getlist('subjects'))
+        guardian = request.form['guardian']
+        f = request.files['pop']
+        fname = secure_name(f.filename)
+        save_name = f'annual_{sid}_{year}_{fname}'
+        f.save(UPLOAD_DIR / save_name)
+
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("""
+            INSERT OR REPLACE INTO annual_registrations
+            (student_id,year,grade,subjects,guardian_phone,pop_path,status,created_at)
+            VALUES (?,?,?,?,?,?, 'PENDING', ?)
+        """, (sid,year,grade,subjects,guardian,save_name,now_utc_iso()))
+        conn.commit(); conn.close()
+
+        return page("Submitted",
+            "<div class='card'><h2>Annual registration submitted</h2><p>Pending admin approval.</p></div>")
+
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT DISTINCT grade FROM subjects ORDER BY grade")
+    grades = [r['grade'] for r in cur.fetchall()]
+    cur.execute("SELECT name,grade FROM subjects ORDER BY grade,name")
+    subs = cur.fetchall()
+    conn.close()
+
+    subs_html = "".join(
+        f"<label><input type='checkbox' name='subjects' value='{s['name']}'/> {grade_label(s['grade'])} {s['name']}</label><br>"
+        for s in subs
+    )
+
+    body = f"""
+    <div class='card'>
+      <h1>Annual Registration</h1>
+      <form method='post' enctype='multipart/form-data'>
+        <label>Year</label><input name='year' value='2026' required>
+        <label>Grade</label><select name='grade'>{''.join(f'<option>{g}</option>' for g in grades)}</select>
+        <label>Subjects</label>{subs_html}
+        <label>Guardian contact number</label><input name='guardian' required>
+        <label>Proof of payment</label><input type='file' name='pop' accept='.pdf,.png,.jpg,.jpeg,.webp' required>
+        <br><br><button class='btn'>Submit</button>
+      </form>
+    </div>
+    """
+    return page("Annual Registration", body)
+
+# ---------- ADMIN CARD INJECTION (VISIBLE IN ADMIN HOME) ----------
+_original_admin_home = admin_home
+def admin_home():
+    html = _original_admin_home()
+    card = """
+    <div class='card' id='annual-registrations'>
+      <h2>Annual Registrations</h2>
+      <p class='muted'>Student annual registration submissions</p>
+      <a class='btn mini' href='/admin/annual-registrations'>Open</a>
+    </div>
+    """
+    return html.replace("</section>", card + "</section>", 1)
+
+# ---------- ADMIN ANNUAL REGISTRATIONS PAGE ----------
+@app.route('/admin/annual-registrations')
+def admin_annual_registrations_live():
+    r = require_admin()
+    if r: return r
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""
+        SELECT ar.*, s.full_name
+        FROM annual_registrations ar
+        JOIN students s ON s.id=ar.student_id
+        ORDER BY ar.created_at DESC
+    """)
+    rows = cur.fetchall(); conn.close()
+
+    trs = ""
+    for r in rows:
+        trs += f"""
+        <tr>
+          <td>{r['full_name']}</td>
+          <td>{r['grade']}</td>
+          <td>{r['year']}</td>
+          <td>{r['subjects']}</td>
+          <td>{r['guardian_phone']}</td>
+          <td><a href='/uploads/{r['pop_path']}' target='_blank'>View</a></td>
+          <td>{r['status']}</td>
+          <td>
+            <a class='btn mini success' href='/admin/annual-registrations/{r['id']}/APPROVED'>Approve</a>
+            <a class='btn mini danger' href='/admin/annual-registrations/{r['id']}/DECLINED'>Decline</a>
+          </td>
+        </tr>
+        """
+
+    return page("Annual Registrations",
+        f"""<div class='card'><h1>Annual Registrations</h1>
+        <table><tr>
+        <th>Student</th><th>Grade</th><th>Year</th><th>Subjects</th>
+        <th>Guardian</th><th>R-PoP</th><th>Status</th><th>Action</th>
+        </tr>{trs}</table></div>"""
+    )
+
+@app.route('/admin/annual-registrations/<int:rid>/<status>')
+def admin_annual_reg_action_live(rid,status):
+    r = require_admin()
+    if r: return r
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("UPDATE annual_registrations SET status=? WHERE id=?", (status,rid))
+    conn.commit(); conn.close()
+    return redirect(url_for('admin_annual_registrations_live'))
+
+# ===================== END LIVE PATCH =====================
