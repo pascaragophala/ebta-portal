@@ -289,6 +289,7 @@ def init_db():
 
     # Defaults & seed
     cur.execute("SELECT value FROM settings WHERE key='current_month'")
+    cur.execute("SELECT value FROM settings WHERE key='admin_current_month'")
     if not cur.fetchone():
         cur.execute("INSERT INTO settings(key,value) VALUES(?,?)",
                     ('current_month', datetime.date.today().strftime('%Y-%m')))
@@ -1304,7 +1305,7 @@ def page(title, body_html, extra_head="", extra_js=""):
     ann_html = ""
     try:
         conn = get_db(); cur = conn.cursor()
-        month = get_setting('current_month')
+        month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
 
         if is_student():
             sid = is_student()
@@ -1615,10 +1616,17 @@ def home():
     body = fr"""
     <section class='grid' style='margin-top:10px'>
     <div class='card soft'>
-        <h1>Enroll for {month_label}</h1>
+        <h1>Enroll for {pretty_month_label(month_raw)}</h1>
         <p class='muted'>All required fields are marked. Upload 1–2 Proof of Payment files.</p>
 
         <form id='reg_form' method='post' action='{url_for('register')}' enctype='multipart/form-data' class='grid'>
+<input type='hidden' name='enrollment_month' value='{month_raw}' />
+<details style='margin-top:6px'>
+<summary class='mini'>Change enrollment month (optional)</summary>
+<label class='mini'>Preferred enrollment month</label>
+<input type='month' name='override_month' />
+</details>
+
 
         <!-- Student & guardian details -->
         <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
@@ -2564,7 +2572,7 @@ def student_submit_ratings():
     r = require_student()
     if r: return r
     sid = is_student()
-    month = get_setting('current_month')
+    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
     if not rating_window_open(month):
         return page("Closed", card_msg("The rating window is not open."))
     conn = get_db(); cur = conn.cursor()
@@ -3013,7 +3021,7 @@ def tutor_session_attendance(sid:int):
     cur = conn.cursor()
 
     # Get current academic month (FIX)
-    month = get_setting('current_month')
+    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
 
     # Session + subject
     cur.execute("""
@@ -3171,7 +3179,7 @@ def admin_enrollments():
     r = require_admin()
     if r:
         return r
-    month = get_setting('current_month')
+    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
     conn = get_db()
     cur = conn.cursor()
     cur.execute(
@@ -3606,7 +3614,7 @@ def admin_groups():
     r = require_admin()
     if r:
         return r
-    month = get_setting('current_month')
+    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
     conn = get_db()
     cur = conn.cursor()
     cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
@@ -3682,7 +3690,7 @@ def admin_settings():
     r = require_admin()
     if r:
         return r
-    cur_month = get_setting('current_month')
+    cur_month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
     body = f"""
     <a class='links' href='{url_for('admin_home')}'>← Back</a>
     <section class='card'>
@@ -3884,7 +3892,7 @@ def attend_post():
     except Exception:
         return page("Error", card_msg("Bad code."))
 
-        month = get_setting('current_month')
+        month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
 
     conn = get_db()
     cur = conn.cursor()
@@ -4037,7 +4045,7 @@ def admin_send_dm():
 def admin_analytics():
     r = require_admin()
     if r: return r
-    month = get_setting('current_month')
+    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
     conn = get_db(); cur = conn.cursor()
 
     # High-level: enrollments by status
@@ -4148,7 +4156,7 @@ def export_remove_list():
     if r:
         return r
 
-        month = get_setting('current_month')
+        month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
     y, m = map(int, month.split('-'))
     ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
     next_month = f"{ny:04d}-{nm:02d}"
@@ -4326,146 +4334,3 @@ try:
 except Exception as e:
     print("DB init warning:", e)
 # =============================================================
-
-# ======================= EBTA 2026 PATCH (FINAL) =======================
-
-# --- Ensure admin-only month setting exists ---
-try:
-    set_setting('admin_month', get_setting('admin_month', get_setting('current_month')))
-except Exception:
-    pass
-
-# --- Annual registrations table (linked) ---
-def ensure_annual_registrations():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS annual_registrations(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        student_id INTEGER NOT NULL,
-        year TEXT NOT NULL,
-        grade TEXT NOT NULL,
-        subjects TEXT NOT NULL,
-        guardian_phone TEXT NOT NULL,
-        pop_file TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'PENDING',
-        created_at TEXT NOT NULL,
-        UNIQUE(student_id, year),
-        FOREIGN KEY(student_id) REFERENCES students(id)
-    );
-    """)
-    ensure_column(conn, "enrollments", "registered_status", "TEXT DEFAULT 'NO'")
-    ensure_column(conn, "enrollments", "registration_pop", "TEXT")
-    conn.commit()
-    conn.close()
-
-ensure_annual_registrations()
-
-# --- Student annual registration page ---
-@app.route('/student/annual-registration', methods=['GET','POST'])
-def student_annual_registration():
-    r = require_student()
-    if r: return r
-    sid = is_student()
-    conn = get_db(); cur = conn.cursor()
-
-    if request.method == 'POST':
-        f = request.files.get('pop')
-        fname = secure_name(f"{sid}_{datetime.datetime.now().timestamp()}_{f.filename}")
-        f.save(UPLOAD_DIR / fname)
-
-        year = get_setting('current_month').split('-')[0]
-        cur.execute("""
-            INSERT OR REPLACE INTO annual_registrations
-            (student_id, year, grade, subjects, guardian_phone, pop_file, status, created_at)
-            VALUES (?,?,?,?,?,?, 'PENDING', ?)
-        """, (
-            sid,
-            year,
-            request.form['grade'],
-            request.form['subjects'],
-            request.form['guardian_phone'],
-            fname,
-            now_utc_iso()
-        ))
-        conn.commit(); conn.close()
-        flash("Annual registration submitted. Awaiting approval.")
-        return redirect(url_for('student_home'))
-
-    return page(
-        "Annual Registration",
-        f"""
-        <div class='card'>
-        <h2>Annual Registration ({get_setting('current_month').split('-')[0]})</h2>
-        <form method='post' enctype='multipart/form-data' class='grid'>
-            <label>Grade for the year</label>
-            <input name='grade' required>
-            <label>Subjects</label>
-            <input name='subjects' required>
-            <label>Guardian WhatsApp</label>
-            <input name='guardian_phone' required>
-            <label>Proof of Payment</label>
-            <input type='file' name='pop' accept='.pdf,.png,.jpg,.jpeg' required>
-            <button class='btn'>Submit</button>
-        </form>
-        </div>
-        """
-    )
-
-# --- Admin annual registrations page ---
-@app.route('/admin/annual-registrations')
-def admin_annual_registrations():
-    r = require_admin()
-    if r: return r
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("""
-        SELECT ar.*, s.full_name
-        FROM annual_registrations ar
-        JOIN students s ON s.id = ar.student_id
-        ORDER BY ar.created_at DESC
-    """)
-    rows = cur.fetchall()
-    body = "".join([
-        f"""<tr>
-            <td>{r['full_name']}</td>
-            <td>{r['grade']}</td>
-            <td>{r['subjects']}</td>
-            <td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>
-            <td><a href='/uploads/{r['pop_file']}' target='_blank'>R‑PoP</a></td>
-            <td>
-                <a class='btn mini success' href='/admin/annual-registrations/approve/{r['id']}'>Approve</a>
-                <a class='btn mini danger' href='/admin/annual-registrations/decline/{r['id']}'>Decline</a>
-            </td>
-        </tr>""" for r in rows
-    ])
-    return page("Annual Registrations", f"""
-        <div class='card'>
-        <h2>Annual Registrations</h2>
-        <table>
-        <tr><th>Student</th><th>Grade</th><th>Subjects</th><th>Status</th><th>PoP</th><th>Actions</th></tr>
-        {body}
-        </table>
-        </div>
-    """)
-
-@app.route('/admin/annual-registrations/approve/<int:rid>')
-def approve_annual(rid):
-    require_admin()
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("UPDATE annual_registrations SET status='APPROVED' WHERE id=?", (rid,))
-    cur.execute("""
-        UPDATE enrollments
-        SET registered_status='YES',
-            registration_pop=(SELECT pop_file FROM annual_registrations WHERE id=?)
-        WHERE student_id=(SELECT student_id FROM annual_registrations WHERE id=?)
-    """, (rid, rid))
-    conn.commit(); conn.close()
-    return redirect(url_for('admin_annual_registrations'))
-
-@app.route('/admin/annual-registrations/decline/<int:rid>')
-def decline_annual(rid):
-    require_admin()
-    conn = get_db()
-    conn.execute("UPDATE annual_registrations SET status='DECLINED' WHERE id=?", (rid,))
-    conn.commit(); conn.close()
-    return redirect(url_for('admin_annual_registrations'))
