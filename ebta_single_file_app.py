@@ -291,7 +291,6 @@ def init_db():
 
     # Defaults & seed
     cur.execute("SELECT value FROM settings WHERE key='current_month'")
-    cur.execute("SELECT value FROM settings WHERE key='admin_current_month'")
     if not cur.fetchone():
         cur.execute("INSERT INTO settings(key,value) VALUES(?,?)",
                     ('current_month', datetime.date.today().strftime('%Y-%m')))
@@ -1307,7 +1306,7 @@ def page(title, body_html, extra_head="", extra_js=""):
     ann_html = ""
     try:
         conn = get_db(); cur = conn.cursor()
-        month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+        month = get_setting('current_month')
 
         if is_student():
             sid = is_student()
@@ -1618,17 +1617,10 @@ def home():
     body = fr"""
     <section class='grid' style='margin-top:10px'>
     <div class='card soft'>
-        <h1>Enroll for {pretty_month_label(month_raw)}</h1>
+        <h1>Enroll for {month_label}</h1>
         <p class='muted'>All required fields are marked. Upload 1–2 Proof of Payment files.</p>
 
         <form id='reg_form' method='post' action='{url_for('register')}' enctype='multipart/form-data' class='grid'>
-<input type='hidden' name='enrollment_month' value='{month_raw}' />
-<details style='margin-top:6px'>
-<summary class='mini'>Change enrollment month (optional)</summary>
-<label class='mini'>Preferred enrollment month</label>
-<input type='month' name='override_month' />
-</details>
-
 
         <!-- Student & guardian details -->
         <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
@@ -2574,7 +2566,7 @@ def student_submit_ratings():
     r = require_student()
     if r: return r
     sid = is_student()
-    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+    month = get_setting('current_month')
     if not rating_window_open(month):
         return page("Closed", card_msg("The rating window is not open."))
     conn = get_db(); cur = conn.cursor()
@@ -3023,7 +3015,7 @@ def tutor_session_attendance(sid:int):
     cur = conn.cursor()
 
     # Get current academic month (FIX)
-    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+    month = get_setting('current_month')
 
     # Session + subject
     cur.execute("""
@@ -3181,7 +3173,7 @@ def admin_enrollments():
     r = require_admin()
     if r:
         return r
-    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+    month = get_setting('current_month')
     conn = get_db()
     cur = conn.cursor()
     cur.execute(
@@ -3616,7 +3608,7 @@ def admin_groups():
     r = require_admin()
     if r:
         return r
-    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+    month = get_setting('current_month')
     conn = get_db()
     cur = conn.cursor()
     cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
@@ -3692,7 +3684,7 @@ def admin_settings():
     r = require_admin()
     if r:
         return r
-    cur_month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+    cur_month = get_setting('current_month')
     body = f"""
     <a class='links' href='{url_for('admin_home')}'>← Back</a>
     <section class='card'>
@@ -3706,21 +3698,63 @@ def admin_settings():
     return page("Settings", body)
 
 @app.post('/admin/settings')
+
 def admin_settings_post():
     r = require_admin()
     if r:
         return r
-    month = request.form.get('month', '').strip()
-    if not month:
-        return page("Error", card_msg("Month required."))
+
     conn = get_db()
-        cur = conn.cursor()
-        cur.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", ('current_month', month))
-    return redirect(url_for('admin_home'))
+    cur = conn.cursor()
 
-# --- Admin: Sessions (ensures tutor_subjects mapping) ---
+    if request.method == 'POST':
+        month = request.form.get('current_month')
+        admin_month = request.form.get('admin_current_month')
 
-@app.get('/admin/sessions')
+        if month:
+            cur.execute(
+                "INSERT INTO settings(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                ('current_month', month)
+            )
+
+        if admin_month:
+            cur.execute(
+                "INSERT INTO settings(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                ('admin_current_month', admin_month)
+            )
+
+        conn.commit()
+        conn.close()
+        flash("Settings updated successfully", "success")
+        return redirect(url_for('admin_home') + "#settings")
+
+    cur.execute("SELECT value FROM settings WHERE key='current_month'")
+    row1 = cur.fetchone()
+    cur.execute("SELECT value FROM settings WHERE key='admin_current_month'")
+    row2 = cur.fetchone()
+    conn.close()
+
+    current_month = row1['value'] if row1 else ''
+    admin_month = row2['value'] if row2 else ''
+
+    body = f"""
+    <div class='card' id='settings'>
+        <h2>Settings</h2>
+        <form method='post' class='grid' style='max-width:420px'>
+            <label>System current month (affects everyone)</label>
+            <input type='month' name='current_month' value='{current_month}'>
+
+            <label>Admin-only view month</label>
+            <input type='month' name='admin_current_month' value='{admin_month}'>
+
+            <button class='btn'>Save settings</button>
+        </form>
+    </div>
+    """
+
+    return page("Admin Settings", body)
 def admin_sessions():
     r = require_admin()
     if r:
@@ -3896,7 +3930,7 @@ def attend_post():
     except Exception:
         return page("Error", card_msg("Bad code."))
 
-        month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+        month = get_setting('current_month')
 
     conn = get_db()
     cur = conn.cursor()
@@ -4049,7 +4083,7 @@ def admin_send_dm():
 def admin_analytics():
     r = require_admin()
     if r: return r
-    month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+    month = get_setting('current_month')
     conn = get_db(); cur = conn.cursor()
 
     # High-level: enrollments by status
@@ -4160,7 +4194,7 @@ def export_remove_list():
     if r:
         return r
 
-        month = request.form.get('override_month') or request.form.get('enrollment_month') or get_setting('current_month')
+        month = get_setting('current_month')
     y, m = map(int, month.split('-'))
     ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
     next_month = f"{ny:04d}-{nm:02d}"
