@@ -4326,7 +4326,7 @@ try:
 except Exception as e:
     print("DB init warning:", e)
 # =============================================================
-\n\n
+
 # ======================= EBTA 2026 PATCH (FINAL) =======================
 
 # --- Ensure admin-only month setting exists ---
@@ -4469,5 +4469,3 @@ def decline_annual(rid):
     conn.execute("UPDATE annual_registrations SET status='DECLINED' WHERE id=?", (rid,))
     conn.commit(); conn.close()
     return redirect(url_for('admin_annual_registrations'))
-
-# ======================= END EBTA 2026 PATCH =======================
