@@ -39,10 +39,12 @@ LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/1nieF2O.jpg")
 
 # ===================== DB ==============
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
     except Exception:
         pass
     return conn
@@ -3711,7 +3713,9 @@ def admin_settings_post():
     month = request.form.get('month', '').strip()
     if not month:
         return page("Error", card_msg("Month required."))
-    set_setting('current_month', month)
+    conn = get_db()
+        cur = conn.cursor()
+        cur.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", ('current_month', month))
     return redirect(url_for('admin_home'))
 
 # --- Admin: Sessions (ensures tutor_subjects mapping) ---
