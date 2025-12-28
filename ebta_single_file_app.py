@@ -4329,225 +4329,229 @@ except Exception as e:
 
 
 
-# ===================== ADDITIONS: Enrollment Month, Annual Registration, Admin Controls =====================
+# ===================== PATCH: ANNUAL REGISTRATION & ENROLLMENT EXTENSIONS =====================
 
-# ---- Settings helpers (admin-only vs global current month) ----
-def get_admin_month():
-    return session.get('admin_month_override') or get_setting('current_month')
-
-def set_admin_month(month):
-    session['admin_month_override'] = month
-
-# ---- DB extensions ----
-def ensure_annual_tables():
+# --- DB EXTENSIONS ---
+def ensure_annual_registration_tables():
     conn = get_db()
     cur = conn.cursor()
-    # Annual registrations with PoP
+
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS annual_registrations(
+    CREATE TABLE IF NOT EXISTS annual_registrations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         student_id INTEGER NOT NULL,
         year TEXT NOT NULL,
         grade TEXT NOT NULL,
-        subjects TEXT NOT NULL, -- CSV of subject ids
+        subjects TEXT NOT NULL,
         guardian_phone TEXT NOT NULL,
-        pop_path TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'PENDING', -- PENDING|APPROVED|DECLINED
+        pop_file TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING',
         created_at TEXT NOT NULL,
-        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
-        UNIQUE(student_id, year)
+        FOREIGN KEY(student_id) REFERENCES students(id)
     );
     """)
-    # Separate PoPs per enrollment
-    ensure_column(conn, 'enrollments', 'epop_path', 'TEXT')
-    ensure_column(conn, 'enrollments', 'rpop_path', 'TEXT')
+
+    ensure_column(conn, "enrollments", "registered_status", "TEXT DEFAULT 'NO'")
+    ensure_column(conn, "enrollments", "registration_pop", "TEXT")
+    ensure_column(conn, "settings", "admin_month", "TEXT")
+
+    # default admin_month mirrors current_month
+    cur.execute("SELECT value FROM settings WHERE key='admin_month'")
+    if not cur.fetchone():
+        cur.execute(
+            "INSERT INTO settings(key,value) VALUES('admin_month', ?)",
+            (get_setting('current_month'),)
+        )
+
     conn.commit()
     conn.close()
 
-ensure_annual_tables()
+ensure_annual_registration_tables()
 
-# ---- Pretty month everywhere ----
-def display_month(month_str):
-    return pretty_month_label(month_str)
 
-# ---- Annual registration page ----
-@app.route('/annual-registration', methods=['GET','POST'])
-def annual_registration():
+# --- HELPERS ---
+def full_month_label(month_str):
+    try:
+        y, m = map(int, month_str.split('-'))
+        return datetime.date(y, m, 1).strftime('%B %Y')
+    except Exception:
+        return month_str
+
+
+def annual_registration_status(conn, student_id):
+    cur = conn.cursor()
+    year = get_setting('current_month').split('-')[0]
+    cur.execute(
+        "SELECT status, pop_file FROM annual_registrations WHERE student_id=? AND year=?",
+        (student_id, year)
+    )
+    row = cur.fetchone()
+    if not row:
+        return "NO", None
+    return row["status"], row["pop_file"]
+
+
+# --- STUDENT: ANNUAL REGISTRATION ---
+@app.route('/student/annual-registration', methods=['GET', 'POST'])
+def student_annual_registration():
     r = require_student()
     if r: return r
+
     sid = is_student()
-    conn = get_db(); cur = conn.cursor()
+    conn = get_db()
+    cur = conn.cursor()
 
     if request.method == 'POST':
-        year = request.form['year']
-        grade = request.form['grade']
-        subjects = ",".join(request.form.getlist('subjects'))
-        guardian_phone = request.form['guardian_phone']
         f = request.files.get('pop')
         if not f:
-            flash('Proof of payment required')
-            return redirect(url_for('annual_registration'))
-        fname = secure_name(f.filename)
-        p = UPLOAD_DIR / f"annual_{sid}_{year}_{fname}"
-        f.save(p)
+            flash("Proof of payment required")
+            return redirect(request.url)
+
+        fname = secure_name(f"{sid}_{datetime.datetime.now().timestamp()}_{f.filename}")
+        f.save(UPLOAD_DIR / fname)
+
+        subjects = ",".join(request.form.getlist("subjects"))
+        year = request.form["year"]
+
         cur.execute("""
             INSERT OR REPLACE INTO annual_registrations
-            (student_id, year, grade, subjects, guardian_phone, pop_path, status, created_at)
+            (student_id, year, grade, subjects, guardian_phone, pop_file, status, created_at)
             VALUES (?,?,?,?,?,?, 'PENDING', ?)
-        """, (sid, year, grade, subjects, guardian_phone, str(p), now_utc_iso()))
+        """, (
+            sid,
+            year,
+            request.form["grade"],
+            subjects,
+            request.form["guardian_phone"],
+            fname,
+            now_utc_iso()
+        ))
+
         conn.commit()
         conn.close()
-        flash('Annual registration submitted')
+        flash("Annual registration submitted. Awaiting approval.")
         return redirect(url_for('student_home'))
 
-    # GET
-    cur.execute("SELECT id,name FROM subjects ORDER BY grade,name")
-    subs = cur.fetchall()
-    conn.close()
+    return page(
+        "Annual Registration",
+        """
+        <div class='card'>
+        <h2>Annual Registration</h2>
+        <form method='post' enctype='multipart/form-data' class='grid'>
+            <label>Grade for this year</label>
+            <input name='grade' required>
 
-    body = """
-    <div class='card'>
-      <h1>Annual Registration</h1>
-      <form method='post' enctype='multipart/form-data' class='grid'>
-        <label>Year</label><input name='year' value='2026' required/>
-        <label>Grade</label><input name='grade' required/>
-        <label>Subjects</label>
-        <div class='grid'>
-          %s
+            <label>Subjects</label>
+            <input name='subjects' placeholder='e.g. Mathematics, Physical Sciences' required>
+
+            <label>Guardian WhatsApp Number</label>
+            <input name='guardian_phone' required>
+
+            <label>Proof of Payment (PDF or image)</label>
+            <input type='file' name='pop' accept='.pdf,.png,.jpg,.jpeg' required>
+
+            <input type='hidden' name='year' value='""" + get_setting('current_month').split('-')[0] + """'>
+
+            <button class='btn'>Submit Annual Registration</button>
+        </form>
         </div>
-        <label>Guardian contact number</label><input name='guardian_phone' required/>
-        <label>Upload proof of payment</label><input type='file' name='pop' accept='.pdf,.png,.jpg,.jpeg' required/>
-        <button class='btn'>Submit</button>
-      </form>
-    </div>
-    """ % "".join([f"<label><input type='checkbox' name='subjects' value='{s['id']}'/> {s['name']}</label>" for s in subs])
-    return page("Annual Registration", body)
+        """
+    )
 
-# ---- Admin: Annual Registrations ----
-@app.route('/admin/annual-registrations', methods=['GET','POST'])
-def admin_annual_regs():
+
+# --- ADMIN: ANNUAL REGISTRATIONS ---
+@app.route('/admin/annual-registrations')
+def admin_annual_registrations():
     r = require_admin()
     if r: return r
-    conn = get_db(); cur = conn.cursor()
 
-    if request.method == 'POST':
-        rid = request.form['rid']
-        action = request.form['action']
-        cur.execute("UPDATE annual_registrations SET status=? WHERE id=?", (action, rid))
-        conn.commit()
-
+    conn = get_db()
+    cur = conn.cursor()
     cur.execute("""
         SELECT ar.*, s.full_name
         FROM annual_registrations ar
-        JOIN students s ON s.id=ar.student_id
+        JOIN students s ON s.id = ar.student_id
         ORDER BY ar.created_at DESC
     """)
     rows = cur.fetchall()
-    conn.close()
 
-    body = """
-    <div class='card'>
-      <h1>Annual Registrations</h1>
-      <table>
-        <thead><tr>
-          <th>Student</th><th>Year</th><th>Grade</th><th>Subjects</th><th>Status</th><th>PoP</th><th>Action</th>
-        </tr></thead>
-        <tbody>
-        %s
-        </tbody>
-      </table>
-    </div>
-    """ % "".join([
-        f"""<tr>
-          <td>{r['full_name']}</td>
-          <td>{r['year']}</td>
-          <td>{r['grade']}</td>
-          <td>{r['subjects']}</td>
-          <td>{r['status']}</td>
-          <td><a href='/uploads/{Path(r['pop_path']).name}' target='_blank'>View</a></td>
-          <td>
-            <form method='post'>
-              <input type='hidden' name='rid' value='{r['id']}'/>
-              <button name='action' value='APPROVED' class='btn success mini'>Approve</button>
-              <button name='action' value='DECLINED' class='btn danger mini'>Decline</button>
-            </form>
-          </td>
-        </tr>""" for r in rows
+    table_rows = "".join([
+        f"""
+        <tr>
+            <td>{r['full_name']}</td>
+            <td>{r['grade']}</td>
+            <td>{r['subjects']}</td>
+            <td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>
+            <td><a href='/uploads/{r['pop_file']}' target='_blank'>View PoP</a></td>
+            <td>
+                <a class='btn mini success' href='/admin/annual-registrations/approve/{r['id']}'>Approve</a>
+                <a class='btn mini danger' href='/admin/annual-registrations/decline/{r['id']}'>Decline</a>
+            </td>
+        </tr>
+        """ for r in rows
     ])
 
-    return page("Admin · Annual Registrations", body)
-
-# ---- Manage Enrollments: helpers for Registered status ----
-def registration_status(conn, student_id, year):
-    cur = conn.cursor()
-    cur.execute("SELECT status FROM annual_registrations WHERE student_id=? AND year=?", (student_id, year))
-    r = cur.fetchone()
-    if not r: return 'No'
-    if r['status'] == 'APPROVED': return 'Yes'
-    return 'Pending'
-
-# ===================== END ADDITIONS =====================
-
-
-
-# ===================== UI WIRING PATCH (POPUP + TABLE + SIDEBAR) =====================
-
-# ---- Home popup ----
-@app.after_request
-def inject_annual_popup(resp):
-    if request.path == '/' and is_student():
-        popup = '''
-<script>
-document.addEventListener('DOMContentLoaded', function(){
-  if(!localStorage.getItem('annualRegAsked')){
-    const box = document.createElement('div');
-    box.style.position='fixed';
-    box.style.inset='0';
-    box.style.background='rgba(0,0,0,.5)';
-    box.style.zIndex='99999';
-    box.innerHTML = `
-      <div style="background:#fff;max-width:420px;margin:10% auto;padding:20px;border-radius:12px">
-        <h3>Annual Registration (2026)</h3>
-        <p>Have you already paid the R50 once-off annual registration for 2026?</p>
-        <div style="display:flex;gap:10px">
-          <button id="ar_yes" class="btn success">Yes</button>
-          <button id="ar_no" class="btn danger">No</button>
+    return page(
+        "Annual Registrations",
+        f"""
+        <div class='card'>
+        <h2>Annual Registrations</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Student</th><th>Grade</th><th>Subjects</th>
+                    <th>Status</th><th>PoP</th><th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>{table_rows}</tbody>
+        </table>
         </div>
-      </div>`;
-    document.body.appendChild(box);
-    document.getElementById('ar_yes').onclick = ()=>{
-      localStorage.setItem('annualRegAsked','1');
-      box.remove();
-    };
-    document.getElementById('ar_no').onclick = ()=>{
-      localStorage.setItem('annualRegAsked','1');
-      window.location.href='/annual-registration';
-    };
-  }
-});
-</script>
-'''
-        resp.set_data(resp.get_data(as_text=True).replace("</body>", popup+"</body>"))
-    return resp
+        """
+    )
 
-# ---- Admin sidebar link injection ----
-def admin_links_with_annual(base_links):
-    out=[]
-    for l in base_links:
-        out.append(l)
-        if l[0].lower().startswith("manage enrollments"):
-            out.append(("Annual Registrations", "/admin/annual-registrations"))
-    return out
 
-# ---- Patch admin sidebar builder ----
-_original_page = page
-def page(title, body_html, extra_head="", extra_js=""):
-    html = _original_page(title, body_html, extra_head, extra_js)
-    if is_admin():
-        html = html.replace(
-            "('Manage enrollments', '#enrollments')",
-            "('Manage enrollments', '#enrollments'),('Annual Registrations','/admin/annual-registrations')"
-        )
-    return html
+@app.route('/admin/annual-registrations/approve/<int:rid>')
+def approve_annual_registration(rid):
+    r = require_admin()
+    if r: return r
 
-# ===================== END UI PATCH =====================
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "UPDATE annual_registrations SET status='APPROVED' WHERE id=?",
+        (rid,)
+    )
+
+    # update enrollments
+    cur.execute(
+        """
+        UPDATE enrollments
+        SET registered_status='YES',
+            registration_pop=(SELECT pop_file FROM annual_registrations WHERE id=?)
+        WHERE student_id=(SELECT student_id FROM annual_registrations WHERE id=?)
+        """, (rid, rid)
+    )
+
+    conn.commit()
+    conn.close()
+    flash("Annual registration approved.")
+    return redirect(url_for('admin_annual_registrations'))
+
+
+@app.route('/admin/annual-registrations/decline/<int:rid>')
+def decline_annual_registration(rid):
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    conn.execute(
+        "UPDATE annual_registrations SET status='DECLINED' WHERE id=?",
+        (rid,)
+    )
+    conn.commit()
+    conn.close()
+    flash("Annual registration declined.")
+    return redirect(url_for('admin_annual_registrations'))
+
+# ===================== END PATCH =====================
