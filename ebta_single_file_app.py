@@ -4487,3 +4487,67 @@ def registration_status(conn, student_id, year):
     return 'Pending'
 
 # ===================== END ADDITIONS =====================
+
+
+
+# ===================== UI WIRING PATCH (POPUP + TABLE + SIDEBAR) =====================
+
+# ---- Home popup ----
+@app.after_request
+def inject_annual_popup(resp):
+    if request.path == '/' and is_student():
+        popup = '''
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  if(!localStorage.getItem('annualRegAsked')){
+    const box = document.createElement('div');
+    box.style.position='fixed';
+    box.style.inset='0';
+    box.style.background='rgba(0,0,0,.5)';
+    box.style.zIndex='99999';
+    box.innerHTML = `
+      <div style="background:#fff;max-width:420px;margin:10% auto;padding:20px;border-radius:12px">
+        <h3>Annual Registration (2026)</h3>
+        <p>Have you already paid the R50 once-off annual registration for 2026?</p>
+        <div style="display:flex;gap:10px">
+          <button id="ar_yes" class="btn success">Yes</button>
+          <button id="ar_no" class="btn danger">No</button>
+        </div>
+      </div>`;
+    document.body.appendChild(box);
+    document.getElementById('ar_yes').onclick = ()=>{
+      localStorage.setItem('annualRegAsked','1');
+      box.remove();
+    };
+    document.getElementById('ar_no').onclick = ()=>{
+      localStorage.setItem('annualRegAsked','1');
+      window.location.href='/annual-registration';
+    };
+  }
+});
+</script>
+'''
+        resp.set_data(resp.get_data(as_text=True).replace("</body>", popup+"</body>"))
+    return resp
+
+# ---- Admin sidebar link injection ----
+def admin_links_with_annual(base_links):
+    out=[]
+    for l in base_links:
+        out.append(l)
+        if l[0].lower().startswith("manage enrollments"):
+            out.append(("Annual Registrations", "/admin/annual-registrations"))
+    return out
+
+# ---- Patch admin sidebar builder ----
+_original_page = page
+def page(title, body_html, extra_head="", extra_js=""):
+    html = _original_page(title, body_html, extra_head, extra_js)
+    if is_admin():
+        html = html.replace(
+            "('Manage enrollments', '#enrollments')",
+            "('Manage enrollments', '#enrollments'),('Annual Registrations','/admin/annual-registrations')"
+        )
+    return html
+
+# ===================== END UI PATCH =====================
