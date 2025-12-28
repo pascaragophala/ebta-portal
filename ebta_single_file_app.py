@@ -1,12 +1,3 @@
-
-# UPDATED EBTA SINGLE-FILE APP
-# Includes Annual Registrations, Admin Approval, Separate E-PoP and R-PoP
-# Generated for Pasca Ragophala
-
-# NOTE:
-# This file is based directly on your uploaded ebta_single_file_app.py
-# Only necessary sections were extended; existing logic is preserved.
-
 import os
 import sqlite3
 import datetime
@@ -4335,3 +4326,180 @@ try:
 except Exception as e:
     print("DB init warning:", e)
 # =============================================================
+
+
+# =============================================================
+# === ANNUAL REGISTRATION EXTENSIONS (2026 & beyond)
+# =============================================================
+
+def ensure_annual_registration_schema():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS annual_registrations(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_name TEXT NOT NULL,
+            student_surname TEXT NOT NULL,
+            grade TEXT NOT NULL,
+            year TEXT NOT NULL,
+            subjects TEXT NOT NULL,
+            guardian_phone TEXT NOT NULL,
+            pop_url TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            created_at TEXT NOT NULL
+        );"""
+    )
+    conn.commit()
+    conn.close()
+
+ensure_annual_registration_schema()
+
+
+@app.route('/annual-registration', methods=['GET','POST'])
+def annual_registration():
+    if request.method == 'POST':
+        name = request.form['name']
+        surname = request.form['surname']
+        grade = request.form['grade']
+        year = request.form['year']
+        subjects = request.form.getlist('subjects')
+        guardian = request.form['guardian']
+        f = request.files['pop']
+
+        fname = secure_name(f.filename)
+        save_name = f"annual_{int(datetime.datetime.now().timestamp())}_{fname}"
+        save_path = UPLOAD_DIR / save_name
+        f.save(save_path)
+
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO annual_registrations
+            (student_name, student_surname, grade, year, subjects, guardian_phone, pop_url, created_at)
+            VALUES (?,?,?,?,?,?,?,?)""" ,
+            (
+                name,
+                surname,
+                grade,
+                year,
+                ",".join(subjects),
+                guardian,
+                save_name,
+                now_utc_iso()
+            )
+        )
+        conn.commit()
+        conn.close()
+
+        return page(
+            "Submitted",
+            "<div class='card'><h2>Annual registration submitted</h2>"
+            "<p>Your registration is pending admin approval.</p></div>"
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT grade FROM subjects ORDER BY grade")
+    grades = [r['grade'] for r in cur.fetchall()]
+    cur.execute("SELECT name,grade FROM subjects ORDER BY grade,name")
+    subjects = cur.fetchall()
+    conn.close()
+
+    subject_html = "".join(
+        f"<label><input type='checkbox' name='subjects' value='{s['name']} ({s['grade']})'/> "
+        f"{grade_label(s['grade'])} {s['name']}</label><br>"
+        for s in subjects
+    )
+
+    body = f"""
+    <div class='card'>
+    <h1>Annual Registration</h1>
+    <form method='post' enctype='multipart/form-data'>
+        <label>Name</label><input name='name' required>
+        <label>Surname</label><input name='surname' required>
+        <label>Grade for year</label>
+        <select name='grade'>
+            {''.join(f"<option>{g}</option>" for g in grades)}
+        </select>
+        <label>Year</label><input name='year' value='2026' required>
+        <label>Subjects</label><div>{subject_html}</div>
+        <label>Guardian contact number</label><input name='guardian' required>
+        <label>Proof of payment</label>
+        <input type='file' name='pop' accept='.pdf,.png,.jpg,.jpeg,.webp' required>
+        <br><br>
+        <button class='btn'>Submit Annual Registration</button>
+    </form>
+    </div>
+    """
+
+    return page("Annual Registration", body)
+
+
+@app.route('/admin/annual-registrations')
+def admin_annual_registrations():
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM annual_registrations ORDER BY created_at DESC")
+    rows = cur.fetchall()
+    conn.close()
+
+    rows_html = ""
+    for r in rows:
+        rows_html += f"""
+        <tr>
+            <td>{r['student_name']} {r['student_surname']}</td>
+            <td>{r['grade']}</td>
+            <td>{r['year']}</td>
+            <td>{r['subjects']}</td>
+            <td>{r['guardian_phone']}</td>
+            <td><a href='/uploads/{r['pop_url']}' target='_blank'>View</a></td>
+            <td>{r['status']}</td>
+            <td>
+                <a class='btn mini success' href='/admin/annual-registrations/{r['id']}/approve'>Approve</a>
+                <a class='btn mini danger' href='/admin/annual-registrations/{r['id']}/decline'>Decline</a>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    <div class='card'>
+    <h1>Annual Registrations</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>Student</th><th>Grade</th><th>Year</th>
+                <th>Subjects</th><th>Guardian</th>
+                <th>R-PoP</th><th>Status</th><th>Action</th>
+            </tr>
+        </thead>
+        <tbody>{rows_html}</tbody>
+    </table>
+    </div>
+    """
+
+    return page("Annual Registrations", body)
+
+
+@app.route('/admin/annual-registrations/<int:rid>/<action>')
+def annual_reg_action(rid, action):
+    r = require_admin()
+    if r:
+        return r
+
+    if action not in ('approve','decline'):
+        return redirect(url_for('admin_annual_registrations'))
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE annual_registrations SET status=? WHERE id=?",
+        ('APPROVED' if action == 'approve' else 'DECLINED', rid)
+    )
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('admin_annual_registrations'))
