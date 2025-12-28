@@ -4326,18 +4326,21 @@ try:
 except Exception as e:
     print("DB init warning:", e)
 # =============================================================
+\n\n
+# ======================= EBTA 2026 PATCH (FINAL) =======================
 
+# --- Ensure admin-only month setting exists ---
+try:
+    set_setting('admin_month', get_setting('admin_month', get_setting('current_month')))
+except Exception:
+    pass
 
-
-# ===================== PATCH: ANNUAL REGISTRATION & ENROLLMENT EXTENSIONS =====================
-
-# --- DB EXTENSIONS ---
-def ensure_annual_registration_tables():
+# --- Annual registrations table (linked) ---
+def ensure_annual_registrations():
     conn = get_db()
     cur = conn.cursor()
-
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS annual_registrations (
+    CREATE TABLE IF NOT EXISTS annual_registrations(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         student_id INTEGER NOT NULL,
         year TEXT NOT NULL,
@@ -4347,72 +4350,31 @@ def ensure_annual_registration_tables():
         pop_file TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'PENDING',
         created_at TEXT NOT NULL,
+        UNIQUE(student_id, year),
         FOREIGN KEY(student_id) REFERENCES students(id)
     );
     """)
-
     ensure_column(conn, "enrollments", "registered_status", "TEXT DEFAULT 'NO'")
     ensure_column(conn, "enrollments", "registration_pop", "TEXT")
-    ensure_column(conn, "settings", "admin_month", "TEXT")
-
-    # default admin_month mirrors current_month
-    cur.execute("SELECT value FROM settings WHERE key='admin_month'")
-    if not cur.fetchone():
-        cur.execute(
-            "INSERT INTO settings(key,value) VALUES('admin_month', ?)",
-            (get_setting('current_month'),)
-        )
-
     conn.commit()
     conn.close()
 
-ensure_annual_registration_tables()
+ensure_annual_registrations()
 
-
-# --- HELPERS ---
-def full_month_label(month_str):
-    try:
-        y, m = map(int, month_str.split('-'))
-        return datetime.date(y, m, 1).strftime('%B %Y')
-    except Exception:
-        return month_str
-
-
-def annual_registration_status(conn, student_id):
-    cur = conn.cursor()
-    year = get_setting('current_month').split('-')[0]
-    cur.execute(
-        "SELECT status, pop_file FROM annual_registrations WHERE student_id=? AND year=?",
-        (student_id, year)
-    )
-    row = cur.fetchone()
-    if not row:
-        return "NO", None
-    return row["status"], row["pop_file"]
-
-
-# --- STUDENT: ANNUAL REGISTRATION ---
-@app.route('/student/annual-registration', methods=['GET', 'POST'])
+# --- Student annual registration page ---
+@app.route('/student/annual-registration', methods=['GET','POST'])
 def student_annual_registration():
     r = require_student()
     if r: return r
-
     sid = is_student()
-    conn = get_db()
-    cur = conn.cursor()
+    conn = get_db(); cur = conn.cursor()
 
     if request.method == 'POST':
         f = request.files.get('pop')
-        if not f:
-            flash("Proof of payment required")
-            return redirect(request.url)
-
         fname = secure_name(f"{sid}_{datetime.datetime.now().timestamp()}_{f.filename}")
         f.save(UPLOAD_DIR / fname)
 
-        subjects = ",".join(request.form.getlist("subjects"))
-        year = request.form["year"]
-
+        year = get_setting('current_month').split('-')[0]
         cur.execute("""
             INSERT OR REPLACE INTO annual_registrations
             (student_id, year, grade, subjects, guardian_phone, pop_file, status, created_at)
@@ -4420,53 +4382,42 @@ def student_annual_registration():
         """, (
             sid,
             year,
-            request.form["grade"],
-            subjects,
-            request.form["guardian_phone"],
+            request.form['grade'],
+            request.form['subjects'],
+            request.form['guardian_phone'],
             fname,
             now_utc_iso()
         ))
-
-        conn.commit()
-        conn.close()
+        conn.commit(); conn.close()
         flash("Annual registration submitted. Awaiting approval.")
         return redirect(url_for('student_home'))
 
     return page(
         "Annual Registration",
-        """
+        f"""
         <div class='card'>
-        <h2>Annual Registration</h2>
+        <h2>Annual Registration ({get_setting('current_month').split('-')[0]})</h2>
         <form method='post' enctype='multipart/form-data' class='grid'>
-            <label>Grade for this year</label>
+            <label>Grade for the year</label>
             <input name='grade' required>
-
             <label>Subjects</label>
-            <input name='subjects' placeholder='e.g. Mathematics, Physical Sciences' required>
-
-            <label>Guardian WhatsApp Number</label>
+            <input name='subjects' required>
+            <label>Guardian WhatsApp</label>
             <input name='guardian_phone' required>
-
-            <label>Proof of Payment (PDF or image)</label>
+            <label>Proof of Payment</label>
             <input type='file' name='pop' accept='.pdf,.png,.jpg,.jpeg' required>
-
-            <input type='hidden' name='year' value='""" + get_setting('current_month').split('-')[0] + """'>
-
-            <button class='btn'>Submit Annual Registration</button>
+            <button class='btn'>Submit</button>
         </form>
         </div>
         """
     )
 
-
-# --- ADMIN: ANNUAL REGISTRATIONS ---
+# --- Admin annual registrations page ---
 @app.route('/admin/annual-registrations')
 def admin_annual_registrations():
     r = require_admin()
     if r: return r
-
-    conn = get_db()
-    cur = conn.cursor()
+    conn = get_db(); cur = conn.cursor()
     cur.execute("""
         SELECT ar.*, s.full_name
         FROM annual_registrations ar
@@ -4474,84 +4425,49 @@ def admin_annual_registrations():
         ORDER BY ar.created_at DESC
     """)
     rows = cur.fetchall()
-
-    table_rows = "".join([
-        f"""
-        <tr>
+    body = "".join([
+        f"""<tr>
             <td>{r['full_name']}</td>
             <td>{r['grade']}</td>
             <td>{r['subjects']}</td>
             <td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>
-            <td><a href='/uploads/{r['pop_file']}' target='_blank'>View PoP</a></td>
+            <td><a href='/uploads/{r['pop_file']}' target='_blank'>R‑PoP</a></td>
             <td>
                 <a class='btn mini success' href='/admin/annual-registrations/approve/{r['id']}'>Approve</a>
                 <a class='btn mini danger' href='/admin/annual-registrations/decline/{r['id']}'>Decline</a>
             </td>
-        </tr>
-        """ for r in rows
+        </tr>""" for r in rows
     ])
-
-    return page(
-        "Annual Registrations",
-        f"""
+    return page("Annual Registrations", f"""
         <div class='card'>
         <h2>Annual Registrations</h2>
         <table>
-            <thead>
-                <tr>
-                    <th>Student</th><th>Grade</th><th>Subjects</th>
-                    <th>Status</th><th>PoP</th><th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>{table_rows}</tbody>
+        <tr><th>Student</th><th>Grade</th><th>Subjects</th><th>Status</th><th>PoP</th><th>Actions</th></tr>
+        {body}
         </table>
         </div>
-        """
-    )
-
+    """)
 
 @app.route('/admin/annual-registrations/approve/<int:rid>')
-def approve_annual_registration(rid):
-    r = require_admin()
-    if r: return r
-
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute(
-        "UPDATE annual_registrations SET status='APPROVED' WHERE id=?",
-        (rid,)
-    )
-
-    # update enrollments
-    cur.execute(
-        """
+def approve_annual(rid):
+    require_admin()
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("UPDATE annual_registrations SET status='APPROVED' WHERE id=?", (rid,))
+    cur.execute("""
         UPDATE enrollments
         SET registered_status='YES',
             registration_pop=(SELECT pop_file FROM annual_registrations WHERE id=?)
         WHERE student_id=(SELECT student_id FROM annual_registrations WHERE id=?)
-        """, (rid, rid)
-    )
-
-    conn.commit()
-    conn.close()
-    flash("Annual registration approved.")
+    """, (rid, rid))
+    conn.commit(); conn.close()
     return redirect(url_for('admin_annual_registrations'))
-
 
 @app.route('/admin/annual-registrations/decline/<int:rid>')
-def decline_annual_registration(rid):
-    r = require_admin()
-    if r: return r
-
+def decline_annual(rid):
+    require_admin()
     conn = get_db()
-    conn.execute(
-        "UPDATE annual_registrations SET status='DECLINED' WHERE id=?",
-        (rid,)
-    )
-    conn.commit()
-    conn.close()
-    flash("Annual registration declined.")
+    conn.execute("UPDATE annual_registrations SET status='DECLINED' WHERE id=?", (rid,))
+    conn.commit(); conn.close()
     return redirect(url_for('admin_annual_registrations'))
 
-# ===================== END PATCH =====================
+# ======================= END EBTA 2026 PATCH =======================
