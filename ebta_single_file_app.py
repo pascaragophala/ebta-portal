@@ -4366,3 +4366,60 @@ document.addEventListener('DOMContentLoaded',()=>{
     return response
 
 # ===================== END SAFE LIVE INJECTION =====================
+
+
+
+# ===================== Annual Registration (2026) =====================
+
+@app.route('/annual-registration', methods=['GET', 'POST'])
+def annual_registration():
+    if request.method == 'POST':
+        full_name = request.form.get('full_name')
+        surname = request.form.get('surname')
+        grade = request.form.get('grade')
+        subjects = request.form.get('subjects')
+        guardian_phone = request.form.get('guardian_phone')
+        year = request.form.get('year', '2026')
+
+        pop = request.files.get('pop')
+        pop_path = None
+        if pop and pop.filename:
+            fname = secure_name(pop.filename)
+            pop_path = f"annual_{int(datetime.datetime.now().timestamp())}_{fname}"
+            pop.save(os.path.join(UPLOAD_DIR, pop_path))
+
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO messages(kind,payload,created_at)
+               VALUES(?,?,?)""",
+            (
+                'annual_registration',
+                f"{full_name} {surname} | Grade {grade} | Subjects: {subjects} | Guardian: {guardian_phone} | POP: {pop_path}",
+                now_utc_iso()
+            )
+        )
+        conn.commit()
+        conn.close()
+        return page("Annual Registration Submitted",
+                    "<div class='card'><h2>Thank you</h2><p>Your annual registration has been submitted and is pending admin approval.</p><a class='btn' href='/'>Back to Home</a></div>")
+
+    return page(
+        "Annual Registration (2026)",
+        """
+        <div class='card'>
+        <h2>Annual Registration (2026)</h2>
+        <form method='post' enctype='multipart/form-data' class='grid'>
+            <label>Name</label><input name='full_name' required>
+            <label>Surname</label><input name='surname' required>
+            <label>Grade for 2026</label><input name='grade' required>
+            <label>Subjects</label><input name='subjects' required>
+            <label>Guardian Contact Number</label><input name='guardian_phone' required>
+            <label>Proof of Payment</label>
+            <input type='file' name='pop' accept='.pdf,.png,.jpg,.jpeg'>
+            <input type='hidden' name='year' value='2026'>
+            <button class='btn'>Submit Annual Registration</button>
+        </form>
+        </div>
+        """
+    )
