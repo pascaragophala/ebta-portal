@@ -1710,6 +1710,33 @@ def home():
 
     extra_js = '''
 <script>
+/* ================= Exit Page Warning ================= */
+(function () {
+    let formTouched = false;
+
+    document.addEventListener('DOMContentLoaded', function () {
+        const form = document.getElementById('reg_form');
+        if (!form) return;
+
+        form.addEventListener('input', () => {
+            formTouched = true;
+        });
+
+        form.addEventListener('submit', () => {
+            formTouched = false;
+        });
+
+        window.addEventListener('beforeunload', function (e) {
+            if (!formTouched) return;
+            e.preventDefault();
+            e.returnValue = '';
+        });
+    });
+})();
+</script>'''
+    
+    extra_js += '''
+<script>
 // Simple on-page popup function (toast/modal) used instead of alert()
 function showPopup(message, type='info', timeout=4000){
     // type can be 'info','error','success'
