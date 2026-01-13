@@ -2188,43 +2188,78 @@ def admin_registered():
 
 # ===================== Status page ==============
 @app.get('/status/<int:id>')
-def status(id:int):
-    token=request.args.get('token')
-    conn=get_db(); cur=conn.cursor()
+def status(id: int):
+    token = request.args.get('token')
+    conn = get_db()
+    cur = conn.cursor()
+
     cur.execute("""
-    SELECT e.*, s.full_name, s.phone_whatsapp, sub.name AS subject_name, sub.id AS subject_id
-    FROM enrollments e
-    JOIN students s ON s.id=e.student_id
-    JOIN subjects sub ON sub.id=e.subject_id
-    WHERE e.id=?""",(id,))
-    e=cur.fetchone()
+        SELECT e.*, s.full_name, s.phone_whatsapp, sub.name AS subject_name, sub.id AS subject_id
+        FROM enrollments e
+        JOIN students s ON s.id = e.student_id
+        JOIN subjects sub ON sub.id = e.subject_id
+        WHERE e.id = ?
+    """, (id,))
+    e = cur.fetchone()
+
     if not e:
-        conn.close(); return page("Not found", card_msg("Enrollment not found."))
-    if token and token!=e['status_token']:
-        conn.close(); return page("Forbidden", card_msg("Invalid token."))
-    cur.execute("SELECT invite_link FROM groups WHERE subject_id=? AND month=? ORDER BY id DESC LIMIT 1",(e['subject_id'],e['month']))
-    g=cur.fetchone()
-    cur.execute("SELECT file_path FROM enrollment_files WHERE enrollment_id=?",(id,))
+        conn.close()
+        return page("Not found", card_msg("Enrollment not found."))
+
+    if token and token != e['status_token']:
+        conn.close()
+        return page("Forbidden", card_msg("Invalid token."))
+
+    cur.execute("""
+        SELECT invite_link 
+        FROM groups 
+        WHERE subject_id = ? AND month = ? 
+        ORDER BY id DESC 
+        LIMIT 1
+    """, (e['subject_id'], e['month']))
+    g = cur.fetchone()
+
+    cur.execute("""
+        SELECT file_path 
+        FROM enrollment_files 
+        WHERE enrollment_id = ?
+    """, (id,))
     pops = [r['file_path'] for r in cur.fetchall()]
+
     conn.close()
-    gl=g['invite_link'] if g else None
-    join=(f"<a class='btn success' target='_blank' href='{gl}'>Join WhatsApp Group</a>"
-        if (e['status']=='ACTIVE' and gl) else (
-        "<div class='muted mini'>"
-        "<strong>Next steps:</strong><br>"
-        "• Approval usually takes up to 48 hours<br>"
-        "• Log in on the Student Portal once approved<br>"
-        "• Use your enrolled phone number and 5-digit PIN<br>"
-        "</div>"
+
+    gl = g['invite_link'] if g else None
+
+    join = (
+        f"<a class='btn success' target='_blank' href='{gl}'>Join WhatsApp Group</a>"
+        if (e['status'] == 'ACTIVE' and gl)
+        else (
+            "<div class='muted mini'>"
+            "<strong>Next steps:</strong> Once your enrollment is approved (usually within 48 hours), "
+            "you’ll be able to log in on the Student Portal using the phone number you used to enroll "
+            "and your 5-digit PIN to access all classes and learning materials."
+            "</div>"
+        )
     )
-    pop_list = " • ".join([f"<a class='links' href='{p}' target='_blank'>PoP</a>" for p in pops]) if pops else "—"
-    body=fr"""
+
+    pop_list = (
+        " • ".join([f"<a class='links' href='{p}' target='_blank'>PoP</a>" for p in pops])
+        if pops else "—"
+    )
+
+    body = fr"""
     <a class='links' href='/'>← Back</a>
-    <section class='grid'><div class='card'><h1>Hello {e['full_name']}</h1>
-    <p class='muted'>Subject: {e['subject_name']} • Month: {pretty_month_label(e['month'])}</p>
-    <p>Status: <span class='chip {e['status'].lower()}'>{e['status']}</span></p>
-    <p class='mini muted'>Proof of Payment: {pop_list}</p>
-    {join}</div></section>"""
+    <section class='grid'>
+        <div class='card'>
+            <h1>Hello {e['full_name']}</h1>
+            <p class='muted'>Subject: {e['subject_name']} • Month: {pretty_month_label(e['month'])}</p>
+            <p>Status: <span class='chip {e['status'].lower()}'>{e['status']}</span></p>
+            <p class='mini muted'>Proof of Payment: {pop_list}</p>
+            {join}
+        </div>
+    </section>
+    """
+
     return page("Status", body)
 
 
