@@ -2209,7 +2209,14 @@ def status(id:int):
     conn.close()
     gl=g['invite_link'] if g else None
     join=(f"<a class='btn success' target='_blank' href='{gl}'>Join WhatsApp Group</a>"
-        if (e['status']=='ACTIVE' and gl) else "<div class='muted'>Link appears once ACTIVE.</div>")
+        if (e['status']=='ACTIVE' and gl) else (
+        "<div class='muted mini'>"
+        "<strong>Next steps:</strong><br>"
+        "• Approval usually takes up to 48 hours<br>"
+        "• Log in on the Student Portal once approved<br>"
+        "• Use your enrolled phone number and 5-digit PIN<br>"
+        "</div>"
+    )
     pop_list = " • ".join([f"<a class='links' href='{p}' target='_blank'>PoP</a>" for p in pops]) if pops else "—"
     body=fr"""
     <a class='links' href='/'>← Back</a>
