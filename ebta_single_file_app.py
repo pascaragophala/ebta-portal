@@ -1710,15 +1710,18 @@ def home():
 
     extra_js = '''
     
- <script>
-/* === Warn user before leaving or closing the page === */
+<script>
+let ebtaAllowExit = false;
+
 window.addEventListener('beforeunload', function (e) {
+    if (ebtaAllowExit) return;
     const message = 'Are you sure you want to leave this page?';
     e.preventDefault();
-    e.returnValue = message; // modern browsers ignore custom text but this is required
+    e.returnValue = message;
     return message;
 });
-</script>   
+</script>
+  
     
 <script>
 // Simple on-page popup function (toast/modal) used instead of alert()
@@ -1803,6 +1806,9 @@ function showPopup(message, type='info', timeout=4000){
     }
 
     form.addEventListener('submit', function(e){
+    
+        // ✅ allow exit without warning when submitting
+        ebtaAllowExit = true;
         const grade = gradeSelect.value;
 
         // Validate phone numbers: ensure 10 digits for student and guardian WhatsApp numbers
