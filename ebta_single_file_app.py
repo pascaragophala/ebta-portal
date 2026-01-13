@@ -1719,19 +1719,6 @@ window.addEventListener('beforeunload', function (e) {
     return message;
 });
 </script>   
-
-<script>
-document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'hidden') {
-        console.log('User switched tabs or windows');
-        // Optional: show a gentle reminder
-        if (typeof showPopup === 'function') {
-            showPopup('You are leaving the enrollment page. Please make sure your details are saved.', 'info', 3000);
-        }
-    }
-});
-</script>
-
     
 <script>
 // Simple on-page popup function (toast/modal) used instead of alert()
