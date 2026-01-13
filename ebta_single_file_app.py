@@ -626,8 +626,10 @@ def send_email_notification(to_email: str, subject: str, body: str):
         msg["To"] = to_email
         msg.set_content(body)
 
-        with smtplib.SMTP(host, port, timeout=15) as s:
+        with smtplib.SMTP(host, port, timeout=30) as s:
+            s.ehlo()
             s.starttls()
+            s.ehlo()
             s.login(user, pwd)
             s.send_message(msg)
     except Exception as e:
