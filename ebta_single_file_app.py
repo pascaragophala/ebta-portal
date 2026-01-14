@@ -32,7 +32,7 @@ QR_DIR = Path(BASE_DATA_DIR) / "qr"
 for d in (UPLOADS_DIR, MATERIALS_DIR, SUBMISSIONS_DIR, QR_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/1nieF2O.jpg")
+LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/SqocnYt.png")
 # =============================================================
 
 
@@ -1465,14 +1465,14 @@ def page(title, body_html, extra_head="", extra_js=""):
     <html><head>
     <meta name='viewport' content='width=device-width, initial-scale=1'/>
     <title>{title}</title>
-    <link rel="icon" type="image/jpeg" href="https://i.imgur.com/QDJvjau.png">
+    <link rel="icon" type="image/jpeg" href="https://i.imgur.com/SqocnYt.png">
     {GOOGLE_FONTS}{BASE_CSS}{BASE_JS}{extra_head}
     </head><body>
     <header class='header'>
         <div class='nav'>
         <div class='brand'>
             <img class='brand-logo'
-                src="https://i.imgur.com/QDJvjau.png"
+                src="https://i.imgur.com/SqocnYt.png"
                 alt="EBTA logo"/>
             <div class='title'>EBTA Portal</div>
         </div>
