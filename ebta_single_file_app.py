@@ -229,6 +229,9 @@ def init_db():
     ensure_column(conn, "materials", "is_assignment", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "materials", "due_date", "TEXT")
     ensure_column(conn, "materials", "max_points", "INTEGER NOT NULL DEFAULT 100")
+    ensure_column(conn, "students", "province", "TEXT")
+    ensure_column(conn, "students", "school", "TEXT")
+
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS submissions(
@@ -1644,6 +1647,27 @@ def home():
             <label>Student Email (optional)</label>
             <input name='email'/>
             </div>
+            <div>
+              <label>Province</label>
+              <select name="province" required>
+                <option value="">Select province…</option>
+                <option>Eastern Cape</option>
+                <option>Free State</option>
+                <option>Gauteng</option>
+                <option>KwaZulu-Natal</option>
+                <option>Limpopo</option>
+                <option>Mpumalanga</option>
+                <option>North West</option>
+                <option>Northern Cape</option>
+                <option>Western Cape</option>
+              </select>
+            </div>
+
+            <div>
+              <label>School</label>
+              <input name="school" placeholder="School name" required />
+            </div>
+
         </div>
 
         <!-- Grade & subjects -->
@@ -2024,6 +2048,9 @@ def register():
     subject_ids = request.form.getlist('subject_ids')
     pin       = request.form.get('pin','').strip()
     pops      = request.files.getlist('pop')
+    province = request.form.get('province')
+    school = request.form.get('school')
+
 
     # Validate required fields
     if not (full_name and phone and guardian_name and guardian and subject_ids and pin):
@@ -2067,10 +2094,30 @@ def register():
         derived_grade = r0['grade']
 
         created_at = now_utc_iso()
-        cur.execute(
-            "INSERT INTO students(full_name,phone_whatsapp,guardian_name,guardian_phone,email,grade,pin,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            (full_name, phone, guardian_name, guardian, email, derived_grade, pin, created_at)
-        )
+        cur.execute("""
+        INSERT INTO students (
+            full_name,
+            phone_whatsapp,
+            guardian_phone,
+            email,
+            grade,
+            pin,
+            province,
+            school,
+            created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?)
+        """, (
+            full_name,
+            phone,
+            guardian_phone,
+            email,
+            grade,
+            pin,
+            province,
+            school,
+            now_utc_iso()
+        ))
+
         sid = cur.lastrowid
 
     # Save PoP files
@@ -3414,50 +3461,104 @@ def admin_students():
     r = require_admin()
     if r:
         return r
+
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT id, full_name, phone_whatsapp, guardian_phone, email, grade, pin FROM students ORDER BY created_at DESC")
-    rows = cur.fetchall()
-    conn.close()
 
-    def nz(v): return v if (v and str(v).strip()) else "N/A"
+    # 1. Fetch students
+    cur.execute("""
+        SELECT
+            id,
+            full_name,
+            phone_whatsapp,
+            guardian_phone,
+            email,
+            grade,
+            province,
+            school,
+            pin
+        FROM students
+        ORDER BY created_at DESC
+    """)
+    rows = cur.fetchall()
+
+    # 2. Second cursor for subjects
+    cur2 = conn.cursor()
+
+    def nz(v):
+        return v if (v and str(v).strip()) else "N/A"
 
     trs = []
+
+    # 3. Loop students
     for s in rows:
+        # Fetch subjects for THIS student
+        cur2.execute("""
+            SELECT sub.name
+            FROM enrollments e
+            JOIN subjects sub ON sub.id = e.subject_id
+            WHERE e.student_id = ?
+        """, (s['id'],))
+
+        subject_rows = cur2.fetchall()
+        subjects = ", ".join([r['name'] for r in subject_rows]) if subject_rows else "N/A"
+
         pin = s['pin'] if s['pin'] else "<span class='muted'>not set</span>"
+
         trs.append(
-            f"<tr><td>{s['full_name']}<div class='muted'>{s['phone_whatsapp']}</div></td>"
+            f"<tr>"
+            f"<td>{s['full_name']}<div class='muted'>{s['phone_whatsapp']}</div></td>"
             f"<td>{grade_label(s['grade'])}</td>"
+            f"<td>{subjects}</td>"
             f"<td>{nz(s['guardian_phone'])}</td>"
+            f"<td>{nz(s['province'])}</td>"
+            f"<td>{nz(s['school'])}</td>"
             f"<td>{nz(s['email'])}</td>"
             f"<td>{pin}</td>"
             f"<td>"
-            f"<form method='post' action='{url_for('admin_student_reset_pin', sid=s['id'])}' style='display:inline'><button class='btn success'>Reset PIN</button></form> "
-            f"<form method='post' action='{url_for('admin_student_delete', sid=s['id'])}' style='display:inline' onsubmit='return confirm(\"Delete this student?\")'><button class='btn danger'>Delete</button></form>"
-            f"</td></tr>"
+            f"<form method='post' action='{url_for('admin_student_reset_pin', sid=s['id'])}' style='display:inline'>"
+            f"<button class='btn success'>Reset PIN</button></form> "
+            f"<form method='post' action='{url_for('admin_student_delete', sid=s['id'])}' "
+            f"style='display:inline' onsubmit='return confirm(\"Delete this student?\")'>"
+            f"<button class='btn danger'>Delete</button></form>"
+            f"</td>"
+            f"</tr>"
         )
+
+    conn.close()
 
     body = f"""
     <a class='links' href='{url_for('admin_home')}'>← Back</a>
     <section class='card'>
         <h1>Students</h1>
         <div class='toolbar'>
-        <input id='stu_q' class='pill' placeholder='Search students' oninput="filterTable('stu_q','stu_tbl')"/>
-        <form method='post' action='{url_for('admin_student_add')}' class='grid' style='grid-template-columns:1fr 160px 120px 1fr auto;gap:10px;margin-left:auto'>
-            <input name='full_name' placeholder='Full name' required />
-            <input name='phone' placeholder='Phone/WhatsApp' required />
-            <input name='grade' placeholder='G8..G12' required />
-            <input name='email' placeholder='Email (optional)' />
-            <button class='btn'>Add</button>
-        </form>
+            <input id='stu_q' class='pill' placeholder='Search students'
+                   oninput="filterTable('stu_q','stu_tbl')"/>
         </div>
+
         <table id='stu_tbl'>
-        <thead><tr><th>Student</th><th>Grade</th><th>Guardian</th><th>Email</th><th>PIN</th><th>Actions</th></tr></thead>
-        <tbody>{''.join(trs) if trs else "<tr><td colspan='6'><div class='empty'>No students yet.</div></td></tr>"}</tbody>
+            <thead>
+                <tr>
+                    <th>Student</th>
+                    <th>Grade</th>
+                    <th>Subject</th>
+                    <th>Guardian</th>
+                    <th>Province</th>
+                    <th>School</th>
+                    <th>Email</th>
+                    <th>PIN</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(trs) if trs else "<tr><td colspan='9'><div class='empty'>No students yet.</div></td></tr>"}
+            </tbody>
         </table>
     </section>
     """
+
     return page("Students", body)
+
 
 @app.post('/admin/students/add')
 def admin_student_add():
