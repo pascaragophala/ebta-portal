@@ -3279,60 +3279,104 @@ def admin_enrollments():
     r = require_admin()
     if r:
         return r
+
     month = get_setting('current_month')
     conn = get_db()
     cur = conn.cursor()
+
+    # Fetch enrollments + student + grade + subject
     cur.execute(
         """
-        SELECT e.*, st.full_name, st.phone_whatsapp, sub.name AS subject_name
+        SELECT 
+            e.*,
+            st.full_name,
+            st.phone_whatsapp,
+            st.grade,
+            sub.name AS subject_name
         FROM enrollments e
-        JOIN students st ON st.id=e.student_id
-        JOIN subjects sub ON sub.id=e.subject_id
-        WHERE e.month=?
+        JOIN students st ON st.id = e.student_id
+        JOIN subjects sub ON sub.id = e.subject_id
+        WHERE e.month = ?
         ORDER BY e.created_at ASC
         """,
         (month,),
     )
+
     rows = cur.fetchall()
 
+    # Proof of Payment helper
     def pop_cell(eid, legacy):
-        cur.execute("SELECT file_path FROM enrollment_files WHERE enrollment_id=?", (eid,))
+        cur.execute(
+            "SELECT file_path FROM enrollment_files WHERE enrollment_id=?",
+            (eid,),
+        )
         files = [r['file_path'] for r in cur.fetchall()]
         if not files and legacy:
-            files=[legacy]
-        return " ".join([f"<a class='links' target='_blank' href='{p}'>PoP</a>" for p in files]) or "—"
+            files = [legacy]
+        return " ".join(
+            [f"<a class='links' target='_blank' href='{p}'>PoP</a>" for p in files]
+        ) or "—"
 
+    # Build table rows
     table_rows = "".join(
         [
-            f"<tr><td>{r['full_name']}<div class='muted'>{r['phone_whatsapp']}</div></td>"
+            f"<tr>"
+            f"<td>{r['full_name']}<div class='muted'>{r['phone_whatsapp']}</div></td>"
+            f"<td>{grade_label(r['grade'])}</td>"
             f"<td>{r['subject_name']}</td>"
             f"<td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>"
             f"<td>{pop_cell(r['id'], r['pop_url'])}</td>"
             f"<td>"
-            f"<form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'><button class='btn success'>Approve</button></form> "
-            f"<form method='post' action='{url_for('enrollment_action', id=r['id'], action='lapse')}' style='display:inline'><button class='btn danger'>Lapse</button></form>"
+            f"<form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>"
+            f"<button class='btn success'>Approve</button></form> "
+            f"<form method='post' action='{url_for('enrollment_action', id=r['id'], action='lapse')}' style='display:inline'>"
+            f"<button class='btn danger'>Lapse</button></form>"
             f"</td>"
-            f"<td><a class='links' target='_blank' href='{url_for('status', id=r['id'])}?{urlencode({'token': r['status_token']})}'>open</a></td>"
+            f"<td>"
+            f"<a class='links' target='_blank' "
+            f"href='{url_for('status', id=r['id'])}?{urlencode({'token': r['status_token']})}'>open</a>"
+            f"</td>"
             f"</tr>"
             for r in rows
         ]
     )
+
     conn.close()
 
     body = f"""
     <a class='links' href='{url_for('admin_home')}'>← Back</a>
+
     <section class='card'>
         <h1>Enrollments — {month}</h1>
+
         <div class='toolbar'>
-        <input id='enr_q' class='pill' placeholder='Search by name, phone, subject' oninput="filterTable('enr_q','enr_tbl')"/>
-        <a class='btn secondary' href='{url_for('export_remove_list')}'>Download remove list</a>
+            <input id='enr_q' class='pill'
+                   placeholder='Search by name, phone, grade, subject'
+                   oninput="filterTable('enr_q','enr_tbl')"/>
+            <a class='btn secondary' href='{url_for('export_remove_list')}'>
+                Download remove list
+            </a>
         </div>
+
         <table id='enr_tbl'>
-        <thead><tr><th>Student</th><th>Subject</th><th>Status</th><th>PoP</th><th>Actions</th><th>Status link</th></tr></thead>
-        <tbody>{table_rows}</tbody>
+            <thead>
+                <tr>
+                    <th>Student</th>
+                    <th>Grade</th>
+                    <th>Subject</th>
+                    <th>Status</th>
+                    <th>PoP</th>
+                    <th>Actions</th>
+                    <th>Status link</th>
+                </tr>
+            </thead>
+            <tbody>
+                {table_rows if table_rows else "<tr><td colspan='7'><div class='empty'>No enrollments yet.</div></td></tr>"}
+            </tbody>
         </table>
     </section>
     """
+
     return page("Enrollments", body)
 
 @app.post('/admin/enrollments/<int:id>/<action>')
