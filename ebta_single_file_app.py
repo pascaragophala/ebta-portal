@@ -1465,6 +1465,7 @@ def page(title, body_html, extra_head="", extra_js=""):
     <html><head>
     <meta name='viewport' content='width=device-width, initial-scale=1'/>
     <title>{title}</title>
+    <link rel="icon" type="image/jpeg" href="https://i.imgur.com/1nieF2O.jpeg">
     {GOOGLE_FONTS}{BASE_CSS}{BASE_JS}{extra_head}
     </head><body>
     <header class='header'>
