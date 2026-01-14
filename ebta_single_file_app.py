@@ -2357,15 +2357,49 @@ def student_forgot_pin():
 
 @app.get('/student/logout')
 def student_logout():
-    session.pop('student_id',None); session.pop('student_name',None)
+    session.pop('student_id', None)
+    session.pop('student_name', None)
+    session.pop('student_month', None)  # 🔑 clear month override
     return redirect(url_for('student_login'))
+
+
+ def get_active_month(role):
+    """
+    Returns the effective month for the current session.
+    Falls back to admin global month if no override is set.
+    """
+    if role == 'student':
+        return session.get('student_month') or get_setting('current_month')
+    if role == 'tutor':
+        return session.get('tutor_month') or get_setting('current_month')
+    return get_setting('current_month')
 
 @app.get('/student')
 def student_home():
+
     r=require_student()
     if r: return r
-    sid=is_student(); month=get_setting('current_month')
+    sid = is_student()
+    month = get_active_month('student')
+
     conn=get_db(); cur=conn.cursor()
+    
+    cur.execute(
+    "SELECT DISTINCT month FROM enrollments WHERE student_id=? ORDER BY month DESC",
+    (sid,)
+    )
+    available_months = [r['month'] for r in cur.fetchall()]
+    
+    month_selector = f"""
+    <form method="post" action="{url_for('student_set_month')}" class="inlineform">
+        <select name="month" onchange="this.form.submit()">
+            {''.join(
+                f"<option value='{m}' {'selected' if m==month else ''}>{pretty_month_label(m)}</option>"
+                for m in available_months
+            )}
+        </select>
+    </form>
+    """
 
     # Enrollments this month
     cur.execute("""
@@ -2576,11 +2610,15 @@ def student_home():
     </div>
     """
 
+
     body=fr"""
     <section class='grid'>
     <div class='card'>
         <h1>Welcome, {session.get('student_name','Student')}</h1>
-        <p class='muted'>Month: {month}</p>
+            <p class='muted'>
+                Viewing: {pretty_month_label(month)} {month_selector}
+            </p>
+
         <h2>Your Enrollments</h2>{enr_html}
         <p class='mini muted'>To add more subjects, submit the Home form again with your phone number and the new subjects + PoP.</p>
     </div>
@@ -2595,6 +2633,40 @@ def student_home():
     {compose_block}
     </section>"""
     return page("Student Portal", body)
+
+
+@app.post('/student/set-month')
+def student_set_month():
+    r = require_student()
+    if r: return r
+
+    sid = is_student()
+    month = request.form.get('month')
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM enrollments WHERE student_id=? AND month=? LIMIT 1",
+        (sid, month)
+    )
+    ok = cur.fetchone() is not None
+    conn.close()
+
+    if ok:
+        session['student_month'] = month
+
+    return redirect(url_for('student_home'))
+
+@app.post('/tutor/set-month')
+def tutor_set_month():
+    r = require_tutor()
+    if r: return r
+
+    month = request.form.get('month')
+    session['tutor_month'] = month
+
+    return redirect(url_for('tutor_home'))
+
 
 @app.post('/student/assignment/<int:mid>/submit')
 def student_submit_assignment(mid:int):
@@ -2731,15 +2803,35 @@ def tutor_forgot_pin():
 
 @app.get('/tutor/logout')
 def tutor_logout():
-    session.pop('tutor_id',None); session.pop('tutor_name',None)
+    session.pop('tutor_id', None)
+    session.pop('tutor_name', None)
+    session.pop('tutor_month', None)  # 🔑 clear month override
     return redirect(url_for('tutor_login'))
+
 
 @app.get('/tutor')
 def tutor_home():
+  
     r=require_tutor()
     if r: return r
-    tid=is_tutor(); month=get_setting('current_month')
+    tid = is_tutor()
+    month = get_active_month('tutor')
+
     conn=get_db(); cur=conn.cursor()
+    
+    cur.execute("SELECT DISTINCT month FROM enrollments ORDER BY month DESC")
+    all_months = [r['month'] for r in cur.fetchall()]
+    
+    month_selector = f"""
+    <form method="post" action="{url_for('tutor_set_month')}" class="inlineform">
+        <select name="month" onchange="this.form.submit()">
+            {''.join(
+                f"<option value='{m}' {'selected' if m==month else ''}>{pretty_month_label(m)}</option>"
+                for m in all_months
+            )}
+        </select>
+    </form>
+    """
 
     # Assigned subjects
     cur.execute("""SELECT s.id AS subject_id, s.name AS subject_name, s.grade
@@ -2886,9 +2978,17 @@ def tutor_home():
 
     conn.close()
 
+
     body=fr"""
     <section class='grid'>
-    <div class='card'><h1>Welcome, {session.get('tutor_name','Tutor')}</h1><p class='muted'>Your subjects</p><div>{assigned_list}</div></div>
+    <div class='card'>
+        <h1>Welcome, {session.get('tutor_name','Tutor')}</h1>
+        <p class='muted'>
+            Viewing: {pretty_month_label(month)} {month_selector}
+        </p>
+        <div>{assigned_list}</div>
+    </div>
+
 
     <div class='card'><h2>WhatsApp Links — {month}</h2>{groups_html}</div>
 
