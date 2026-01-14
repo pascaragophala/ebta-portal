@@ -2363,7 +2363,7 @@ def student_logout():
     return redirect(url_for('student_login'))
 
 
- def get_active_month(role):
+def get_active_month(role):
     """
     Returns the effective month for the current session.
     Falls back to admin global month if no override is set.
