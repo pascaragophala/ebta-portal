@@ -2042,76 +2042,73 @@ function showPopup(message, type='info', timeout=4000){
 def register():
     full_name = request.form.get('full_name','').strip()
     phone = normalize_phone(request.form.get('phone',''))
-    guardian  = request.form.get('guardian','').strip()
-    email     = request.form.get('email','').strip()
+    guardian = request.form.get('guardian','').strip()
     guardian_name = request.form.get('guardian_name','').strip()
+    email = request.form.get('email','').strip() or None
     subject_ids = request.form.getlist('subject_ids')
-    pin       = request.form.get('pin','').strip()
-    pops      = request.files.getlist('pop')
+    pin = request.form.get('pin','').strip()
+    pops = request.files.getlist('pop')
     province = request.form.get('province')
     school = request.form.get('school')
 
-
-    # Validate required fields
-    if not (full_name and phone and guardian_name and guardian and subject_ids and pin):
+    # Validation
+    if not (full_name and phone and guardian and guardian_name and subject_ids and pin):
         return page("Error", card_msg("All fields are required."))
+
     if not is_valid_pin(pin):
         return page("Error", card_msg("PIN must be exactly 5 digits."))
 
-    # Validate PoP files: 1–2 files required
-    pops = [f for f in pops if (f and f.filename)]
+    pops = [f for f in pops if f and f.filename]
     if len(pops) < 1 or len(pops) > 2:
         return page("Error", card_msg("Upload 1 or 2 Proof of Payment files."))
 
-    # Ensure registrations table exists
     conn = get_db()
     ensure_registration_table(conn)
     cur = conn.cursor()
 
-    # 🔑 STEP 1: Look up student by PHONE FIRST
+    # Check existing student
     cur.execute("SELECT id, pin FROM students WHERE phone_whatsapp=?", (phone,))
     srow = cur.fetchone()
 
-    # 🔑 STEP 2: Handle PIN logic correctly
     if srow:
-        # Existing student → PIN must match this phone
         if srow['pin'] != pin:
             conn.close()
             return page("Error", card_msg("Incorrect PIN for this phone number."))
         sid = srow['id']
     else:
-        # New student → now enforce PIN uniqueness
         if pin_in_use(conn, pin):
             conn.close()
             return page("Error", card_msg("PIN already in use. Pick another."))
 
-        # derive grade from the first subject selected
+        # Derive grade from first subject
         cur.execute("SELECT grade FROM subjects WHERE id=?", (subject_ids[0],))
         r0 = cur.fetchone()
         if not r0:
             conn.close()
             return page("Error", card_msg("Invalid subject selection."))
+
         derived_grade = r0['grade']
 
-        created_at = now_utc_iso()
         cur.execute("""
         INSERT INTO students (
             full_name,
             phone_whatsapp,
             guardian_phone,
+            guardian_name,
             email,
             grade,
             pin,
             province,
             school,
             created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?)
         """, (
             full_name,
             phone,
-            guardian_phone,
+            guardian,
+            guardian_name,
             email,
-            grade,
+            derived_grade,
             pin,
             province,
             school,
@@ -2129,47 +2126,38 @@ def register():
         pop.save(dest)
         saved_paths.append(f"/uploads/{safe}")
 
-    # --- Registration fee logic (unchanged) ---
+    # Annual registration (optional)
     try:
-        reg_conn = get_db()
-        ensure_registration_table(reg_conn)
-        reg_cur = reg_conn.cursor()
         year = datetime.date.today().strftime('%Y')
-        if not student_registered_for_year(reg_conn, sid, year):
-            paid_check = request.form.get('paid_check')
-            if paid_check:
-                reg_created_at = now_utc_iso()
-                reg_cur.execute(
+        if not student_registered_for_year(conn, sid, year):
+            if request.form.get('paid_check'):
+                cur.execute(
                     "INSERT INTO registrations(student_id,year,amount,created_at) VALUES(?,?,?,?)",
-                    (sid, year, 50, reg_created_at)
+                    (sid, year, 50, now_utc_iso())
                 )
-                reg_conn.commit()
     except Exception:
         pass
-    finally:
-        try:
-            if reg_conn:
-                reg_conn.close()
-        except Exception:
-            pass
 
     month = get_setting('current_month', datetime.date.today().strftime('%Y-%m'))
+
     cur.execute("SELECT subject_id FROM enrollments WHERE student_id=? AND month=?", (sid, month))
     existing = {str(x['subject_id']) for x in cur.fetchall()}
 
     created = []
-    created_at = now_utc_iso()
 
     for subid in subject_ids:
         if subid in existing:
             continue
         token = secrets.token_urlsafe(16)
-        pop_url_legacy = saved_paths[0]
-        cur.execute(
-            """INSERT INTO enrollments(student_id,subject_id,month,status,payment_method,payment_ref,pop_url,status_token,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?)""",
-            (sid, subid, month, 'PENDING', 'EFT', None, pop_url_legacy, token, created_at)
-        )
+        cur.execute("""
+        INSERT INTO enrollments(
+            student_id,subject_id,month,status,
+            payment_method,payment_ref,pop_url,status_token,created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?)
+        """, (
+            sid, subid, month, 'PENDING',
+            'EFT', None, saved_paths[0], token, now_utc_iso()
+        ))
         eid = cur.lastrowid
         for pth in saved_paths:
             cur.execute(
@@ -2188,20 +2176,19 @@ def register():
         eid, tok = created[0]
         return redirect(url_for('status', id=eid) + '?' + urlencode({'token': tok}))
 
-    links = [
-        f"<li><a class='links' target='_blank' href='{url_for('status', id=e)}?{urlencode({'token': t})}'>Status for enrollment #{e}</a></li>"
+    links = "".join(
+        f"<li><a class='links' target='_blank' href='{url_for('status', id=e)}?{urlencode({'token': t})}'>Enrollment #{e}</a></li>"
         for e, t in created
-    ]
+    )
 
-    body = f"""
+    return page("Submitted", f"""
     <section class='wrap small'>
-    <div class='card'>
-        <h1>Registration submitted</h1>
-        <ul>{''.join(links)}</ul>
-    </div>
+        <div class='card'>
+            <h1>Registration submitted</h1>
+            <ul>{links}</ul>
+        </div>
     </section>
-    """
-    return page("Submitted", body)
+    """)
 
 
 
