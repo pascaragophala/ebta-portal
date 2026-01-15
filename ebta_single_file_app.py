@@ -1720,7 +1720,10 @@ def home():
             </ul>
             <label style='margin-top:6px;display:flex;align-items:center;gap:8px;'>
                 <input type='checkbox' id='paid_check' name='paid_check'/>
-                <span class='mini'>I have already made payment and will upload my Proof of Payment now.</span>
+                <span class='mini' id='payment_text'>
+                  Payment has been made and I will upload the Proof of Payment now.
+                </span>
+
             </label>
             <div id='pop_section' style='margin-top:8px;display:none;'>
                 <label>Proof of Payment (1–2 files)</label>
@@ -1925,7 +1928,25 @@ function showPopup(message, type='info', timeout=4000){
         const parent = document.getElementById('reg_form')?.querySelector('div.grid[style*="grid-template-columns:1fr 1fr"]') || document.getElementById('reg_form');
         if(parent) parent.appendChild(feeBox);
         }
-        feeBox.innerHTML = `<div class='mini muted'>Per-subject fee for selected grade: R${per}. Total subjects: ${count}. Total due for enrollment (this month): <strong>R${total}</strong>.</div>`;
+        feeBox.innerHTML = `
+          <div class='mini' style="
+              font-size:15px;
+              font-weight:600;
+              color:#0f172a;
+              padding:10px;
+              border:2px solid #1b5e20;
+              border-radius:10px;
+              background:#f0fdf4;
+            ">
+            Per-subject fee: <strong>R${per}</strong><br>
+            Subjects selected: <strong>${count}</strong><br>
+            Total due for this month:
+            <span style="font-size:18px; font-weight:800; color:#1b5e20;">
+              R${total}
+            </span>
+          </div>
+        `;
+
     }
     document.addEventListener('change', function(e){
         if(e.target && (e.target.name==='subject_ids' || e.target.id==='grade_select')) updateFees();
@@ -2021,6 +2042,8 @@ function showPopup(message, type='info', timeout=4000){
       noBtn.style.background = '#fff';
       noBtn.style.color = '#0f172a';
       noBtn.onclick = function(){
+        // allow page exit without warning
+        ebtaAllowExit = true;
         // Redirect to registration form
         window.location.href = 'https://docs.google.com/forms/d/e/1FAIpQLScCF4rLX81GxKDhuq2xk0rxYMEognlcytvqKqdLgvzpJ36I3A/viewform?usp=header';
       };
@@ -2392,18 +2415,30 @@ def student_home():
 
     conn=get_db(); cur=conn.cursor()
     
-    cur.execute(
-    "SELECT DISTINCT month FROM enrollments WHERE student_id=? ORDER BY month DESC",
-    (sid,)
-    )
-    available_months = [r['month'] for r in cur.fetchall()]
+    # Determine year to show (use current system month year)
+    system_month = get_setting('current_month')
+    year = int(system_month.split('-')[0])
+
+    all_months = all_months_for_year(year)
+
+    # Months where student had at least one ACTIVE enrollment
+    cur.execute("""
+        SELECT DISTINCT month
+        FROM enrollments
+        WHERE student_id=? AND status='ACTIVE'
+    """, (sid,))
+    active_months = {r['month'] for r in cur.fetchall()}
     
     month_selector = f"""
     <form method="post" action="{url_for('student_set_month')}" class="inlineform">
         <select name="month" onchange="this.form.submit()">
             {''.join(
-                f"<option value='{m}' {'selected' if m==month else ''}>{pretty_month_label(m)}</option>"
-                for m in available_months
+                f"<option value='{m}' "
+                f"{'selected' if m == month else ''}>"
+                f"{pretty_month_label(m)}"
+                f"{'' if m in active_months else ' (not enrolled)'}"
+                f"</option>"
+                for m in all_months
             )}
         </select>
     </form>
@@ -2417,10 +2452,11 @@ def student_home():
     """,(sid,month))
     enrolls=cur.fetchall()
     active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status']=='ACTIVE']
+    has_active_enrollment = month in active_months
 
     # WhatsApp links for enrolled subjects
     group_html="<div class='empty'>No group links yet.</div>"
-    if active_sub_ids:
+    if has_active_enrollment and active_sub_ids:
         q=f"SELECT g.subject_id, g.invite_link, s.name, s.grade FROM groups g JOIN subjects s ON s.id=g.subject_id WHERE g.month=? AND g.subject_id IN ({','.join('?'*len(active_sub_ids))}) ORDER BY s.grade,s.name"
         cur.execute(q,(month,*active_sub_ids)); gs=cur.fetchall()
         if gs:
@@ -2429,7 +2465,7 @@ def student_home():
 
     # Sessions + Meet link for enrolled subjects
     sessions_html="<div class='empty'>No sessions yet.</div>"
-    if active_sub_ids:
+    if has_active_enrollment and active_sub_ids:
         q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link
             FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
             WHERE s.subject_id IN ({','.join('?'*len(active_sub_ids))})
@@ -2447,7 +2483,7 @@ def student_home():
     materials_html="<div class='empty'>No materials yet.</div>"
     assignments=[]; normal=[]
     tutors_for_subject={}
-    if active_sub_ids:
+    if has_active_enrollment and active_sub_ids:
         # get tutors for each active subject (for messaging)
         cur.execute(f"""SELECT ts.subject_id, t.id AS tutor_id, t.full_name
                         FROM tutor_subjects ts JOIN tutors t ON t.id=ts.tutor_id
@@ -2562,7 +2598,11 @@ def student_home():
         e_rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td><td><span class='chip {r['status'].lower()}'>{r['status']}</span></td></tr>" for r in enrolls])
         enr_html=f"<table><thead><tr><th>Subject</th><th>Status</th></tr></thead><tbody>{e_rows}</tbody></table>"
     else:
-        enr_html="<div class='empty'>No enrollments yet.</div>"
+        enr_html = f"""
+        <div class='empty'>
+            You were not enrolled for {pretty_month_label(month)}.
+        </div>
+        """
 
     # ===== Ratings block (24th to month-end) =====
     rate_card = ""
@@ -2646,24 +2686,23 @@ def student_home():
 @app.post('/student/set-month')
 def student_set_month():
     r = require_student()
-    if r: return r
+    if r:
+        return r
 
-    sid = is_student()
     month = request.form.get('month')
+    if not month:
+        return redirect(url_for('student_home'))
 
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT 1 FROM enrollments WHERE student_id=? AND month=? LIMIT 1",
-        (sid, month)
-    )
-    ok = cur.fetchone() is not None
-    conn.close()
-
-    if ok:
-        session['student_month'] = month
-
+    # Always allow switching month
+    session['student_month'] = month
     return redirect(url_for('student_home'))
+    
+def all_months_for_year(year: int):
+    """
+    Returns ['YYYY-01', 'YYYY-02', ..., 'YYYY-12']
+    """
+    return [f"{year}-{m:02d}" for m in range(1, 13)]
+    
 
 @app.post('/tutor/set-month')
 def tutor_set_month():
@@ -2827,14 +2866,29 @@ def tutor_home():
 
     conn=get_db(); cur=conn.cursor()
     
-    cur.execute("SELECT DISTINCT month FROM enrollments ORDER BY month DESC")
-    all_months = [r['month'] for r in cur.fetchall()]
+    system_month = get_setting('current_month')
+    year = int(system_month.split('-')[0])
+    all_months = all_months_for_year(year)
+
     
+    cur.execute("""
+        SELECT DISTINCT e.month
+        FROM enrollments e
+        JOIN tutor_subjects ts ON ts.subject_id = e.subject_id
+        WHERE ts.tutor_id = ?
+          AND e.status = 'ACTIVE'
+    """, (tid,))
+    active_months = {r['month'] for r in cur.fetchall()}
+
+
     month_selector = f"""
     <form method="post" action="{url_for('tutor_set_month')}" class="inlineform">
         <select name="month" onchange="this.form.submit()">
             {''.join(
-                f"<option value='{m}' {'selected' if m==month else ''}>{pretty_month_label(m)}</option>"
+                f"<option value='{m}' {'selected' if m == month else ''}>"
+                f"{pretty_month_label(m)}"
+                f"{'' if m in active_months else ' (no activity)'}"
+                f"</option>"
                 for m in all_months
             )}
         </select>
