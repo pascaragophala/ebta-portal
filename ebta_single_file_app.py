@@ -485,6 +485,14 @@ def safe_url(endpoint, fallback):
 
 DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
 
+def get_admin_active_month():
+    """
+    Admin-only working month.
+    Falls back to global system month if not overridden.
+    """
+    return session.get('admin_month') or get_setting('current_month')
+
+
 def get_setting(key, default=""):
     conn = get_db()
     cur = conn.cursor()
@@ -3368,7 +3376,7 @@ def admin_enrollments():
     if r:
         return r
 
-    month = get_setting('current_month')
+    month = get_admin_active_month()
     conn = get_db()
     cur = conn.cursor()
 
@@ -3976,31 +3984,72 @@ def admin_settings():
     r = require_admin()
     if r:
         return r
-    cur_month = get_setting('current_month')
+
+    system_month = get_setting('current_month')
+    admin_month = session.get('admin_month') or system_month
+
     body = f"""
     <a class='links' href='{url_for('admin_home')}'>← Back</a>
+
     <section class='card'>
-        <h1>Settings</h1>
-        <form class='grid' method='post' action='{url_for('admin_settings_post')}'>
-        <div><label>Current month (YYYY-MM)</label><input name='month' value='{cur_month}' /></div>
-        <button class='btn'>Save</button>
+        <h1>Admin working month</h1>
+        <p class='muted mini'>
+            This only affects what YOU see on admin pages.
+            Students and tutors are not affected.
+        </p>
+        <form class='grid' method='post' action='{url_for('admin_set_month')}'>
+            <div>
+                <label>Admin month (YYYY-MM)</label>
+                <input name='month' value='{admin_month}' />
+            </div>
+            <button class='btn'>Apply for admin view</button>
+        </form>
+    </section>
+
+    <section class='card soft'>
+        <h2>System month (global)</h2>
+        <p class='muted mini'>
+            This affects enrollments, students, tutors, uploads and ratings.
+            Change only when starting a new month.
+        </p>
+        <form class='grid' method='post' action='{url_for('admin_set_system_month')}'>
+            <div>
+                <label>System month (YYYY-MM)</label>
+                <input name='month' value='{system_month}' />
+            </div>
+            <button class='btn warn'>Change system month</button>
         </form>
     </section>
     """
-    return page("Settings", body)
 
-@app.post('/admin/settings')
-def admin_settings_post():
+    return page("Settings", body)
+    
+@app.post('/admin/set-month')
+def admin_set_month():
     r = require_admin()
     if r:
         return r
+
     month = request.form.get('month', '').strip()
     if not month:
-        return page("Error", card_msg("Month required."))
-    set_setting('current_month', month)
+        return redirect(url_for('admin_settings'))
+
+    session['admin_month'] = month
     return redirect(url_for('admin_home'))
 
-# --- Admin: Sessions (ensures tutor_subjects mapping) ---
+
+@app.post('/admin/set-system-month')
+def admin_set_system_month():
+    r = require_admin()
+    if r:
+        return r
+
+    month = request.form.get('month', '').strip()
+    if not month:
+        return redirect(url_for('admin_settings'))
+
+    set_setting('current_month', month)
+    return redirect(url_for('admin_home'))
 
 @app.get('/admin/sessions')
 def admin_sessions():
@@ -4331,7 +4380,7 @@ def admin_send_dm():
 def admin_analytics():
     r = require_admin()
     if r: return r
-    month = get_setting('current_month')
+    month = get_admin_active_month()
     conn = get_db(); cur = conn.cursor()
 
     # High-level: enrollments by status
@@ -4442,7 +4491,7 @@ def export_remove_list():
     if r:
         return r
 
-        month = get_setting('current_month')
+        month = get_admin_active_month()
     y, m = map(int, month.split('-'))
     ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
     next_month = f"{ny:04d}-{nm:02d}"
