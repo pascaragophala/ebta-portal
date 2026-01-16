@@ -3978,9 +3978,17 @@ def admin_groups():
     group_list = (
         ''.join(
             [
-                f"<div class='row' style='display:flex;justify-content:space-between;border-top:1px solid var(--border);padding:10px 0'>"
+                f"<div class='row' style='display:flex;justify-content:space-between;"
+                f"border-top:1px solid var(--border);padding:10px 0;gap:10px'>"
                 f"<div>{grade_label(g['grade'])} — {g['name']}</div>"
-                f"<div><a class='links' target='_blank' href='{g['invite_link']}'>Open link</a></div></div>"
+                f"<div style='display:flex;gap:10px'>"
+                f"<a class='links' target='_blank' href='{g['invite_link']}'>Open</a>"
+                f"<form method='post' action='{url_for('admin_group_delete', gid=g['id'])}' "
+                f"onsubmit='return confirm(\"Delete this group link?\")'>"
+                f"<button class='btn danger mini'>Delete</button>"
+                f"</form>"
+                f"</div>"
+                f"</div>"
                 for g in groups
             ]
         )
@@ -4029,6 +4037,20 @@ def admin_groups_post():
         cur.execute("INSERT INTO groups(subject_id,month,invite_link,created_at) VALUES(?,?,?,?)",(subject_id, month, link, now))
     conn.commit()
     conn.close()
+    return redirect(url_for('admin_groups'))
+    
+@app.post('/admin/groups/delete/<int:gid>')
+def admin_group_delete(gid):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM groups WHERE id=?", (gid,))
+    conn.commit()
+    conn.close()
+
     return redirect(url_for('admin_groups'))
 
 # --- Admin: Settings ---
@@ -4128,13 +4150,22 @@ def admin_sessions():
     dow_opts = ''.join([f"<option value='{i}'>{d}</option>" for i, d in enumerate(DOW)])
     rows = ''.join(
         [
-            f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td>"
+            f"<tr>"
+            f"<td>{grade_label(r['grade'])} — {r['subject_name']}</td>"
             f"<td>{r['tutor_name']} ({r['tutor_phone']})</td>"
             f"<td>{DOW[r['day_of_week']]} {r['start_time']}-{r['end_time']}</td>"
-            f"<td><a class='links' href='{url_for('session_qr', id=r['id'])}'>Open QR</a></td></tr>"
+            f"<td>"
+            f"<a class='links' href='{url_for('session_qr', id=r['id'])}'>QR</a> · "
+            f"<form method='post' action='{url_for('admin_session_delete', sid=r['id'])}' "
+            f"style='display:inline' onsubmit='return confirm(\"Delete this session?\")'>"
+            f"<button class='btn danger mini'>Delete</button>"
+            f"</form>"
+            f"</td>"
+            f"</tr>"
             for r in sessions_rows
         ]
     ) or "<tr><td colspan='4'><div class='empty'>No sessions.</div></td></tr>"
+
 
     body = f"""
     <a class='links' href='{url_for('admin_home')}'>← Back</a>
@@ -4152,7 +4183,7 @@ def admin_sessions():
             <button class='btn'>Add</button>
         </div>
         </form>
-        <table><thead><tr><th>Subject</th><th>Tutor</th><th>When</th><th>QR</th></tr></thead><tbody>{rows}</tbody></table>
+        <table><thead><tr><th>Subject</th><th>Tutor</th><th>When</th><th>QR</th></tr><th>Actions</th></thead><tbody>{rows}</tbody></table>
     </section>
     """
     return page("Sessions", body)
@@ -4229,6 +4260,21 @@ def session_qr(id: int):
     </section>
     """
     return page("Session QR", body)
+    
+@app.post('/admin/sessions/delete/<int:sid>')
+def admin_session_delete(sid):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM sessions WHERE id=?", (sid,))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('admin_sessions'))
+
 
 # --- PNG QR endpoint (reliable) ---
 
