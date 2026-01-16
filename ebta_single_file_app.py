@@ -3006,7 +3006,7 @@ def tutor_home():
                 <tr>
                     <th>Subject</th>
                     <th>Title</th>
-                    <th>File / Video</th>
+                    <th>File</th>
                     <th>Uploaded</th>
                     <th>Action</th>
                 </tr>
