@@ -875,6 +875,63 @@ body{font-size:15px;}
 }
 .footer{padding:22px 0}
 }
+
+@media (min-width: 769px) and (max-width: 1024px){
+    .layout{
+        grid-template-columns: 1fr;
+    }
+
+    .sidebar{
+        position: relative;
+        top: auto;
+        max-height: none;
+        margin-bottom: 14px;
+    }
+
+    .grid[style*="grid-template-columns:1fr 1fr"]{
+        grid-template-columns: 1fr;
+    }
+
+    .stats{
+        grid-template-columns: repeat(2, minmax(0,1fr));
+    }
+
+    .stats-mini{
+        grid-template-columns: repeat(2, minmax(0,1fr));
+    }
+
+    h1{font-size:20px;}
+    h2{font-size:17px;}
+}
+
+@media (max-width: 1024px){
+    .grid[style*="grid-template-columns"]{
+        grid-template-columns: 1fr !important;
+    }
+}
+
+@media (max-width: 1024px){
+    .layout{
+        gap:12px;
+    }
+}
+
+.toolbar{
+    flex-wrap: wrap;
+}
+
+.toolbar .btn{
+    white-space: nowrap;
+}
+
+@media (max-width: 1024px){
+    input, select, textarea{
+        padding:14px;
+        font-size:16px;
+    }
+}
+
+
 /* === Modern LMS Layout Additions === */
 .layout{display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start}
 .sidebar{
@@ -1906,52 +1963,89 @@ function showPopup(message, type='info', timeout=4000){
 
     // --- Fee calculation: display per-subject fee and total dynamically ---
     (function(){
-    function feeForGrade(g){
-        if(!g) return 0;
-        if(g==='G12') return 250;
-        if(g==='G10' || g==='G11') return 200;
-        if(g==='G8' || g==='G9') return 200;
-        return 200;
-    }
-    function updateFees(){
-        const grade = document.getElementById('grade_select')?.value || '';
-        const boxes = Array.from(document.querySelectorAll("input[type='checkbox'][name='subject_ids']"));
-        const selected = boxes.filter(b => b.checked && b.closest('label') && b.closest('label').getAttribute('data-grade')===grade);
-        const count = selected.length;
-        const per = feeForGrade(grade);
-        const total = per * count;
-        let feeBox = document.getElementById('fee_summary');
-        if(!feeBox){
-        feeBox = document.createElement('div');
-        feeBox.id = 'fee_summary';
-        feeBox.style.marginTop = '8px';
-        const parent = document.getElementById('reg_form')?.querySelector('div.grid[style*="grid-template-columns:1fr 1fr"]') || document.getElementById('reg_form');
-        if(parent) parent.appendChild(feeBox);
+        function feeForGrade(g){
+            if(!g) return 0;
+            if(g==='G12') return 250;
+            if(g==='G10' || g==='G11') return 200;
+            if(g==='G8' || g==='G9') return 200;
+            return 200;
         }
-        feeBox.innerHTML = `
-          <div class='mini' style="
-              font-size:15px;
-              font-weight:600;
-              color:#0f172a;
-              padding:10px;
-              border:2px solid #1b5e20;
-              border-radius:10px;
-              background:#f0fdf4;
-            ">
-            Per-subject fee: <strong>R${per}</strong><br>
-            Subjects selected: <strong>${count}</strong><br>
-            Total due for this month:
-            <span style="font-size:18px; font-weight:800; color:#1b5e20;">
-              R${total}
-            </span>
-          </div>
-        `;
 
-    }
-    document.addEventListener('change', function(e){
-        if(e.target && (e.target.name==='subject_ids' || e.target.id==='grade_select')) updateFees();
-    });
-    document.addEventListener('DOMContentLoaded', updateFees);
+        function updateFees(){
+            const grade = document.getElementById('grade_select')?.value || '';
+            const boxes = Array.from(
+                document.querySelectorAll("input[type='checkbox'][name='subject_ids']")
+            );
+
+            const selected = boxes.filter(b =>
+                b.checked &&
+                b.closest('label') &&
+                b.closest('label').getAttribute('data-grade') === grade
+            );
+
+            const count = selected.length;
+            const per = feeForGrade(grade);
+            const subtotal = per * count;
+
+            let discount = 0;
+            let discountLabel = '';
+
+            if (count >= 3) {
+                discount = Math.round(subtotal * 0.10);
+                discountLabel = `
+                    <div style="color:#065f46; margin-top:4px;">
+                        Multi-subject discount (10%): <strong>-R${discount}</strong>
+                    </div>
+                `;
+            }
+
+            const total = subtotal - discount;
+
+            let feeBox = document.getElementById('fee_summary');
+            if(!feeBox){
+                feeBox = document.createElement('div');
+                feeBox.id = 'fee_summary';
+                feeBox.style.marginTop = '10px';
+
+                const parent =
+                    document.getElementById('reg_form')
+                    ?.querySelector('div.grid[style*="grid-template-columns:1fr 1fr"]')
+                    || document.getElementById('reg_form');
+
+                if(parent) parent.appendChild(feeBox);
+            }
+
+            feeBox.innerHTML = `
+                <div class='mini' style="
+                    font-size:15px;
+                    font-weight:600;
+                    color:#0f172a;
+                    padding:12px;
+                    border:2px solid #1b5e20;
+                    border-radius:12px;
+                    background:#f0fdf4;
+                ">
+                    Per-subject fee: <strong>R${per}</strong><br>
+                    Subjects selected: <strong>${count}</strong><br>
+                    Subtotal: <strong>R${subtotal}</strong>
+                    ${discountLabel}
+                    <div style="margin-top:6px;">
+                        Total due for this month:
+                        <span style="font-size:18px; font-weight:800; color:#1b5e20;">
+                            R${total}
+                        </span>
+                    </div>
+                </div>
+            `;
+        }
+
+        document.addEventListener('change', function(e){
+            if(e.target && (e.target.name==='subject_ids' || e.target.id==='grade_select')){
+                updateFees();
+            }
+        });
+
+        document.addEventListener('DOMContentLoaded', updateFees);
     })();
 
     
@@ -2249,7 +2343,7 @@ def admin_registered():
         for rr in rows:
             when = rr['created_at'][:16].replace('T',' ')
             rrows.append(f"<tr><td>{rr['full_name']}</td><td>{rr['phone_whatsapp']}</td><td>{grade_label(rr['grade'])}</td><td>R{rr['amount']}</td><td>{when}</td></tr>")
-        rows_html = f"<table><thead><tr><th>Student</th><th>Phone</th><th>Grade</th><th>Amount</th><th>Registered at</th></tr></thead><tbody>{''.join(rrows)}</tbody></table>"
+        rows_html = f'<div class="scroll-x"><table><thead><tr><th>Student</th><th>Phone</th><th>Grade</th><th>Amount</th><th>Registered at</th></tr></thead><tbody>{"".join(rrows)}</tbody></table></div>'
     body = f"""
     <section class='grid'>
     <div class='card'>
@@ -2453,6 +2547,22 @@ def student_home():
     enrolls=cur.fetchall()
     active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status']=='ACTIVE']
     has_active_enrollment = month in active_months
+    
+    enroll_cta = ""
+
+    if month == system_month and not has_active_enrollment:
+        enroll_cta = f"""
+        <div class='card soft'>
+            <h3>Not enrolled for {pretty_month_label(month)}</h3>
+            <p class='muted'>
+                Enrollments for this month are open. You can add subjects now.
+            </p>
+            <a class='btn' href='{url_for("home")}'>
+                Enroll now
+            </a>
+        </div>
+        """
+
 
     # WhatsApp links for enrolled subjects
     group_html="<div class='empty'>No group links yet.</div>"
@@ -2461,7 +2571,7 @@ def student_home():
         cur.execute(q,(month,*active_sub_ids)); gs=cur.fetchall()
         if gs:
             rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['name']}</td><td><a class='links' target='_blank' href='{r['invite_link']}'>Open WhatsApp</a></td></tr>" for r in gs])
-            group_html=f"<table><thead><tr><th>Subject</th><th>Link</th></tr></thead><tbody>{rows}</tbody></table>"
+            group_html=f'<div class="scroll-x"><table><thead><tr><th>Subject</th><th>Link</th></tr></thead><tbody>{rows}</tbody></table></div>'
 
     # Sessions + Meet link for enrolled subjects
     sessions_html="<div class='empty'>No sessions yet.</div>"
@@ -2477,7 +2587,7 @@ def student_home():
             for r in sess:
                 meet = f"<a class='links' target='_blank' href='{r['meet_link']}'>Join</a>" if r['meet_link'] else "—"
                 rows.append(f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td><td>{DOW[r['day_of_week']]} {r['start_time']}-{r['end_time']}</td><td>{meet}</td></tr>")
-            sessions_html=f"<table><thead><tr><th>Subject</th><th>When</th><th>Meet</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+            sessions_html=f'<div class="scroll-x"><table><thead><tr><th>Subject</th><th>When</th><th>Meet</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
 
     # Materials & Assignments list (with upload timestamp)
     materials_html="<div class='empty'>No materials yet.</div>"
@@ -2506,7 +2616,7 @@ def student_home():
                 row = (m, f"<tr><td>{grade_label(m['grade'])} — {m['subject_name']}</td><td>{m['title']} {'<span class=\"badge\">assignment</span>' if is_ass else ''}</td><td>{m['tutor_name']}</td><td>{when}</td><td>{link}</td></tr>")
                 (assignments if is_ass else normal).append(row)
             def pack(rows):
-                return "<table><thead><tr><th>Subject</th><th>Title</th><th>Tutor</th><th>Uploaded</th><th>Link</th></tr></thead><tbody>"+''.join([r[1] for r in rows])+"</tbody></table>"
+                return '<div class="scroll-x"><table><thead><tr><th>Subject</th><th>Title</th><th>Tutor</th><th>Uploaded</th><th>Link</th></tr></thead><tbody>"+"".join([r[1] for r in rows])+"</tbody></table></div>'
             materials_html = (("<h3>Assignments</h3>"+pack(assignments)) if assignments else "") + (("<h3>Materials</h3>"+pack(normal)) if normal else "")
 
     # Assignment submission blocks (top priority)
@@ -2596,7 +2706,7 @@ def student_home():
     # Enrollment list UI
     if enrolls:
         e_rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td><td><span class='chip {r['status'].lower()}'>{r['status']}</span></td></tr>" for r in enrolls])
-        enr_html=f"<table><thead><tr><th>Subject</th><th>Status</th></tr></thead><tbody>{e_rows}</tbody></table>"
+        enr_html=f'<div class="scroll-x"><table><thead><tr><th>Subject</th><th>Status</th></tr></thead><tbody>{e_rows}</tbody></table></div>'
     else:
         enr_html = f"""
         <div class='empty'>
@@ -2638,10 +2748,12 @@ def student_home():
             <h2>Rate your classes for {month}</h2>
             <p class='muted mini'>This is open from the 24th to the end of the month. 1 ★ (poor) → 5 ★ (excellent).</p>
             <form method='post' action='{url_for('student_submit_ratings')}'>
-            <table>
-                <thead><tr><th>Subject</th><th>Rating</th><th>Comment</th></tr></thead>
-                <tbody>{''.join(rows)}</tbody>
-            </table>
+            <div class="scroll-x">
+                <table>
+                    <thead><tr><th>Subject</th><th>Rating</th><th>Comment</th></tr></thead>
+                    <tbody>{''.join(rows)}</tbody>
+                </table>
+            </div>
             <div class='toolbar'><button class='btn'>Save ratings</button></div>
             </form>
         </div>
@@ -2667,7 +2779,10 @@ def student_home():
                 Viewing: {pretty_month_label(month)} {month_selector}
             </p>
 
-        <h2>Your Enrollments</h2>{enr_html}
+        <h2>Your Enrollments</h2>
+        {enr_html}
+        {enroll_cta}
+
         <p class='mini muted'>To add more subjects, submit the Home form again with your phone number and the new subjects + PoP.</p>
     </div>
 
@@ -2913,7 +3028,7 @@ def tutor_home():
         cur.execute(q,(month,*sub_ids)); groups=cur.fetchall()
         if groups:
             rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['name']}</td><td><a class='links' target='_blank' href='{r['invite_link']}'>Open WhatsApp</a></td></tr>" for r in groups])
-            groups_html=f"<table><thead><tr><th>Subject</th><th>Link</th></tr></thead><tbody>{rows}</tbody></table>"
+            groups_html=f'<div class="scroll-x"><table><thead><tr><th>Subject</th><th>Link</th></tr></thead><tbody>{rows}</tbody></table></div>'
 
     # Sessions for this tutor
     cur.execute("""SELECT se.id, se.subject_id, s.name AS subject_name, s.grade, se.day_of_week, se.start_time, se.end_time, se.meet_link
@@ -3001,20 +3116,22 @@ def tutor_home():
         "<div class='empty'>No uploads yet.</div>"
         if not rows else
         f"""
-        <table>
-            <thead>
-                <tr>
-                    <th>Subject</th>
-                    <th>Title</th>
-                    <th>File</th>
-                    <th>Uploaded</th>
-                    <th>Action</th>
-                </tr>
-            </thead>
-            <tbody>
-                {''.join(rows)}
-            </tbody>
-        </table>
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Subject</th>
+                        <th>Title</th>
+                        <th>File</th>
+                        <th>Uploaded</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(rows)}
+                </tbody>
+            </table>
+        </div>    
         """
     )
 
@@ -3049,7 +3166,7 @@ def tutor_home():
             avgm = cur.fetchone()['avgm']
             rows.append(f"<tr><td>{st['full_name']}</td><td>{c}</td><td>{rate}</td><td>{'-' if avgm is None else int(round(avgm))}</td></tr>")
             message_student_options.append((st['id'], s['subject_id'], f"{st['full_name']} — {grade_label(s['grade'])} {s['subject_name']}"))
-        table = "<div class='empty'>No active students.</div>" if not rows else f"<table><thead><tr><th>Student</th><th>Attendance</th><th>Rate</th><th>Avg mark</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        table = "<div class='empty'>No active students.</div>" if not rows else f'<div class="scroll-x"><table><thead><tr><th>Student</th><th>Attendance</th><th>Rate</th><th>Avg mark</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>'
         stu_sections.append(f"<div class='card'><h3>{grade_label(s['grade'])} — {s['subject_name']}</h3>{table}</div>")
 
     # Tutor inbox
@@ -3105,7 +3222,7 @@ def tutor_home():
     <div class='card'><h2>WhatsApp Links — {month}</h2>{groups_html}</div>
 
     <div class='card'><h2>Your sessions</h2>
-        <table><thead><tr><th>Subject</th><th>When</th><th>Meet</th><th>Tools</th></tr></thead><tbody>{s_rows}</tbody></table>
+        <div class="scroll-x"><table><thead><tr><th>Subject</th><th>When</th><th>Meet</th><th>Tools</th></tr></thead><tbody>{s_rows}</tbody></table></div>
     </div>
 
     {upload_block}
@@ -3113,7 +3230,7 @@ def tutor_home():
     <div class='card'><h2>Your uploads</h2>{uploads_html}</div>
 
     <div class='card'><h2>Your assignments</h2>
-        <table><thead><tr><th>Subject</th><th>Title</th><th>Due</th><th>Total</th><th>Manage</th></tr></thead><tbody>{asg_rows}</tbody></table>
+        <div class="scroll-x"><table><thead><tr><th>Subject</th><th>Title</th><th>Due</th><th>Total</th><th>Manage</th></tr></thead><tbody>{asg_rows}</tbody></table></div>
     </div>
 
     {inbox_card}
@@ -3224,7 +3341,7 @@ def tutor_assignment_manage(mid:int):
                 </td></tr>""")
         else:
             rows.append(f"<tr><td>{st['full_name']}</td><td><span class='muted'>No submission</span></td><td>—</td></tr>")
-    table = "<div class='empty'>No students.</div>" if not rows else f"<table><thead><tr><th>Student</th><th>Submission</th><th>Grade (0..{total})</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+    table = "<div class='empty'>No students.</div>" if not rows else f'<div class="scroll-x"><table><thead><tr><th>Student</th><th>Submission</th><th>Grade (0..{total})</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
     conn.close()
 
     js_alert = "<script>showPopup('Grade saved', 'success');;</script>" if saved else ""
@@ -3393,8 +3510,8 @@ def tutor_session_attendance(sid:int):
     table = (
         "<div class='empty'>No students.</div>"
         if not rows
-        else f"<table><thead><tr><th>Student</th><th>Present</th></tr></thead>"
-             f"<tbody>{''.join(rows)}</tbody></table>"
+        else f'<div class="scroll-x"><table><thead><tr><th>Student</th><th>Present</th></tr></thead>'
+             f'<tbody>{"".join(rows)}</tbody></table></div>'
     )
 
     body = f"""
@@ -3580,23 +3697,26 @@ def admin_enrollments():
             </a>
         </div>
 
-        <table id='enr_tbl'>
-            <thead>
-                <tr>
-                    <th>Student</th>
-                    <th>Grade</th>
-                    <th>Subject</th>
-                    <th>Status</th>
-                    <th>PoP</th>
-                    <th>History</th>
-                    <th>Actions</th>
-                    <th>Status link</th>
-                </tr>
-            </thead>
-            <tbody>
-                {table_rows if table_rows else "<tr><td colspan='7'><div class='empty'>No enrollments yet.</div></td></tr>"}
-            </tbody>
-        </table>
+        <div class="scroll-x">
+            <table id='enr_tbl'>
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Status</th>
+                        <th>History</th>
+                        <th>PoP</th>
+                        <th>Actions</th>
+                        <th>Status link</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {table_rows if table_rows else "<tr><td colspan='7'><div class='empty'>No enrollments yet.</div></td></tr>"}
+                </tbody>
+            </table>
+        </div>
+        
     </section>
     """
 
@@ -3803,24 +3923,27 @@ def admin_students():
                    oninput="filterTable('stu_q','stu_tbl')"/>
         </div>
 
-        <table id='stu_tbl'>
-            <thead>
-                <tr>
-                    <th>Student</th>
-                    <th>Grade</th>
-                    <th>Subject</th>
-                    <th>Guardian</th>
-                    <th>Province</th>
-                    <th>School</th>
-                    <th>Email</th>
-                    <th>PIN</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {''.join(trs) if trs else "<tr><td colspan='9'><div class='empty'>No students yet.</div></td></tr>"}
-            </tbody>
-        </table>
+        <div class="scroll-x">
+            <table id='stu_tbl'>
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Guardian</th>
+                        <th>Province</th>
+                        <th>School</th>
+                        <th>Email</th>
+                        <th>PIN</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(trs) if trs else "<tr><td colspan='9'><div class='empty'>No students yet.</div></td></tr>"}
+                </tbody>
+            </table>
+        </div>    
+            
     </section>
     """
 
@@ -3943,10 +4066,12 @@ def admin_tutors():
             <button class='btn'>Add</button>
         </form>
         </div>
-        <table id='tut_tbl'>
-        <thead><tr><th>Tutor</th><th>PIN</th><th>Subjects</th><th>Actions</th></tr></thead>
-        <tbody>{''.join(trs) if trs else "<tr><td colspan='4'><div class='empty'>No tutors yet.</div></td></tr>"}</tbody>
-        </table>
+        <div class="scroll-x">
+            <table id='tut_tbl'>
+            <thead><tr><th>Tutor</th><th>PIN</th><th>Subjects</th><th>Actions</th></tr></thead>
+            <tbody>{''.join(trs) if trs else "<tr><td colspan='4'><div class='empty'>No tutors yet.</div></td></tr>"}</tbody>
+            </table>
+        </div>
     </section>
     """
     return page("Tutors", body)
@@ -4256,7 +4381,7 @@ def admin_sessions():
             <button class='btn'>Add</button>
         </div>
         </form>
-        <table><thead><tr><th>Subject</th><th>Tutor</th><th>When</th><th>QR</th></tr><th>Actions</th></thead><tbody>{rows}</tbody></table>
+        <div class="scroll-x"><table><thead><tr><th>Subject</th><th>Tutor</th><th>When</th><th>QR</th></tr><th>Actions</th></thead><tbody>{rows}</tbody></table></div>
     </section>
     """
     return page("Sessions", body)
@@ -4458,10 +4583,12 @@ def admin_messages():
     <a class='links' href='{url_for('admin_home')}'>← Back</a>
     <section class='card'>
         <h1>Admin inbox</h1>
-        <table>
-        <thead><tr><th>Type</th><th>Payload</th><th>When</th><th>Status</th><th>Action</th></tr></thead>
-        <tbody>{''.join(trs) if trs else "<tr><td colspan='5'><div class='empty'>No messages.</div></td></tr>"}</tbody>
-        </table>
+        <div class="scroll-x">
+            <table>
+            <thead><tr><th>Type</th><th>Payload</th><th>When</th><th>Status</th><th>Action</th></tr></thead>
+            <tbody>{''.join(trs) if trs else "<tr><td colspan='5'><div class='empty'>No messages.</div></td></tr>"}</tbody>
+            </table>
+        </div>
     </section>
     """
     return page("Messages", body)
@@ -4626,16 +4753,18 @@ def admin_analytics():
     conn.close()
 
     table = f"""
-    <table>
-        <thead>
-        <tr>
-            <th>Subject</th><th>Active</th><th>Attendance</th>
-            <th>#Assign</th><th>#Submissions</th><th>Completion</th>
-            <th>Avg mark</th><th>Rating</th>
-        </tr>
-        </thead>
-        <tbody>{''.join(rows) if rows else "<tr><td colspan='8'><div class='empty'>No data.</div></td></tr>"}</tbody>
-    </table>
+    <div class="scroll-x">
+        <table>
+            <thead>
+            <tr>
+                <th>Subject</th><th>Active</th><th>Attendance</th>
+                <th>#Assign</th><th>#Submissions</th><th>Completion</th>
+                <th>Avg mark</th><th>Rating</th>
+            </tr>
+            </thead>
+            <tbody>{''.join(rows) if rows else "<tr><td colspan='8'><div class='empty'>No data.</div></td></tr>"}</tbody>
+        </table>
+    </div>
     """
 
     body = f"""
