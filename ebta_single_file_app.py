@@ -2356,7 +2356,16 @@ def admin_registered():
         for rr in rows:
             when = rr['created_at'][:16].replace('T',' ')
             rrows.append(f"<tr><td>{rr['full_name']}</td><td>{rr['phone_whatsapp']}</td><td>{grade_label(rr['grade'])}</td><td>R{rr['amount']}</td><td>{when}</td></tr>")
-        rows_html = f'<div class="scroll-x"><table><thead><tr><th>Student</th><th>Phone</th><th>Grade</th><th>Amount</th><th>Registered at</th></tr></thead><tbody>{"".join(rrows)}</tbody></table></div>'
+        rows_html = (
+            "<div class='scroll-x'>"
+            "<table>"
+            "<thead><tr>"
+            "<th>Student</th><th>Phone</th><th>Grade</th><th>Amount</th><th>Registered at</th>"
+            "</tr></thead>"
+            f"<tbody>{''.join(rrows)}</tbody>"
+            "</table></div>"
+        )
+
     body = f"""
     <section class='grid'>
     <div class='card'>
@@ -2600,7 +2609,25 @@ def student_home():
             for r in sess:
                 meet = f"<a class='links' target='_blank' href='{r['meet_link']}'>Join</a>" if r['meet_link'] else "—"
                 rows.append(f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td><td>{DOW[r['day_of_week']]} {r['start_time']}-{r['end_time']}</td><td>{meet}</td></tr>")
-            sessions_html=f'<div class="scroll-x"><table><thead><tr><th>Subject</th><th>When</th><th>Meet</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+            rows_html = "".join(rows)
+
+            sessions_html = f"""
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Subject</th>
+                            <th>When</th>
+                            <th>Meet</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows_html}
+                    </tbody>
+                </table>
+            </div>
+            """
+
 
     # Materials & Assignments list (with upload timestamp)
     materials_html="<div class='empty'>No materials yet.</div>"
@@ -2629,7 +2656,26 @@ def student_home():
                 row = (m, f"<tr><td>{grade_label(m['grade'])} — {m['subject_name']}</td><td>{m['title']} {'<span class=\"badge\">assignment</span>' if is_ass else ''}</td><td>{m['tutor_name']}</td><td>{when}</td><td>{link}</td></tr>")
                 (assignments if is_ass else normal).append(row)
             def pack(rows):
-                return '<div class="scroll-x"><table><thead><tr><th>Subject</th><th>Title</th><th>Tutor</th><th>Uploaded</th><th>Link</th></tr></thead><tbody>"+"".join([r[1] for r in rows])+"</tbody></table></div>'
+                rows_html = "".join(r[1] for r in rows)
+
+                return f"""
+                <div class="scroll-x">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Subject</th>
+                        <th>Title</th>
+                        <th>Tutor</th>
+                        <th>Uploaded</th>
+                        <th>Link</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows_html}
+                    </tbody>
+                  </table>
+                </div>
+                """
             materials_html = (("<h3>Assignments</h3>"+pack(assignments)) if assignments else "") + (("<h3>Materials</h3>"+pack(normal)) if normal else "")
 
     # Assignment submission blocks (top priority)
@@ -3179,7 +3225,14 @@ def tutor_home():
             avgm = cur.fetchone()['avgm']
             rows.append(f"<tr><td>{st['full_name']}</td><td>{c}</td><td>{rate}</td><td>{'-' if avgm is None else int(round(avgm))}</td></tr>")
             message_student_options.append((st['id'], s['subject_id'], f"{st['full_name']} — {grade_label(s['grade'])} {s['subject_name']}"))
-        table = "<div class='empty'>No active students.</div>" if not rows else f'<div class="scroll-x"><table><thead><tr><th>Student</th><th>Attendance</th><th>Rate</th><th>Avg mark</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>'
+        table = (
+            "<div class='empty'>No active students.</div>"
+            if not rows
+            else f"<div class='scroll-x'><table><thead><tr>"
+                 f"<th>Student</th><th>Attendance</th><th>Rate</th><th>Avg mark</th>"
+                 f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+        )
+
         stu_sections.append(f"<div class='card'><h3>{grade_label(s['grade'])} — {s['subject_name']}</h3>{table}</div>")
 
     # Tutor inbox
@@ -3354,7 +3407,14 @@ def tutor_assignment_manage(mid:int):
                 </td></tr>""")
         else:
             rows.append(f"<tr><td>{st['full_name']}</td><td><span class='muted'>No submission</span></td><td>—</td></tr>")
-    table = "<div class='empty'>No students.</div>" if not rows else f'<div class="scroll-x"><table><thead><tr><th>Student</th><th>Submission</th><th>Grade (0..{total})</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+    table = (
+        "<div class='empty'>No students.</div>"
+        if not rows
+        else f"<div class='scroll-x'><table><thead><tr>"
+             f"<th>Student</th><th>Submission</th><th>Grade (0..{total})</th>"
+             f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+    )
+
     conn.close()
 
     js_alert = "<script>showPopup('Grade saved', 'success');;</script>" if saved else ""
