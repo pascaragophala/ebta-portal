@@ -3533,33 +3533,35 @@ def admin_enrollments():
             [f"<a class='links' target='_blank' href='{p}'>PoP</a>" for p in files]
         ) or "—"
 
-    # Build table rows
-    history = enrollment_history_label(r['student_id'], month)
+    table_rows = ""
+    for r in rows:
+        history = enrollment_history_label(r['student_id'], month)
 
-    table_rows = "".join(
-        [
-            f"<tr>"
-            f"<td>{r['full_name']}<div class='muted'>{r['phone_whatsapp']}</div></td>"
-            f"<td>{grade_label(r['grade'])}</td>"
-            f"<td>{r['subject_name']}</td>"
-            f"<td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>"
-            f"<td><span class='mini muted'>{history}</span></td>"
+        table_rows += f"""
+        <tr>
+            <td>{r['full_name']}<div class='muted'>{r['phone_whatsapp']}</div></td>
+            <td>{grade_label(r['grade'])}</td>
+            <td>{r['subject_name']}</td>
+            <td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>
+            <td><span class='mini muted'>{history}</span></td>
+            <td>{pop_cell(r['id'], r['pop_url'])}</td>
+            <td>
+                <form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>
+                    <button class='btn success'>Approve</button>
+                </form>
+                <form method='post' action='{url_for('enrollment_action', id=r['id'], action='lapse')}' style='display:inline'>
+                    <button class='btn danger'>Lapse</button>
+                </form>
+            </td>
+            <td>
+                <a class='links' target='_blank'
+                   href='{url_for('status', id=r['id'])}?{urlencode({'token': r['status_token']})}'>
+                   open
+                </a>
+            </td>
+        </tr>
+        """
 
-            f"<td>{pop_cell(r['id'], r['pop_url'])}</td>"
-            f"<td>"
-            f"<form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>"
-            f"<button class='btn success'>Approve</button></form> "
-            f"<form method='post' action='{url_for('enrollment_action', id=r['id'], action='lapse')}' style='display:inline'>"
-            f"<button class='btn danger'>Lapse</button></form>"
-            f"</td>"
-            f"<td>"
-            f"<a class='links' target='_blank' "
-            f"href='{url_for('status', id=r['id'])}?{urlencode({'token': r['status_token']})}'>open</a>"
-            f"</td>"
-            f"</tr>"
-            for r in rows
-        ]
-    )
 
     conn.close()
 
