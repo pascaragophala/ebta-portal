@@ -2012,7 +2012,20 @@ function showPopup(message, type='info', timeout=4000){
                     ?.querySelector('div.grid[style*="grid-template-columns:1fr 1fr"]')
                     || document.getElementById('reg_form');
 
-                if(parent) parent.appendChild(feeBox);
+                const form = document.getElementById('reg_form');
+
+                const paymentLabel = Array.from(form.querySelectorAll('label'))
+                    .find(l => l.textContent.trim() === 'Payment details');
+
+                if (paymentLabel) {
+                    const paymentColumn = paymentLabel.closest('div');
+                    if (paymentColumn && paymentColumn.parentNode) {
+                        feeBox.style.gridColumn = '1 / -1';
+                        feeBox.style.marginBottom = '12px';
+                        paymentColumn.parentNode.insertBefore(feeBox, paymentColumn);
+                    }
+                }
+
             }
 
             feeBox.innerHTML = `
