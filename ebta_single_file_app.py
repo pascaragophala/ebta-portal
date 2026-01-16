@@ -3503,6 +3503,22 @@ def admin_enrollments():
     )
 
     rows = cur.fetchall()
+    
+    def enrollment_history_label(student_id, current_month):
+        year = current_month.split('-')[0]
+
+        cur.execute("""
+            SELECT 1
+            FROM enrollments
+            WHERE student_id = ?
+              AND status = 'ACTIVE'
+              AND substr(month, 1, 4) = ?
+              AND month < ?
+            LIMIT 1
+        """, (student_id, year, current_month))
+
+        return "Returning student" if cur.fetchone() else "First month"
+
 
     # Proof of Payment helper
     def pop_cell(eid, legacy):
@@ -3518,6 +3534,8 @@ def admin_enrollments():
         ) or "—"
 
     # Build table rows
+    history = enrollment_history_label(r['student_id'], month)
+
     table_rows = "".join(
         [
             f"<tr>"
@@ -3525,6 +3543,8 @@ def admin_enrollments():
             f"<td>{grade_label(r['grade'])}</td>"
             f"<td>{r['subject_name']}</td>"
             f"<td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>"
+            f"<td><span class='mini muted'>{history}</span></td>"
+
             f"<td>{pop_cell(r['id'], r['pop_url'])}</td>"
             f"<td>"
             f"<form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>"
@@ -3566,6 +3586,7 @@ def admin_enrollments():
                     <th>Subject</th>
                     <th>Status</th>
                     <th>PoP</th>
+                    <th>History</th>
                     <th>Actions</th>
                     <th>Status link</th>
                 </tr>
