@@ -2962,12 +2962,62 @@ def tutor_home():
             return (datetime.datetime.now(datetime.timezone.utc) - created) <= datetime.timedelta(hours=24)
         except Exception:
             return False
-    rows=[]
+        
+    rows = []
     for m in mymats:
-        when=m['created_at'][:16].replace('T',' ')
-        delbtn=f"<form method='post' action='{url_for('tutor_delete_material', mid=m['id'])}' style='display:inline' onsubmit='return confirm(\"Delete this upload?\")'><button class='btn danger mini'>Delete</button></form>" if can_delete(m['created_at']) else "<span class='muted mini'>Locked</span>"
-        rows.append(f"<tr><td>{grade_label(m['grade'])} — {m['subject_name']}</td><td>{m['title']} {'<span class=\"badge\">assignment</span>' if (m['is_assignment']==1 or m['kind']=='assignment') else ''}</td><td>{when}</td><td>{delbtn}</td></tr>")
-    uploads_html = "<div class='empty'>No uploads yet.</div>" if not rows else f"<table><thead><tr><th>Subject</th><th>Title</th><th>Uploaded</th><th>Action</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        when = m['created_at'][:16].replace('T', ' ')
+
+        # file or video link
+        link = "—"
+        if m['file_path']:
+            link = f"<a class='links' target='_blank' href='{m['file_path']}'>Download</a>"
+        elif m['youtube_url']:
+            link = f"<a class='links' target='_blank' href='{m['youtube_url']}'>Open video</a>"
+
+        # delete button (only within 24h)
+        if can_delete(m['created_at']):
+            action = f"""
+            <form method="post"
+                  action="{url_for('tutor_delete_material', mid=m['id'])}"
+                  style="display:inline"
+                  onsubmit="return confirm('Delete this upload?')">
+                <button class="btn danger mini">Delete</button>
+            </form>
+            """
+        else:
+            action = "<span class='muted mini'>Locked</span>"
+
+        rows.append(f"""
+            <tr>
+                <td>{grade_label(m['grade'])} — {m['subject_name']}</td>
+                <td>{m['title']}</td>
+                <td>{link}</td>
+                <td>{when}</td>
+                <td>{action}</td>
+            </tr>
+        """)
+
+    uploads_html = (
+        "<div class='empty'>No uploads yet.</div>"
+        if not rows else
+        f"""
+        <table>
+            <thead>
+                <tr>
+                    <th>Subject</th>
+                    <th>Title</th>
+                    <th>File / Video</th>
+                    <th>Uploaded</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(rows)}
+            </tbody>
+        </table>
+        """
+    )
+
 
     # Assignments you posted (manage submissions)
     cur.execute("""SELECT m.id, m.title, m.due_date, m.max_points, s.name AS subject_name, s.grade
