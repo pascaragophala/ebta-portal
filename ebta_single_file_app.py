@@ -876,59 +876,12 @@ body{font-size:15px;}
 .footer{padding:22px 0}
 }
 
-@media (min-width: 769px) and (max-width: 1024px){
-    .layout{
-        grid-template-columns: 1fr;
-    }
-
-    .sidebar{
-        position: relative;
-        top: auto;
-        max-height: none;
-        margin-bottom: 14px;
-    }
-
-    .grid[style*="grid-template-columns:1fr 1fr"]{
-        grid-template-columns: 1fr;
-    }
-
-    .stats{
-        grid-template-columns: repeat(2, minmax(0,1fr));
-    }
-
-    .stats-mini{
-        grid-template-columns: repeat(2, minmax(0,1fr));
-    }
-
-    h1{font-size:20px;}
-    h2{font-size:17px;}
-}
-
-@media (max-width: 1024px){
-    .grid[style*="grid-template-columns"]{
-        grid-template-columns: 1fr !important;
-    }
-}
-
-@media (max-width: 1024px){
-    .layout{
-        gap:12px;
-    }
-}
-
 .toolbar{
     flex-wrap: wrap;
 }
 
 .toolbar .btn{
     white-space: nowrap;
-}
-
-@media (max-width: 1024px){
-    input, select, textarea{
-        padding:14px;
-        font-size:16px;
-    }
 }
 
 
@@ -962,10 +915,7 @@ border-radius:12px; padding:10px; box-shadow:var(--shadow-sm)
 .stats-mini .s .t{font-size:11px; color:var(--muted)}
 .announce{background:#fffaf0; border:1px solid #fde68a; padding:12px; border-radius:12px; margin-bottom:12px}
 .announce h3{margin:0 0 6px; font-size:14px}
-@media (max-width: 1024px){
-.layout{grid-template-columns:1fr}
-.sidebar{position:relative; top:auto; max-height:none}
-}
+
 /* Hash navigation highlight */
 .flash-highlight{animation: flashBorder 2.8s ease-in-out; box-shadow: 0 0 0 4px rgba(255,215,0,.25); position: relative;}
 @keyframes flashBorder{
@@ -1009,6 +959,162 @@ overflow-x:auto;
 .scroll-x table{
 min-width:720px;
 }
+
+.two-col{
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.subject-grid{
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, 1fr); /* desktop default */
+}
+
+.subject-item{
+  display: flex;
+  align-items: center;          /* vertical lock */
+  justify-content: flex-start;
+  gap: 12px;
+
+  min-height: 56px;             /* VERY important for iOS */
+  width: 100%;
+
+  border: 1px solid var(--border);
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.subject-item.hidden{
+  display: none;
+}
+/* Checkbox hard lock */
+.subject-item input[type="checkbox"]{
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+
+  appearance: auto;
+  -webkit-appearance: checkbox;
+}
+
+/* Text lock */
+.subject-item span{
+  flex: 1;
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.payment-confirm{
+  margin-top:10px;
+  display:flex;
+  align-items:flex-start;
+  gap:12px;
+}
+
+.payment-confirm input{
+  flex-shrink:0;
+  width:20px;
+  height:20px;
+  margin-top:2px;
+}
+
+/* =========================
+   TABLETS & iPad (<=1024px)
+   ========================= */
+@media (max-width: 1024px){
+
+  /* Force all two-column layouts to stack */
+  .two-col{
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  /* Generic grid safety */
+  .grid[style*="grid-template-columns"]{
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Layout + sidebar */
+  .layout{
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .sidebar{
+    position: relative;
+    top: auto;
+    max-height: none;
+    margin-bottom: 14px;
+  }
+
+  /* Subject grid: 2 columns on tablet */
+  .subject-grid{
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* Inputs (prevent iOS zoom + spacing issues) */
+  input,
+  select,
+  textarea{
+    padding: 14px;
+    font-size: 16px;
+  }
+
+  /* Stats */
+  .stats,
+  .stats-mini{
+    grid-template-columns: repeat(2, minmax(0,1fr));
+  }
+
+  h1{font-size:20px;}
+  h2{font-size:17px;}
+}
+
+/* =========================
+   PHONES (<=600px)
+   ========================= */
+@media (max-width: 600px){
+
+  /* Subject grid: single column */
+  .subject-grid{
+    grid-template-columns: 1fr;
+  }
+
+  #fee_summary{
+    position: relative;
+  }
+}
+
+@supports (-webkit-touch-callout: none) {
+
+  /* iOS grid stability */
+  .subject-grid{
+    align-content: start;
+  }
+
+  /* Prevent Safari from reserving phantom space */
+  .subject-item{
+    max-width: 100%;
+  }
+
+  /* iOS checkbox vertical bug */
+  .subject-item input[type="checkbox"]{
+    align-self: center;
+  }
+
+  /* Prevent iOS font zoom shifting layout */
+  input,
+  select,
+  textarea{
+    font-size: 16px !important;
+  }
+}
+
+
 </style>
 """
 
@@ -1671,14 +1777,14 @@ def home():
 
     # Build a flat list of subject checkboxes, each tagged with data-grade
     subject_items = "".join(
-        f"<label data-grade='{s['grade']}' "
-        f"style='display:none; gap:8px; align-items:center; border:1px solid var(--border); "
-        f"padding:8px; border-radius:10px'>"
+        f"<label data-grade='{s['grade']}' class='subject-item hidden'>"
         f"<input type='checkbox' name='subject_ids' value='{s['id']}'/>"
         f"<span>{grade_names.get(s['grade'], s['grade'])} — {s['name']}</span>"
         f"</label>"
         for s in subjects
     )
+
+
 
     month_raw = get_setting('current_month')
     month_label = pretty_month_label(month_raw)
@@ -1692,7 +1798,7 @@ def home():
         <form id='reg_form' method='post' action='{url_for('register')}' enctype='multipart/form-data' class='grid'>
 
         <!-- Student & guardian details -->
-        <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
+        <div class="grid two-col">
             <div>
             <label>Student Name</label>
             <input name='full_name' required/>
@@ -1737,7 +1843,7 @@ def home():
         </div>
 
         <!-- Grade & subjects -->
-        <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
+        <div class="grid two-col">
             <div>
             <label>Choose grade</label>
             <select id='grade_select' name='grade'>
@@ -1751,45 +1857,56 @@ def home():
 
         <div class='grid'>
             <label>Choose subject(s) for selected grade</label>
-            <div id='subject_list'
-                class='grid'
-                style='gap:8px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))'>
+            <div id="subject_list" class="subject-grid">
             {subject_items}
             </div>
         </div>
 
         <!-- PIN + Payment + PoP -->
-        <div class='grid' style='grid-template-columns:1fr 1fr;gap:12px'>
+        <div class="grid two-col">
             <div>
-            <label>Create a 5-digit PIN</label>
-            <input name='pin' required minlength='5' maxlength='5' pattern='\d{{5}}'/>
+                <label>Create a 5-digit PIN</label>
+                <input name="pin"
+                       required
+                       minlength="5"
+                       maxlength="5"
+                       pattern="\d{5}" />
             </div>
-            <div>
+        </div>
+        <div class="card soft" id="payment-anchor">
+
             <label>Payment details</label>
-            <div class='mini'>
+
+            <div class="mini">
                 Please pay your monthly EBTA fees via EFT using the details below, then tick the box to confirm payment and upload your Proof of Payment.
             </div>
-            <ul class='mini' style='margin:6px 0 4px 14px;padding:0;'>
+
+            <ul class="mini" style="margin:6px 0 4px 14px;padding:0;">
                 <li>Account holder: Ms MCB MOHALE</li>
                 <li>Contact: 0649619653</li>
                 <li>Account number: 2062604285</li>
                 <li>Bank name: Capitec</li>
             </ul>
-            <label style='margin-top:6px;display:flex;align-items:center;gap:8px;'>
-                <input type='checkbox' id='paid_check' name='paid_check'/>
-                <span class='mini' id='payment_text'>
-                  Payment has been made and I will upload the Proof of Payment now.
-                </span>
 
+            <label class="payment-confirm">
+                <input type="checkbox" id="paid_check" name="paid_check" />
+                <span class="mini" id="payment_text">
+                    Payment has been made and I will upload the Proof of Payment now.
+                </span>
             </label>
-            <div id='pop_section' style='margin-top:8px;display:none;'>
+
+
+            <div id="pop_section" style="margin-top:8px;display:none;">
                 <label>Proof of Payment (1–2 files)</label>
-                <input type='file' name='pop'
-                    accept='.pdf,.png,.jpg,.jpeg,.gif,.webp'
-                    multiple/>
+                <input type="file"
+                       name="pop"
+                       accept=".pdf,.png,.jpg,.jpeg,.gif,.webp"
+                       multiple />
             </div>
-            </div>
+
         </div>
+
+               
 
         <div class='toolbar'>
             <button class='btn'>Submit Enrollment</button>
@@ -1863,24 +1980,29 @@ function showPopup(message, type='info', timeout=4000){
     const popInput = form.querySelector("input[type='file'][name='pop']");
 
     function updateSubjects() {
-        const grade = gradeSelect.value;
-        boxes.forEach(box => {
-        const label = box.closest('label');
+      const grade = gradeSelect.value;
+
+      boxes.forEach(box => {
+        const label = box.closest('.subject-item');
         if (!label) return;
+
         const g = label.getAttribute('data-grade');
 
         if (!grade) {
-            // No grade selected: hide all and clear
-            label.style.display = 'none';
-            box.checked = false;
-        } else if (g === grade) {
-            label.style.display = 'flex';
-        } else {
-            label.style.display = 'none';
-            box.checked = false;
+          label.classList.add('hidden');
+          box.checked = false;
+          return;
         }
-        });
+
+        if (g === grade) {
+          label.classList.remove('hidden');
+        } else {
+          label.classList.add('hidden');
+          box.checked = false;
+        }
+      });
     }
+
 
     gradeSelect.addEventListener('change', updateSubjects);
     updateSubjects(); // initial
@@ -1991,10 +2113,10 @@ function showPopup(message, type='info', timeout=4000){
             let discountLabel = '';
 
             if (count >= 3) {
-                discount = Math.round(subtotal * 0.10);
+                discount = Math.round(subtotal * 0.05);
                 discountLabel = `
                     <div style="color:#065f46; margin-top:4px;">
-                        Multi-subject discount (10%): <strong>-R${discount}</strong>
+                        Multi-subject discount (5%): <strong>-R${discount}</strong>
                     </div>
                 `;
             }
@@ -2014,16 +2136,10 @@ function showPopup(message, type='info', timeout=4000){
 
                 const form = document.getElementById('reg_form');
 
-                const paymentLabel = Array.from(form.querySelectorAll('label'))
-                    .find(l => l.textContent.trim() === 'Payment details');
-
-                if (paymentLabel) {
-                    const paymentColumn = paymentLabel.closest('div');
-                    if (paymentColumn && paymentColumn.parentNode) {
-                        feeBox.style.gridColumn = '1 / -1';
-                        feeBox.style.marginBottom = '12px';
-                        paymentColumn.parentNode.insertBefore(feeBox, paymentColumn);
-                    }
+                const anchor = document.getElementById('payment-anchor');
+                if (anchor) {
+                    feeBox.style.marginBottom = '12px';
+                    anchor.appendChild(feeBox);
                 }
 
             }
