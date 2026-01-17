@@ -1867,10 +1867,14 @@ def home():
             <div>
                 <label>Create a 5-digit PIN</label>
                 <input name="pin"
-                       required
-                       minlength="5"
-                       maxlength="5"
-                       pattern="\d{5}" />
+                   required
+                   maxlength="5"
+                   pattern="[0-9]{5}"
+                   inputmode="numeric"
+                   placeholder="e.g. 12345"
+                   title="Enter exactly 5 digits"
+                   autocomplete="off" />
+
             </div>
         </div>
         <div class="card soft" id="payment-anchor">
