@@ -3736,7 +3736,7 @@ def admin_login():
 
 @app.post('/admin/login')
 def admin_login_post():
-    pwd=request.form.get('pwd',''); expected=os.environ.get('EBTA_ADMIN_PASSWORD','admin@!!@pasca*charlotte##$47start')
+    pwd=request.form.get('pwd',''); expected=os.environ.get('EBTA_ADMIN_PASSWORD','admin@!!@*$_yeedim##$40start')
     if pwd==expected: session['admin']=True; return redirect(url_for('admin_home'))
     return page("Error", card_msg("Wrong password."))
 
