@@ -3938,7 +3938,6 @@ def admin_home():
     <a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct messages</a>
     <a class='btn secondary' href='{url_for('admin_analytics')}'>Analytics</a>
     <a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>
-    <a class='btn secondary' href='{url_for('export_remove_list')}'>Export remove list</a>
     <a class='btn danger' href='#logout'>Logout</a>
     </div></section>"""
     return page("Admin", body)
@@ -4047,9 +4046,6 @@ def admin_enrollments():
             <input id='enr_q' class='pill'
                    placeholder='Search by name, phone, grade, subject'
                    oninput="filterTable('enr_q','enr_tbl')"/>
-            <a class='btn secondary' href='{url_for('export_remove_list')}'>
-                Download remove list
-            </a>
         </div>
 
         <div class="scroll-x">
