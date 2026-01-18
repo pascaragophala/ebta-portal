@@ -2256,7 +2256,7 @@ function showPopup(message, type='info', timeout=4000){
       const p = document.createElement('div');
       p.className = 'muted mini';
       p.style.marginBottom = '14px';
-      p.textContent = 'Have you already paid the R50 once-off annual registration for 2026?';
+      p.textContent = 'Have you filled in the google form after paying the R50 Non-refundable registration fee?';
 
       const btnRow = document.createElement('div');
       btnRow.style.display = 'flex';
