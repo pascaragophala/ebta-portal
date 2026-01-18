@@ -302,42 +302,42 @@ def init_db():
         seed = [
             # Mathematics
             ("Mathematics","G8"), ("Mathematics","G9"),
-            ("Mathematics","G10"), ("Mathematics","G11"), ("Mathematics","G12"),("Mathematics-Upgrading","G12"),
+            ("Mathematics","G10"), ("Mathematics","G11"), ("Mathematics","G12"),("Mathematics","G13"),
 
             # Mathematical Literacy
             ("Mathematical Literacy","G10"),
             ("Mathematical Literacy","G11"),
-            ("Mathematical Literacy","G12"),("Mathematical Literacy-Upgrading","G12"),
+            ("Mathematical Literacy","G12"),("Mathematical Literacy","G13"),
 
             # Physical Sciences
             ("Physical Sciences","G10"),
             ("Physical Sciences","G11"),
-            ("Physical Sciences","G12"),("Physical Sciences-Upgrading","G12"),
+            ("Physical Sciences","G12"),("Physical Sciences","G13"),
 
             # Life Sciences
             ("Life Sciences","G10"),
             ("Life Sciences","G11"),
-            ("Life Sciences","G12"),("Life Sciences-Upgrading","G12"),
+            ("Life Sciences","G12"),("Life Sciences","G13"),
 
             # Accounting
             ("Accounting","G10"),
             ("Accounting","G11"),
-            ("Accounting","G12"),("Accounting-Upgrading","G12"),
+            ("Accounting","G12"),("Accounting","G13"),
 
             # Geography
             ("Geography","G10"),
             ("Geography","G11"),
-            ("Geography","G12"),("Geography-Upgrading","G12"),
+            ("Geography","G12"),("Geography","G13"),
 
             # Economics
             ("Economics","G10"),
             ("Economics","G11"),
-            ("Economics","G12"),("Economics-Upgrading","G12"),
+            ("Economics","G12"),("Economics","G13"),
 
             # Business Studies
             ("Business Studies","G10"),
             ("Business Studies","G11"),
-            ("Business Studies","G12"),("Business Studies-Upgrading","G12"),
+            ("Business Studies","G12"),("Business Studies","G13"),
 
             # Grades 8–9
             ("EMS","G8"), ("EMS","G9"),
@@ -349,42 +349,42 @@ def init_db():
         required_subjects = [
             # Mathematics
             ("Mathematics","G8"), ("Mathematics","G9"),
-            ("Mathematics","G10"), ("Mathematics","G11"), ("Mathematics","G12"),("Mathematics-Upgrading","G12"),
+            ("Mathematics","G10"), ("Mathematics","G11"), ("Mathematics","G12"),("Mathematics","G13"),
 
             # Mathematical Literacy
             ("Mathematical Literacy","G10"),
             ("Mathematical Literacy","G11"),
-            ("Mathematical Literacy","G12"),("Mathematical Literacy-Upgrading","G12"),
+            ("Mathematical Literacy","G12"),("Mathematical Literacy","G13"),
 
             # Physical Sciences
             ("Physical Sciences","G10"),
             ("Physical Sciences","G11"),
-            ("Physical Sciences","G12"),("Physical Sciences-Upgrading","G12"),
+            ("Physical Sciences","G12"),("Physical Sciences","G13"),
 
             # Life Sciences
             ("Life Sciences","G10"),
             ("Life Sciences","G11"),
-            ("Life Sciences","G12"),("Life Sciences-Upgrading","G12"),
+            ("Life Sciences","G12"),("Life Sciences","G13"),
 
             # Accounting
             ("Accounting","G10"),
             ("Accounting","G11"),
-            ("Accounting","G12"),("Accounting-Upgrading","G12"),
+            ("Accounting","G12"),("Accounting","G13"),
 
             # Geography
             ("Geography","G10"),
             ("Geography","G11"),
-            ("Geography","G12"),("Geography-Upgrading","G12"),
+            ("Geography","G12"),("Geography","G13"),
 
             # Economics
             ("Economics","G10"),
             ("Economics","G11"),
-            ("Economics","G12"),("Economics-Upgrading","G12"),
+            ("Economics","G12"),("Economics","G13"),
 
             # Business Studies
             ("Business Studies","G10"),
             ("Business Studies","G11"),
-            ("Business Studies","G12"),("Business Studies-Upgrading","G12"),
+            ("Business Studies","G12"),("Business Studies","G13"),
 
             # Grades 8–9
             ("EMS","G8"), ("EMS","G9"),
@@ -1707,42 +1707,42 @@ def home():
     required_subjects = [
         # Mathematics
         ("Mathematics","G8"), ("Mathematics","G9"),
-        ("Mathematics","G10"), ("Mathematics","G11"), ("Mathematics","G12"),("Mathematics-Upgrading","G12"),
+        ("Mathematics","G10"), ("Mathematics","G11"), ("Mathematics","G12"),("Mathematics","G13"),
 
         # Mathematical Literacy
         ("Mathematical Literacy","G10"),
         ("Mathematical Literacy","G11"),
-        ("Mathematical Literacy","G12"),("Mathematical Literacy-Upgrading","G12"),
+        ("Mathematical Literacy","G12"),("Mathematical Literacy","G13"),
 
         # Physical Sciences
         ("Physical Sciences","G10"),
         ("Physical Sciences","G11"),
-        ("Physical Sciences","G12"),("Physical Sciences-Upgrading","G12"),
+        ("Physical Sciences","G12"),("Physical Sciences","G13"),
 
         # Life Sciences
         ("Life Sciences","G10"),
         ("Life Sciences","G11"),
-        ("Life Sciences","G12"),("Life Sciences-Upgrading","G12"),
+        ("Life Sciences","G12"),("Life Sciences","G13"),
 
         # Accounting
         ("Accounting","G10"),
         ("Accounting","G11"),
-        ("Accounting","G12"),("Accounting-Upgrading","G12"),
+        ("Accounting","G12"),("Accounting","G13"),
 
         # Geography
         ("Geography","G10"),
         ("Geography","G11"),
-        ("Geography","G12"),("Geography-Upgrading","G12"),
+        ("Geography","G12"),("Geography","G13"),
 
         # Economics
         ("Economics","G10"),
         ("Economics","G11"),
-        ("Economics","G12"),("Economics-Upgrading","G12"),
+        ("Economics","G12"),("Economics","G13"),
 
         # Business Studies
         ("Business Studies","G10"),
         ("Business Studies","G11"),
-        ("Business Studies","G12"),("Business Studies-Upgrading","G12"),
+        ("Business Studies","G12"),("Business Studies","G13"),
 
         # Grades 8–9
         ("EMS","G8"), ("EMS","G9"),
@@ -1759,13 +1759,14 @@ def home():
     subjects = cur.fetchall()
     conn.close()
 
-    order = ['G8', 'G9', 'G10', 'G11', 'G12']
+    order = ['G8', 'G9', 'G10', 'G11', 'G12','G13']
     grade_names = {
         'G8': 'Grade 8',
         'G9': 'Grade 9',
         'G10': 'Grade 10',
         'G11': 'Grade 11',
-        'G12': 'Grade 12'
+        'G12': 'Grade 12',
+        'G13': 'Upgrading'  
     }
 
     # Build grade dropdown options (only grades that have subjects)
@@ -2132,6 +2133,7 @@ function showPopup(message, type='info', timeout=4000){
         function feeForGrade(g){
             if(!g) return 0;
             if(g==='G12') return 250;
+            if(g==='G13') return 350;
             if(g==='G10' || g==='G11') return 200;
             if(g==='G8' || g==='G9') return 200;
             return 200;
@@ -2157,36 +2159,37 @@ function showPopup(message, type='info', timeout=4000){
             let discountLabel = '';
 
             if (count >= 3) {
-                discount = Math.round(subtotal * 0.05);
-                discountLabel = `
-                    <div style="color:#065f46; margin-top:4px;">
-                        Multi-subject discount (5%): <strong>-R${discount}</strong>
-                    </div>
-                `;
+                if (grade === 'G13') {
+                    discount = Math.round(subtotal * 0.10);
+                    discountLabel = `
+                        <div style="color:#065f46; margin-top:4px;">
+                            Multi-subject discount (10%): <strong>-R${discount}</strong>
+                        </div>
+                    `;
+                } else {
+                    discount = Math.round(subtotal * 0.05);
+                    discountLabel = `
+                        <div style="color:#065f46; margin-top:4px;">
+                            Multi-subject discount (5%): <strong>-R${discount}</strong>
+                        </div>
+                    `;
+                }
             }
 
             const total = subtotal - discount;
             window.ebtaTotalDue = total;
 
             let feeBox = document.getElementById('fee_summary');
-            if(!feeBox){
+            if (!feeBox) {
                 feeBox = document.createElement('div');
                 feeBox.id = 'fee_summary';
                 feeBox.style.marginTop = '10px';
-
-                const parent =
-                    document.getElementById('reg_form')
-                    ?.querySelector('div.grid[style*="grid-template-columns:1fr 1fr"]')
-                    || document.getElementById('reg_form');
-
-                const form = document.getElementById('reg_form');
 
                 const anchor = document.getElementById('payment-anchor');
                 if (anchor) {
                     feeBox.style.marginBottom = '12px';
                     anchor.appendChild(feeBox);
                 }
-
             }
 
             feeBox.innerHTML = `
@@ -2468,14 +2471,28 @@ def register():
     grade = row['grade']
 
     def fee_for_grade(g):
-        if g == 'G12': return 250
+        if g == 'G13':
+            return 350
+        if g == 'G12':
+            return 250
         return 200
+
 
     per = fee_for_grade(grade)
     count = len(subject_ids)
     subtotal = per * count
-    discount = int(round(subtotal * 0.05)) if count >= 3 else 0
+
+    # Discount rules
+    if count >= 3:
+        if grade == 'G13':
+            discount = int(round(subtotal * 0.10))  # 10% for G13 (3+ subjects)
+        else:
+            discount = int(round(subtotal * 0.05))  # 5% for others (3+ subjects)
+    else:
+        discount = 0
+
     total_due = subtotal - discount
+
 
     if amount_paid != total_due:
         conn.close()
@@ -4340,18 +4357,66 @@ def admin_student_reset_pin(sid:int):
     return page("PIN Updated", card_msg(f"Student PIN reset to: {new_pin}"))
 
 @app.post('/admin/students/<int:sid>/delete')
-def admin_student_delete(sid:int):
+def admin_student_delete(sid: int):
     r = require_admin()
     if r:
         return r
+
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM attendance WHERE student_id=?", (sid,))
-    cur.execute("DELETE FROM enrollments WHERE student_id=?", (sid,))
-    cur.execute("DELETE FROM students WHERE id=?", (sid,))
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+
+        # 1. Delete attendance
+        cur.execute("DELETE FROM attendance WHERE student_id=?", (sid,))
+
+        # 2. Delete submissions
+        cur.execute("DELETE FROM submissions WHERE student_id=?", (sid,))
+
+        # 3. Delete lesson ratings
+        cur.execute("DELETE FROM lesson_ratings WHERE student_id=?", (sid,))
+
+        # 4. Delete enrollment files (important)
+        cur.execute("""
+            DELETE FROM enrollment_files
+            WHERE enrollment_id IN (
+                SELECT id FROM enrollments WHERE student_id=?
+            )
+        """, (sid,))
+
+        # 5. Delete payments
+        cur.execute("""
+            DELETE FROM payments
+            WHERE enrollment_id IN (
+                SELECT id FROM enrollments WHERE student_id=?
+            )
+        """, (sid,))
+
+        # 6. Delete enrollments
+        cur.execute("DELETE FROM enrollments WHERE student_id=?", (sid,))
+
+        # 7. Delete registrations
+        cur.execute("DELETE FROM registrations WHERE student_id=?", (sid,))
+
+        # 8. Delete messages
+        cur.execute("""
+            DELETE FROM direct_messages
+            WHERE (from_role='student' AND from_id=?)
+               OR (to_role='student' AND to_id=?)
+        """, (sid, sid))
+
+        # 9. Finally delete student
+        cur.execute("DELETE FROM students WHERE id=?", (sid,))
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
     return redirect(url_for('admin_students'))
+
 
 # --- Admin: Tutors ---
 
