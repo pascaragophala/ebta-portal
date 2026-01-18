@@ -290,6 +290,9 @@ def init_db():
         FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
     );
     """)
+    
+    
+    
 
     # Defaults & seed
     cur.execute("SELECT value FROM settings WHERE key='current_month'")
@@ -439,6 +442,26 @@ def init_db():
         FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
     );
     """)
+    
+    # Enrollment control defaults
+    cur.execute("SELECT value FROM settings WHERE key='enrollment_open'")
+    if not cur.fetchone():
+        cur.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?)",
+            ('enrollment_open', '1')  # 1 = open, 0 = closed
+        )
+
+    cur.execute("SELECT value FROM settings WHERE key='enrollment_message'")
+    if not cur.fetchone():
+        cur.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?)",
+            (
+                'enrollment_message',
+                'Enrollments are currently closed. February enrollments open on 20 January 2026.'
+            )
+        )
+
+    
     conn.commit()
     conn.close()
 
@@ -1703,6 +1726,14 @@ def logo():
 def home():
     conn = get_db()
     cur = conn.cursor()
+    
+    enrollment_open = get_setting('enrollment_open', '1') == '1'
+    enrollment_message = get_setting(
+        'enrollment_message',
+        'Enrollments are currently closed.'
+    )
+
+    
     # Ensure key subjects exist for all offered grades (idempotent)
     required_subjects = [
         # Mathematics
@@ -1790,6 +1821,45 @@ def home():
 
     month_raw = get_setting('current_month')
     month_label = pretty_month_label(month_raw)
+    
+    if not enrollment_open:
+        conn.close()
+        body = f"""
+        <section style="
+            min-height:70vh;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            padding:20px;
+        ">
+            <div class='card soft' style="
+                max-width:520px;
+                width:100%;
+                text-align:center;
+                padding:28px 24px;
+            ">
+                <h1 style="margin-bottom:12px;">
+                    Enrollments Closed
+                </h1>
+
+                <p class='mini muted' style="
+                    font-size:16px;
+                    line-height:1.6;
+                ">
+                    {enrollment_message}
+                </p>
+
+                <div style="margin-top:18px;">
+                    <span class="mini" style="color:#475569;">
+                        Please check back soon.
+                    </span>
+                </div>
+            </div>
+        </section>
+        """
+        return page("EBTA Enrollment", body)
+
+
 
     body = fr"""
     <section class='grid' style='margin-top:10px'>
@@ -2344,6 +2414,16 @@ function showPopup(message, type='info', timeout=4000){
 
 @app.post('/register')
 def register():
+    if get_setting('enrollment_open', '1') != '1':
+        return page(
+            "Enrollments Closed",
+            card_msg(
+                get_setting(
+                    'enrollment_message',
+                    'Enrollments are currently closed.'
+                )
+            )
+        )
     full_name = request.form.get('full_name','').strip()
     phone = normalize_phone(request.form.get('phone',''))
     guardian = request.form.get('guardian','').strip()
@@ -4661,6 +4741,10 @@ def admin_settings():
 
     system_month = get_setting('current_month')
     admin_month = session.get('admin_month') or system_month
+    
+    enrollment_open = '1' if get_setting('enrollment_open', '1') == '1' else '0'
+    enrollment_message = get_setting('enrollment_message', '')
+
 
     body = f"""
     <a class='links' href='{url_for('admin_home')}'>← Back</a>
@@ -4694,9 +4778,54 @@ def admin_settings():
             <button class='btn warn'>Change system month</button>
         </form>
     </section>
+    
+    <section class='card soft'>
+        <h2>Enrollment control</h2>
+        <p class='muted mini'>
+            Control whether students can enroll and what message they see when enrollment is closed.
+        </p>
+
+        <form class='grid' method='post' action='{url_for('admin_set_enrollment')}'>
+            <div>
+                <label>Enrollment status</label>
+                <select name='open'>
+                    <option value='1' {"selected" if enrollment_open=='1' else ""}>Open</option>
+                    <option value='0' {"selected" if enrollment_open=='0' else ""}>Closed</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Closed message (shown to students)</label>
+                <textarea name='message' rows='3'>{enrollment_message}</textarea>
+            </div>
+
+            <button class='btn warn'>Save enrollment settings</button>
+        </form>
+    </section>
+
+    
     """
 
     return page("Settings", body)
+    
+    
+@app.post('/admin/set-enrollment')
+def admin_set_enrollment():
+    r = require_admin()
+    if r:
+        return r
+
+    open_val = request.form.get('open', '0')
+    message = request.form.get('message', '').strip()
+
+    set_setting('enrollment_open', '1' if open_val == '1' else '0')
+    set_setting(
+        'enrollment_message',
+        message or 'Enrollments are currently closed.'
+    )
+
+    return redirect(url_for('admin_settings'))
+
     
 @app.post('/admin/set-month')
 def admin_set_month():
