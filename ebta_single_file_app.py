@@ -231,6 +231,7 @@ def init_db():
     ensure_column(conn, "materials", "max_points", "INTEGER NOT NULL DEFAULT 100")
     ensure_column(conn, "students", "province", "TEXT")
     ensure_column(conn, "students", "school", "TEXT")
+    ensure_column(conn, "enrollments", "amount_paid", "INTEGER")
 
 
     cur.execute("""
@@ -301,44 +302,44 @@ def init_db():
         seed = [
             # Mathematics
             ("Mathematics","G8"), ("Mathematics","G9"),
-            ("Mathematics","G10"), ("Mathematics","G11"), ("Mathematics","G12"),
+            ("Mathematics","G10"), ("Mathematics","G11"), ("Mathematics","G12"),("Mathematics-Upgrading","G12"),
 
             # Mathematical Literacy
             ("Mathematical Literacy","G10"),
             ("Mathematical Literacy","G11"),
-            ("Mathematical Literacy","G12"),
+            ("Mathematical Literacy","G12"),("Mathematical Literacy-Upgrading","G12"),
 
             # Physical Sciences
             ("Physical Sciences","G10"),
             ("Physical Sciences","G11"),
-            ("Physical Sciences","G12"),
+            ("Physical Sciences","G12"),("Physical Sciences-Upgrading","G12"),
 
             # Life Sciences
             ("Life Sciences","G10"),
             ("Life Sciences","G11"),
-            ("Life Sciences","G12"),
+            ("Life Sciences","G12"),("Life Sciences-Upgrading","G12"),
 
             # Accounting
             ("Accounting","G10"),
             ("Accounting","G11"),
-            ("Accounting","G12"),
+            ("Accounting","G12"),("Accounting-Upgrading","G12"),
 
             # Geography
             ("Geography","G10"),
             ("Geography","G11"),
-            ("Geography","G12"),
+            ("Geography","G12"),("Geography-Upgrading","G12"),
 
             # Economics
             ("Economics","G10"),
             ("Economics","G11"),
-            ("Economics","G12"),
+            ("Economics","G12"),("Economics-Upgrading","G12"),
 
             # Business Studies
             ("Business Studies","G10"),
             ("Business Studies","G11"),
-            ("Business Studies","G12"),
+            ("Business Studies","G12"),("Business Studies-Upgrading","G12"),
 
-            # Grades 8–9 subjects
+            # Grades 8–9
             ("EMS","G8"), ("EMS","G9"),
             ("Natural Sciences","G8"), ("Natural Sciences","G9"),
         ]
@@ -348,42 +349,42 @@ def init_db():
         required_subjects = [
             # Mathematics
             ("Mathematics","G8"), ("Mathematics","G9"),
-            ("Mathematics","G10"), ("Mathematics","G11"), ("Mathematics","G12"),
+            ("Mathematics","G10"), ("Mathematics","G11"), ("Mathematics","G12"),("Mathematics-Upgrading","G12"),
 
             # Mathematical Literacy
             ("Mathematical Literacy","G10"),
             ("Mathematical Literacy","G11"),
-            ("Mathematical Literacy","G12"),
+            ("Mathematical Literacy","G12"),("Mathematical Literacy-Upgrading","G12"),
 
             # Physical Sciences
             ("Physical Sciences","G10"),
             ("Physical Sciences","G11"),
-            ("Physical Sciences","G12"),
+            ("Physical Sciences","G12"),("Physical Sciences-Upgrading","G12"),
 
             # Life Sciences
             ("Life Sciences","G10"),
             ("Life Sciences","G11"),
-            ("Life Sciences","G12"),
+            ("Life Sciences","G12"),("Life Sciences-Upgrading","G12"),
 
             # Accounting
             ("Accounting","G10"),
             ("Accounting","G11"),
-            ("Accounting","G12"),
+            ("Accounting","G12"),("Accounting-Upgrading","G12"),
 
             # Geography
             ("Geography","G10"),
             ("Geography","G11"),
-            ("Geography","G12"),
+            ("Geography","G12"),("Geography-Upgrading","G12"),
 
             # Economics
             ("Economics","G10"),
             ("Economics","G11"),
-            ("Economics","G12"),
+            ("Economics","G12"),("Economics-Upgrading","G12"),
 
             # Business Studies
             ("Business Studies","G10"),
             ("Business Studies","G11"),
-            ("Business Studies","G12"),
+            ("Business Studies","G12"),("Business Studies-Upgrading","G12"),
 
             # Grades 8–9
             ("EMS","G8"), ("EMS","G9"),
@@ -1706,42 +1707,42 @@ def home():
     required_subjects = [
         # Mathematics
         ("Mathematics","G8"), ("Mathematics","G9"),
-        ("Mathematics","G10"), ("Mathematics","G11"), ("Mathematics","G12"),
+        ("Mathematics","G10"), ("Mathematics","G11"), ("Mathematics","G12"),("Mathematics-Upgrading","G12"),
 
         # Mathematical Literacy
         ("Mathematical Literacy","G10"),
         ("Mathematical Literacy","G11"),
-        ("Mathematical Literacy","G12"),
+        ("Mathematical Literacy","G12"),("Mathematical Literacy-Upgrading","G12"),
 
         # Physical Sciences
         ("Physical Sciences","G10"),
         ("Physical Sciences","G11"),
-        ("Physical Sciences","G12"),
+        ("Physical Sciences","G12"),("Physical Sciences-Upgrading","G12"),
 
         # Life Sciences
         ("Life Sciences","G10"),
         ("Life Sciences","G11"),
-        ("Life Sciences","G12"),
+        ("Life Sciences","G12"),("Life Sciences-Upgrading","G12"),
 
         # Accounting
         ("Accounting","G10"),
         ("Accounting","G11"),
-        ("Accounting","G12"),
+        ("Accounting","G12"),("Accounting-Upgrading","G12"),
 
         # Geography
         ("Geography","G10"),
         ("Geography","G11"),
-        ("Geography","G12"),
+        ("Geography","G12"),("Geography-Upgrading","G12"),
 
         # Economics
         ("Economics","G10"),
         ("Economics","G11"),
-        ("Economics","G12"),
+        ("Economics","G12"),("Economics-Upgrading","G12"),
 
         # Business Studies
         ("Business Studies","G10"),
         ("Business Studies","G11"),
-        ("Business Studies","G12"),
+        ("Business Studies","G12"),("Business Studies-Upgrading","G12"),
 
         # Grades 8–9
         ("EMS","G8"), ("EMS","G9"),
@@ -1906,6 +1907,21 @@ def home():
                        name="pop"
                        accept=".pdf,.png,.jpg,.jpeg,.gif,.webp"
                        multiple />
+            </div>
+            
+            <div style="margin-top:14px;">
+                <label>Amount paid</label>
+                <input
+                    type="number"
+                    name="amount_paid"
+                    id="amount_paid"
+                    inputmode="numeric"
+                    min="0"
+                    step="1"
+                    placeholder="Enter amount paid for this month"
+                    required
+                />
+                <div class="mini muted" id="amount_paid_hint" style="margin-top:4px;"></div>
             </div>
 
         </div>
@@ -2079,7 +2095,31 @@ function showPopup(message, type='info', timeout=4000){
         showPopup('Please confirm that you have made payment before submitting, and then upload your Proof of Payment.', 'error');;
         return;
         }
+        
+        const amountInput = form.querySelector("#amount_paid");
+        const amountHint = document.getElementById("amount_paid_hint");
 
+        if (!amountInput || amountInput.value.trim() === "") {
+            e.preventDefault();
+            showPopup("Please enter the amount you paid for this month.", "error");
+            amountInput.focus();
+            return;
+        }
+
+        const paid = parseInt(amountInput.value, 10);
+        const due = window.ebtaTotalDue || 0;
+
+        if (paid !== due) {
+            e.preventDefault();
+            amountHint.textContent = `You need to pay R${due} to enroll for this month.`;
+            showPopup(`Payment mismatch. Required amount is R${due}.`, "error");
+            amountInput.focus();
+            return;
+        } else {
+            amountHint.textContent = "";
+        }
+
+        
         if (!popInput || !popInput.files || popInput.files.length < 1 || popInput.files.length > 2) {
         e.preventDefault();
         showPopup('Please upload 1 or 2 Proof of Payment files.', 'error');;
@@ -2126,6 +2166,7 @@ function showPopup(message, type='info', timeout=4000){
             }
 
             const total = subtotal - discount;
+            window.ebtaTotalDue = total;
 
             let feeBox = document.getElementById('fee_summary');
             if(!feeBox){
@@ -2256,36 +2297,37 @@ function showPopup(message, type='info', timeout=4000){
       const p = document.createElement('div');
       p.className = 'muted mini';
       p.style.marginBottom = '14px';
-      p.textContent = 'Have you filled in the google form after paying the R50 Non-refundable registration fee?';
+      p.style.color = '#334155';   // darker than muted, still soft
+      p.style.fontWeight = '500';  // slight emphasis, not bold
+      p.textContent = 'Have you filled in the Google Form after paying the R50 non-refundable registration fee?';
+
 
       const btnRow = document.createElement('div');
       btnRow.style.display = 'flex';
       btnRow.style.gap = '10px';
       btnRow.style.justifyContent = 'flex-end';
 
-      const noBtn = document.createElement('button');
-      noBtn.className = 'btn secondary';
-      noBtn.textContent = 'NO';
-      noBtn.style.background = '#fff';
-      noBtn.style.color = '#0f172a';
-      noBtn.onclick = function(){
-        // allow page exit without warning
-        ebtaAllowExit = true;
-        // Redirect to registration form
-        window.location.href = 'https://docs.google.com/forms/d/e/1FAIpQLScCF4rLX81GxKDhuq2xk0rxYMEognlcytvqKqdLgvzpJ36I3A/viewform?usp=header';
-      };
-
       const yesBtn = document.createElement('button');
-      yesBtn.className = 'btn success';
+      yesBtn.className = 'btn secondary';   // YES now looks like old NO
       yesBtn.textContent = 'YES';
       yesBtn.onclick = function(){
-        if (typeof showProceedModal === 'function') showProceedModal('You may proceed with the monthly enrollment.');
+        if (typeof showProceedModal === 'function') {
+          showProceedModal('You may proceed with the monthly enrollment.');
+        }
         const modal = document.getElementById('ebta-reg-2026-modal');
         if(modal) modal.remove();
       };
 
-      btnRow.appendChild(noBtn);
+      const noBtn = document.createElement('button');
+      noBtn.className = 'btn success';      // NO now takes green emphasis
+      noBtn.textContent = 'NO';
+      noBtn.onclick = function(){
+        ebtaAllowExit = true;
+        window.location.href =          'https://docs.google.com/forms/d/e/1FAIpQLScCF4rLX81GxKDhuq2xk0rxYMEognlcytvqKqdLgvzpJ36I3A/viewform?usp=header';
+      };
+
       btnRow.appendChild(yesBtn);
+      btnRow.appendChild(noBtn);
       box.appendChild(h);
       box.appendChild(p);
       box.appendChild(btnRow);
@@ -2310,6 +2352,17 @@ def register():
     province = request.form.get('province')
     school = request.form.get('school')
 
+    amount_paid = request.form.get('amount_paid', '').strip()
+
+    try:
+        amount_paid = int(amount_paid)
+    except ValueError:
+        return page("Error", card_msg("Invalid amount paid."))
+
+
+    amount_paid = int(amount_paid)
+
+    
     # Validation
     if not (full_name and phone and guardian and guardian_name and subject_ids and pin):
         return page("Error", card_msg("All fields are required."))
@@ -2401,28 +2454,110 @@ def register():
 
     cur.execute("SELECT subject_id FROM enrollments WHERE student_id=? AND month=?", (sid, month))
     existing = {str(x['subject_id']) for x in cur.fetchall()}
+    
+    # Recalculate total server-side
+    cur.execute(
+        "SELECT grade FROM subjects WHERE id=?",
+        (subject_ids[0],)
+    )
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return page("Error", card_msg("Invalid subject selection."))
+
+    grade = row['grade']
+
+    def fee_for_grade(g):
+        if g == 'G12': return 250
+        return 200
+
+    per = fee_for_grade(grade)
+    count = len(subject_ids)
+    subtotal = per * count
+    discount = int(round(subtotal * 0.05)) if count >= 3 else 0
+    total_due = subtotal - discount
+
+    if amount_paid != total_due:
+        conn.close()
+        return page(
+            "Payment error",
+            card_msg(f"You need to pay R{total_due} to enroll for this month.")
+        )
+
 
     created = []
 
     for subid in subject_ids:
         if subid in existing:
             continue
+
         token = secrets.token_urlsafe(16)
+
+        # 1️⃣ Insert enrollment FIRST
         cur.execute("""
         INSERT INTO enrollments(
-            student_id,subject_id,month,status,
-            payment_method,payment_ref,pop_url,status_token,created_at
-        ) VALUES(?,?,?,?,?,?,?,?,?)
+            student_id,
+            subject_id,
+            month,
+            status,
+            payment_method,
+            payment_ref,
+            pop_url,
+            amount_paid,
+            status_token,
+            created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?)
         """, (
-            sid, subid, month, 'PENDING',
-            'EFT', None, saved_paths[0], token, now_utc_iso()
+            sid,
+            subid,
+            month,
+            'PENDING',
+            'EFT',
+            None,              # temporary, updated below
+            saved_paths[0],
+            amount_paid,
+            token,
+            now_utc_iso()
         ))
+
+        # 2️⃣ Now eid is valid
         eid = cur.lastrowid
+
+        # 3️⃣ Generate reference AFTER eid exists
+        payment_ref = f"EFT-{eid}-{int(datetime.datetime.now().timestamp())}"
+
+        # 4️⃣ Update enrollment with reference
+        cur.execute(
+            "UPDATE enrollments SET payment_ref=? WHERE id=?",
+            (payment_ref, eid)
+        )
+
+        # 5️⃣ Insert payment record
+        cur.execute("""
+        INSERT INTO payments(
+            enrollment_id,
+            amount,
+            gateway,
+            reference,
+            result,
+            timestamp
+        ) VALUES (?,?,?,?,?,?)
+        """, (
+            eid,
+            amount_paid,
+            'EFT',
+            payment_ref,
+            'PENDING',
+            now_utc_iso()
+        ))
+
+        # 6️⃣ Save PoP files
         for pth in saved_paths:
             cur.execute(
                 "INSERT INTO enrollment_files(enrollment_id,file_path) VALUES(?,?)",
                 (eid, pth)
             )
+
         created.append((eid, token))
 
     conn.commit()
@@ -3740,9 +3875,18 @@ def admin_login():
 
 @app.post('/admin/login')
 def admin_login_post():
-    pwd=request.form.get('pwd',''); expected=os.environ.get('EBTA_ADMIN_PASSWORD','admin@!!@*$_yeedim##$40start')
-    if pwd==expected: session['admin']=True; return redirect(url_for('admin_home'))
+    pwd = request.form.get('pwd', '')
+    expected = os.environ.get('EBTA_ADMIN_PASSWORD')
+
+    if not expected:
+        return page("Error", card_msg("Admin password is not configured."))
+
+    if pwd == expected:
+        session['admin'] = True
+        return redirect(url_for('admin_home'))
+
     return page("Error", card_msg("Wrong password."))
+
 
 @app.get('/admin/logout')
 def admin_logout(): session.clear(); return redirect(url_for('admin_login'))
@@ -3855,6 +3999,7 @@ def admin_enrollments():
             <td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>
             <td><span class='mini muted'>{history}</span></td>
             <td>{pop_cell(r['id'], r['pop_url'])}</td>
+            <td><strong>R{r['amount_paid']}</strong></td>
             <td>
                 <form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>
                     <button class='btn success'>Approve</button>
@@ -3900,6 +4045,7 @@ def admin_enrollments():
                         <th>Status</th>
                         <th>History</th>
                         <th>PoP</th>
+                        <th>Amount paid</th>
                         <th>Actions</th>
                         <th>Status link</th>
                     </tr>
