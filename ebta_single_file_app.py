@@ -2817,20 +2817,70 @@ def status(id: int):
 # ===================== Student Portal (includes messaging & monthly ratings) ==============
 @app.get('/student/login')
 def student_login():
-    if is_student(): return redirect(url_for('student_home'))
-    body=fr"""
-    <section class='wrap small'><div class='card auth-card'><h1>Student login</h1>
-    <form method='post' action='{url_for('student_login_post')}' class='grid'>
-        <div><label>WhatsApp number</label><input name='phone' required/></div>
-        <div><label>5-digit PIN</label><input name='pin' required maxlength='5' minlength='5'/></div>
-        <button class='btn success'>Login</button>
-    </form><hr/>
-    <form method='post' action='{url_for('student_forgot_pin')}' class='grid'>
-        <div class='muted'>Forgot your PIN?</div>
-        <div><label>Enter your WhatsApp number</label><input name='phone' required/></div>
-        <button class='btn secondary'>Notify Admin</button>
-    </form></div></section>"""
-    return page("Student Login", body)
+    if is_student():
+        return redirect(url_for('student_home'))
+
+    body = f"""
+    <section class='wrap small'>
+      <div class='card auth-card'>
+        <h1>Student login</h1>
+
+        <form method='post' action='{url_for('student_login_post')}' class='grid'>
+            <div>
+                <label>WhatsApp number</label>
+                <input name='phone' required />
+            </div>
+
+            <div>
+                <label>5-digit PIN</label>
+                <input name='pin' required maxlength='5' minlength='5' />
+            </div>
+
+            <button class='btn success'>Login</button>
+        </form>
+
+        <div style="margin-top:14px; text-align:center">
+            <a href="#" class="mini muted" id="helpToggle">
+                Need help?
+            </a>
+        </div>
+
+        <div id="forgotSection" style="display:none; margin-top:16px;">
+            <hr/>
+            <form method='post' action='{url_for('student_forgot_pin')}' class='grid'>
+                <div class='mini muted'>
+                    Forgot your PIN? Enter your WhatsApp number and we’ll notify the admin.
+                </div>
+                <div>
+                    <label>WhatsApp number</label>
+                    <input name='phone' required />
+                </div>
+                <button class='btn secondary'>Notify Admin</button>
+            </form>
+        </div>
+      </div>
+    </section>
+    """
+
+    extra_js = """
+    <script>
+      document.addEventListener('DOMContentLoaded', function(){
+        const help = document.getElementById('helpToggle');
+        const section = document.getElementById('forgotSection');
+
+        if(help && section){
+            help.addEventListener('click', function(e){
+                e.preventDefault();
+                section.style.display =
+                    section.style.display === 'none' ? 'block' : 'none';
+            });
+        }
+      });
+    </script>
+    """
+
+    return page("Student Login", body, extra_js=extra_js)
+
 
 @app.post('/student/login')
 def student_login_post():
@@ -3338,20 +3388,69 @@ def student_submit_ratings():
 # ===================== Tutor Portal (includes messaging to student/admin) ==============
 @app.get('/tutor/login')
 def tutor_login():
-    if is_tutor(): return redirect(url_for('tutor_home'))
-    body=fr"""
-    <section class='wrap small'><div class='card auth-card'><h1>Tutor login</h1>
-    <form method='post' action='{url_for('tutor_login_post')}' class='grid'>
-        <div><label>Phone</label><input name='phone' required/></div>
-        <div><label>5-digit PIN</label><input name='pin' required maxlength='5' minlength='5'/></div>
-        <button class='btn success'>Login</button>
-    </form><hr/>
-    <form method='post' action='{url_for('tutor_forgot_pin')}' class='grid'>
-        <div class='muted'>Forgot your PIN?</div>
-        <div><label>Enter your phone</label><input name='phone' required/></div>
-        <button class='btn secondary'>Notify Admin</button>
-    </form></div></section>"""
-    return page("Tutor Login", body)
+    if is_tutor():
+        return redirect(url_for('tutor_home'))
+
+    body = f"""
+    <section class='wrap small'>
+      <div class='card auth-card'>
+        <h1>Tutor login</h1>
+
+        <form method='post' action='{url_for('tutor_login_post')}' class='grid'>
+            <div>
+                <label>Phone number</label>
+                <input name='phone' required />
+            </div>
+
+            <div>
+                <label>5-digit PIN</label>
+                <input name='pin' required maxlength='5' minlength='5' />
+            </div>
+
+            <button class='btn success'>Login</button>
+        </form>
+
+        <div style="margin-top:14px; text-align:center">
+            <a href="#" class="mini muted" id="tutorHelpToggle">
+                Need help?
+            </a>
+        </div>
+
+        <div id="tutorForgotSection" style="display:none; margin-top:16px;">
+            <hr/>
+            <form method='post' action='{url_for('tutor_forgot_pin')}' class='grid'>
+                <div class='mini muted'>
+                    Forgot your PIN? Enter your phone number and we’ll notify the admin.
+                </div>
+                <div>
+                    <label>Phone number</label>
+                    <input name='phone' required />
+                </div>
+                <button class='btn secondary'>Notify Admin</button>
+            </form>
+        </div>
+      </div>
+    </section>
+    """
+
+    extra_js = """
+    <script>
+      document.addEventListener('DOMContentLoaded', function(){
+        const help = document.getElementById('tutorHelpToggle');
+        const section = document.getElementById('tutorForgotSection');
+
+        if(help && section){
+            help.addEventListener('click', function(e){
+                e.preventDefault();
+                section.style.display =
+                    section.style.display === 'none' ? 'block' : 'none';
+            });
+        }
+      });
+    </script>
+    """
+
+    return page("Tutor Login", body, extra_js=extra_js)
 
 @app.post('/tutor/login')
 def tutor_login_post():
