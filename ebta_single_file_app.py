@@ -2786,7 +2786,7 @@ def status(id: int):
         if (e['status'] == 'ACTIVE' and gl)
         else (
             "<div class='muted mini'>"
-            "<strong>Next steps:</strong> Once your enrollment is approved (usually within 48 hours), "
+            "<strong>Next steps:</strong> Once your enrollment is approved (usually within 7 days), "
             "you’ll be able to log in on the Student Portal using the phone number you used to enroll "
             "and your 5-digit PIN to access all classes and learning materials."
             "</div>"
