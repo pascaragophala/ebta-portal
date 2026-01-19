@@ -79,6 +79,7 @@ def ensure_column(conn, table, column, ddl_tail):
 def init_db():
     conn = get_db()
     cur = conn.cursor()
+  
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS settings(
@@ -328,23 +329,23 @@ def init_db():
             ("Accounting","G12"),("Accounting","G13"),
 
             # Geography
-            ("Geography","G10"),
             ("Geography","G11"),
-            ("Geography","G12"),("Geography","G13"),
+            ("Geography","G12"),
 
             # Economics
-            ("Economics","G10"),
-            ("Economics","G11"),
-            ("Economics","G12"),("Economics","G13"),
+            ("Economics","G12"),
 
             # Business Studies
             ("Business Studies","G10"),
             ("Business Studies","G11"),
-            ("Business Studies","G12"),("Business Studies","G13"),
+            ("Business Studies","G12"),
 
             # Grades 8–9
             ("EMS","G8"), ("EMS","G9"),
             ("Natural Sciences","G8"), ("Natural Sciences","G9"),
+            
+            #English
+            ("English","G8"), ("English","G9"),("English","G10"),("English","G11"),("English","G12"),
         ]
 
         cur.executemany("INSERT OR IGNORE INTO subjects(name,grade) VALUES(?,?)", seed)
@@ -375,23 +376,23 @@ def init_db():
             ("Accounting","G12"),("Accounting","G13"),
 
             # Geography
-            ("Geography","G10"),
             ("Geography","G11"),
-            ("Geography","G12"),("Geography","G13"),
+            ("Geography","G12"),
 
             # Economics
-            ("Economics","G10"),
-            ("Economics","G11"),
-            ("Economics","G12"),("Economics","G13"),
+            ("Economics","G12"),
 
             # Business Studies
             ("Business Studies","G10"),
             ("Business Studies","G11"),
-            ("Business Studies","G12"),("Business Studies","G13"),
+            ("Business Studies","G12"),
 
             # Grades 8–9
             ("EMS","G8"), ("EMS","G9"),
             ("Natural Sciences","G8"), ("Natural Sciences","G9"),
+            
+            #English
+            ("English","G8"), ("English","G9"),("English","G10"),("English","G11"),("English","G12"),
         ]
 
         cur.executemany("INSERT OR IGNORE INTO subjects(name,grade) VALUES(?,?)", required_subjects)
@@ -460,6 +461,57 @@ def init_db():
                 'Enrollments are currently closed. February enrollments open on 20 January 2026.'
             )
         )
+
+    
+    # --- REMOVE UNWANTED SUBJECTS (SAFE CLEANUP) ---
+
+    subjects_to_remove = [
+        ("Geography", "G10"),
+        ("Geography", "G13"),
+        ("Economics", "G10"),
+        ("Economics", "G11"),
+        ("Economics", "G13"),
+        ("Business Studies", "G13"),
+    ]
+
+    for name, grade in subjects_to_remove:
+        # Remove related enrollments
+        cur.execute("""
+            DELETE FROM enrollments
+            WHERE subject_id IN (
+                SELECT id FROM subjects WHERE name=? AND grade=?
+            )
+        """, (name, grade))
+
+        # Remove tutor-subject mappings
+        cur.execute("""
+            DELETE FROM tutor_subjects
+            WHERE subject_id IN (
+                SELECT id FROM subjects WHERE name=? AND grade=?
+            )
+        """, (name, grade))
+
+        # Remove groups
+        cur.execute("""
+            DELETE FROM groups
+            WHERE subject_id IN (
+                SELECT id FROM subjects WHERE name=? AND grade=?
+            )
+        """, (name, grade))
+
+        # Remove sessions
+        cur.execute("""
+            DELETE FROM sessions
+            WHERE subject_id IN (
+                SELECT id FROM subjects WHERE name=? AND grade=?
+            )
+        """, (name, grade))
+
+        # Finally remove the subject itself
+        cur.execute("""
+            DELETE FROM subjects
+            WHERE name=? AND grade=?
+        """, (name, grade))
 
     
     conn.commit()
@@ -1769,23 +1821,23 @@ def home():
         ("Accounting","G12"),("Accounting","G13"),
 
         # Geography
-        ("Geography","G10"),
         ("Geography","G11"),
-        ("Geography","G12"),("Geography","G13"),
+        ("Geography","G12"),
 
         # Economics
-        ("Economics","G10"),
-        ("Economics","G11"),
-        ("Economics","G12"),("Economics","G13"),
+        ("Economics","G12"),
 
         # Business Studies
         ("Business Studies","G10"),
         ("Business Studies","G11"),
-        ("Business Studies","G12"),("Business Studies","G13"),
+        ("Business Studies","G12"),
 
         # Grades 8–9
         ("EMS","G8"), ("EMS","G9"),
         ("Natural Sciences","G8"), ("Natural Sciences","G9"),
+        
+        #English
+        ("English","G8"), ("English","G9"),("English","G10"),("English","G11"),("English","G12"),
     ]
 
     try:
