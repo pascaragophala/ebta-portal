@@ -1138,6 +1138,14 @@ min-width:720px;
   }
 }
 
+.admin-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+
 
 </style>
 """
@@ -4087,6 +4095,24 @@ def admin_login_post():
 @app.get('/admin/logout')
 def admin_logout(): session.clear(); return redirect(url_for('admin_login'))
 
+
+def admin_nav():
+    return f"""
+    <nav class="admin-nav">
+        <a class="btn secondary" href="{url_for('admin_home')}">Dashboard</a>
+        <a class="btn secondary" href="{url_for('admin_enrollments')}">Enrollments</a>
+        <a class="btn secondary" href="{url_for('admin_students')}">Students</a>
+        <a class="btn secondary" href="{url_for('admin_tutors')}">Tutors</a>
+        <a class="btn secondary" href="{url_for('admin_groups')}">Groups</a>
+        <a class="btn secondary" href="{url_for('admin_sessions')}">Sessions</a>
+        <a class="btn secondary" href="{url_for('admin_messages')}">Inbox</a>
+        <a class="btn secondary" href="{url_for('admin_direct_messages')}">Direct Msgs</a>
+        <a class="btn secondary" href="{url_for('admin_analytics')}">Analytics</a>
+        <a class="btn secondary" href="{url_for('admin_settings')}">Settings</a>
+    </nav>
+    """
+
+
 @app.get('/admin')
 def admin_home():
     r=require_admin()
@@ -4117,7 +4143,6 @@ def admin_home():
     <a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct messages</a>
     <a class='btn secondary' href='{url_for('admin_analytics')}'>Analytics</a>
     <a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>
-    <a class='btn danger' href='#logout'>Logout</a>
     </div></section>"""
     return page("Admin", body)
 
@@ -4232,7 +4257,7 @@ def admin_enrollments():
     conn.close()
 
     body = f"""
-    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    {admin_nav()}
 
     <section class='card'>
         <h1>Enrollments — {month}</h1>
@@ -4463,7 +4488,7 @@ def admin_students():
     conn.close()
 
     body = f"""
-    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    {admin_nav()}
     <section class='card'>
         <h1>Students</h1>
         <div class='toolbar'>
@@ -4651,7 +4676,7 @@ def admin_tutors():
         )
 
     body = f"""
-    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    {admin_nav()}
     <section class='card'>
         <h1>Tutors</h1>
         <div class='toolbar'>
@@ -4794,7 +4819,7 @@ def admin_groups():
     )
 
     body = f"""
-    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    {admin_nav()}
     <section class='card'>
         <h1>Group links — {month}</h1>
         <form class='grid' method='post' action='{url_for('admin_groups_post')}'>
@@ -4863,7 +4888,7 @@ def admin_settings():
 
 
     body = f"""
-    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    {admin_nav()}
 
     <section class='card'>
         <h1>Admin working month</h1>
@@ -5011,7 +5036,7 @@ def admin_sessions():
 
 
     body = f"""
-    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    {admin_nav()}
     <section class='card'>
         <h1>Sessions</h1>
         <form class='grid' method='post' action='{url_for('admin_sessions_post')}'>
@@ -5094,7 +5119,7 @@ def session_qr(id: int):
     qr_src = url_for('qr_png') + '?' + urlencode({'text': attend_url})
 
     body = f"""
-    <a class='links' href='{url_for('admin_sessions')}'>← Back</a>
+    {admin_nav()}
     <section class='card' style='text-align:center'>
         <h1>Scan to check in</h1>
         <p class='muted'>{grade_label(se['grade'])} — {se['subject_name']} with {se['tutor_name']} ({today})</p>
@@ -5248,7 +5273,7 @@ def admin_messages():
 
 
     body = f"""
-    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    {admin_nav()}
     <section class='card'>
         <h1>Admin inbox</h1>
         <div class="scroll-x">
@@ -5304,7 +5329,7 @@ def admin_direct_messages():
     tut_opts="".join([f"<option value='tutor|{t['id']}'>{t['full_name']}</option>" for t in tutors])
     stu_opts="".join([f"<option value='student|{s['id']}'>{s['full_name']}</option>" for s in students])
     body=fr"""
-    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    {admin_nav()}
     <section class='grid'>
         <div class='card'><h1>Direct messages</h1>
         <form method='post' action='{url_for('admin_send_dm')}' class='grid'>
@@ -5436,7 +5461,7 @@ def admin_analytics():
     """
 
     body = f"""
-    <a class='links' href='{url_for('admin_home')}'>← Back</a>
+    {admin_nav()}
     <section class='grid'>
         <div class='stats'>
         {stat('Current month', month)}
