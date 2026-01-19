@@ -4123,6 +4123,16 @@ def admin_home():
 
 # --- Admin: Enrollments (show all PoP files) ---
 
+def format_datetime(dt_str):
+    if not dt_str:
+        return "—"
+    try:
+        dt = datetime.datetime.fromisoformat(dt_str)
+        return dt.strftime("%d %b %Y, %H:%M")
+    except Exception:
+        return dt_str.replace("T", " ")[:16]
+
+
 @app.get('/admin/enrollments')
 def admin_enrollments():
     r = require_admin()
@@ -4193,7 +4203,13 @@ def admin_enrollments():
             <td>{r['subject_name']}</td>
             <td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>
             <td><span class='mini muted'>{history}</span></td>
+            <td>
+                <span class='mini'>
+                    {format_datetime(r['created_at'])}
+                </span>
+            </td>
             <td>{pop_cell(r['id'], r['pop_url'])}</td>
+
             <td><strong>R{r['amount_paid']}</strong></td>
             <td>
                 <form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>
@@ -4236,6 +4252,7 @@ def admin_enrollments():
                         <th>Subject</th>
                         <th>Status</th>
                         <th>History</th>
+                        <th>Timestamp</th>
                         <th>PoP</th>
                         <th>Amount paid</th>
                         <th>Actions</th>
@@ -4243,7 +4260,7 @@ def admin_enrollments():
                     </tr>
                 </thead>
                 <tbody>
-                    {table_rows if table_rows else "<tr><td colspan='7'><div class='empty'>No enrollments yet.</div></td></tr>"}
+                    {table_rows if table_rows else "<tr><td colspan='10'><div class='empty'>No enrollments yet.</div></td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -5191,6 +5208,13 @@ def attend_post():
 
 # --- Admin: Messages (forgot PIN etc.) ---
 
+def format_datime(ts):
+    try:
+        dt = datetime.datetime.fromisoformat(ts.replace('Z', ''))
+        return dt.strftime('%d %b %Y, %H:%M')
+    except Exception:
+        return ts
+
 @app.get('/admin/messages')
 def admin_messages():
     r = require_admin()
@@ -5203,9 +5227,25 @@ def admin_messages():
     conn.close()
     trs = []
     for m in rows:
-        status = "<span class='chip active'>Open</span>" if m['resolved']==0 else "<span class='chip'>Resolved</span>"
-        action = "" if m['resolved'] else f"<form method='post' action='{url_for('admin_message_resolve', mid=m['id'])}' style='display:inline'><button class='btn success'>Mark resolved</button></form>"
-        trs.append(f"<tr><td>{m['kind']}</td><td>{m['payload']}</td><td>{m['created_at']}</td><td>{status}</td><td>{action}</td></tr>")
+        status = "<span class='chip active'>Open</span>" if m['resolved'] == 0 else "<span class='chip'>Resolved</span>"
+        action = "" if m['resolved'] else f"""
+            <form method='post' action='{url_for('admin_message_resolve', mid=m['id'])}' style='display:inline'>
+                <button class='btn success'>Mark resolved</button>
+            </form>
+        """
+
+        when = format_datime(m['created_at'])
+
+        trs.append(f"""
+            <tr>
+                <td>{m['kind']}</td>
+                <td>{m['payload']}</td>
+                <td class='mini muted'>{when}</td>
+                <td>{status}</td>
+                <td>{action}</td>
+            </tr>
+        """)
+
 
     body = f"""
     <a class='links' href='{url_for('admin_home')}'>← Back</a>
