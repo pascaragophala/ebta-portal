@@ -233,6 +233,9 @@ def init_db():
     ensure_column(conn, "students", "province", "TEXT")
     ensure_column(conn, "students", "school", "TEXT")
     ensure_column(conn, "enrollments", "amount_paid", "INTEGER")
+    ensure_column(conn, "groups", "is_visible", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "sessions", "is_visible", "INTEGER NOT NULL DEFAULT 1")
+
 
 
     cur.execute("""
@@ -3053,8 +3056,18 @@ def student_home():
     # WhatsApp links for enrolled subjects
     group_html="<div class='empty'>No group links yet.</div>"
     if has_active_enrollment and active_sub_ids:
-        q=f"SELECT g.subject_id, g.invite_link, s.name, s.grade FROM groups g JOIN subjects s ON s.id=g.subject_id WHERE g.month=? AND g.subject_id IN ({','.join('?'*len(active_sub_ids))}) ORDER BY s.grade,s.name"
-        cur.execute(q,(month,*active_sub_ids)); gs=cur.fetchall()
+        q = f"""
+        SELECT g.subject_id, g.invite_link, s.name, s.grade
+        FROM groups g
+        JOIN subjects s ON s.id = g.subject_id
+        WHERE g.month = 'ALL' AND g.is_visible=1
+          AND g.subject_id IN ({','.join('?' * len(active_sub_ids))})
+        ORDER BY s.grade, s.name
+        """
+        cur.execute(q, (*active_sub_ids,))
+
+        
+        gs=cur.fetchall()
         if gs:
             rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['name']}</td><td><a class='links' target='_blank' href='{r['invite_link']}'>Open WhatsApp</a></td></tr>" for r in gs])
             group_html=f'<div class="scroll-x"><table><thead><tr><th>Subject</th><th>Link</th></tr></thead><tbody>{rows}</tbody></table></div>'
@@ -3064,7 +3077,7 @@ def student_home():
     if has_active_enrollment and active_sub_ids:
         q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link
             FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
-            WHERE s.subject_id IN ({','.join('?'*len(active_sub_ids))})
+            WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(active_sub_ids))})
             ORDER BY s.day_of_week, s.start_time"""
         cur.execute(q, (*active_sub_ids,))
         sess=cur.fetchall()
@@ -3309,7 +3322,7 @@ def student_home():
         <p class='mini muted'>To add more subjects, submit the Home form again with your phone number and the new subjects + PoP.</p>
     </div>
 
-    <div class='card'><h2>WhatsApp Links</h2>{group_html}</div>
+    <div class='card'><h2>WhatsApp Group Links</h2>{group_html}</div>
     <div class='card'><h2>Sessions</h2>{sessions_html}</div>
     <div class='card'><h2>Materials & Assignments</h2><div class='scroll-x'>{materials_html}</div></div>
 {(''.join(submit_blocks)) if submit_blocks else ''}
@@ -3590,22 +3603,53 @@ def tutor_home():
     assigned_list=", ".join([f"{grade_label(r['grade'])} — {r['subject_name']}" for r in subs]) or "<span class='muted'>No subjects assigned yet.</span>"
 
     # WhatsApp links for current month
-    sub_ids=[str(x['subject_id']) for x in subs]
-    groups_html="<div class='empty'>No group links yet.</div>"
+    # WhatsApp group links (persistent, not month-based)
+    sub_ids = [str(x['subject_id']) for x in subs]
+    groups_html = "<div class='empty'>No group links yet.</div>"
+
     if sub_ids:
-        q=f"""SELECT g.subject_id, g.invite_link, s.name, s.grade
-            FROM groups g JOIN subjects s ON s.id=g.subject_id
-            WHERE g.month=? AND g.subject_id IN ({','.join('?'*len(sub_ids))})
-            ORDER BY s.grade,s.name"""
-        cur.execute(q,(month,*sub_ids)); groups=cur.fetchall()
+        q = f"""
+            SELECT g.subject_id, g.invite_link, s.name, s.grade
+            FROM groups g
+            JOIN subjects s ON s.id = g.subject_id
+            WHERE g.month = 'ALL' AND g.is_visible=1
+              AND g.subject_id IN ({','.join('?' * len(sub_ids))})
+            ORDER BY s.grade, s.name
+        """
+        cur.execute(q, sub_ids)
+        groups = cur.fetchall()
+
         if groups:
-            rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['name']}</td><td><a class='links' target='_blank' href='{r['invite_link']}'>Open WhatsApp</a></td></tr>" for r in groups])
-            groups_html=f'<div class="scroll-x"><table><thead><tr><th>Subject</th><th>Link</th></tr></thead><tbody>{rows}</tbody></table></div>'
+            rows = "".join([
+                f"""
+                <tr>
+                    <td>{grade_label(r['grade'])} — {r['name']}</td>
+                    <td>
+                        <a class='links' target='_blank' href='{r['invite_link']}'>
+                            Open WhatsApp
+                        </a>
+                    </td>
+                </tr>
+                """
+                for r in groups
+            ])
+
+            groups_html = f"""
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr><th>Subject</th><th>Link</th></tr>
+                    </thead>
+                    <tbody>{rows}</tbody>
+                </table>
+            </div>
+            """
+
 
     # Sessions for this tutor
     cur.execute("""SELECT se.id, se.subject_id, s.name AS subject_name, s.grade, se.day_of_week, se.start_time, se.end_time, se.meet_link
                 FROM sessions se JOIN subjects s ON s.id=se.subject_id
-                WHERE se.tutor_id=? ORDER BY se.day_of_week,se.start_time""",(tid,))
+                WHERE se.tutor_id=? AND se.active=1 ORDER BY se.day_of_week,se.start_time""",(tid,))
     sess=cur.fetchall()
     s_rows="".join([
         f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td>"
@@ -3798,7 +3842,7 @@ def tutor_home():
     </div>
 
 
-    <div class='card'><h2>WhatsApp Links — {month}</h2>{groups_html}</div>
+    <div class='card'><h2>WhatsApp Group Links</h2>{groups_html}</div>
 
     <div class='card'><h2>Your sessions</h2>
         <div class="scroll-x"><table><thead><tr><th>Subject</th><th>When</th><th>Meet</th><th>Tools</th></tr></thead><tbody>{s_rows}</tbody></table></div>
@@ -4830,43 +4874,89 @@ def admin_tutor_add_subject(tid:int):
 
 # --- Admin: Groups ---
 
+@app.post('/admin/groups/toggle/<int:gid>')
+def admin_group_toggle(gid):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE groups
+        SET is_visible = CASE WHEN is_visible=1 THEN 0 ELSE 1 END
+        WHERE id=?
+    """, (gid,))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('admin_groups'))
+
+
 @app.get('/admin/groups')
 def admin_groups():
     r = require_admin()
     if r:
         return r
-    month = get_setting('current_month')
+
     conn = get_db()
     cur = conn.cursor()
+
     cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
     subjects = cur.fetchall()
+
     cur.execute("""
-    SELECT g.id, g.invite_link, s.name, s.grade
-    FROM groups g JOIN subjects s ON s.id=g.subject_id
-    WHERE g.month=? ORDER BY s.grade, s.name
-    """, (month,))
+        SELECT g.id, g.invite_link, g.is_visible, s.name, s.grade
+        FROM groups g
+        JOIN subjects s ON s.id = g.subject_id
+        WHERE g.month = 'ALL'
+        ORDER BY s.grade, s.name
+    """)
     groups = cur.fetchall()
     conn.close()
 
-    group_list = (
-        ''.join(
-            [
-                f"<div class='row' style='display:flex;justify-content:space-between;"
-                f"border-top:1px solid var(--border);padding:10px 0;gap:10px'>"
-                f"<div>{grade_label(g['grade'])} — {g['name']}</div>"
-                f"<div style='display:flex;gap:10px'>"
-                f"<a class='links' target='_blank' href='{g['invite_link']}'>Open</a>"
-                f"<form method='post' action='{url_for('admin_group_delete', gid=g['id'])}' "
-                f"onsubmit='return confirm(\"Delete this group link?\")'>"
-                f"<button class='btn danger mini'>Delete</button>"
-                f"</form>"
-                f"</div>"
-                f"</div>"
-                for g in groups
-            ]
-        )
-        or "<div class='empty'>No links saved for this month yet.</div>"
-    )
+    group_map = {g['name'] + g['grade']: g for g in groups}
+
+    rows = ""
+    for s in subjects:
+        key = s['name'] + s['grade']
+        g = group_map.get(key)
+
+        if g:
+            visibility = (
+                "<span class='chip active'>Shown</span>"
+                if g['is_visible'] == 1
+                else "<span class='chip lapsed'>Hidden</span>"
+            )
+
+            rows += f"""
+            <tr>
+                <td>{grade_label(s['grade'])} — {s['name']}</td>
+                <td><a class='links' target='_blank' href='{g['invite_link']}'>Open</a></td>
+                <td>{visibility}</td>
+                <td>
+                    <form method='post' action='{url_for('admin_group_toggle', gid=g['id'])}' style='display:inline'>
+                        <button class='btn mini secondary'>
+                            {'Hide' if g['is_visible'] else 'Show'}
+                        </button>
+                    </form>
+                    <form method='post' action='{url_for('admin_group_delete', gid=g['id'])}'
+                          style='display:inline'
+                          onsubmit='return confirm("Delete this group link?")'>
+                        <button class='btn danger mini'>Delete</button>
+                    </form>
+                </td>
+            </tr>
+            """
+
+        else:
+            rows += f"""
+            <tr>
+                <td>{grade_label(s['grade'])} — {s['name']}</td>
+                <td class='muted'>Not set</td>
+                <td>-</td>
+            </tr>
+            """
 
     options = ''.join(
         [f"<option value='{s['id']}'>{s['grade']} — {s['name']}</option>" for s in subjects]
@@ -4875,42 +4965,67 @@ def admin_groups():
     body = f"""
     {admin_nav()}
     <section class='card'>
-        <h1>Group links — {month}</h1>
+        <h1>Group links (persistent)</h1>
+
         <form class='grid' method='post' action='{url_for('admin_groups_post')}'>
-        <div style='display:grid;grid-template-columns:1fr 130px 1fr auto;gap:10px'>
-            <select name='subject_id'>{options}</select>
-            <input name='month' value='{month}' placeholder='YYYY-MM' />
-            <input name='link' placeholder='WhatsApp invite link' />
-            <button class='btn'>Save</button>
-        </div>
+            <div style='display:grid;grid-template-columns:1fr 2fr auto;gap:10px'>
+                <select name='subject_id' required>{options}</select>
+                <input name='link' placeholder='WhatsApp invite link' required />
+                <button class='btn'>Save</button>
+            </div>
         </form>
-        <div style='margin-top:10px'>{group_list}</div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr><th>Subject</th><th>Link</th><th>Visibility</th><th>Actions</th></tr>
+                </thead>
+                <tbody>{rows}</tbody>
+            </table>
+        </div>
     </section>
     """
     return page("Groups", body)
+
 
 @app.post('/admin/groups')
 def admin_groups_post():
     r = require_admin()
     if r:
         return r
-    subject_id = request.form.get('subject_id', '')
-    month = request.form.get('month', '')
-    link = request.form.get('link', '')
-    if not (subject_id and month and link):
-        return page("Error", card_msg("Missing fields."))
+
+    subject_id = request.form.get('subject_id')
+    link = request.form.get('link')
+
+    if not (subject_id and link):
+        return page("Error", card_msg("Subject and link are required."))
+
     now = now_utc_iso()
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT id FROM groups WHERE subject_id=? AND month=?", (subject_id, month))
+
+    cur.execute("""
+        SELECT id FROM groups
+        WHERE subject_id=? AND month='ALL'
+    """, (subject_id,))
     row = cur.fetchone()
+
     if row:
-        cur.execute("UPDATE groups SET invite_link=?, created_at=? WHERE id=?",(link, now, row["id"]))
+        cur.execute("""
+            UPDATE groups
+            SET invite_link=?, created_at=?
+            WHERE id=?
+        """, (link, now, row['id']))
     else:
-        cur.execute("INSERT INTO groups(subject_id,month,invite_link,created_at) VALUES(?,?,?,?)",(subject_id, month, link, now))
+        cur.execute("""
+            INSERT INTO groups(subject_id, month, invite_link, created_at)
+            VALUES (?, 'ALL', ?, ?)
+        """, (subject_id, link, now))
+
     conn.commit()
     conn.close()
     return redirect(url_for('admin_groups'))
+
     
 @app.post('/admin/groups/delete/<int:gid>')
 def admin_group_delete(gid):
@@ -5072,21 +5187,30 @@ def admin_sessions():
     dow_opts = ''.join([f"<option value='{i}'>{d}</option>" for i, d in enumerate(DOW)])
     rows = ''.join(
         [
-            f"<tr>"
-            f"<td>{grade_label(r['grade'])} — {r['subject_name']}</td>"
-            f"<td>{r['tutor_name']} ({r['tutor_phone']})</td>"
-            f"<td>{DOW[r['day_of_week']]} {r['start_time']}-{r['end_time']}</td>"
-            f"<td>"
-            f"<a class='links' href='{url_for('session_qr', id=r['id'])}'>QR</a> · "
-            f"<form method='post' action='{url_for('admin_session_delete', sid=r['id'])}' "
-            f"style='display:inline' onsubmit='return confirm(\"Delete this session?\")'>"
-            f"<button class='btn danger mini'>Delete</button>"
-            f"</form>"
-            f"</td>"
-            f"</tr>"
+            (
+                f"<tr>"
+                f"<td>{grade_label(r['grade'])} — {r['subject_name']}</td>"
+                f"<td>{r['tutor_name']} ({r['tutor_phone']})</td>"
+                f"<td>{DOW[r['day_of_week']]} {r['start_time']}-{r['end_time']}</td>"
+                f"<td>"
+                f"{'<span class=\"chip active\">Shown</span>' if r['active'] == 1 else '<span class=\"chip lapsed\">Hidden</span>'}"
+                f"</td>"
+                f"<td>"
+                f"<a class='links' href='{url_for('session_qr', id=r['id'])}'>QR</a> · "
+                f"<form method='post' action='{url_for('admin_session_toggle', sid=r['id'])}' style='display:inline'>"
+                f"<button class='btn mini secondary'>{'Hide' if r['active'] == 1 else 'Show'}</button>"
+                f"</form> · "
+                f"<form method='post' action='{url_for('admin_session_delete', sid=r['id'])}' "
+                f"style='display:inline' onsubmit='return confirm(\"Delete this session?\")'>"
+                f"<button class='btn danger mini'>Delete</button>"
+                f"</form>"
+                f"</td>"
+                f"</tr>"
+            )
             for r in sessions_rows
         ]
-    ) or "<tr><td colspan='4'><div class='empty'>No sessions.</div></td></tr>"
+    ) or "<tr><td colspan='5'><div class='empty'>No sessions.</div></td></tr>"
+
 
 
     body = f"""
@@ -5105,10 +5229,30 @@ def admin_sessions():
             <button class='btn'>Add</button>
         </div>
         </form>
-        <div class="scroll-x"><table><thead><tr><th>Subject</th><th>Tutor</th><th>When</th><th>QR</th></tr><th>Actions</th></thead><tbody>{rows}</tbody></table></div>
+        <div class="scroll-x"><table><thead><tr><th>Subject</th><th>Tutor</th><th>When</th><th>Visibility</th><th>Actions</th></thead><tbody>{rows}</tbody></table></div>
     </section>
     """
     return page("Sessions", body)
+    
+
+@app.post('/admin/sessions/toggle/<int:sid>')
+def admin_session_toggle(sid):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE sessions
+        SET active = CASE WHEN active=1 THEN 0 ELSE 1 END
+        WHERE id=?
+    """, (sid,))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('admin_sessions'))
+
 
 @app.post('/admin/sessions')
 def admin_sessions_post():
