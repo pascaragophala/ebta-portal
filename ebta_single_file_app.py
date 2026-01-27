@@ -4263,12 +4263,13 @@ def admin_enrollments():
         return r
 
     month = get_admin_active_month()
+    year = month.split('-')[0]
+
     conn = get_db()
     cur = conn.cursor()
 
-    # Fetch enrollments + student + grade + subject
-    cur.execute(
-        """
+    # 1. Fetch enrollments + student + subject
+    cur.execute("""
         SELECT 
             e.*,
             st.full_name,
@@ -4280,44 +4281,39 @@ def admin_enrollments():
         JOIN subjects sub ON sub.id = e.subject_id
         WHERE e.month = ?
         ORDER BY e.created_at ASC
-        """,
-        (month,),
-    )
-
+    """, (month,))
     rows = cur.fetchall()
-    
-    def enrollment_history_label(student_id, current_month):
-        year = current_month.split('-')[0]
 
-        cur.execute("""
-            SELECT 1
-            FROM enrollments
-            WHERE student_id = ?
-              AND status = 'ACTIVE'
-              AND substr(month, 1, 4) = ?
-              AND month < ?
-            LIMIT 1
-        """, (student_id, year, current_month))
+    # 2. Fetch returning students in ONE query
+    cur.execute("""
+        SELECT DISTINCT student_id
+        FROM enrollments
+        WHERE status = 'ACTIVE'
+          AND substr(month, 1, 4) = ?
+          AND month < ?
+    """, (year, month))
+    returning_ids = {r['student_id'] for r in cur.fetchall()}
 
-        return "Returning student" if cur.fetchone() else "First month"
-
-
-    # Proof of Payment helper
-    def pop_cell(eid, legacy):
-        cur.execute(
-            "SELECT file_path FROM enrollment_files WHERE enrollment_id=?",
-            (eid,),
-        )
-        files = [r['file_path'] for r in cur.fetchall()]
-        if not files and legacy:
-            files = [legacy]
-        return " ".join(
-            [f"<a class='links' target='_blank' href='{p}'>PoP</a>" for p in files]
-        ) or "—"
+    # 3. Fetch all PoP files in ONE query
+    cur.execute("""
+        SELECT enrollment_id, file_path
+        FROM enrollment_files
+    """)
+    pop_map = {}
+    for r in cur.fetchall():
+        pop_map.setdefault(r['enrollment_id'], []).append(r['file_path'])
 
     table_rows = ""
     for r in rows:
-        history = enrollment_history_label(r['student_id'], month)
+        history = "Returning student" if r['student_id'] in returning_ids else "First month"
+
+        files = pop_map.get(r['id'], [])
+        if not files and r['pop_url']:
+            files = [r['pop_url']]
+
+        pop_html = " ".join(
+            [f"<a class='links' target='_blank' href='{p}'>PoP</a>" for p in files]
+        ) or "—"
 
         table_rows += f"""
         <tr>
@@ -4331,8 +4327,7 @@ def admin_enrollments():
                     {format_datetime(r['created_at'])}
                 </span>
             </td>
-            <td>{pop_cell(r['id'], r['pop_url'])}</td>
-
+            <td>{pop_html}</td>
             <td><strong>R{r['amount_paid']}</strong></td>
             <td>
                 <form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>
@@ -4350,7 +4345,6 @@ def admin_enrollments():
             </td>
         </tr>
         """
-
 
     conn.close()
 
@@ -4387,11 +4381,11 @@ def admin_enrollments():
                 </tbody>
             </table>
         </div>
-        
     </section>
     """
 
     return page("Enrollments", body)
+    
 
 @app.post('/admin/enrollments/<int:id>/<action>')
 def enrollment_action(id: int, action: str):
@@ -4538,29 +4532,27 @@ def admin_students():
         FROM students
         ORDER BY created_at DESC
     """)
-    rows = cur.fetchall()
+    students = cur.fetchall()
 
-    # 2. Second cursor for subjects
-    cur2 = conn.cursor()
+    # 2. Fetch ALL subjects in one go
+    cur.execute("""
+        SELECT e.student_id, sub.name
+        FROM enrollments e
+        JOIN subjects sub ON sub.id = e.subject_id
+    """)
+    subject_rows = cur.fetchall()
+
+    # Build map: student_id -> subjects
+    subject_map = {}
+    for r in subject_rows:
+        subject_map.setdefault(r['student_id'], []).append(r['name'])
 
     def nz(v):
         return v if (v and str(v).strip()) else "N/A"
 
     trs = []
-
-    # 3. Loop students
-    for s in rows:
-        # Fetch subjects for THIS student
-        cur2.execute("""
-            SELECT sub.name
-            FROM enrollments e
-            JOIN subjects sub ON sub.id = e.subject_id
-            WHERE e.student_id = ?
-        """, (s['id'],))
-
-        subject_rows = cur2.fetchall()
-        subjects = ", ".join([r['name'] for r in subject_rows]) if subject_rows else "N/A"
-
+    for s in students:
+        subjects = ", ".join(subject_map.get(s['id'], [])) or "N/A"
         pin = s['pin'] if s['pin'] else "<span class='muted'>not set</span>"
 
         trs.append(
@@ -4614,7 +4606,6 @@ def admin_students():
                 </tbody>
             </table>
         </div>    
-            
     </section>
     """
 
