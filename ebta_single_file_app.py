@@ -2046,7 +2046,7 @@ def home():
             </div>
             
             <div style="margin-top:14px;">
-                <label>Amount paid</label>
+                <label>Amount You Paid</label>
                 <input
                     type="number"
                     name="amount_paid"
@@ -2054,7 +2054,7 @@ def home():
                     inputmode="numeric"
                     min="0"
                     step="1"
-                    placeholder="Enter amount paid for this month"
+                    placeholder="Enter amount paid for this month for classes"
                     required
                 />
                 <div class="mini muted" id="amount_paid_hint" style="margin-top:4px;"></div>
