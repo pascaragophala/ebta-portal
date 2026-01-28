@@ -236,6 +236,12 @@ def init_db():
     ensure_column(conn, "groups", "is_visible", "INTEGER NOT NULL DEFAULT 1")
     ensure_column(conn, "sessions", "is_visible", "INTEGER NOT NULL DEFAULT 1")
 
+    # --- Performance indexes ---
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollments_month ON enrollments(month)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollments_created ON enrollments(created_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollment_files_enr ON enrollment_files(enrollment_id)")
+
 
 
     cur.execute("""
