@@ -4268,10 +4268,17 @@ def admin_enrollments():
     conn = get_db()
     cur = conn.cursor()
 
-    # 1. Fetch enrollments + student + subject
+    # 1. Fetch ONLY required columns + preformatted timestamp
     cur.execute("""
         SELECT 
-            e.*,
+            e.id,
+            e.student_id,
+            e.subject_id,
+            e.status,
+            e.amount_paid,
+            e.pop_url,
+            e.status_token,
+            strftime('%Y-%m-%d %H:%M', e.created_at) AS created_at,
             st.full_name,
             st.phone_whatsapp,
             st.grade,
@@ -4284,7 +4291,7 @@ def admin_enrollments():
     """, (month,))
     rows = cur.fetchall()
 
-    # 2. Fetch returning students in ONE query
+    # 2. Returning students (one query)
     cur.execute("""
         SELECT DISTINCT student_id
         FROM enrollments
@@ -4294,7 +4301,7 @@ def admin_enrollments():
     """, (year, month))
     returning_ids = {r['student_id'] for r in cur.fetchall()}
 
-    # 3. Fetch all PoP files in ONE query
+    # 3. PoP files (one query)
     cur.execute("""
         SELECT enrollment_id, file_path
         FROM enrollment_files
@@ -4303,7 +4310,10 @@ def admin_enrollments():
     for r in cur.fetchall():
         pop_map.setdefault(r['enrollment_id'], []).append(r['file_path'])
 
-    table_rows = ""
+    conn.close()
+
+    # 4. Build rows (lighter Python work)
+    out = []
     for r in rows:
         history = "Returning student" if r['student_id'] in returning_ids else "First month"
 
@@ -4312,21 +4322,17 @@ def admin_enrollments():
             files = [r['pop_url']]
 
         pop_html = " ".join(
-            [f"<a class='links' target='_blank' href='{p}'>PoP</a>" for p in files]
+            f"<a class='links' target='_blank' href='{p}'>PoP</a>" for p in files
         ) or "—"
 
-        table_rows += f"""
+        out.append(f"""
         <tr>
             <td>{r['full_name']}<div class='muted'>{r['phone_whatsapp']}</div></td>
             <td>{grade_label(r['grade'])}</td>
             <td>{r['subject_name']}</td>
             <td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>
             <td><span class='mini muted'>{history}</span></td>
-            <td>
-                <span class='mini'>
-                    {format_datetime(r['created_at'])}
-                </span>
-            </td>
+            <td><span class='mini'>{r['created_at']}</span></td>
             <td>{pop_html}</td>
             <td><strong>R{r['amount_paid']}</strong></td>
             <td>
@@ -4344,9 +4350,9 @@ def admin_enrollments():
                 </a>
             </td>
         </tr>
-        """
+        """)
 
-    conn.close()
+    table_rows = "".join(out)
 
     body = f"""
     {admin_nav()}
@@ -4377,7 +4383,7 @@ def admin_enrollments():
                     </tr>
                 </thead>
                 <tbody>
-                    {table_rows if table_rows else "<tr><td colspan='10'><div class='empty'>No enrollments yet.</div></td></tr>"}
+                    {table_rows or "<tr><td colspan='10'><div class='empty'>No enrollments yet.</div></td></tr>"}
                 </tbody>
             </table>
         </div>
