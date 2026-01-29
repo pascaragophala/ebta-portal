@@ -1046,8 +1046,10 @@ body.wide-mode :root, body.wide-mode .wrap, body.wide-mode .container, body.wide
 overflow-x:auto;
 -webkit-overflow-scrolling:touch;
 }
-.scroll-x table{
-min-width:720px;
+@media (max-width: 700px){
+  .scroll-x table{
+    min-width: 100%;
+  }
 }
 
 .two-col{
