@@ -4286,7 +4286,7 @@ def admin_enrollments():
     total = cur.fetchone()['c']
     total_pages = (total + limit - 1) // limit
 
-    # Main query (paginated)
+    # Main query
     cur.execute("""
         SELECT 
             e.id, e.student_id, e.status, e.amount_paid,
@@ -4323,7 +4323,7 @@ def admin_enrollments():
 
     trs = []
     for r in rows:
-        history = "Returning" if r['student_id'] in returning_ids else "First"
+        history = "Returning student" if r['student_id'] in returning_ids else "First month"
 
         files = pop_map.get(r['id'], []) or ([r['pop_url']] if r['pop_url'] else [])
         pop_html = " ".join(
@@ -4335,11 +4335,11 @@ def admin_enrollments():
             <td>{r['full_name']}<div class='muted'>{r['phone_whatsapp']}</div></td>
             <td>{grade_label(r['grade'])}</td>
             <td>{r['subject_name']}</td>
-            <td>{r['status']}</td>
-            <td>{history}</td>
-            <td>{r['created_at']}</td>
+            <td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>
+            <td><span class='mini muted'>{history}</span></td>
+            <td><span class='mini'>{r['created_at']}</span></td>
             <td>{pop_html}</td>
-            <td>R{r['amount_paid']}</td>
+            <td><strong>R{r['amount_paid']}</strong></td>
             <td>
                 <form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>
                     <button class='btn success'>Approve</button>
@@ -4359,7 +4359,7 @@ def admin_enrollments():
 
     nav = f"""
     <div class='pager'>
-        Page {page_num} of {total_pages} &nbsp;
+        Page {page_num} of {total_pages}
         {"<a href='?page="+str(page_num-1)+"'>Prev</a>" if page_num>1 else ""}
         {"<a href='?page="+str(page_num+1)+"'>Next</a>" if page_num<total_pages else ""}
     </div>
@@ -4367,19 +4367,32 @@ def admin_enrollments():
 
     body = f"""
     {admin_nav()}
+
     <section class='card'>
         <h1>Enrollments — {month}</h1>
+
+        <div class='toolbar'>
+            <input id='enr_q' class='pill'
+                   placeholder='Search by name, phone, grade, subject'
+                   oninput="filterTable('enr_q','enr_tbl')"/>
+        </div>
 
         {nav}
 
         <div class="scroll-x">
-            <table>
+            <table id='enr_tbl'>
                 <thead>
                     <tr>
-                        <th>Student</th><th>Grade</th><th>Subject</th>
-                        <th>Status</th><th>History</th>
-                        <th>Timestamp</th><th>PoP</th>
-                        <th>Amount</th><th>Actions</th><th>Link</th>
+                        <th>Student</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Status</th>
+                        <th>History</th>
+                        <th>Timestamp</th>
+                        <th>PoP</th>
+                        <th>Amount paid</th>
+                        <th>Actions</th>
+                        <th>Status link</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -4530,12 +4543,10 @@ def admin_students():
     conn = get_db()
     cur = conn.cursor()
 
-    # Total count (for navigation)
     cur.execute("SELECT COUNT(*) AS c FROM students")
     total = cur.fetchone()['c']
     total_pages = (total + limit - 1) // limit
 
-    # Fetch students (paginated)
     cur.execute("""
         SELECT
             id,
@@ -4553,7 +4564,6 @@ def admin_students():
     """, (limit, offset))
     students = cur.fetchall()
 
-    # Fetch subjects for only these students
     ids = [s['id'] for s in students]
     subject_map = {}
 
@@ -4603,7 +4613,7 @@ def admin_students():
 
     nav = f"""
     <div class='pager'>
-        Page {page_num} of {total_pages} &nbsp;
+        Page {page_num} of {total_pages}
         {"<a href='?page="+str(page_num-1)+"'>Prev</a>" if page_num>1 else ""}
         {"<a href='?page="+str(page_num+1)+"'>Next</a>" if page_num<total_pages else ""}
     </div>
@@ -4614,20 +4624,31 @@ def admin_students():
     <section class='card'>
         <h1>Students</h1>
 
+        <div class='toolbar'>
+            <input id='stu_q' class='pill'
+                   placeholder='Search students'
+                   oninput="filterTable('stu_q','stu_tbl')"/>
+        </div>
+
         {nav}
 
         <div class="scroll-x">
-            <table>
+            <table id='stu_tbl'>
                 <thead>
                     <tr>
-                        <th>Student</th><th>Grade</th><th>Subject</th>
-                        <th>Guardian</th><th>Province</th>
-                        <th>School</th><th>Email</th>
-                        <th>PIN</th><th>Actions</th>
+                        <th>Student</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Guardian</th>
+                        <th>Province</th>
+                        <th>School</th>
+                        <th>Email</th>
+                        <th>PIN</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {''.join(trs) or "<tr><td colspan='9'>No students yet.</td></tr>"}
+                    {''.join(trs) or "<tr><td colspan='9'>No students.</td></tr>"}
                 </tbody>
             </table>
         </div>
