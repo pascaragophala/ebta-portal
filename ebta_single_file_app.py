@@ -1211,6 +1211,21 @@ min-width:720px;
     margin-bottom: 16px;
 }
 
+@media (max-width: 700px) {
+  table thead { display: none; }
+  table tr { display: block; margin-bottom: 12px; }
+  table td {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px;
+    border-bottom: 1px solid #eee;
+  }
+  table td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: #555;
+  }
+}
 
 
 </style>
@@ -3251,7 +3266,20 @@ def student_home():
 
     # Enrollment list UI
     if enrolls:
-        e_rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td><td><span class='chip {r['status'].lower()}'>{r['status']}</span></td></tr>" for r in enrolls])
+        e_rows="".join([
+          f"""
+          <tr>
+            <td data-label="Subject">
+                {grade_label(r['grade'])} — {r['subject_name']}
+            </td>
+            <td data-label="Status">
+                <span class='chip {r['status'].lower()}'>{r['status']}</span>
+            </td>
+          </tr>
+          """
+          for r in enrolls
+        ])
+
         enr_html=f'<div class="scroll-x"><table><thead><tr><th>Subject</th><th>Status</th></tr></thead><tbody>{e_rows}</tbody></table></div>'
     else:
         enr_html = f"""
