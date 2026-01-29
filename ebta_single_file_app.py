@@ -3050,16 +3050,17 @@ def student_home():
 
     if month == system_month and not has_active_enrollment:
         enroll_cta = f"""
-        <div class='card soft'>
+        <div class='card soft' style="display:block !important; width:100%; margin-top:12px;">
             <h3>Not enrolled for {pretty_month_label(month)}</h3>
             <p class='muted'>
                 Enrollments status pending. You can add subjects now.
             </p>
-            <a class='btn' href='{url_for("home")}'>
+            <a class='btn' href='{url_for("home")}' style="display:inline-block;">
                 Enroll now
             </a>
         </div>
         """
+
 
 
     # WhatsApp links for enrolled subjects
