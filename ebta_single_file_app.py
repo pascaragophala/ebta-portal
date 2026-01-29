@@ -2080,7 +2080,7 @@ def home():
                     inputmode="numeric"
                     min="0"
                     step="1"
-                    placeholder="Enter the amount you paid for this month for classes"
+                    placeholder="Enter the amount you paid for classes"
                     required
                 />
                 <div class="mini muted" id="amount_paid_hint" style="margin-top:4px;"></div>
