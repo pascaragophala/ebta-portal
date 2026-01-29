@@ -241,6 +241,9 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollments_created ON enrollments(created_at)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollment_files_enr ON enrollment_files(enrollment_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_students_created ON students(created_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollments_month_created ON enrollments(month, created_at)")
+
 
 
 
@@ -4271,76 +4274,72 @@ def admin_enrollments():
     month = get_admin_active_month()
     year = month.split('-')[0]
 
+    page_num = int(request.args.get("page", 1))
+    limit = 50
+    offset = (page_num - 1) * limit
+
     conn = get_db()
     cur = conn.cursor()
 
-    # 1. Fetch ONLY required columns + preformatted timestamp
+    # Total count
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,))
+    total = cur.fetchone()['c']
+    total_pages = (total + limit - 1) // limit
+
+    # Main query (paginated)
     cur.execute("""
         SELECT 
-            e.id,
-            e.student_id,
-            e.subject_id,
-            e.status,
-            e.amount_paid,
-            e.pop_url,
-            e.status_token,
+            e.id, e.student_id, e.status, e.amount_paid,
+            e.pop_url, e.status_token,
             strftime('%Y-%m-%d %H:%M', e.created_at) AS created_at,
-            st.full_name,
-            st.phone_whatsapp,
-            st.grade,
+            st.full_name, st.phone_whatsapp, st.grade,
             sub.name AS subject_name
         FROM enrollments e
         JOIN students st ON st.id = e.student_id
         JOIN subjects sub ON sub.id = e.subject_id
         WHERE e.month = ?
-        ORDER BY e.created_at ASC
-    """, (month,))
+        ORDER BY e.created_at DESC
+        LIMIT ? OFFSET ?
+    """, (month, limit, offset))
     rows = cur.fetchall()
 
-    # 2. Returning students (one query)
+    # Returning students
     cur.execute("""
         SELECT DISTINCT student_id
         FROM enrollments
-        WHERE status = 'ACTIVE'
-          AND substr(month, 1, 4) = ?
+        WHERE status='ACTIVE'
+          AND substr(month,1,4)=?
           AND month < ?
     """, (year, month))
     returning_ids = {r['student_id'] for r in cur.fetchall()}
 
-    # 3. PoP files (one query)
-    cur.execute("""
-        SELECT enrollment_id, file_path
-        FROM enrollment_files
-    """)
+    # PoP files
+    cur.execute("SELECT enrollment_id, file_path FROM enrollment_files")
     pop_map = {}
     for r in cur.fetchall():
         pop_map.setdefault(r['enrollment_id'], []).append(r['file_path'])
 
     conn.close()
 
-    # 4. Build rows (lighter Python work)
-    out = []
+    trs = []
     for r in rows:
-        history = "Returning student" if r['student_id'] in returning_ids else "First month"
+        history = "Returning" if r['student_id'] in returning_ids else "First"
 
-        files = pop_map.get(r['id'], [])
-        if not files and r['pop_url']:
-            files = [r['pop_url']]
-
+        files = pop_map.get(r['id'], []) or ([r['pop_url']] if r['pop_url'] else [])
         pop_html = " ".join(
             f"<a class='links' target='_blank' href='{p}'>PoP</a>" for p in files
         ) or "—"
 
-        out.append(f"""
+        trs.append(f"""
         <tr>
             <td>{r['full_name']}<div class='muted'>{r['phone_whatsapp']}</div></td>
             <td>{grade_label(r['grade'])}</td>
             <td>{r['subject_name']}</td>
-            <td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>
-            <td><span class='mini muted'>{history}</span></td>
-            <td><span class='mini'>{r['created_at']}</span></td>
+            <td>{r['status']}</td>
+            <td>{history}</td>
+            <td>{r['created_at']}</td>
             <td>{pop_html}</td>
-            <td><strong>R{r['amount_paid']}</strong></td>
+            <td>R{r['amount_paid']}</td>
             <td>
                 <form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>
                     <button class='btn success'>Approve</button>
@@ -4358,45 +4357,43 @@ def admin_enrollments():
         </tr>
         """)
 
-    table_rows = "".join(out)
+    nav = f"""
+    <div class='pager'>
+        Page {page_num} of {total_pages} &nbsp;
+        {"<a href='?page="+str(page_num-1)+"'>Prev</a>" if page_num>1 else ""}
+        {"<a href='?page="+str(page_num+1)+"'>Next</a>" if page_num<total_pages else ""}
+    </div>
+    """
 
     body = f"""
     {admin_nav()}
-
     <section class='card'>
         <h1>Enrollments — {month}</h1>
 
-        <div class='toolbar'>
-            <input id='enr_q' class='pill'
-                   placeholder='Search by name, phone, grade, subject'
-                   oninput="filterTable('enr_q','enr_tbl')"/>
-        </div>
+        {nav}
 
         <div class="scroll-x">
-            <table id='enr_tbl'>
+            <table>
                 <thead>
                     <tr>
-                        <th>Student</th>
-                        <th>Grade</th>
-                        <th>Subject</th>
-                        <th>Status</th>
-                        <th>History</th>
-                        <th>Timestamp</th>
-                        <th>PoP</th>
-                        <th>Amount paid</th>
-                        <th>Actions</th>
-                        <th>Status link</th>
+                        <th>Student</th><th>Grade</th><th>Subject</th>
+                        <th>Status</th><th>History</th>
+                        <th>Timestamp</th><th>PoP</th>
+                        <th>Amount</th><th>Actions</th><th>Link</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {table_rows or "<tr><td colspan='10'><div class='empty'>No enrollments yet.</div></td></tr>"}
+                    {''.join(trs) or "<tr><td colspan='10'>No enrollments.</td></tr>"}
                 </tbody>
             </table>
         </div>
+
+        {nav}
     </section>
     """
 
     return page("Enrollments", body)
+
     
 
 @app.post('/admin/enrollments/<int:id>/<action>')
@@ -4526,10 +4523,19 @@ def admin_students():
     if r:
         return r
 
+    page_num = int(request.args.get("page", 1))
+    limit = 50
+    offset = (page_num - 1) * limit
+
     conn = get_db()
     cur = conn.cursor()
 
-    # 1. Fetch students
+    # Total count (for navigation)
+    cur.execute("SELECT COUNT(*) AS c FROM students")
+    total = cur.fetchone()['c']
+    total_pages = (total + limit - 1) // limit
+
+    # Fetch students (paginated)
     cur.execute("""
         SELECT
             id,
@@ -4543,21 +4549,27 @@ def admin_students():
             pin
         FROM students
         ORDER BY created_at DESC
-    """)
+        LIMIT ? OFFSET ?
+    """, (limit, offset))
     students = cur.fetchall()
 
-    # 2. Fetch ALL subjects in one go
-    cur.execute("""
-        SELECT e.student_id, sub.name
-        FROM enrollments e
-        JOIN subjects sub ON sub.id = e.subject_id
-    """)
-    subject_rows = cur.fetchall()
-
-    # Build map: student_id -> subjects
+    # Fetch subjects for only these students
+    ids = [s['id'] for s in students]
     subject_map = {}
-    for r in subject_rows:
-        subject_map.setdefault(r['student_id'], []).append(r['name'])
+
+    if ids:
+        qmarks = ",".join("?" * len(ids))
+        cur.execute(f"""
+            SELECT e.student_id, sub.name
+            FROM enrollments e
+            JOIN subjects sub ON sub.id = e.subject_id
+            WHERE e.student_id IN ({qmarks})
+        """, ids)
+
+        for r in cur.fetchall():
+            subject_map.setdefault(r['student_id'], []).append(r['name'])
+
+    conn.close()
 
     def nz(v):
         return v if (v and str(v).strip()) else "N/A"
@@ -4567,61 +4579,65 @@ def admin_students():
         subjects = ", ".join(subject_map.get(s['id'], [])) or "N/A"
         pin = s['pin'] if s['pin'] else "<span class='muted'>not set</span>"
 
-        trs.append(
-            f"<tr>"
-            f"<td>{s['full_name']}<div class='muted'>{s['phone_whatsapp']}</div></td>"
-            f"<td>{grade_label(s['grade'])}</td>"
-            f"<td>{subjects}</td>"
-            f"<td>{nz(s['guardian_phone'])}</td>"
-            f"<td>{nz(s['province'])}</td>"
-            f"<td>{nz(s['school'])}</td>"
-            f"<td>{nz(s['email'])}</td>"
-            f"<td>{pin}</td>"
-            f"<td>"
-            f"<form method='post' action='{url_for('admin_student_reset_pin', sid=s['id'])}' style='display:inline'>"
-            f"<button class='btn success'>Reset PIN</button></form> "
-            f"<form method='post' action='{url_for('admin_student_delete', sid=s['id'])}' "
-            f"style='display:inline' onsubmit='return confirm(\"Delete this student?\")'>"
-            f"<button class='btn danger'>Delete</button></form>"
-            f"</td>"
-            f"</tr>"
-        )
+        trs.append(f"""
+        <tr>
+            <td>{s['full_name']}<div class='muted'>{s['phone_whatsapp']}</div></td>
+            <td>{grade_label(s['grade'])}</td>
+            <td>{subjects}</td>
+            <td>{nz(s['guardian_phone'])}</td>
+            <td>{nz(s['province'])}</td>
+            <td>{nz(s['school'])}</td>
+            <td>{nz(s['email'])}</td>
+            <td>{pin}</td>
+            <td>
+                <form method='post' action='{url_for('admin_student_reset_pin', sid=s['id'])}' style='display:inline'>
+                    <button class='btn success'>Reset PIN</button>
+                </form>
+                <form method='post' action='{url_for('admin_student_delete', sid=s['id'])}' style='display:inline'
+                      onsubmit='return confirm("Delete this student?")'>
+                    <button class='btn danger'>Delete</button>
+                </form>
+            </td>
+        </tr>
+        """)
 
-    conn.close()
+    nav = f"""
+    <div class='pager'>
+        Page {page_num} of {total_pages} &nbsp;
+        {"<a href='?page="+str(page_num-1)+"'>Prev</a>" if page_num>1 else ""}
+        {"<a href='?page="+str(page_num+1)+"'>Next</a>" if page_num<total_pages else ""}
+    </div>
+    """
 
     body = f"""
     {admin_nav()}
     <section class='card'>
         <h1>Students</h1>
-        <div class='toolbar'>
-            <input id='stu_q' class='pill' placeholder='Search students'
-                   oninput="filterTable('stu_q','stu_tbl')"/>
-        </div>
+
+        {nav}
 
         <div class="scroll-x">
-            <table id='stu_tbl'>
+            <table>
                 <thead>
                     <tr>
-                        <th>Student</th>
-                        <th>Grade</th>
-                        <th>Subject</th>
-                        <th>Guardian</th>
-                        <th>Province</th>
-                        <th>School</th>
-                        <th>Email</th>
-                        <th>PIN</th>
-                        <th>Actions</th>
+                        <th>Student</th><th>Grade</th><th>Subject</th>
+                        <th>Guardian</th><th>Province</th>
+                        <th>School</th><th>Email</th>
+                        <th>PIN</th><th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {''.join(trs) if trs else "<tr><td colspan='9'><div class='empty'>No students yet.</div></td></tr>"}
+                    {''.join(trs) or "<tr><td colspan='9'>No students yet.</td></tr>"}
                 </tbody>
             </table>
-        </div>    
+        </div>
+
+        {nav}
     </section>
     """
 
     return page("Students", body)
+
 
 
 @app.post('/admin/students/add')
