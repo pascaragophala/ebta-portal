@@ -3053,7 +3053,7 @@ def student_home():
         <div class='card soft'>
             <h3>Not enrolled for {pretty_month_label(month)}</h3>
             <p class='muted'>
-                Enrollments for this month are open. You can add subjects now.
+                Enrollments status pending. You can add subjects now.
             </p>
             <a class='btn' href='{url_for("home")}'>
                 Enroll now
