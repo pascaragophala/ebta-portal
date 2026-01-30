@@ -5553,24 +5553,43 @@ def admin_messages():
         return r
 
     page_num = int(request.args.get("page", 1))
+    q = request.args.get("q", "").strip()   # search term
     limit = 50
     offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
 
-    # Total count (for navigation)
-    cur.execute("SELECT COUNT(*) AS c FROM messages")
+    # ----- Total count (with filter) -----
+    if q:
+        cur.execute("""
+            SELECT COUNT(*) AS c
+            FROM messages
+            WHERE kind LIKE ? OR payload LIKE ?
+        """, (f"%{q}%", f"%{q}%"))
+    else:
+        cur.execute("SELECT COUNT(*) AS c FROM messages")
+
     total = cur.fetchone()['c']
     total_pages = (total + limit - 1) // limit
 
-    # Fetch paginated messages
-    cur.execute("""
-        SELECT id, kind, payload, created_at, resolved
-        FROM messages
-        ORDER BY created_at DESC
-        LIMIT ? OFFSET ?
-    """, (limit, offset))
+    # ----- Fetch paginated messages -----
+    if q:
+        cur.execute("""
+            SELECT id, kind, payload, created_at, resolved
+            FROM messages
+            WHERE kind LIKE ? OR payload LIKE ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, (f"%{q}%", f"%{q}%", limit, offset))
+    else:
+        cur.execute("""
+            SELECT id, kind, payload, created_at, resolved
+            FROM messages
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, (limit, offset))
+
     rows = cur.fetchall()
     conn.close()
 
@@ -5580,10 +5599,10 @@ def admin_messages():
         action = "" if m['resolved'] else f"""
             <form method='post' action='{url_for('admin_message_resolve', mid=m['id'])}' style='display:inline'>
                 <input type="hidden" name="page" value="{page_num}">
+                <input type="hidden" name="q" value="{q}">
                 <button class='btn success mini'>Mark resolved</button>
             </form>
         """
-
 
         when = format_datime(m['created_at'])
 
@@ -5600,8 +5619,8 @@ def admin_messages():
     nav = f"""
     <div class='pager' style="margin:10px 0">
         Page {page_num} of {total_pages}
-        {"<a class='links' href='?page="+str(page_num-1)+"'>Prev</a>" if page_num>1 else ""}
-        {"<a class='links' href='?page="+str(page_num+1)+"'>Next</a>" if page_num<total_pages else ""}
+        {"<a class='links' href='?page="+str(page_num-1)+"&q="+q+"'>Prev</a>" if page_num>1 else ""}
+        {"<a class='links' href='?page="+str(page_num+1)+"&q="+q+"'>Next</a>" if page_num<total_pages else ""}
     </div>
     """
 
@@ -5609,6 +5628,13 @@ def admin_messages():
     {admin_nav()}
     <section class='card'>
         <h1>Admin Inbox</h1>
+
+        <form method="get" class="toolbar">
+            <input name="q" class="pill"
+                   placeholder="Filter by type or text (e.g. forgot_student_pin)"
+                   value="{q}">
+            <button class="btn mini">Search</button>
+        </form>
 
         {nav}
 
@@ -5637,12 +5663,13 @@ def admin_messages():
 
 
 @app.post('/admin/messages/<int:mid>/resolve')
-def admin_message_resolve(mid: int):
+def admin_message_resolve(mid:int):
     r = require_admin()
     if r:
         return r
 
     page_num = request.form.get("page", 1)
+    q = request.form.get("q", "")
 
     conn = get_db()
     cur = conn.cursor()
@@ -5650,7 +5677,8 @@ def admin_message_resolve(mid: int):
     conn.commit()
     conn.close()
 
-    return redirect(url_for('admin_messages', page=page_num))
+    return redirect(url_for('admin_messages', page=page_num, q=q))
+
 
 
 # --- Admin: Direct Messages (student/tutor DMs) ---
