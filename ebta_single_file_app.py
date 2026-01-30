@@ -244,6 +244,8 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollment_files_enr ON enrollment_files(enrollment_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_created ON students(created_at)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollments_month_created ON enrollments(month, created_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at DESC)")
+
 
 
 
@@ -4404,12 +4406,15 @@ def admin_enrollments():
             <td><strong>R{r['amount_paid']}</strong></td>
             <td>
                 <form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>
+                    <input type="hidden" name="page" value="{page_num}">
                     <button class='btn success'>Approve</button>
                 </form>
                 <form method='post' action='{url_for('enrollment_action', id=r['id'], action='lapse')}' style='display:inline'>
+                    <input type="hidden" name="page" value="{page_num}">
                     <button class='btn danger'>Lapse</button>
                 </form>
             </td>
+
             <td>
                 <a class='links' target='_blank'
                    href='{url_for('status', id=r['id'])}?{urlencode({'token': r['status_token']})}'>
@@ -4476,6 +4481,8 @@ def enrollment_action(id: int, action: str):
     r = require_admin()
     if r:
         return r
+        
+    page_num = int(request.form.get("page", 1))
     conn = get_db()
     cur = conn.cursor()
 
@@ -4588,7 +4595,7 @@ def enrollment_action(id: int, action: str):
         # Never break the admin flow if notifications fail
         pass
 
-    return redirect(url_for('admin_enrollments'))
+    return redirect(url_for('admin_enrollments', page=page_num))
 
 # --- Admin: Students (show Guardian & Email) ---
 
@@ -5544,58 +5551,107 @@ def admin_messages():
     r = require_admin()
     if r:
         return r
+
+    page_num = int(request.args.get("page", 1))
+    limit = 50
+    offset = (page_num - 1) * limit
+
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT id,kind,payload,created_at,resolved FROM messages ORDER BY created_at DESC")
+
+    # Total count (for navigation)
+    cur.execute("SELECT COUNT(*) AS c FROM messages")
+    total = cur.fetchone()['c']
+    total_pages = (total + limit - 1) // limit
+
+    # Fetch paginated messages
+    cur.execute("""
+        SELECT id, kind, payload, created_at, resolved
+        FROM messages
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    """, (limit, offset))
     rows = cur.fetchall()
     conn.close()
+
     trs = []
     for m in rows:
         status = "<span class='chip active'>Open</span>" if m['resolved'] == 0 else "<span class='chip'>Resolved</span>"
         action = "" if m['resolved'] else f"""
             <form method='post' action='{url_for('admin_message_resolve', mid=m['id'])}' style='display:inline'>
-                <button class='btn success'>Mark resolved</button>
+                <input type="hidden" name="page" value="{page_num}">
+                <button class='btn success mini'>Mark resolved</button>
             </form>
         """
+
 
         when = format_datime(m['created_at'])
 
         trs.append(f"""
             <tr>
                 <td>{m['kind']}</td>
-                <td>{m['payload']}</td>
+                <td style="max-width:480px; word-break:break-word">{m['payload']}</td>
                 <td class='mini muted'>{when}</td>
                 <td>{status}</td>
                 <td>{action}</td>
             </tr>
         """)
 
+    nav = f"""
+    <div class='pager' style="margin:10px 0">
+        Page {page_num} of {total_pages}
+        {"<a class='links' href='?page="+str(page_num-1)+"'>Prev</a>" if page_num>1 else ""}
+        {"<a class='links' href='?page="+str(page_num+1)+"'>Next</a>" if page_num<total_pages else ""}
+    </div>
+    """
 
     body = f"""
     {admin_nav()}
     <section class='card'>
-        <h1>Admin inbox</h1>
+        <h1>Admin Inbox</h1>
+
+        {nav}
+
         <div class="scroll-x">
             <table>
-            <thead><tr><th>Type</th><th>Payload</th><th>When</th><th>Status</th><th>Action</th></tr></thead>
-            <tbody>{''.join(trs) if trs else "<tr><td colspan='5'><div class='empty'>No messages.</div></td></tr>"}</tbody>
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Payload</th>
+                    <th>When</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(trs) if trs else "<tr><td colspan='5'><div class='empty'>No messages.</div></td></tr>"}
+            </tbody>
             </table>
         </div>
+
+        {nav}
     </section>
     """
+
     return page("Messages", body)
 
+
 @app.post('/admin/messages/<int:mid>/resolve')
-def admin_message_resolve(mid:int):
+def admin_message_resolve(mid: int):
     r = require_admin()
     if r:
         return r
+
+    page_num = request.form.get("page", 1)
+
     conn = get_db()
     cur = conn.cursor()
     cur.execute("UPDATE messages SET resolved=1 WHERE id=?", (mid,))
     conn.commit()
     conn.close()
-    return redirect(url_for('admin_messages'))
+
+    return redirect(url_for('admin_messages', page=page_num))
+
 
 # --- Admin: Direct Messages (student/tutor DMs) ---
 
