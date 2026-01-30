@@ -1994,7 +1994,7 @@ def home():
         <!-- Student & guardian details -->
         <div class="grid two-col">
             <div>
-            <label>Student Name</label>
+            <label>Student Name & Surname</label>
             <input name='full_name' required/>
             </div>
             <div>
