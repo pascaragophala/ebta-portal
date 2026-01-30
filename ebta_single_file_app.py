@@ -5298,7 +5298,6 @@ def admin_sessions():
                 f"{'<span class=\"chip active\">Shown</span>' if r['active'] == 1 else '<span class=\"chip lapsed\">Hidden</span>'}"
                 f"</td>"
                 f"<td>"
-                f"<a class='links' href='{url_for('session_qr', id=r['id'])}'>QR</a> · "
                 f"<form method='post' action='{url_for('admin_session_toggle', sid=r['id'])}' style='display:inline'>"
                 f"<button class='btn mini secondary'>{'Hide' if r['active'] == 1 else 'Show'}</button>"
                 f"</form> · "
