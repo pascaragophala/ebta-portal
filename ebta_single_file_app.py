@@ -5775,7 +5775,20 @@ def admin_analytics():
     active = count_status('ACTIVE')
     lapsed = count_status('LAPSED')
 
-    cur.execute("SELECT SUM(amount_paid) AS r FROM enrollments WHERE month=? AND status='ACTIVE'", (month,))
+    # ===== TRUE REVENUE (distributed) =====
+    cur.execute("""
+        SELECT ROUND(SUM(
+            e.amount_paid * 1.0 / (
+                SELECT COUNT(*)
+                FROM enrollments e2
+                WHERE e2.student_id = e.student_id
+                  AND e2.month = e.month
+                  AND e2.status = 'ACTIVE'
+            )
+        ), 2) AS r
+        FROM enrollments e
+        WHERE e.month=? AND e.status='ACTIVE'
+    """, (month,))
     revenue = cur.fetchone()['r'] or 0
 
     # ===== New vs Returning =====
@@ -5799,11 +5812,20 @@ def admin_analytics():
     """, (month, month))
     returning = cur.fetchone()[0] or 0
 
-    # ===== Revenue trend (per selected month, per day) =====
+    # ===== Revenue trend (per day, corrected) =====
     cur.execute("""
-        SELECT substr(created_at,1,10) AS day, SUM(amount_paid) AS r
-        FROM enrollments
-        WHERE month=? AND status='ACTIVE'
+        SELECT substr(e.created_at,1,10) AS day,
+               ROUND(SUM(
+                   e.amount_paid * 1.0 / (
+                       SELECT COUNT(*)
+                       FROM enrollments e2
+                       WHERE e2.student_id = e.student_id
+                         AND e2.month = e.month
+                         AND e2.status = 'ACTIVE'
+                   )
+               ), 2) AS r
+        FROM enrollments e
+        WHERE e.month=? AND e.status='ACTIVE'
         GROUP BY day ORDER BY day
     """, (month,))
     rev_rows = cur.fetchall()
@@ -5821,9 +5843,18 @@ def admin_analytics():
     att_labels = [r['date'] for r in att_rows]
     att_data = [r['c'] for r in att_rows]
 
-    # ===== Revenue per subject =====
+    # ===== Revenue per subject (corrected) =====
     cur.execute("""
-        SELECT s.name || ' (' || s.grade || ')' AS label, SUM(e.amount_paid) AS r
+        SELECT s.name || ' (' || s.grade || ')' AS label,
+               ROUND(SUM(
+                   e.amount_paid * 1.0 / (
+                       SELECT COUNT(*)
+                       FROM enrollments e2
+                       WHERE e2.student_id = e.student_id
+                         AND e2.month = e.month
+                         AND e2.status = 'ACTIVE'
+                   )
+               ), 2) AS r
         FROM enrollments e
         JOIN subjects s ON s.id=e.subject_id
         WHERE e.month=? AND e.status='ACTIVE'
@@ -5836,7 +5867,7 @@ def admin_analytics():
 
     # ===== Top rated tutors =====
     cur.execute("""
-        SELECT t.full_name, AVG(l.rating) AS avg_rating
+        SELECT t.full_name, ROUND(AVG(l.rating),2) AS avg_rating
         FROM lesson_ratings l
         JOIN tutor_subjects ts ON ts.subject_id=l.subject_id
         JOIN tutors t ON t.id=ts.tutor_id
@@ -5846,7 +5877,7 @@ def admin_analytics():
     """, (month,))
     tutor_rows = cur.fetchall()
     tutor_labels = [r['full_name'] for r in tutor_rows]
-    tutor_data = [round(r['avg_rating'],2) for r in tutor_rows]
+    tutor_data = [r['avg_rating'] for r in tutor_rows]
 
     # ===== Subject performance table =====
     cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
@@ -5854,12 +5885,19 @@ def admin_analytics():
 
     rows=[]
     for s in subs:
-        cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE subject_id=? AND month=? AND status='ACTIVE'", (s['id'], month))
+        cur.execute("""
+            SELECT COUNT(*) AS c
+            FROM enrollments
+            WHERE subject_id=? AND month=? AND status='ACTIVE'
+        """, (s['id'], month))
         active_students = cur.fetchone()['c'] or 0
 
-        cur.execute("""SELECT COUNT(*) AS c FROM attendance a
-                       JOIN sessions se ON se.id=a.session_id
-                       WHERE se.subject_id=? AND strftime('%Y-%m', a.date)=?""", (s['id'], month))
+        cur.execute("""
+            SELECT COUNT(*) AS c
+            FROM attendance a
+            JOIN sessions se ON se.id=a.session_id
+            WHERE se.subject_id=? AND strftime('%Y-%m', a.date)=?
+        """, (s['id'], month))
         att = cur.fetchone()['c'] or 0
 
         rows.append(f"""
@@ -5993,7 +6031,7 @@ def admin_analytics():
     """
 
     return page("Analytics Dashboard", body)
- 
+
 # --- Export remove list ---
 
 @app.get('/api/export/remove-list')
