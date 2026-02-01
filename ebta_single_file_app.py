@@ -4278,7 +4278,6 @@ def admin_nav():
         <a class="btn secondary" href="{url_for('admin_sessions')}">Sessions</a>
         <a class="btn secondary" href="{url_for('admin_messages')}">Inbox</a>
         <a class="btn secondary" href="{url_for('admin_direct_messages')}">Direct Msgs</a>
-        <a class="btn secondary" href="{url_for('admin_analytics')}">Analytics</a>
         <a class="btn secondary" href="{url_for('admin_settings')}">Settings</a>
     </nav>
     """
@@ -4312,7 +4311,6 @@ def admin_home():
     <a class='btn secondary' href='{url_for('admin_sessions')}'>Sessions & QR</a>
     <a class='btn secondary' href='{url_for('admin_messages')}'>Inbox</a>
     <a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct messages</a>
-    <a class='btn secondary' href='{url_for('admin_analytics')}'>Analytics</a>
     <a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>
     </div></section>"""
     return page("Admin", body)
