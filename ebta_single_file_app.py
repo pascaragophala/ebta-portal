@@ -2083,7 +2083,7 @@ def home():
 
             <ul class="mini" style="margin:6px 0 4px 14px;padding:0;">
                 <li>Account holder: Ms MCB MOHALE</li>
-                <li>Contact: 0649619653</li>
+                <li>Capitec number: 0649619653</li>
                 <li>Account number: 2062604285</li>
                 <li>Bank name: Capitec</li>
             </ul>
