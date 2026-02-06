@@ -3881,25 +3881,118 @@ def tutor_home():
     inbox = cur.fetchall()
     inbox_list = "".join([f"<div class='msg {'me' if m['from_role']=='tutor' else 'them'}'><div class='meta'>{m['from_name']} → {m['to_name']} • {m['created_at'][:16].replace('T',' ')}</div><div>{m['body']}</div></div>" for m in inbox]) or "<div class='empty'>No messages yet.</div>"
 
-    # Compose forms
-    stud_opts = "".join([f"<option value='{sid}|{subid}'>{label}</option>" for sid,subid,label in message_student_options]) or "<option value=''>No students</option>"
+    # =========================
+    # Compose forms (UPDATED)
+    # =========================
+
+    # Broadcast to ALL students across tutor subjects
+    broadcast_all = "<option value='ALL'>All My Students</option>"
+
+    # Broadcast per subject
+    subject_broadcast_opts = "".join([
+        f"<option value='SUBJECT_ALL|{s['subject_id']}'>All students — {grade_label(s['grade'])} {s['subject_name']}</option>"
+        for s in subs
+    ])
+
+    # Individual students
+    individual_opts = "".join([
+        f"<option value='{sid}|{subid}'>{label}</option>"
+        for sid, subid, label in message_student_options
+    ]) or "<option value=''>No students</option>"
+
+    # Final dropdown with categories
+    stud_opts = f"""
+    <optgroup label="Broadcast">
+        {broadcast_all}
+    </optgroup>
+
+    <optgroup label="By Subject">
+        {subject_broadcast_opts}
+    </optgroup>
+
+    <optgroup label="Individual Students">
+        {individual_opts}
+    </optgroup>
+    """
+
+
+    # =========================
+    # Inbox Card UI
+    # =========================
 
     inbox_card = f"""
-    <div class='card'><h2>Inbox & Messages</h2>
+    <div class='card'>
+
+        <h2>Inbox & Messages</h2>
+
         <div class='grid' style='grid-template-columns:1fr;gap:8px'>
-        <form method='post' action='{url_for('tutor_message_student')}' class='grid'>
-            <div><label>Message a student</label><select name='combo' required>{stud_opts}</select></div>
-            <div><label>Your message</label><textarea name='body' required placeholder='Type your message...'></textarea></div>
-            <button class='btn'>Send</button>
-        </form>
-        <form method='post' action='{url_for('tutor_message_admin')}' class='grid'>
-            <div><label>Message Admin</label><textarea name='body' required placeholder='Type your message for Admin...'></textarea></div>
-            <button class='btn secondary'>Send to Admin</button>
-        </form>
+
+            <!-- Message students -->
+            <form method='post' action='{url_for('tutor_message_student')}' class='grid'>
+
+                <div>
+                    <label>Message students</label>
+
+                    <select name='combo' required>
+                        {stud_opts}
+                    </select>
+
+                    <div class='mini muted'>
+                        You can message an individual student, a subject, or all students.
+                    </div>
+
+                </div>
+
+                <div>
+                    <label>Your message</label>
+
+                    <textarea name='body'
+                              required
+                              placeholder='Type your message...'></textarea>
+
+                </div>
+
+                <button class='btn'>
+                    Send to students
+                </button>
+
+            </form>
+
+
+            <!-- Message admin -->
+            <form method='post'
+                  action='{url_for('tutor_message_admin')}'
+                  class='grid'>
+
+                <div>
+
+                    <label>Message Admin</label>
+
+                    <textarea name='body'
+                              required
+                              placeholder='Type your message for Admin...'></textarea>
+
+                </div>
+
+                <button class='btn secondary'>
+                    Send to Admin
+                </button>
+
+            </form>
+
         </div>
-        <div style='margin-top:10px'>{inbox_list}</div>
+
+
+        <!-- Inbox messages -->
+        <div style='margin-top:10px'>
+
+            {inbox_list}
+
+        </div>
+
     </div>
     """
+
 
     conn.close()
 
@@ -4087,33 +4180,145 @@ def tutor_assignment_grade(mid:int, sid:int):
     # redirect with saved alert
     return redirect(url_for('tutor_assignment_manage', mid=mid, saved=1))
 
-# Tutor → Student message
+# Tutor → Student message (individual OR broadcast)
 @app.post('/tutor/message-student')
 def tutor_message_student():
-    r=require_tutor()
-    if r: return r
-    tid=is_tutor()
-    combo=request.form.get('combo','')
-    body=request.form.get('body','').strip()
-    if not (combo and body): return page("Error", card_msg("Choose a student and write a message."))
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    combo = request.form.get('combo', '')
+    body = request.form.get('body', '').strip()
+
+    if not body:
+        return page("Error", card_msg("Message cannot be empty."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    month = get_setting('current_month')
+    now = now_utc_iso()
+
+    # ========================
+    # SEND TO ALL STUDENTS (ALL SUBJECTS)
+    # ========================
+    if combo == "ALL":
+
+        cur.execute("""
+            SELECT DISTINCT e.student_id, e.subject_id
+            FROM enrollments e
+            JOIN tutor_subjects ts ON ts.subject_id = e.subject_id
+            WHERE ts.tutor_id = ?
+            AND e.month = ?
+            AND e.status = 'ACTIVE'
+        """, (tid, month))
+
+        rows = cur.fetchall()
+
+        cur.executemany("""
+            INSERT INTO direct_messages
+            (from_role, from_id, to_role, to_id, subject_id, body, created_at)
+            VALUES ('tutor', ?, 'student', ?, ?, ?, ?)
+        """, [(tid, r['student_id'], r['subject_id'], body, now) for r in rows])
+
+        conn.commit()
+        conn.close()
+
+        return redirect(url_for('tutor_home'))
+
+    # ========================
+    # SEND TO ALL STUDENTS IN ONE SUBJECT
+    # ========================
+    if combo.startswith("SUBJECT_ALL|"):
+
+        try:
+            subject_id = int(combo.split('|')[1])
+        except:
+            conn.close()
+            return page("Error", card_msg("Invalid subject."))
+
+        # verify tutor teaches subject
+        cur.execute("""
+            SELECT 1
+            FROM tutor_subjects
+            WHERE tutor_id=? AND subject_id=?
+        """, (tid, subject_id))
+
+        if not cur.fetchone():
+            conn.close()
+            return page("Error", card_msg("You are not assigned to that subject."))
+
+        cur.execute("""
+            SELECT student_id
+            FROM enrollments
+            WHERE subject_id=?
+            AND month=?
+            AND status='ACTIVE'
+        """, (subject_id, month))
+
+        students = cur.fetchall()
+
+        cur.executemany("""
+            INSERT INTO direct_messages
+            (from_role, from_id, to_role, to_id, subject_id, body, created_at)
+            VALUES ('tutor', ?, 'student', ?, ?, ?, ?)
+        """, [(tid, s['student_id'], subject_id, body, now) for s in students])
+
+        conn.commit()
+        conn.close()
+
+        return redirect(url_for('tutor_home'))
+
+    # ========================
+    # SEND TO INDIVIDUAL STUDENT
+    # ========================
     try:
-        student_id_str, subject_id_str = combo.split('|',1)
-        student_id=int(student_id_str); subject_id=int(subject_id_str)
-    except Exception:
-        return page("Error", card_msg("Bad selection."))
-    conn=get_db(); cur=conn.cursor()
-    # verify tutor teaches subject and student is ACTIVE there
-    month=get_setting('current_month')
-    cur.execute("SELECT 1 FROM tutor_subjects WHERE tutor_id=? AND subject_id=?", (tid,subject_id))
+        student_id_str, subject_id_str = combo.split('|', 1)
+        student_id = int(student_id_str)
+        subject_id = int(subject_id_str)
+    except:
+        conn.close()
+        return page("Error", card_msg("Invalid selection."))
+
+    # verify tutor teaches subject
+    cur.execute("""
+        SELECT 1
+        FROM tutor_subjects
+        WHERE tutor_id=? AND subject_id=?
+    """, (tid, subject_id))
+
     if not cur.fetchone():
-        conn.close(); return page("Error", card_msg("You are not assigned to that subject."))
-    cur.execute("""SELECT 1 FROM enrollments WHERE student_id=? AND subject_id=? AND month=? AND status='ACTIVE'""",(student_id,subject_id,month))
+        conn.close()
+        return page("Error", card_msg("Not allowed."))
+
+    # verify student active
+    cur.execute("""
+        SELECT 1
+        FROM enrollments
+        WHERE student_id=?
+        AND subject_id=?
+        AND month=?
+        AND status='ACTIVE'
+    """, (student_id, subject_id, month))
+
     if not cur.fetchone():
-        conn.close(); return page("Error", card_msg("Student not ACTIVE in that subject this month."))
-    cur.execute("INSERT INTO direct_messages(from_role,from_id,to_role,to_id,subject_id,body,created_at) VALUES('tutor',?,?,?,?,?,?)",
-                (tid,'student',student_id,subject_id,body,now_utc_iso()))
-    conn.commit(); conn.close()
+        conn.close()
+        return page("Error", card_msg("Student not active."))
+
+    cur.execute("""
+        INSERT INTO direct_messages
+        (from_role, from_id, to_role, to_id, subject_id, body, created_at)
+        VALUES ('tutor', ?, 'student', ?, ?, ?, ?)
+    """, (tid, student_id, subject_id, body, now))
+
+    conn.commit()
+    conn.close()
+
     return redirect(url_for('tutor_home'))
+
 
 # Tutor → Admin message
 @app.post('/tutor/message-admin')
@@ -5810,70 +6015,202 @@ def admin_message_resolve(mid:int):
 
 @app.get('/admin/direct-messages')
 def admin_direct_messages():
-    r=require_admin()
-    if r: return r
-    conn=get_db(); cur=conn.cursor()
-    cur.execute("""SELECT dm.*,
-                        CASE dm.from_role 
-                            WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
-                            WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
-                            ELSE 'Admin' END AS from_name,
-                        CASE dm.to_role 
-                            WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
-                            WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
-                            ELSE 'Admin' END AS to_name
-                FROM direct_messages dm
-                ORDER BY dm.created_at ASC LIMIT 80""")
-    dms=cur.fetchall()
-    # mark those to admin as read
-    cur.execute("UPDATE direct_messages SET is_read=1 WHERE to_role='admin'")
-    # lists for compose
-    cur.execute("SELECT id,full_name FROM tutors ORDER BY full_name"); tutors=cur.fetchall()
-    cur.execute("SELECT id,full_name FROM students ORDER BY full_name"); students=cur.fetchall()
-    conn.commit(); conn.close()
+    r = require_admin()
+    if r:
+        return r
 
-    dm_list = "".join([f"<div class='msg {'me' if m['from_role']=='admin' else 'them'}'><div class='meta'>{m['from_name']} → {m['to_name']} • {m['created_at'][:16].replace('T',' ')}</div><div>{m['body']}</div></div>" for m in dms]) or "<div class='empty'>No messages yet.</div>"
+    conn = get_db()
+    cur = conn.cursor()
 
-    tut_opts="".join([f"<option value='tutor|{t['id']}'>{t['full_name']}</option>" for t in tutors])
-    stu_opts="".join([f"<option value='student|{s['id']}'>{s['full_name']}</option>" for s in students])
-    body=fr"""
-    {admin_nav()}
-    <section class='grid'>
-        <div class='card'><h1>Direct messages</h1>
-        <form method='post' action='{url_for('admin_send_dm')}' class='grid'>
-            <div><label>To (Tutor/Student)</label>
-            <select name='target' required>
-                <optgroup label='Tutors'>{tut_opts}</optgroup>
-                <optgroup label='Students'>{stu_opts}</optgroup>
-            </select>
+    # Load messages
+    cur.execute("""
+        SELECT dm.*,
+            CASE dm.from_role 
+                WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
+                WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
+                ELSE 'Admin'
+            END AS from_name,
+
+            CASE dm.to_role 
+                WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
+                WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
+                ELSE 'Admin'
+            END AS to_name
+
+        FROM direct_messages dm
+        ORDER BY dm.created_at DESC
+        LIMIT 200
+    """)
+
+    dms = cur.fetchall()
+
+    # mark admin messages as read
+    cur.execute("""
+        UPDATE direct_messages
+        SET is_read = 1
+        WHERE to_role = 'admin'
+    """)
+
+    # recipient lists
+    cur.execute("SELECT id, full_name FROM tutors ORDER BY full_name")
+    tutors = cur.fetchall()
+
+    cur.execute("SELECT id, full_name FROM students ORDER BY full_name")
+    students = cur.fetchall()
+
+    conn.commit()
+    conn.close()
+
+    # message list display
+    dm_list = "".join([
+        f"""
+        <div class='msg {'me' if m['from_role']=='admin' else 'them'}'>
+            <div class='meta'>
+                {m['from_name']} → {m['to_name']} • {m['created_at'][:16].replace('T',' ')}
             </div>
-            <div><label>Message</label><textarea name='body' required placeholder='Type your message...'></textarea></div>
-            <button class='btn'>Send</button>
-        </form>
-        <div style='margin-top:10px'>{dm_list}</div>
+            <div>{m['body']}</div>
+        </div>
+        """
+        for m in dms
+    ]) or "<div class='empty'>No messages yet.</div>"
+
+    # options
+    tut_opts = "".join([
+        f"<option value='tutor|{t['id']}'>{t['full_name']}</option>"
+        for t in tutors
+    ])
+
+    stu_opts = "".join([
+        f"<option value='student|{s['id']}'>{s['full_name']}</option>"
+        for s in students
+    ])
+
+    body = f"""
+    {admin_nav()}
+
+    <section class='grid'>
+        <div class='card'>
+
+            <h1>Direct messages</h1>
+
+            <form method='post'
+                  action='{url_for('admin_send_dm')}'
+                  class='grid'>
+
+                <div>
+
+                    <label>Send to</label>
+
+                    <select name='target' required>
+
+                        <optgroup label='Broadcast'>
+                            <option value='ALL_TUTORS'>All Tutors</option>
+                            <option value='ALL_STUDENTS'>All Students</option>
+                        </optgroup>
+
+                        <optgroup label='Tutors'>
+                            {tut_opts}
+                        </optgroup>
+
+                        <optgroup label='Students'>
+                            {stu_opts}
+                        </optgroup>
+
+                    </select>
+
+                </div>
+
+                <div>
+                    <label>Message</label>
+                    <textarea name='body'
+                              required
+                              placeholder='Type your message...'></textarea>
+                </div>
+
+                <button class='btn'>Send</button>
+
+            </form>
+
+            <div style='margin-top:15px'>
+                {dm_list}
+            </div>
+
         </div>
     </section>
     """
+
     return page("Direct Messages", body)
+
 
 @app.post('/admin/direct-messages/send')
 def admin_send_dm():
-    r=require_admin()
-    if r: return r
-    target=request.form.get('target','')
-    body=request.form.get('body','').strip()
-    if not (target and body): return page("Error", card_msg("Select a recipient and write a message."))
-    try:
-        role, id_str = target.split('|',1)
-        rid = int(id_str)
-    except Exception:
-        return page("Error", card_msg("Bad recipient."))
-    if role not in ('student','tutor'): return page("Error", card_msg("Bad role."))
-    conn=get_db(); cur=conn.cursor()
-    cur.execute("INSERT INTO direct_messages(from_role,from_id,to_role,to_id,subject_id,body,created_at) VALUES('admin',0,?,?,NULL,?,?)",
-                (role, rid, body, now_utc_iso()))
-    conn.commit(); conn.close()
+
+    r = require_admin()
+    if r:
+        return r
+
+    target = request.form.get('target', '')
+    body = request.form.get('body', '').strip()
+
+    if not body:
+        return page("Error", card_msg("Message cannot be empty."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    now = now_utc_iso()
+
+    # SEND TO ALL TUTORS
+    if target == "ALL_TUTORS":
+
+        cur.execute("SELECT id FROM tutors")
+
+        tutors = cur.fetchall()
+
+        cur.executemany("""
+            INSERT INTO direct_messages
+            (from_role, from_id, to_role, to_id, subject_id, body, created_at)
+            VALUES ('admin', 0, 'tutor', ?, NULL, ?, ?)
+        """, [(t['id'], body, now) for t in tutors])
+
+    # SEND TO ALL STUDENTS
+    elif target == "ALL_STUDENTS":
+
+        cur.execute("SELECT id FROM students")
+
+        students = cur.fetchall()
+
+        cur.executemany("""
+            INSERT INTO direct_messages
+            (from_role, from_id, to_role, to_id, subject_id, body, created_at)
+            VALUES ('admin', 0, 'student', ?, NULL, ?, ?)
+        """, [(s['id'], body, now) for s in students])
+
+    else:
+
+        # individual send
+        try:
+            role, id_str = target.split('|', 1)
+            rid = int(id_str)
+        except:
+            conn.close()
+            return page("Error", card_msg("Invalid recipient."))
+
+        if role not in ("student", "tutor"):
+            conn.close()
+            return page("Error", card_msg("Invalid role."))
+
+        cur.execute("""
+            INSERT INTO direct_messages
+            (from_role, from_id, to_role, to_id, subject_id, body, created_at)
+            VALUES ('admin', 0, ?, ?, NULL, ?, ?)
+        """, (role, rid, body, now))
+
+    conn.commit()
+    conn.close()
+
     return redirect(url_for('admin_direct_messages'))
+
 
 # --- Admin: Analytics dashboard ---
 
