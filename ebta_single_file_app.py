@@ -3836,10 +3836,12 @@ def tutor_home():
     stu_sections=[]
     message_student_options=[]
     for s in subs:
-        cur.execute("""SELECT st.id, st.full_name
-                    FROM enrollments e JOIN students st ON st.id=e.student_id
-                    WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
-                    ORDER BY st.full_name""",(s['subject_id'], month))
+        cur.execute("""SELECT st.id, st.full_name, st.phone_whatsapp
+            FROM enrollments e 
+            JOIN students st ON st.id=e.student_id
+            WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
+            ORDER BY st.full_name""",(s['subject_id'], month))
+
         studs=cur.fetchall()
         cur.execute("SELECT COUNT(DISTINCT date) AS c FROM attendance a JOIN sessions se ON se.id=a.session_id WHERE se.subject_id=? AND strftime('%Y-%m', a.date)=?", (s['subject_id'], month))
         total_days = cur.fetchone()['c'] or 0
@@ -3853,13 +3855,38 @@ def tutor_home():
                         JOIN materials m ON m.id=sub.material_id
                         WHERE sub.student_id=? AND m.subject_id=? AND m.month=? AND sub.mark IS NOT NULL""",(st['id'], s['subject_id'], month))
             avgm = cur.fetchone()['avgm']
-            rows.append(f"<tr><td>{st['full_name']}</td><td>{c}</td><td>{rate}</td><td>{'-' if avgm is None else int(round(avgm))}</td></tr>")
+            rows.append(f"""
+            <tr>
+                <td>
+                    {st['full_name']}
+                    <div class='mini muted'>{st['phone_whatsapp'] or '—'}</div>
+                </td>
+
+                <td>
+                    {st['phone_whatsapp'] or '—'}
+                </td>
+
+                <td>
+                    {c}
+                </td>
+
+                <td>
+                    {rate}
+                </td>
+
+                <td>
+                    {'-' if avgm is None else int(round(avgm))}
+                </td>
+
+            </tr>
+            """)
+
             message_student_options.append((st['id'], s['subject_id'], f"{st['full_name']} — {grade_label(s['grade'])} {s['subject_name']}"))
         table = (
             "<div class='empty'>No active students.</div>"
             if not rows
             else f"<div class='scroll-x'><table><thead><tr>"
-                 f"<th>Student</th><th>Attendance</th><th>Rate</th><th>Avg mark</th>"
+                 f"<th>Student</th><th>Phone</th><th>Attendance</th><th>Rate</th><th>Avg mark</th>"
                  f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
         )
 
@@ -4542,7 +4569,7 @@ def admin_enrollments():
     year = month.split('-')[0]
 
     page_num = int(request.args.get("page", 1))
-    limit = 50
+    limit = 30
     offset = (page_num - 1) * limit
 
     conn = get_db()
@@ -4809,7 +4836,7 @@ def admin_students():
         return r
 
     page_num = int(request.args.get("page", 1))
-    limit = 50
+    limit = 30
     offset = (page_num - 1) * limit
 
     conn = get_db()
