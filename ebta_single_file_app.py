@@ -5284,13 +5284,22 @@ def admin_sessions():
     subjects = cur.fetchall()
 
     cur.execute("""
-    SELECT se.*, s.name AS subject_name, s.grade,
-           t.full_name AS tutor_name, t.phone AS tutor_phone
+    SELECT se.*, 
+           s.name AS subject_name, 
+           s.grade,
+           t.full_name AS tutor_name, 
+           t.phone AS tutor_phone
     FROM sessions se
-    JOIN subjects s ON s.id=se.subject_id
-    JOIN tutors t ON t.id=se.tutor_id
-    ORDER BY se.day_of_week, se.start_time
+    JOIN subjects s ON s.id = se.subject_id
+    JOIN tutors t ON t.id = se.tutor_id
+
+    ORDER BY
+        CAST(REPLACE(s.grade, 'G', '') AS INTEGER) ASC,
+        s.name ASC,
+        se.day_of_week ASC,
+        se.start_time ASC
     """)
+
     sessions_rows = cur.fetchall()
 
     conn.close()
