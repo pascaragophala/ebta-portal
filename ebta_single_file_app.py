@@ -5276,68 +5276,186 @@ def admin_sessions():
     r = require_admin()
     if r:
         return r
+
     conn = get_db()
     cur = conn.cursor()
+
     cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
     subjects = cur.fetchall()
+
     cur.execute("""
-    SELECT se.*, s.name AS subject_name, s.grade, t.full_name AS tutor_name, t.phone AS tutor_phone
+    SELECT se.*, s.name AS subject_name, s.grade,
+           t.full_name AS tutor_name, t.phone AS tutor_phone
     FROM sessions se
     JOIN subjects s ON s.id=se.subject_id
     JOIN tutors t ON t.id=se.tutor_id
     ORDER BY se.day_of_week, se.start_time
     """)
     sessions_rows = cur.fetchall()
+
     conn.close()
 
-    options = ''.join([f"<option value='{s['id']}'>{s['grade']} — {s['name']}</option>" for s in subjects])
-    dow_opts = ''.join([f"<option value='{i}'>{d}</option>" for i, d in enumerate(DOW)])
-    rows = ''.join(
-        [
-            (
-                f"<tr>"
-                f"<td>{grade_label(r['grade'])} — {r['subject_name']}</td>"
-                f"<td>{r['tutor_name']} ({r['tutor_phone']})</td>"
-                f"<td>{DOW[r['day_of_week']]} {r['start_time']}-{r['end_time']}</td>"
-                f"<td>"
-                f"{'<span class=\"chip active\">Shown</span>' if r['active'] == 1 else '<span class=\"chip lapsed\">Hidden</span>'}"
-                f"</td>"
-                f"<td>"
-                f"<form method='post' action='{url_for('admin_session_toggle', sid=r['id'])}' style='display:inline'>"
-                f"<button class='btn mini secondary'>{'Hide' if r['active'] == 1 else 'Show'}</button>"
-                f"</form> · "
-                f"<form method='post' action='{url_for('admin_session_delete', sid=r['id'])}' "
-                f"style='display:inline' onsubmit='return confirm(\"Delete this session?\")'>"
-                f"<button class='btn danger mini'>Delete</button>"
-                f"</form>"
-                f"</td>"
-                f"</tr>"
-            )
-            for r in sessions_rows
-        ]
-    ) or "<tr><td colspan='5'><div class='empty'>No sessions.</div></td></tr>"
+    options = ''.join([
+        f"<option value='{s['id']}'>{s['grade']} — {s['name']}</option>"
+        for s in subjects
+    ])
 
+    dow_opts = ''.join([
+        f"<option value='{i}'>{d}</option>"
+        for i, d in enumerate(DOW)
+    ])
+
+    rows = ''.join([
+        f"""
+        <tr>
+            <td>{grade_label(r['grade'])} — {r['subject_name']}</td>
+
+            <td>
+                {r['tutor_name']}<br>
+                <span class='mini muted'>{r['tutor_phone']}</span>
+            </td>
+
+            <td>
+                {DOW[r['day_of_week']]}<br>
+                <span class='mini muted'>
+                    {r['start_time']} - {r['end_time']}
+                </span>
+            </td>
+
+            <!-- NEW TEST LINK COLUMN -->
+            <td>
+                {
+                    f"<a class='btn mini success' target='_blank' href='{r['meet_link']}'>Open</a>"
+                    if r['meet_link']
+                    else "<span class='muted mini'>No link</span>"
+                }
+            </td>
+
+            <td>
+                {
+                    '<span class="chip active">Shown</span>'
+                    if r['active'] == 1
+                    else '<span class="chip lapsed">Hidden</span>'
+                }
+            </td>
+
+            <td>
+                <a class='links' href='{url_for('session_qr', id=r['id'])}'>QR</a>
+
+                ·
+
+                <form method='post'
+                      action='{url_for('admin_session_toggle', sid=r['id'])}'
+                      style='display:inline'>
+
+                    <button class='btn mini secondary'>
+                        {'Hide' if r['active'] == 1 else 'Show'}
+                    </button>
+
+                </form>
+
+                ·
+
+                <form method='post'
+                      action='{url_for('admin_session_delete', sid=r['id'])}'
+                      style='display:inline'
+                      onsubmit='return confirm("Delete this session?")'>
+
+                    <button class='btn danger mini'>Delete</button>
+
+                </form>
+
+            </td>
+
+        </tr>
+        """
+        for r in sessions_rows
+    ]) or "<tr><td colspan='6'><div class='empty'>No sessions.</div></td></tr>"
 
 
     body = f"""
     {admin_nav()}
+
     <section class='card'>
+
         <h1>Sessions</h1>
-        <form class='grid' method='post' action='{url_for('admin_sessions_post')}'>
-        <div style='display:grid;grid-template-columns:1fr 1fr 110px 110px 1fr auto;gap:10px'>
-            <select name='subject_id'>{options}</select>
-            <input name='tutor_name' placeholder='Tutor name' required />
-            <select name='dow'>{dow_opts}</select>
-            <input name='start' placeholder='Start HH:MM' required />
-            <input name='end' placeholder='End HH:MM' required />
-            <input name='tutor_phone' placeholder='Tutor phone' required />
-            <input name='meet' placeholder='Meet link (optional)' />
-            <button class='btn'>Add</button>
-        </div>
+
+        <form class='grid'
+              method='post'
+              action='{url_for('admin_sessions_post')}'>
+
+            <div style='display:grid;
+                        grid-template-columns:1fr 1fr 110px 110px 1fr auto;
+                        gap:10px'>
+
+                <select name='subject_id'>{options}</select>
+
+                <input name='tutor_name'
+                       placeholder='Tutor name'
+                       required />
+
+                <select name='dow'>{dow_opts}</select>
+
+                <input name='start'
+                       placeholder='Start HH:MM'
+                       required />
+
+                <input name='end'
+                       placeholder='End HH:MM'
+                       required />
+
+                <input name='tutor_phone'
+                       placeholder='Tutor phone'
+                       required />
+
+                <input name='meet'
+                       placeholder='Meet link (optional)' />
+
+                <button class='btn'>Add</button>
+
+            </div>
+
         </form>
-        <div class="scroll-x"><table><thead><tr><th>Subject</th><th>Tutor</th><th>When</th><th>Visibility</th><th>Actions</th></thead><tbody>{rows}</tbody></table></div>
+
+
+        <div class="scroll-x">
+
+            <table>
+
+                <thead>
+
+                    <tr>
+
+                        <th>Subject</th>
+
+                        <th>Tutor</th>
+
+                        <th>When</th>
+
+                        <!-- NEW COLUMN -->
+                        <th>Test link</th>
+
+                        <th>Visibility</th>
+
+                        <th>Actions</th>
+
+                    </tr>
+
+                </thead>
+
+                <tbody>
+
+                    {rows}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
     </section>
     """
+
     return page("Sessions", body)
     
 
