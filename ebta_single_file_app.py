@@ -344,14 +344,11 @@ def init_db():
             ("Accounting","G12"),("Accounting","G13"),
 
             # Geography
-            ("Geography","G11"),
             ("Geography","G12"),
 
             # Economics
-            ("Economics","G12"),
 
             # Business Studies
-            ("Business Studies","G10"),
             ("Business Studies","G11"),
             ("Business Studies","G12"),
 
@@ -391,14 +388,11 @@ def init_db():
             ("Accounting","G12"),("Accounting","G13"),
 
             # Geography
-            ("Geography","G11"),
             ("Geography","G12"),
 
             # Economics
-            ("Economics","G12"),
 
             # Business Studies
-            ("Business Studies","G10"),
             ("Business Studies","G11"),
             ("Business Studies","G12"),
 
@@ -481,53 +475,50 @@ def init_db():
     # --- REMOVE UNWANTED SUBJECTS (SAFE CLEANUP) ---
     # (Currently disabled – kept for future use)
 
-    # subjects_to_remove = [
-    #     ("Geography", "G10"),
-    #     ("Geography", "G13"),
-    #     ("Economics", "G10"),
-    #     ("Economics", "G11"),
-    #     ("Economics", "G13"),
-    #     ("Business Studies", "G13"),
-    # ]
+     subjects_to_remove = [
+         ("Geography", "G11"),
+         ("Economics", "G12"),
+         ("Business Studies", "G10"),
+     ]
 
-    # for name, grade in subjects_to_remove:
-    #     # Remove related enrollments
-    #     cur.execute("""
-    #         DELETE FROM enrollments
-    #         WHERE subject_id IN (
-    #             SELECT id FROM subjects WHERE name=? AND grade=?
-    #         )
-    #     """, (name, grade))
+     for name, grade in subjects_to_remove:
+         # Remove related enrollments
+         cur.execute("""
+             DELETE FROM enrollments
+             WHERE subject_id IN (
+                 SELECT id FROM subjects WHERE name=? AND grade=?
+             )
+         """, (name, grade))
 
-    #     # Remove tutor-subject mappings
-    #     cur.execute("""
-    #         DELETE FROM tutor_subjects
-    #         WHERE subject_id IN (
-    #             SELECT id FROM subjects WHERE name=? AND grade=?
-    #         )
-    #     """, (name, grade))
+         # Remove tutor-subject mappings
+         cur.execute("""
+             DELETE FROM tutor_subjects
+             WHERE subject_id IN (
+                 SELECT id FROM subjects WHERE name=? AND grade=?
+             )
+         """, (name, grade))
 
-    #     # Remove groups
-    #     cur.execute("""
-    #         DELETE FROM groups
-    #         WHERE subject_id IN (
-    #             SELECT id FROM subjects WHERE name=? AND grade=?
-    #         )
-    #     """, (name, grade))
+         # Remove groups
+         cur.execute("""
+             DELETE FROM groups
+             WHERE subject_id IN (
+                 SELECT id FROM subjects WHERE name=? AND grade=?
+             )
+         """, (name, grade))
 
-    #     # Remove sessions
-    #     cur.execute("""
-    #         DELETE FROM sessions
-    #         WHERE subject_id IN (
-    #             SELECT id FROM subjects WHERE name=? AND grade=?
-    #         )
-    #     """, (name, grade))
+         # Remove sessions
+         cur.execute("""
+             DELETE FROM sessions
+             WHERE subject_id IN (
+                 SELECT id FROM subjects WHERE name=? AND grade=?
+             )
+         """, (name, grade))
 
-    #     # Finally remove the subject itself
-    #     cur.execute("""
-    #         DELETE FROM subjects
-    #         WHERE name=? AND grade=?
-    #     """, (name, grade))
+         # Finally remove the subject itself
+         cur.execute("""
+             DELETE FROM subjects
+             WHERE name=? AND grade=?
+         """, (name, grade))
 
 
     
@@ -1885,14 +1876,12 @@ def home():
         ("Accounting","G12"),("Accounting","G13"),
 
         # Geography
-        ("Geography","G11"),
         ("Geography","G12"),
 
         # Economics
         ("Economics","G12"),
 
         # Business Studies
-        ("Business Studies","G10"),
         ("Business Studies","G11"),
         ("Business Studies","G12"),
 
