@@ -1880,7 +1880,6 @@ def home():
         ("Geography","G12"),
 
         # Economics
-        ("Economics","G12"),
 
         # Business Studies
         ("Business Studies","G11"),
