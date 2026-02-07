@@ -5494,66 +5494,36 @@ def admin_set_system_month():
 
 @app.get('/admin/sessions')
 def admin_sessions():
-
     r = require_admin()
     if r:
         return r
 
-    q = (request.args.get("q") or "").strip()
-
     conn = get_db()
     cur = conn.cursor()
 
-    # Subjects dropdown
-    cur.execute("""
-        SELECT id,name,grade
-        FROM subjects
-        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
-    """)
+    cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
     subjects = cur.fetchall()
 
-    # ============================
-    # Sessions query with SEARCH
-    # ============================
+    cur.execute("""
+    SELECT se.*, 
+           s.name AS subject_name, 
+           s.grade,
+           t.full_name AS tutor_name, 
+           t.phone AS tutor_phone
+    FROM sessions se
+    JOIN subjects s ON s.id = se.subject_id
+    JOIN tutors t ON t.id = se.tutor_id
 
-    params = []
-    where = ""
-
-    if q:
-        where = """
-        WHERE
-            LOWER(s.name) LIKE ?
-            OR LOWER(s.grade) LIKE ?
-            OR LOWER(t.full_name) LIKE ?
-            OR LOWER(t.phone) LIKE ?
-        """
-        like = f"%{q.lower()}%"
-        params = [like, like, like, like]
-
-    cur.execute(f"""
-        SELECT se.*,
-               s.name AS subject_name,
-               s.grade,
-               t.full_name AS tutor_name,
-               t.phone AS tutor_phone
-        FROM sessions se
-        JOIN subjects s ON s.id = se.subject_id
-        JOIN tutors t ON t.id = se.tutor_id
-        {where}
-        ORDER BY
-            CAST(REPLACE(s.grade,'G','') AS INTEGER) ASC,
-            s.name ASC,
-            se.day_of_week ASC,
-            se.start_time ASC
-    """, params)
+    ORDER BY
+        CAST(REPLACE(s.grade, 'G', '') AS INTEGER) ASC,
+        s.name ASC,
+        se.day_of_week ASC,
+        se.start_time ASC
+    """)
 
     sessions_rows = cur.fetchall()
 
     conn.close()
-
-    # ============================
-    # Dropdown options
-    # ============================
 
     options = ''.join([
         f"<option value='{s['id']}'>{s['grade']} — {s['name']}</option>"
@@ -5565,17 +5535,10 @@ def admin_sessions():
         for i, d in enumerate(DOW)
     ])
 
-    # ============================
-    # Rows
-    # ============================
-
     rows = ''.join([
         f"""
         <tr>
-
-            <td>
-                {grade_label(r['grade'])} — {r['subject_name']}
-            </td>
+            <td>{grade_label(r['grade'])} — {r['subject_name']}</td>
 
             <td>
                 {r['tutor_name']}<br>
@@ -5589,6 +5552,7 @@ def admin_sessions():
                 </span>
             </td>
 
+            <!-- NEW TEST LINK COLUMN -->
             <td>
                 {
                     f"<a class='btn mini success' target='_blank' href='{r['meet_link']}'>Open</a>"
@@ -5606,9 +5570,7 @@ def admin_sessions():
             </td>
 
             <td>
-
-                <a class='links'
-                   href='{url_for('session_qr', id=r['id'])}'>QR</a>
+                <a class='links' href='{url_for('session_qr', id=r['id'])}'>QR</a>
 
                 ·
 
@@ -5617,7 +5579,7 @@ def admin_sessions():
                       style='display:inline'>
 
                     <button class='btn mini secondary'>
-                        {'Hide' if r['active'] else 'Show'}
+                        {'Hide' if r['active'] == 1 else 'Show'}
                     </button>
 
                 </form>
@@ -5629,9 +5591,7 @@ def admin_sessions():
                       style='display:inline'
                       onsubmit='return confirm("Delete this session?")'>
 
-                    <button class='btn danger mini'>
-                        Delete
-                    </button>
+                    <button class='btn danger mini'>Delete</button>
 
                 </form>
 
@@ -5640,11 +5600,8 @@ def admin_sessions():
         </tr>
         """
         for r in sessions_rows
-    ]) or "<tr><td colspan='6'><div class='empty'>No sessions found.</div></td></tr>"
+    ]) or "<tr><td colspan='6'><div class='empty'>No sessions.</div></td></tr>"
 
-    # ============================
-    # Page UI
-    # ============================
 
     body = f"""
     {admin_nav()}
@@ -5653,29 +5610,6 @@ def admin_sessions():
 
         <h1>Sessions</h1>
 
-        <!-- SEARCH -->
-        <form method='get'
-              class='toolbar'
-              style='margin-bottom:12px'>
-
-            <input class='pill'
-                   name='q'
-                   value="{html_escape(q)}"
-                   placeholder='Search grade, subject, tutor, phone'>
-
-            <button class='btn mini'>
-                Search
-            </button>
-
-            {
-                "<a class='links mini' href='/admin/sessions'>Clear</a>"
-                if q else ""
-            }
-
-        </form>
-
-
-        <!-- ADD SESSION FORM -->
         <form class='grid'
               method='post'
               action='{url_for('admin_sessions_post')}'>
@@ -5688,24 +5622,24 @@ def admin_sessions():
 
                 <input name='tutor_name'
                        placeholder='Tutor name'
-                       required>
+                       required />
 
                 <select name='dow'>{dow_opts}</select>
 
                 <input name='start'
                        placeholder='Start HH:MM'
-                       required>
+                       required />
 
                 <input name='end'
                        placeholder='End HH:MM'
-                       required>
+                       required />
 
                 <input name='tutor_phone'
                        placeholder='Tutor phone'
-                       required>
+                       required />
 
                 <input name='meet'
-                       placeholder='Meet link (optional)'>
+                       placeholder='Meet link (optional)' />
 
                 <button class='btn'>Add</button>
 
@@ -5714,7 +5648,6 @@ def admin_sessions():
         </form>
 
 
-        <!-- TABLE -->
         <div class="scroll-x">
 
             <table>
@@ -5722,12 +5655,20 @@ def admin_sessions():
                 <thead>
 
                     <tr>
+
                         <th>Subject</th>
+
                         <th>Tutor</th>
+
                         <th>When</th>
+
+                        <!-- NEW COLUMN -->
                         <th>Test link</th>
+
                         <th>Visibility</th>
+
                         <th>Actions</th>
+
                     </tr>
 
                 </thead>
@@ -5746,7 +5687,6 @@ def admin_sessions():
     """
 
     return page("Sessions", body)
-
     
 
 @app.post('/admin/sessions/toggle/<int:sid>')
