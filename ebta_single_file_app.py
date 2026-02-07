@@ -6031,16 +6031,34 @@ def admin_message_resolve(mid:int):
 
 @app.get('/admin/direct-messages')
 def admin_direct_messages():
+
     r = require_admin()
     if r:
         return r
 
+    page_num = int(request.args.get("page", 1))
+    limit = 30
+    offset = (page_num - 1) * limit
+
     conn = get_db()
     cur = conn.cursor()
 
-    # Load messages
+    # =========================
+    # TOTAL COUNT
+    # =========================
+
+    cur.execute("SELECT COUNT(*) AS c FROM direct_messages")
+    total = cur.fetchone()['c']
+    total_pages = (total + limit - 1) // limit
+
+
+    # =========================
+    # LOAD PAGINATED MESSAGES
+    # =========================
+
     cur.execute("""
         SELECT dm.*,
+
             CASE dm.from_role 
                 WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
                 WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
@@ -6054,11 +6072,14 @@ def admin_direct_messages():
             END AS to_name
 
         FROM direct_messages dm
+
         ORDER BY dm.created_at DESC
-        LIMIT 200
-    """)
+
+        LIMIT ? OFFSET ?
+    """, (limit, offset))
 
     dms = cur.fetchall()
+
 
     # mark admin messages as read
     cur.execute("""
@@ -6067,7 +6088,11 @@ def admin_direct_messages():
         WHERE to_role = 'admin'
     """)
 
-    # recipient lists
+
+    # =========================
+    # RECIPIENT LISTS
+    # =========================
+
     cur.execute("SELECT id, full_name FROM tutors ORDER BY full_name")
     tutors = cur.fetchall()
 
@@ -6077,20 +6102,49 @@ def admin_direct_messages():
     conn.commit()
     conn.close()
 
-    # message list display
+
+    # =========================
+    # MESSAGE LIST DISPLAY
+    # =========================
+
     dm_list = "".join([
         f"""
         <div class='msg {'me' if m['from_role']=='admin' else 'them'}'>
+
             <div class='meta'>
-                {m['from_name']} → {m['to_name']} • {m['created_at'][:16].replace('T',' ')}
+                {m['from_name']} → {m['to_name']}
+                • {m['created_at'][:16].replace('T',' ')}
             </div>
+
             <div>{m['body']}</div>
+
         </div>
         """
         for m in dms
     ]) or "<div class='empty'>No messages yet.</div>"
 
-    # options
+
+    # =========================
+    # PAGINATION NAV
+    # =========================
+
+    nav = f"""
+    <div class='pager' style="margin:10px 0">
+
+        Page {page_num} of {total_pages}
+
+        {"<a class='links' href='?page="+str(page_num-1)+"'>Prev</a>" if page_num>1 else ""}
+
+        {"<a class='links' href='?page="+str(page_num+1)+"'>Next</a>" if page_num<total_pages else ""}
+
+    </div>
+    """
+
+
+    # =========================
+    # DROPDOWN OPTIONS
+    # =========================
+
     tut_opts = "".join([
         f"<option value='tutor|{t['id']}'>{t['full_name']}</option>"
         for t in tutors
@@ -6101,17 +6155,25 @@ def admin_direct_messages():
         for s in students
     ])
 
+
+    # =========================
+    # PAGE BODY
+    # =========================
+
     body = f"""
     {admin_nav()}
 
     <section class='grid'>
+
         <div class='card'>
 
-            <h1>Direct messages</h1>
+            <h1>Direct Messages</h1>
 
             <form method='post'
                   action='{url_for('admin_send_dm')}'
                   class='grid'>
+
+                <input type="hidden" name="page" value="{page_num}">
 
                 <div>
 
@@ -6147,15 +6209,21 @@ def admin_direct_messages():
 
             </form>
 
+            {nav}
+
             <div style='margin-top:15px'>
                 {dm_list}
             </div>
 
+            {nav}
+
         </div>
+
     </section>
     """
 
     return page("Direct Messages", body)
+
 
 
 @app.post('/admin/direct-messages/send')
@@ -6164,6 +6232,8 @@ def admin_send_dm():
     r = require_admin()
     if r:
         return r
+
+    page_num = request.form.get("page", 1)
 
     target = request.form.get('target', '')
     body = request.form.get('body', '').strip()
@@ -6176,11 +6246,9 @@ def admin_send_dm():
 
     now = now_utc_iso()
 
-    # SEND TO ALL TUTORS
     if target == "ALL_TUTORS":
 
         cur.execute("SELECT id FROM tutors")
-
         tutors = cur.fetchall()
 
         cur.executemany("""
@@ -6189,11 +6257,9 @@ def admin_send_dm():
             VALUES ('admin', 0, 'tutor', ?, NULL, ?, ?)
         """, [(t['id'], body, now) for t in tutors])
 
-    # SEND TO ALL STUDENTS
     elif target == "ALL_STUDENTS":
 
         cur.execute("SELECT id FROM students")
-
         students = cur.fetchall()
 
         cur.executemany("""
@@ -6204,17 +6270,8 @@ def admin_send_dm():
 
     else:
 
-        # individual send
-        try:
-            role, id_str = target.split('|', 1)
-            rid = int(id_str)
-        except:
-            conn.close()
-            return page("Error", card_msg("Invalid recipient."))
-
-        if role not in ("student", "tutor"):
-            conn.close()
-            return page("Error", card_msg("Invalid role."))
+        role, id_str = target.split('|', 1)
+        rid = int(id_str)
 
         cur.execute("""
             INSERT INTO direct_messages
@@ -6225,7 +6282,8 @@ def admin_send_dm():
     conn.commit()
     conn.close()
 
-    return redirect(url_for('admin_direct_messages'))
+    return redirect(url_for('admin_direct_messages', page=page_num))
+
 
 
 # --- Admin: Analytics dashboard ---
