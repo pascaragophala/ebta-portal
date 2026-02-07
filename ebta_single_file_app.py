@@ -452,13 +452,13 @@ def init_db():
         FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
     );
     """)
-    
+
     # Enrollment control defaults
     cur.execute("SELECT value FROM settings WHERE key='enrollment_open'")
     if not cur.fetchone():
         cur.execute(
             "INSERT INTO settings(key,value) VALUES(?,?)",
-            ('enrollment_open', '1')  # 1 = open, 0 = closed
+            ('enrollment_open', '1')
         )
 
     cur.execute("SELECT value FROM settings WHERE key='enrollment_message'")
@@ -471,59 +471,60 @@ def init_db():
             )
         )
 
-    
+
     # --- REMOVE UNWANTED SUBJECTS (SAFE CLEANUP) ---
     # (Currently disabled – kept for future use)
 
-     subjects_to_remove = [
-         ("Geography", "G11"),
-         ("Economics", "G12"),
-         ("Business Studies", "G10"),
-     ]
+    subjects_to_remove = [
+        ("Geography", "G11"),
+        ("Economics", "G12"),
+        ("Business Studies", "G10"),
+    ]
 
-     for name, grade in subjects_to_remove:
-         # Remove related enrollments
-         cur.execute("""
-             DELETE FROM enrollments
-             WHERE subject_id IN (
-                 SELECT id FROM subjects WHERE name=? AND grade=?
-             )
-         """, (name, grade))
+    for name, grade in subjects_to_remove:
 
-         # Remove tutor-subject mappings
-         cur.execute("""
-             DELETE FROM tutor_subjects
-             WHERE subject_id IN (
-                 SELECT id FROM subjects WHERE name=? AND grade=?
-             )
-         """, (name, grade))
+        # Remove related enrollments
+        cur.execute("""
+            DELETE FROM enrollments
+            WHERE subject_id IN (
+                SELECT id FROM subjects WHERE name=? AND grade=?
+            )
+        """, (name, grade))
 
-         # Remove groups
-         cur.execute("""
-             DELETE FROM groups
-             WHERE subject_id IN (
-                 SELECT id FROM subjects WHERE name=? AND grade=?
-             )
-         """, (name, grade))
+        # Remove tutor-subject mappings
+        cur.execute("""
+            DELETE FROM tutor_subjects
+            WHERE subject_id IN (
+                SELECT id FROM subjects WHERE name=? AND grade=?
+            )
+        """, (name, grade))
 
-         # Remove sessions
-         cur.execute("""
-             DELETE FROM sessions
-             WHERE subject_id IN (
-                 SELECT id FROM subjects WHERE name=? AND grade=?
-             )
-         """, (name, grade))
+        # Remove groups
+        cur.execute("""
+            DELETE FROM groups
+            WHERE subject_id IN (
+                SELECT id FROM subjects WHERE name=? AND grade=?
+            )
+        """, (name, grade))
 
-         # Finally remove the subject itself
-         cur.execute("""
-             DELETE FROM subjects
-             WHERE name=? AND grade=?
-         """, (name, grade))
+        # Remove sessions
+        cur.execute("""
+            DELETE FROM sessions
+            WHERE subject_id IN (
+                SELECT id FROM subjects WHERE name=? AND grade=?
+            )
+        """, (name, grade))
+
+        # Finally remove the subject itself
+        cur.execute("""
+            DELETE FROM subjects
+            WHERE name=? AND grade=?
+        """, (name, grade))
 
 
-    
     conn.commit()
     conn.close()
+
 
 
 
