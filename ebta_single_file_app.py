@@ -5921,6 +5921,7 @@ def admin_messages():
         return r
 
     import json
+    import re
 
     page_num = int(request.args.get("page", 1))
     q = request.args.get("q", "").strip()
@@ -5931,7 +5932,7 @@ def admin_messages():
     conn = get_db()
     cur = conn.cursor()
 
-    # ----- COUNT -----
+    # COUNT
     if q:
         cur.execute("""
             SELECT COUNT(*) AS c
@@ -5944,7 +5945,7 @@ def admin_messages():
     total = cur.fetchone()['c']
     total_pages = max(1, (total + limit - 1) // limit)
 
-    # ----- FETCH -----
+    # FETCH
     if q:
         cur.execute("""
             SELECT id, kind, payload, created_at, resolved
@@ -5967,6 +5968,8 @@ def admin_messages():
 
     for m in rows:
 
+        when = format_datime(m['created_at'])
+
         status = (
             "<span class='chip active'>Open</span>"
             if m['resolved'] == 0
@@ -5983,82 +5986,71 @@ def admin_messages():
             </form>
         """
 
-        when = format_datime(m['created_at'])
+        payload = m['payload']
+        phone = None
 
-        # DEFAULT DISPLAY
-        payload_display = m['payload']
-
-        # TRY ENHANCE PAYLOAD WITH STUDENT INFO
+        # --- TRY JSON ---
         try:
-
-            data = json.loads(m['payload'])
-
-            phone = (
-                data.get("phone")
-                or data.get("phone_whatsapp")
-                or data.get("student_phone")
-            )
-
-            if phone:
-
-                cur.execute("""
-                    SELECT full_name, phone_whatsapp, pin
-                    FROM students
-                    WHERE phone_whatsapp=?
-                """, (phone,))
-
-                student = cur.fetchone()
-
-                if student:
-
-                    pin = student['pin'] if student['pin'] else "Not enrolled"
-
-                    payload_display = f"""
-                        <div><b>Name:</b> {student['full_name']}</div>
-                        <div><b>Phone:</b> {student['phone_whatsapp']}</div>
-                        <div><b>PIN:</b> {pin}</div>
-                    """
-
-                else:
-
-                    payload_display = f"""
-                        <div><b>Phone:</b> {phone}</div>
-                        <div><b>PIN:</b> Not enrolled</div>
-                    """
-
+            data = json.loads(payload)
+            phone = data.get("phone") or data.get("phone_whatsapp")
         except:
             pass
 
+        # --- TRY TEXT FORMAT phone=082... ---
+        if not phone:
+            match = re.search(r'phone\s*=\s*(\d+)', payload)
+            if match:
+                phone = match.group(1)
+
+        # --- LOOKUP STUDENT ---
+        if phone:
+
+            cur.execute("""
+                SELECT full_name, phone_whatsapp, pin
+                FROM students
+                WHERE phone_whatsapp=?
+            """, (phone,))
+
+            student = cur.fetchone()
+
+            if student:
+
+                pin = student['pin'] if student['pin'] else "Not enrolled"
+
+                payload_display = f"""
+                <div><b>Name:</b> {student['full_name']}</div>
+                <div><b>Phone:</b> {student['phone_whatsapp']}</div>
+                <div><b>PIN:</b> {pin}</div>
+                """
+
+            else:
+
+                payload_display = f"""
+                <div><b>Phone:</b> {phone}</div>
+                <div><b>PIN:</b> Not enrolled</div>
+                """
+
+        else:
+
+            payload_display = payload
+
         trs.append(f"""
-            <tr>
-                <td>{m['kind']}</td>
-
-                <td style="max-width:480px;word-break:break-word">
-                    {payload_display}
-                </td>
-
-                <td class='mini muted'>{when}</td>
-
-                <td>{status}</td>
-
-                <td>{action}</td>
-            </tr>
+        <tr>
+            <td>{m['kind']}</td>
+            <td>{payload_display}</td>
+            <td class='mini muted'>{when}</td>
+            <td>{status}</td>
+            <td>{action}</td>
+        </tr>
         """)
 
     conn.close()
 
-    # ----- NAV -----
     nav = f"""
     <div class='pager' style="margin:10px 0">
-
         Page {page_num} of {total_pages}
-
-        {"<a class='links' href='?page="+str(page_num-1)+"&q="+q+"'>Prev</a>"
-        if page_num > 1 else ""}
-
-        {"<a class='links' href='?page="+str(page_num+1)+"&q="+q+"'>Next</a>"
-        if page_num < total_pages else ""}
-
+        {"<a class='links' href='?page="+str(page_num-1)+"&q="+q+"'>Prev</a>" if page_num>1 else ""}
+        {"<a class='links' href='?page="+str(page_num+1)+"&q="+q+"'>Next</a>" if page_num<total_pages else ""}
     </div>
     """
 
@@ -6070,50 +6062,27 @@ def admin_messages():
         <h1>Admin Inbox</h1>
 
         <form method="get" class="toolbar">
-
-            <input name="q"
-                   class="pill"
-                   placeholder="Search messages..."
-                   value="{q}">
-
+            <input name="q" class="pill" placeholder="Search..." value="{q}">
             <button class="btn mini">Search</button>
-
         </form>
 
         {nav}
 
         <div class="scroll-x">
-
             <table>
-
                 <thead>
-
                     <tr>
-
                         <th>Type</th>
-
                         <th>Student Info</th>
-
                         <th>When</th>
-
                         <th>Status</th>
-
                         <th>Action</th>
-
                     </tr>
-
                 </thead>
-
                 <tbody>
-
-                    {''.join(trs)
-                    if trs else
-                    "<tr><td colspan='5'><div class='empty'>No messages.</div></td></tr>"}
-
+                    {''.join(trs)}
                 </tbody>
-
             </table>
-
         </div>
 
         {nav}
@@ -6122,6 +6091,7 @@ def admin_messages():
     """
 
     return page("Messages", body)
+
 
 
 @app.post('/admin/messages/<int:mid>/resolve')
