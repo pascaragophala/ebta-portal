@@ -5723,19 +5723,40 @@ def admin_sessions_post():
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT id FROM tutors WHERE full_name=?", (tutor_name,))
+    # First try find tutor by PHONE (most reliable unique field)
+    cur.execute("SELECT id FROM tutors WHERE phone=?", (tutor_phone,))
     row = cur.fetchone()
-    tutor_id = row['id'] if row else None
-    if not tutor_id:
+
+    if row:
+        tutor_id = row['id']
+
+        cur.execute("""
+            UPDATE tutors
+            SET full_name=?
+            WHERE id=?
+        """, (tutor_name, tutor_id))
+
+
+    else:
+        # If not found, create new tutor safely
         pins = set()
+
         cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
         pins |= {r['pin'] for r in cur.fetchall()}
+
         cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
         pins |= {r['pin'] for r in cur.fetchall()}
+
         pin = gen_pin(pins)
         now = now_utc_iso()
-        cur.execute("INSERT INTO tutors(full_name,phone,pin,created_at) VALUES(?,?,?,?)", (tutor_name, tutor_phone, pin, now))
+
+        cur.execute("""
+            INSERT INTO tutors(full_name, phone, pin, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (tutor_name, tutor_phone, pin, now))
+
         tutor_id = cur.lastrowid
+
     cur.execute("""
     INSERT INTO sessions(subject_id,tutor_id,day_of_week,start_time,end_time,meet_link)
     VALUES(?,?,?,?,?,?)
