@@ -5915,19 +5915,21 @@ def format_datime(ts):
 
 @app.get('/admin/messages')
 def admin_messages():
+
     r = require_admin()
     if r:
         return r
 
     page_num = int(request.args.get("page", 1))
-    q = request.args.get("q", "").strip()   # search term
+    q = request.args.get("q", "").strip()
+
     limit = 50
     offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
 
-    # ----- Total count (with filter) -----
+    # ----- Total count -----
     if q:
         cur.execute("""
             SELECT COUNT(*) AS c
@@ -5940,7 +5942,8 @@ def admin_messages():
     total = cur.fetchone()['c']
     total_pages = (total + limit - 1) // limit
 
-    # ----- Fetch paginated messages -----
+
+    # ----- Fetch messages -----
     if q:
         cur.execute("""
             SELECT id, kind, payload, created_at, resolved
@@ -5958,30 +5961,106 @@ def admin_messages():
         """, (limit, offset))
 
     rows = cur.fetchall()
-    conn.close()
+
 
     trs = []
+
     for m in rows:
-        status = "<span class='chip active'>Open</span>" if m['resolved'] == 0 else "<span class='chip'>Resolved</span>"
+
+        payload = m['payload']
+        phone_display = "—"
+        pin_display = "—"
+
+        # Try extract phone from payload
+        phone = None
+
+        import re
+
+        # match SA phone numbers
+        match = re.search(r'(0\d{9})', payload)
+        if match:
+            phone = match.group(1)
+
+        if phone:
+
+            cur.execute("""
+                SELECT id, full_name, phone, pin
+                FROM students
+                WHERE phone=?
+            """, (phone,))
+
+            student = cur.fetchone()
+
+            if student:
+
+                phone_display = student['phone']
+
+                # Check enrollment exists
+                cur.execute("""
+                    SELECT 1
+                    FROM enrollments
+                    WHERE student_id=?
+                    LIMIT 1
+                """, (student['id'],))
+
+                enrolled = cur.fetchone()
+
+                if enrolled:
+                    pin_display = student['pin'] or "No PIN"
+                else:
+                    pin_display = "<span class='muted'>Not enrolled</span>"
+
+            else:
+                phone_display = phone
+                pin_display = "<span class='muted'>Not registered</span>"
+
+
+        status = (
+            "<span class='chip active'>Open</span>"
+            if m['resolved'] == 0
+            else "<span class='chip'>Resolved</span>"
+        )
+
         action = "" if m['resolved'] else f"""
-            <form method='post' action='{url_for('admin_message_resolve', mid=m['id'])}' style='display:inline'>
+            <form method='post'
+                  action='{url_for('admin_message_resolve', mid=m['id'])}'
+                  style='display:inline'>
+
                 <input type="hidden" name="page" value="{page_num}">
                 <input type="hidden" name="q" value="{q}">
-                <button class='btn success mini'>Mark resolved</button>
+
+                <button class='btn success mini'>
+                    Mark resolved
+                </button>
+
             </form>
         """
 
         when = format_datime(m['created_at'])
 
         trs.append(f"""
-            <tr>
-                <td>{m['kind']}</td>
-                <td style="max-width:480px; word-break:break-word">{m['payload']}</td>
-                <td class='mini muted'>{when}</td>
-                <td>{status}</td>
-                <td>{action}</td>
-            </tr>
+        <tr>
+
+            <td>{m['kind']}</td>
+
+            <td style="max-width:380px; word-break:break-word">
+                {m['payload']}
+            </td>
+
+            <td>
+                <div class='mini'>{phone_display}</div>
+                <div class='mini muted'>PIN: {pin_display}</div>
+            </td>
+
+            <td class='mini muted'>{when}</td>
+
+            <td>{status}</td>
+
+            <td>{action}</td>
+
+        </tr>
         """)
+
 
     nav = f"""
     <div class='pager' style="margin:10px 0">
@@ -5991,38 +6070,66 @@ def admin_messages():
     </div>
     """
 
+
+    conn.close()
+
+
     body = f"""
     {admin_nav()}
+
     <section class='card'>
+
         <h1>Admin Inbox</h1>
 
         <form method="get" class="toolbar">
-            <input name="q" class="pill"
-                   placeholder="Filter by type or text (e.g. forgot_student_pin)"
+
+            <input name="q"
+                   class="pill"
+                   placeholder="Search messages..."
                    value="{q}">
+
             <button class="btn mini">Search</button>
+
         </form>
 
         {nav}
 
         <div class="scroll-x">
+
             <table>
+
             <thead>
+
                 <tr>
+
                     <th>Type</th>
+
                     <th>Payload</th>
+
+                    <th>Phone & PIN</th>
+
                     <th>When</th>
+
                     <th>Status</th>
+
                     <th>Action</th>
+
                 </tr>
+
             </thead>
+
             <tbody>
-                {''.join(trs) if trs else "<tr><td colspan='5'><div class='empty'>No messages.</div></td></tr>"}
+
+                {''.join(trs) if trs else "<tr><td colspan='6'><div class='empty'>No messages.</div></td></tr>"}
+
             </tbody>
+
             </table>
+
         </div>
 
         {nav}
+
     </section>
     """
 
