@@ -3480,6 +3480,33 @@ def student_home():
 
         <p class='mini muted'>To add more subjects, submit the Home form again with your phone number and the new subjects + PoP.</p>
     </div>
+    <div class='card soft' style="border-left:5px solid #25D366;">
+        <h2>EBTA Notifications Groups</h2>
+
+        <div class="mini muted" style="margin-bottom:10px;">
+            Join these official EBTA WhatsApp groups to receive important announcements, updates, and notifications.
+        </div>
+
+        <div class="grid" style="gap:10px">
+
+            <a class="btn success"
+               target="_blank"
+               href="https://chat.whatsapp.com/HfmZyzcU9bMDB3N1DAuFrJ"
+               style="display:block;text-align:center">
+               Join EBTA Learners Notifications
+            </a>
+
+            <a class="btn"
+               target="_blank"
+               href="https://chat.whatsapp.com/DZYMvnEl9jpEyvzxqbgwV6"
+               style="display:block;text-align:center;background:#0ea5e9;color:white">
+               Join EBTA Parents Notifications
+            </a>
+
+        </div>
+
+    </div>
+
 
     <div class='card'><h2>WhatsApp Group Links</h2>{group_html}</div>
     <div class='card'><h2>Sessions</h2>{sessions_html}</div>
