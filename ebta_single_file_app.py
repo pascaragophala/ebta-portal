@@ -3200,23 +3200,63 @@ def student_home():
 
 
     # WhatsApp links for enrolled subjects
-    group_html="<div class='empty'>No group links yet.</div>"
+    group_html = "<div class='empty'>No group links yet.</div>"
+
     if has_active_enrollment and active_sub_ids:
+
         q = f"""
         SELECT g.subject_id, g.invite_link, s.name, s.grade
         FROM groups g
         JOIN subjects s ON s.id = g.subject_id
-        WHERE g.month = 'ALL' AND g.is_visible=1
+        WHERE g.month = 'ALL'
+          AND g.is_visible = 1
           AND g.subject_id IN ({','.join('?' * len(active_sub_ids))})
-        ORDER BY s.grade, s.name
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.name
         """
-        cur.execute(q, (*active_sub_ids,))
 
-        
-        gs=cur.fetchall()
+        cur.execute(q, (*active_sub_ids,))
+        gs = cur.fetchall()
+
         if gs:
-            rows="".join([f"<tr><td>{grade_label(r['grade'])} — {r['name']}</td><td><a class='links' target='_blank' href='{r['invite_link']}'>Open WhatsApp</a></td></tr>" for r in gs])
-            group_html=f'<div class="scroll-x"><table><thead><tr><th>Subject</th><th>Link</th></tr></thead><tbody>{rows}</tbody></table></div>'
+
+            cards = []
+
+            for r in gs:
+
+                cards.append(f"""
+                <div class="card soft" style="border-left:5px solid #25D366">
+
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+
+                        <div>
+                            <div style="font-weight:600">
+                                {grade_label(r['grade'])} — {r['name']}
+                            </div>
+
+                            <div class="mini muted">
+                                Official subject WhatsApp group
+                            </div>
+                        </div>
+
+                        <a class="btn success mini"
+                           target="_blank"
+                           href="{r['invite_link']}">
+
+                           Join Group
+
+                        </a>
+
+                    </div>
+
+                </div>
+                """)
+
+            group_html = f"""
+            <div class="grid" style="gap:10px">
+                {''.join(cards)}
+            </div>
+            """
+
 
     # Sessions + Meet link for enrolled subjects
     sessions_html="<div class='empty'>No sessions yet.</div>"
@@ -3513,7 +3553,20 @@ def student_home():
 
 
 
-    <div class='card'><h2>WhatsApp Group Links</h2>{group_html}</div>
+    <div class='card' style="border-left:5px solid #25D366">
+
+        <h2 style="display:flex;align-items:center;gap:8px">
+            Subject WhatsApp Groups
+        </h2>
+
+        <div class="mini muted" style="margin-bottom:12px">
+            Join your subject-specific WhatsApp groups for class communication.
+        </div>
+
+        {group_html}
+
+    </div>
+
     <div class='card'><h2>Sessions</h2>{sessions_html}</div>
     <div class='card'><h2>Materials & Assignments</h2><div class='scroll-x'>{materials_html}</div></div>
 {(''.join(submit_blocks)) if submit_blocks else ''}
