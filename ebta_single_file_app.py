@@ -4740,13 +4740,69 @@ def admin_enrollments():
         </tr>
         """)
 
+    # Build smart page range
+    start = max(1, page_num - 3)
+    end = min(total_pages, page_num + 3)
+
+    page_links = []
+
+    # First + Prev
+    if page_num > 1:
+        page_links.append(f"<a class='links' href='?page=1'>« First</a>")
+        page_links.append(f"<a class='links' href='?page={page_num-1}'>‹ Prev</a>")
+
+    # Numbered pages
+    for p in range(start, end + 1):
+        if p == page_num:
+            page_links.append(f"<span class='current' style='padding:4px 8px;background:#0f172a;color:white;border-radius:6px'>{p}</span>")
+        else:
+            page_links.append(f"<a class='links' href='?page={p}'>{p}</a>")
+
+    # Next + Last
+    if page_num < total_pages:
+        page_links.append(f"<a class='links' href='?page={page_num+1}'>Next ›</a>")
+        page_links.append(f"<a class='links' href='?page={total_pages}'>Last »</a>")
+
+
     nav = f"""
-    <div class='pager'>
-        Page {page_num} of {total_pages}
-        {"<a href='?page="+str(page_num-1)+"'>Prev</a>" if page_num>1 else ""}
-        {"<a href='?page="+str(page_num+1)+"'>Next</a>" if page_num<total_pages else ""}
+    <div class='pager' style="
+        display:flex;
+        align-items:center;
+        gap:8px;
+        flex-wrap:wrap;
+        margin:10px 0
+    ">
+
+        <span class="mini muted">
+            Page {page_num} of {total_pages}
+        </span>
+
+        {"".join(page_links)}
+
+        <form method="get"
+              style="display:inline-flex;align-items:center;gap:6px;margin-left:10px">
+
+            <span class="mini muted">Go to page</span>
+
+            <input type="number"
+                   name="page"
+                   min="1"
+                   max="{total_pages}"
+                   value="{page_num}"
+                   style="
+                       width:70px;
+                       padding:4px;
+                       border-radius:6px;
+                       border:1px solid #ccc
+                   ">
+
+            <button class="btn mini">Go</button>
+
+        </form>
+
     </div>
     """
+
 
     body = f"""
     {admin_nav()}
@@ -4996,13 +5052,53 @@ def admin_students():
         </tr>
         """)
 
+    # Build smart page number range
+    start = max(1, page_num - 3)
+    end = min(total_pages, page_num + 3)
+
+    page_links = []
+
+    # First
+    if page_num > 1:
+        page_links.append(f"<a class='links' href='?page=1'>« First</a>")
+        page_links.append(f"<a class='links' href='?page={page_num-1}'>‹ Prev</a>")
+
+    # Numbered pages
+    for p in range(start, end + 1):
+        if p == page_num:
+            page_links.append(f"<span class='current'>{p}</span>")
+        else:
+            page_links.append(f"<a class='links' href='?page={p}'>{p}</a>")
+
+    # Next
+    if page_num < total_pages:
+        page_links.append(f"<a class='links' href='?page={page_num+1}'>Next ›</a>")
+        page_links.append(f"<a class='links' href='?page={total_pages}'>Last »</a>")
+
+
     nav = f"""
-    <div class='pager'>
-        Page {page_num} of {total_pages}
-        {"<a href='?page="+str(page_num-1)+"'>Prev</a>" if page_num>1 else ""}
-        {"<a href='?page="+str(page_num+1)+"'>Next</a>" if page_num<total_pages else ""}
+    <div class='pager' style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0">
+
+        <span class="mini muted">
+            Page {page_num} of {total_pages}
+        </span>
+
+        {"".join(page_links)}
+
+        <form method="get" style="display:inline-flex;align-items:center;gap:6px;margin-left:10px">
+            <span class="mini muted">Go to page</span>
+            <input type="number"
+                   name="page"
+                   min="1"
+                   max="{total_pages}"
+                   value="{page_num}"
+                   style="width:70px;padding:4px;border-radius:6px;border:1px solid #ccc">
+            <button class="btn mini">Go</button>
+        </form>
+
     </div>
     """
+
 
     body = f"""
     {admin_nav()}
