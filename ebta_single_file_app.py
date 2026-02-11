@@ -3483,9 +3483,9 @@ def student_home():
     <div class='card soft' style="border-left:5px solid #25D366;">
         <h2>EBTA Notifications Groups</h2>
 
-        <div class="mini muted" style="margin-bottom:10px;">
-            Join these official EBTA WhatsApp groups to receive important announcements, updates, and notifications.
-        </div>
+        <p class="mini muted" style="margin-bottom:12px;">
+            Join these official EBTA WhatsApp groups to receive important announcements and updates.
+        </p>
 
         <div class="grid" style="gap:10px">
 
@@ -3493,19 +3493,24 @@ def student_home():
                target="_blank"
                href="https://chat.whatsapp.com/HfmZyzcU9bMDB3N1DAuFrJ"
                style="display:block;text-align:center">
-               Join EBTA Learners Notifications
+
+                EBTA Learners Notifications
+
             </a>
 
-            <a class="btn"
+            <a class="btn secondary"
                target="_blank"
                href="https://chat.whatsapp.com/DZYMvnEl9jpEyvzxqbgwV6"
-               style="display:block;text-align:center;background:#0ea5e9;color:white">
-               Join EBTA Parents Notifications
+               style="display:block;text-align:center">
+
+                EBTA Parents Notifications
+
             </a>
 
         </div>
 
     </div>
+
 
 
     <div class='card'><h2>WhatsApp Group Links</h2>{group_html}</div>
