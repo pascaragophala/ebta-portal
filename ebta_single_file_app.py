@@ -3268,28 +3268,60 @@ def student_home():
         cur.execute(q, (*active_sub_ids,))
         sess=cur.fetchall()
         if sess:
-            rows=[]
+
+            cards = []
+
             for r in sess:
-                meet = f"<a class='links' target='_blank' href='{r['meet_link']}'>Join</a>" if r['meet_link'] else "—"
-                rows.append(f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td><td>{DOW[r['day_of_week']]} {r['start_time']}-{r['end_time']}</td><td>{meet}</td></tr>")
-            rows_html = "".join(rows)
+
+                meet_btn = ""
+
+                if r['meet_link']:
+                    meet_btn = f"""
+                    <a class="btn success mini"
+                       target="_blank"
+                       href="{r['meet_link']}">
+                       Join Session
+                    </a>
+                    """
+
+                cards.append(f"""
+                <div class="card soft" style="border-left:5px solid #3b82f6">
+
+                    <div style="
+                        display:flex;
+                        justify-content:space-between;
+                        align-items:center;
+                        flex-wrap:wrap;
+                        gap:10px;
+                    ">
+
+                        <div>
+
+                            <div style="font-weight:600">
+                                {grade_label(r['grade'])} — {r['subject_name']}
+                            </div>
+
+                            <div class="mini muted">
+                                {DOW[r['day_of_week']]} • {r['start_time']} - {r['end_time']}
+                            </div>
+
+                        </div>
+
+                        <div>
+                            {meet_btn}
+                        </div>
+
+                    </div>
+
+                </div>
+                """)
 
             sessions_html = f"""
-            <div class="scroll-x">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Subject</th>
-                            <th>When</th>
-                            <th>Meet</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows_html}
-                    </tbody>
-                </table>
+            <div class="grid" style="gap:10px">
+                {''.join(cards)}
             </div>
             """
+
 
 
     # Materials & Assignments list (with upload timestamp)
@@ -3312,34 +3344,85 @@ def student_home():
             ORDER BY m.created_at DESC"""
         cur.execute(q,(month,*active_sub_ids)); mats=cur.fetchall()
         if mats:
-            for m in mats:
-                is_ass = (m['is_assignment']==1 or m['kind']=='assignment')
-                when = m['created_at'][:16].replace('T',' ')
-                link = f"<a class='links' target='_blank' href='{m['file_path']}'>Download</a>" if m['kind'] in ('file','assignment') and m['file_path'] else f"<a class='links' target='_blank' href='{m['youtube_url']}'>Open</a>"
-                row = (m, f"<tr><td>{grade_label(m['grade'])} — {m['subject_name']}</td><td>{m['title']} {'<span class=\"badge\">assignment</span>' if is_ass else ''}</td><td>{m['tutor_name']}</td><td>{when}</td><td>{link}</td></tr>")
-                (assignments if is_ass else normal).append(row)
-            def pack(rows):
-                rows_html = "".join(r[1] for r in rows)
 
-                return f"""
-                <div class="scroll-x">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Subject</th>
-                        <th>Title</th>
-                        <th>Tutor</th>
-                        <th>Uploaded</th>
-                        <th>Link</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows_html}
-                    </tbody>
-                  </table>
+            cards = []
+
+            for m in mats:
+
+                is_ass = (m['is_assignment']==1 or m['kind']=='assignment')
+
+                when = m['created_at'][:16].replace('T',' ')
+
+                link = ""
+
+                if m['kind'] in ('file','assignment') and m['file_path']:
+                    link = f"""
+                    <a class="btn mini"
+                       target="_blank"
+                       href="{m['file_path']}">
+                       Download
+                    </a>
+                    """
+                elif m['youtube_url']:
+                    link = f"""
+                    <a class="btn mini"
+                       target="_blank"
+                       href="{m['youtube_url']}">
+                       Open Video
+                    </a>
+                    """
+
+                badge = ""
+
+                if is_ass:
+                    badge = "<span class='badge'>Assignment</span>"
+
+                cards.append(f"""
+                <div class="card soft" style="border-left:5px solid #16a34a">
+
+                    <div style="
+                        display:flex;
+                        justify-content:space-between;
+                        align-items:center;
+                        flex-wrap:wrap;
+                        gap:10px;
+                    ">
+
+                        <div>
+
+                            <div style="font-weight:600">
+                                {grade_label(m['grade'])} — {m['subject_name']}
+                            </div>
+
+                            <div>
+                                {m['title']} {badge}
+                            </div>
+
+                            <div class="mini muted">
+                                Tutor: {m['tutor_name']}
+                            </div>
+
+                            <div class="mini muted">
+                                Uploaded: {when}
+                            </div>
+
+                        </div>
+
+                        <div>
+                            {link}
+                        </div>
+
+                    </div>
+
                 </div>
-                """
-            materials_html = (("<h3>Assignments</h3>"+pack(assignments)) if assignments else "") + (("<h3>Materials</h3>"+pack(normal)) if normal else "")
+                """)
+
+            materials_html = f"""
+            <div class="grid" style="gap:10px">
+                {''.join(cards)}
+            </div>
+            """
+
 
     # Assignment submission blocks (top priority)
     submit_blocks=[]
