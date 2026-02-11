@@ -2113,10 +2113,23 @@ def home():
                
 
         <div class='toolbar'>
+
+            <button type="button" class="btn secondary" onclick="openTermsModal()">
+                View Terms & Conditions
+            </button>
+
+            <label style="display:flex;align-items:center;gap:6px;">
+                <input type="checkbox" id="terms_check" required>
+                <span class="mini">I agree to the Terms & Conditions</span>
+            </label>
+
             <button class='btn'>Submit Enrollment</button>
+
             <a class='btn secondary' href='{url_for('student_login')}'>Student login</a>
             <a class='btn secondary' href='{url_for('tutor_login')}'>Tutor login</a>
+
         </div>
+
         </form>
     </div>
     </section>
@@ -2225,7 +2238,14 @@ function showPopup(message, type='info', timeout=4000){
     }
 
     form.addEventListener('submit', function(e){
-    
+        const termsCheck = document.getElementById('terms_check');
+
+        if(!termsCheck || !termsCheck.checked){
+            e.preventDefault();
+            showPopup("You must agree to the Terms & Conditions before enrolling.", "error");
+            return;
+        }
+
         // ✅ allow exit without warning when submitting
         ebtaAllowExit = true;
         const grade = gradeSelect.value;
@@ -2521,6 +2541,83 @@ function showPopup(message, type='info', timeout=4000){
       document.body.appendChild(overlay);
     });
     </script>'''
+    
+    extra_js += """
+    <script>
+
+    function openTermsModal(){
+        if(document.getElementById('terms-modal')) return;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'terms-modal';
+        overlay.style.position = 'fixed';
+        overlay.style.inset = '0';
+        overlay.style.background = 'rgba(0,0,0,0.6)';
+        overlay.style.display = 'flex';
+        overlay.style.alignItems = 'center';
+        overlay.style.justifyContent = 'center';
+        overlay.style.zIndex = '99999';
+
+        const box = document.createElement('div');
+        box.style.width = '95%';
+        box.style.maxWidth = '600px';
+        box.style.maxHeight = '80vh';
+        box.style.overflow = 'auto';
+        box.style.background = '#fff';
+        box.style.padding = '20px';
+        box.style.borderRadius = '12px';
+
+        box.innerHTML = `
+            <h2>EBTA Terms & Conditions</h2>
+
+            <div style="font-size:14px;line-height:1.6;margin-top:10px;">
+
+            <p><strong>1. Enrollment Agreement</strong><br>
+            By enrolling, you agree to participate in EBTA classes and follow all academy rules.</p>
+
+            <p><strong>2. Payment Policy</strong><br>
+            • Monthly fees must be paid before attending classes.<br>
+            • Fees are non-refundable once classes have started.<br>
+            • Proof of payment must be uploaded during enrollment.</p>
+
+            <p><strong>3. PIN Responsibility</strong><br>
+            Your PIN is confidential. Do not share it with anyone.</p>
+
+            <p><strong>4. Attendance</strong><br>
+            Students must attend sessions regularly and on time.</p>
+
+            <p><strong>5. Conduct</strong><br>
+            Respect tutors, students, and academy policies at all times.</p>
+
+            <p><strong>6. Communication</strong><br>
+            Important information will be shared via WhatsApp or the EBTA Portal.</p>
+
+            <p><strong>7. Privacy</strong><br>
+            Your personal information is stored securely and used only for academic purposes.</p>
+
+            <p><strong>8. Agreement</strong><br>
+            By proceeding, you confirm that you understand and accept these Terms & Conditions.</p>
+
+            </div>
+
+            <div style="margin-top:15px;text-align:right;">
+                <button class="btn success" onclick="closeTermsModal()">Close</button>
+            </div>
+        `;
+
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+    }
+
+    function closeTermsModal(){
+        const modal = document.getElementById('terms-modal');
+        if(modal) modal.remove();
+    }
+
+    </script>
+    """
+
+    
     return page("EBTA Enrollment", body, extra_js=extra_js)
 
 
@@ -4825,7 +4922,7 @@ def admin_students():
         return r
 
     page_num = int(request.args.get("page", 1))
-    limit = 30
+    limit = 20
     offset = (page_num - 1) * limit
 
     conn = get_db()
