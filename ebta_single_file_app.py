@@ -614,12 +614,8 @@ def secure_name(name):
     return ''.join(ch if ch in keep else '_' for ch in name)
 
 
-def normalize_phone(phone: str) -> str:
-    if not phone:
-        return ""
-    return ''.join(ch for ch in phone if ch.isdigit())
     
-def fpnormalize_phone(phone: str) -> str:
+def normalize_phone(phone: str) -> str:
 
     if not phone:
         return ""
@@ -3181,7 +3177,7 @@ def student_login_post():
 @app.post('/student/forgot-pin')
 def student_forgot_pin():
 
-    phone = fpnormalize_phone(request.form.get('phone',''))
+    phone = normalize_phone(request.form.get('phone',''))
 
     if not phone:
         return page(
