@@ -618,6 +618,30 @@ def normalize_phone(phone: str) -> str:
     if not phone:
         return ""
     return ''.join(ch for ch in phone if ch.isdigit())
+    
+def fpnormalize_phone(phone: str) -> str:
+
+    if not phone:
+        return ""
+
+    # remove spaces, dashes, brackets
+    phone = ''.join(ch for ch in phone if ch.isdigit() or ch == '+')
+
+    # Already international
+    if phone.startswith("+"):
+        return phone
+
+    # South Africa local starting with 0
+    if phone.startswith("0"):
+        return "+27" + phone[1:]
+
+    # South Africa local without 0 (e.g. 823456789)
+    if phone.startswith("27"):
+        return "+" + phone
+
+    # fallback
+    return phone
+
 
 
 def gen_pin(existing):
@@ -3156,13 +3180,124 @@ def student_login_post():
 
 @app.post('/student/forgot-pin')
 def student_forgot_pin():
-    phone = normalize_phone(request.form.get('phone',''))
-    if not phone: return page("Error", card_msg("Phone required."))
-    conn=get_db(); cur=conn.cursor()
-    cur.execute("INSERT INTO messages(kind,payload,created_at) VALUES(?,?,?)",
-                ('forgot_student_pin', f"phone={phone}", now_utc_iso()))
-    conn.commit(); conn.close()
-    return page("Submitted", card_msg("Request sent to Admin."))
+
+    phone = fpnormalize_phone(request.form.get('phone',''))
+
+    if not phone:
+        return page(
+            "Error",
+            card_msg("Please enter your WhatsApp number.")
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Find student
+    cur.execute("""
+        SELECT id, full_name, phone_whatsapp, pin
+        FROM students
+        WHERE phone_whatsapp=?
+    """, (phone,))
+
+    student = cur.fetchone()
+
+    # Student not found
+    if not student:
+        conn.close()
+        return page(
+            "Not found",
+            card_msg("""
+                This number is not registered.
+                Please enroll first before requesting your PIN.
+            """)
+        )
+
+    student_id = student["id"]
+    student_name = student["full_name"]
+    student_pin = student["pin"]
+
+    # Check if enrolled at least once
+    cur.execute("""
+        SELECT 1
+        FROM enrollments
+        WHERE student_id=?
+        LIMIT 1
+    """, (student_id,))
+
+    enrolled = cur.fetchone()
+
+    if not enrolled:
+        conn.close()
+        return page(
+            "Not enrolled",
+            card_msg("""
+                You are not enrolled yet.
+                Please enroll first before requesting your PIN.
+            """)
+        )
+
+    # Generate PIN if missing
+    if not student_pin:
+
+        pins = set()
+
+        cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
+        pins |= {r["pin"] for r in cur.fetchall()}
+
+        cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
+        pins |= {r["pin"] for r in cur.fetchall()}
+
+        student_pin = gen_pin(pins)
+
+        cur.execute("""
+            UPDATE students
+            SET pin=?
+            WHERE id=?
+        """, (student_pin, student_id))
+
+        conn.commit()
+
+    # Log admin notification
+    cur.execute("""
+        INSERT INTO messages(kind,payload,created_at,resolved)
+        VALUES(?,?,?,0)
+    """, (
+        "forgot_student_pin",
+        f"{student_name} requested PIN reset ({phone})",
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    # Send SMS automatically
+    try:
+
+        base_url = (request.url_root or '').rstrip('/')
+
+        sms = (
+            f"EBTA Portal: Hi {student_name.split()[0]}, "
+            f"your login PIN is {student_pin}. "
+            f"Login at {base_url}/student/login"
+        )
+
+        send_sms_notification(phone, sms)
+
+    except Exception:
+        pass
+
+    return page(
+        "PIN sent",
+        card_msg("""
+            Your PIN has been sent to your WhatsApp number.
+            Please check your messages.
+        """)
+    )
+
+
+def card_msg(text):
+    return f"<div class='card'><div>{text}</div></div>"
+
 
 @app.get('/student/logout')
 def student_logout():
