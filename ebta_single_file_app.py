@@ -745,18 +745,52 @@ def send_email_notification(to_email: str, subject: str, body: str):
 
 
 def send_sms_notification(to_phone: str, body: str):
-    # Best-effort SMS sender.
-    # Uses Twilio-style environment variables if available, otherwise logs into the messages table.
-    # Env vars for real sending:
-    #   EBTA_TWILIO_SID, EBTA_TWILIO_TOKEN, EBTA_TWILIO_FROM
+    # Best-effort SMS sender with automatic SA phone normalization
+
     if not to_phone:
         return
+
+    # --- Normalize South African phone number ---
+    phone = str(to_phone).strip()
+
+    # remove spaces, dashes, brackets
+    phone = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+
+    # convert 0821234567 → +27821234567
+    if phone.startswith("0") and len(phone) == 10:
+        phone = "+27" + phone[1:]
+
+    # convert 27821234567 → +27821234567
+    elif phone.startswith("27") and len(phone) == 11:
+        phone = "+" + phone
+
+    # already correct format
+    elif phone.startswith("+27"):
+        pass
+
+    else:
+        # invalid format → log error
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+            payload = f"INVALID_PHONE:{to_phone}"
+            cur.execute(
+                "INSERT INTO messages(kind,payload,created_at,resolved) VALUES(?,?,?,0)",
+                ("sms_error", payload, now_utc_iso()),
+            )
+            conn.commit()
+            conn.close()
+        except:
+            pass
+        return
+
+    to_phone = phone
 
     account_sid = os.environ.get("EBTA_TWILIO_SID")
     auth_token = os.environ.get("EBTA_TWILIO_TOKEN")
     from_number = os.environ.get("EBTA_TWILIO_FROM")
 
-    # If Twilio not configured, log the SMS so it appears in Admin → Messages
+    # If Twilio not configured, log SMS
     if not (account_sid and auth_token and from_number):
         try:
             conn = get_db()
@@ -768,17 +802,34 @@ def send_sms_notification(to_phone: str, body: str):
             )
             conn.commit()
             conn.close()
-        except Exception:
+        except:
             pass
         return
 
+    # Send via Twilio
     try:
-        from twilio.rest import Client  # type: ignore
+        from twilio.rest import Client
 
         client = Client(account_sid, auth_token)
-        client.messages.create(from_=from_number, to=to_phone, body=body)
+
+        client.messages.create(
+            from_=from_number,
+            to=to_phone,
+            body=body
+        )
+
+        # optional success log
+        conn = get_db()
+        cur = conn.cursor()
+        payload = f"SENT TO:{to_phone}"
+        cur.execute(
+            "INSERT INTO messages(kind,payload,created_at,resolved) VALUES(?,?,?,0)",
+            ("sms_sent", payload, now_utc_iso()),
+        )
+        conn.commit()
+        conn.close()
+
     except Exception as e:
-        # Log error so admin can see what went wrong
         try:
             conn = get_db()
             cur = conn.cursor()
@@ -789,9 +840,8 @@ def send_sms_notification(to_phone: str, body: str):
             )
             conn.commit()
             conn.close()
-        except Exception:
+        except:
             pass
-
 
 # ===================== Templating ==============
 GOOGLE_FONTS = "<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap' rel='stylesheet'>"
@@ -3896,30 +3946,52 @@ def tutor_home():
         groups = cur.fetchall()
 
         if groups:
-            rows = "".join([
-                f"""
-                <tr>
-                    <td>{grade_label(r['grade'])} — {r['name']}</td>
-                    <td>
-                        <a class='links' target='_blank' href='{r['invite_link']}'>
-                            Open WhatsApp
+
+            cards = []
+
+            for r in groups:
+
+                cards.append(f"""
+                <div class="card soft"
+                     style="border-left:5px solid #25D366">
+
+                    <div style="
+                        display:flex;
+                        justify-content:space-between;
+                        align-items:center;
+                        flex-wrap:wrap;
+                        gap:10px;
+                    ">
+
+                        <div>
+
+                            <div style="font-weight:600">
+                                {grade_label(r['grade'])} — {r['name']}
+                            </div>
+
+                            <div class="mini muted">
+                                WhatsApp class group
+                            </div>
+
+                        </div>
+
+                        <a class="btn success mini"
+                           target="_blank"
+                           href="{r['invite_link']}">
+                           Open Group
                         </a>
-                    </td>
-                </tr>
-                """
-                for r in groups
-            ])
+
+                    </div>
+
+                </div>
+                """)
 
             groups_html = f"""
-            <div class="scroll-x">
-                <table>
-                    <thead>
-                        <tr><th>Subject</th><th>Link</th></tr>
-                    </thead>
-                    <tbody>{rows}</tbody>
-                </table>
+            <div class="grid" style="gap:10px">
+                {''.join(cards)}
             </div>
             """
+
 
 
     # Sessions for this tutor
@@ -3927,14 +3999,70 @@ def tutor_home():
                 FROM sessions se JOIN subjects s ON s.id=se.subject_id
                 WHERE se.tutor_id=? AND se.active=1 ORDER BY se.day_of_week,se.start_time""",(tid,))
     sess=cur.fetchall()
-    s_rows="".join([
-        f"<tr><td>{grade_label(r['grade'])} — {r['subject_name']}</td>"
-        f"<td>{DOW[r['day_of_week']]} {r['start_time']}-{r['end_time']}</td>"
-        f"<td>{('<a class=\"links\" target=\"_blank\" href=\"'+r['meet_link']+'\">Meet</a>') if r['meet_link'] else '—'}</td>"
-        f"<td><a class='links' href='{url_for('session_qr', id=r['id'])}'></a> · "
-        f"<a class='links' href='{url_for('tutor_session_attendance', sid=r['id'])}'>Mark attendance</a></td></tr>"
-        for r in sess
-    ]) or "<tr><td colspan='4'><div class='empty'>No sessions yet.</div></td></tr>"
+    session_cards = []
+
+    for r in sess:
+
+        meet_btn = ""
+
+        if r['meet_link']:
+            meet_btn = f"""
+            <a class="btn success mini"
+               target="_blank"
+               href="{r['meet_link']}">
+               Join
+            </a>
+            """
+
+        tools = f"""
+        <a class="btn mini"
+           href="{url_for('tutor_session_attendance', sid=r['id'])}">
+           Attendance
+        </a>
+        """
+
+        session_cards.append(f"""
+        <div class="card soft"
+             style="border-left:5px solid #3b82f6">
+
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                flex-wrap:wrap;
+                gap:10px;
+            ">
+
+                <div>
+
+                    <div style="font-weight:600">
+                        {grade_label(r['grade'])} — {r['subject_name']}
+                    </div>
+
+                    <div class="mini muted">
+                        {DOW[r['day_of_week']]} • {r['start_time']} - {r['end_time']}
+                    </div>
+
+                </div>
+
+                <div style="display:flex;gap:6px">
+
+                    {meet_btn}
+                    {tools}
+
+                </div>
+
+            </div>
+
+        </div>
+        """)
+
+    sessions_html = (
+        "<div class='empty'>No sessions yet.</div>"
+        if not session_cards else
+        f"<div class='grid' style='gap:10px'>{''.join(session_cards)}</div>"
+    )
+
 
     # Upload form (assignments + due date + max points)
     subjects_options="".join([f"<option value='{r['subject_id']}'>{grade_label(r['grade'])} — {r['subject_name']}</option>" for r in subs]) or "<option value=''>No assigned subjects</option>"
@@ -4241,8 +4369,9 @@ def tutor_home():
     <div class='card'><h2>WhatsApp Group Links</h2>{groups_html}</div>
 
     <div class='card'><h2>Your sessions</h2>
-        <div class="scroll-x"><table><thead><tr><th>Subject</th><th>When</th><th>Meet</th><th>Tools</th></tr></thead><tbody>{s_rows}</tbody></table></div>
+        {sessions_html}
     </div>
+
 
     {upload_block}
 
