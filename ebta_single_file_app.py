@@ -614,30 +614,10 @@ def secure_name(name):
     return ''.join(ch if ch in keep else '_' for ch in name)
 
 
-    
 def normalize_phone(phone: str) -> str:
-
     if not phone:
         return ""
-
-    # remove spaces, dashes, brackets
-    phone = ''.join(ch for ch in phone if ch.isdigit() or ch == '+')
-
-    # Already international
-    if phone.startswith("+"):
-        return phone
-
-    # South Africa local starting with 0
-    if phone.startswith("0"):
-        return "+27" + phone[1:]
-
-    # South Africa local without 0 (e.g. 823456789)
-    if phone.startswith("27"):
-        return "+" + phone
-
-    # fallback
-    return phone
-
+    return ''.join(ch for ch in phone if ch.isdigit())
 
 
 def gen_pin(existing):
