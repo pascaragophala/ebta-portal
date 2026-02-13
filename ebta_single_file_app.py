@@ -5222,6 +5222,7 @@ def enrollment_action(id: int, action: str):
     notify_subject = None
     notify_grade = None
     notify_month = None
+    notify_group_link = None
 
     if action == 'approve':
         # Activate enrollment
@@ -5250,10 +5251,26 @@ def enrollment_action(id: int, action: str):
             notify_phone = srow["phone_whatsapp"]
             notify_email = srow["email"]
             notify_pin = srow["pin"]
+            notify_group_link = None
+
             if erow:
                 notify_month = erow["month"]
                 notify_subject = erow["subject_name"]
                 notify_grade = erow["grade"]
+
+                # Fetch WhatsApp group link
+                cur.execute("""
+                    SELECT g.invite_link
+                    FROM groups g
+                    JOIN subjects s ON s.id = g.subject_id
+                    WHERE s.name=? AND s.grade=? AND g.is_visible=1
+                    LIMIT 1
+                """, (notify_subject, notify_grade))
+
+                grow = cur.fetchone()
+                if grow:
+                    notify_group_link = grow["invite_link"]
+
 
             # If the student does not have a PIN yet, generate one now
             if not notify_pin:
@@ -5308,13 +5325,23 @@ def enrollment_action(id: int, action: str):
             email_body = "\n".join(email_body_lines)
 
             sms_body_parts = [
-                f"EBTA: Hi {first_name}, your enrollment is APPROVED.",
+                f"EBTA: Hi {first_name}, your enrollment is APPROVED."
             ]
-            if month_label or grade_label_txt or notify_subject:
-                detail = " ".join(x for x in [grade_label_txt, notify_subject, month_label] if x)
-                sms_body_parts.append(detail + ".")
-            sms_body_parts.append(f"Login with WhatsApp {notify_phone} + PIN {notify_pin} at {login_link}.")
+
+            # Subject info
+            if grade_label_txt or notify_subject:
+                sms_body_parts.append(f"{grade_label_txt} {notify_subject}.")
+
+            # Login info
+            sms_body_parts.append(f"PIN: {notify_pin}")
+            sms_body_parts.append(f"Login: {login_link}")
+
+            # WhatsApp group link
+            if notify_group_link:
+                sms_body_parts.append(f"Join class group: {notify_group_link}")
+
             sms_body = " ".join(sms_body_parts)
+
 
             if notify_email:
                 send_email_notification(notify_email, email_subject, email_body)
