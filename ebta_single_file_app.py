@@ -236,7 +236,6 @@ def init_db():
     ensure_column(conn, "enrollments", "amount_paid", "INTEGER")
     ensure_column(conn, "groups", "is_visible", "INTEGER NOT NULL DEFAULT 1")
     ensure_column(conn, "sessions", "is_visible", "INTEGER NOT NULL DEFAULT 1")
-    
 
     # --- Performance indexes ---
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollments_month ON enrollments(month)")
@@ -522,87 +521,11 @@ def init_db():
             WHERE name=? AND grade=?
         """, (name, grade))
 
-    seed_whatsapp_groups()
-    conn.commit()
-    conn.close()
-
-
-def seed_whatsapp_groups():
-    conn = get_db()
-    cur = conn.cursor()
-
-    GROUPS = [
-
-        ("G8","Mathematics","https://chat.whatsapp.com/IXUVpdNYWLOEVVmHqG9kHd?mode=gi_t"),
-        ("G8","EMS","https://chat.whatsapp.com/EUbqUVQR5nP9s6SqH3uYRp?mode=gi_t"),
-        ("G8","Natural Sciences","https://chat.whatsapp.com/EummuKTtrTx9vwihleo7B8?mode=gi_t"),
-        ("G8","English","https://chat.whatsapp.com/DzbgWyRE7dK1NjQWuJCU2A?mode=gi_t"),
-
-        ("G9","Mathematics","https://chat.whatsapp.com/FJZVlW8wgxxGEcYu4Uk2Ri?mode=gi_t"),
-        ("G9","EMS","https://chat.whatsapp.com/IiHybLZDoGECrMBMcygUTA?mode=gi_t"),
-        ("G9","Natural Sciences","https://chat.whatsapp.com/CExjeIResYWL21MzsOr2me?mode=gi_t"),
-        ("G9","English","https://chat.whatsapp.com/GnIBwkyX2jMJogQt7cFrjQ?mode=gi_t"),
-
-        ("G10","Mathematics","https://chat.whatsapp.com/JqwM5tLyLRs6DYtDwgZusu?mode=gi_t"),
-        ("G10","Mathematical Literacy","https://chat.whatsapp.com/HvfL4NzQgUZ06fvdcFNysM?mode=gi_t"),
-        ("G10","Physical Sciences","https://chat.whatsapp.com/LyFfJsO0ETiELqSGX5wQ73?mode=gi_t"),
-        ("G10","Life Sciences","https://chat.whatsapp.com/I4cmp1kenhX1V3qdvuGEas?mode=gi_t"),
-        ("G10","Accounting","https://chat.whatsapp.com/HwtHaZGdjoQ2ehZWo82Qn4?mode=gi_t"),
-        ("G10","English","https://chat.whatsapp.com/KaEoFnTk7nZAFAmzl3FWcI?mode=gi_t"),
-
-        ("G11","Mathematics","https://chat.whatsapp.com/FtdsaNcfZK18k7ZjM3XriL?mode=gi_t"),
-        ("G11","Mathematical Literacy","https://chat.whatsapp.com/EkOE2IGx4G0EROPFz1zNTr?mode=gi_t"),
-        ("G11","Physical Sciences","https://chat.whatsapp.com/D21Yaz4hqIsE9CheAfAfoV?mode=gi_t"),
-        ("G11","Life Sciences","https://chat.whatsapp.com/F6XyA6gz29I0w4hLr8RiS9?mode=gi_t"),
-        ("G11","Accounting","https://chat.whatsapp.com/CArCBoBjrFo9aFQP3ORwXO?mode=gi_t"),
-        ("G11","English","https://chat.whatsapp.com/BfjLGJe4KSB50qGRuSN3LO?mode=gi_t"),
-        ("G11","Business Studies","https://chat.whatsapp.com/L66no2fcMia0zx4ZWCf2om?mode=gi_t"),
-
-        ("G12","Mathematics","https://chat.whatsapp.com/JVe3X9dGVvt3avIlBk5tBh?mode=gi_t"),
-        ("G12","Mathematical Literacy","https://chat.whatsapp.com/LmsdvcVL2UWAdeB3dfhxj4?mode=gi_t"),
-        ("G12","Physical Sciences","https://chat.whatsapp.com/G6xIaC1wUaPG0QvtexkabR?mode=gi_t"),
-        ("G12","Life Sciences","https://chat.whatsapp.com/E0uQh7aTfIFLw25Jjs4EZt?mode=gi_t"),
-        ("G12","Accounting","https://chat.whatsapp.com/COiWDfs76vyDg6mg1Xz5Bh?mode=gi_t"),
-        ("G12","Geography","https://chat.whatsapp.com/I5vGYc1iRk5ACjpdJ82WSv?mode=gi_t"),
-        ("G12","Business Studies","https://chat.whatsapp.com/LC15wjNy7VNH2xWa3iLAbw?mode=gi_t"),
-        ("G12","English","https://chat.whatsapp.com/KbCod7ry9Eu6ctGd9ngxvv?mode=gi_t"),
-
-        ("G13","Mathematics","https://chat.whatsapp.com/BW8GuhFvkH05Us9R11uIlD?mode=gi_t"),
-        ("G13","Mathematical Literacy","https://chat.whatsapp.com/D7sQlKSOlssCEjTNuWi1V2?mode=gi_t"),
-        ("G13","Physical Sciences","https://chat.whatsapp.com/Fc9eqkjgRjKDABkhvgQwlU?mode=gi_t"),
-        ("G13","Life Sciences","https://chat.whatsapp.com/GQr4gGGhXfuCeIVbzsvy0P?mode=gi_t"),
-        ("G13","Accounting","https://chat.whatsapp.com/Cgptbu9EHVi6G8WyBb4HW4?mode=gi_t"),
-    ]
-
-    now = now_utc_iso()
-
-    for grade, subject, link in GROUPS:
-
-        cur.execute("""
-            SELECT id FROM subjects
-            WHERE grade=? AND name=?
-        """, (grade, subject))
-
-        subj = cur.fetchone()
-
-        if not subj:
-            continue
-
-        subject_id = subj["id"]
-
-        cur.execute("""
-            INSERT OR REPLACE INTO groups(
-                subject_id,
-                month,
-                invite_link,
-                created_at,
-                is_visible
-            )
-            VALUES (?, 'ALL', ?, ?, 1)
-        """, (subject_id, link, now))
 
     conn.commit()
     conn.close()
+
+
 
 
 
@@ -5299,7 +5222,6 @@ def enrollment_action(id: int, action: str):
     notify_subject = None
     notify_grade = None
     notify_month = None
-    notify_group_link = None
 
     if action == 'approve':
         # Activate enrollment
@@ -5328,26 +5250,10 @@ def enrollment_action(id: int, action: str):
             notify_phone = srow["phone_whatsapp"]
             notify_email = srow["email"]
             notify_pin = srow["pin"]
-            notify_group_link = None
-
             if erow:
                 notify_month = erow["month"]
                 notify_subject = erow["subject_name"]
                 notify_grade = erow["grade"]
-
-                # Fetch WhatsApp group link
-                cur.execute("""
-                    SELECT g.invite_link
-                    FROM groups g
-                    JOIN subjects s ON s.id = g.subject_id
-                    WHERE s.name=? AND s.grade=? AND g.is_visible=1
-                    LIMIT 1
-                """, (notify_subject, notify_grade))
-
-                grow = cur.fetchone()
-                if grow:
-                    notify_group_link = grow["invite_link"]
-
 
             # If the student does not have a PIN yet, generate one now
             if not notify_pin:
@@ -5402,23 +5308,13 @@ def enrollment_action(id: int, action: str):
             email_body = "\n".join(email_body_lines)
 
             sms_body_parts = [
-                f"EBTA: Hi {first_name}, your enrollment is APPROVED."
+                f"EBTA: Hi {first_name}, your enrollment is APPROVED.",
             ]
-
-            # Subject info
-            if grade_label_txt or notify_subject:
-                sms_body_parts.append(f"{grade_label_txt} {notify_subject}.")
-
-            # Login info
-            sms_body_parts.append(f"PIN: {notify_pin}")
-            sms_body_parts.append(f"Login: {login_link}")
-
-            # WhatsApp group link
-            if notify_group_link:
-                sms_body_parts.append(f"Join class group: {notify_group_link}")
-
+            if month_label or grade_label_txt or notify_subject:
+                detail = " ".join(x for x in [grade_label_txt, notify_subject, month_label] if x)
+                sms_body_parts.append(detail + ".")
+            sms_body_parts.append(f"Login with WhatsApp {notify_phone} + PIN {notify_pin} at {login_link}.")
             sms_body = " ".join(sms_body_parts)
-
 
             if notify_email:
                 send_email_notification(notify_email, email_subject, email_body)
