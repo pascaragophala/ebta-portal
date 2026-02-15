@@ -5808,8 +5808,10 @@ def admin_tutor_add_subject(tid:int):
     
 @app.get('/admin/uploads-control')
 def admin_uploads_control():
+
     r = require_admin()
-    if r: return r
+    if r:
+        return r
 
     conn = get_db()
     cur = conn.cursor()
@@ -5827,29 +5829,53 @@ def admin_uploads_control():
 
     for s in subs:
 
-        status = "Locked" if s["uploads_locked"] else "Unlocked"
+        locked = s["uploads_locked"] == 1
 
-        btn = (
-            f"<a class='btn danger mini' href='/admin/uploads-lock/{s['id']}'>Lock</a>"
-            if not s["uploads_locked"]
-            else
-            f"<a class='btn success mini' href='/admin/uploads-unlock/{s['id']}'>Unlock</a>"
+        status = (
+            "<span class='chip danger'>Locked</span>"
+            if locked else
+            "<span class='chip success'>Unlocked</span>"
         )
+
+        if locked:
+            action = f"""
+            <a class='btn success mini'
+               href='/admin/uploads-unlock/{s["id"]}'>
+               Unlock
+            </a>
+            """
+        else:
+            action = f"""
+            <a class='btn danger mini'
+               href='/admin/uploads-lock/{s["id"]}'>
+               Lock
+            </a>
+            """
 
         rows.append(f"""
         <tr>
             <td>{grade_label(s['grade'])}</td>
             <td>{s['name']}</td>
             <td>{status}</td>
-            <td>{btn}</td>
+            <td>{action}</td>
         </tr>
         """)
 
-    table = f"""
-    <div class='card'>
-        <h2>Uploads & Assignments Control</h2>
+    body = f"""
+    {admin_nav()}
+
+    <section class='card' id="uploads-control">
+
+        <h1>Uploads & Assignments Control</h1>
+
+        <div class='muted mini'>
+            Locking prevents tutors from uploading materials or assignments for that subject.
+        </div>
+
+        <div class="scroll-x" style="margin-top:12px">
 
         <table>
+
             <thead>
                 <tr>
                     <th>Grade</th>
@@ -5860,13 +5886,18 @@ def admin_uploads_control():
             </thead>
 
             <tbody>
-                {''.join(rows)}
+                {''.join(rows) or "<tr><td colspan='4'>No subjects found.</td></tr>"}
             </tbody>
+
         </table>
-    </div>
+
+        </div>
+
+    </section>
     """
 
-    return page("Uploads Control", table)
+    return page("Uploads Control", body)
+
     
 @app.get('/admin/uploads-lock/<int:subject_id>')
 def admin_uploads_lock(subject_id):
