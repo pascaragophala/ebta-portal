@@ -1718,9 +1718,9 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("Dashboard", "#dashboard"),
                 ("Upload Material", "#upload"),
                 ("Assignments", "#assignments"),
-                ("Students", "#students"),   # ADD THIS LINE
                 ("Attendance", "#attendance"),
                 ("Messages", "#messages"),
+                ("Students", "#students"),
                 ("Logout", url_for('tutor_logout'))
             ]
 
