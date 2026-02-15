@@ -5913,9 +5913,19 @@ def admin_materials():
     if r:
         return r
 
+    page_num = int(request.args.get("page", 1))
+    limit = 20
+    offset = (page_num - 1) * limit
+
     conn = get_db()
     cur = conn.cursor()
 
+    # total count
+    cur.execute("SELECT COUNT(*) AS c FROM materials")
+    total = cur.fetchone()["c"]
+    total_pages = (total + limit - 1) // limit
+
+    # fetch page
     cur.execute("""
         SELECT
             m.id,
@@ -5929,61 +5939,121 @@ def admin_materials():
         JOIN subjects s ON s.id = m.subject_id
         JOIN tutors t ON t.id = m.tutor_id
         ORDER BY m.created_at DESC
-        LIMIT 300
-    """)
+        LIMIT ? OFFSET ?
+    """, (limit, offset))
 
     rows = cur.fetchall()
     conn.close()
 
     trs = []
 
-    for r in rows:
+    for row in rows:
 
-        locked = r["admin_unlocked"] == 0
+        locked = row["admin_unlocked"] == 0
 
         status = (
-            "<span class='chip'>Locked</span>"
+            "<span class='chip danger'>Locked</span>"
             if locked else
             "<span class='chip success'>Unlocked</span>"
         )
 
-        unlock_btn = ""
-
         if locked:
-            unlock_btn = f"""
+            action = f"""
             <form method='post'
-                  action='{url_for('admin_unlock_material', mid=r['id'])}'
+                  action='{url_for('admin_unlock_material', mid=row["id"])}'
                   style='display:inline'>
+                <input type="hidden" name="page" value="{page_num}">
                 <button class='btn success mini'>Unlock</button>
             </form>
             """
         else:
-            unlock_btn = f"""
+            action = f"""
             <form method='post'
-                  action='{url_for('admin_relock_material', mid=r['id'])}'
+                  action='{url_for('admin_relock_material', mid=row["id"])}'
                   style='display:inline'>
+                <input type="hidden" name="page" value="{page_num}">
                 <button class='btn danger mini'>Relock</button>
             </form>
             """
 
         trs.append(f"""
         <tr>
-            <td>{grade_label(r['grade'])} — {r['subject']}</td>
-            <td>{r['title']}</td>
-            <td>{r['tutor']}</td>
-            <td>{r['created_at'][:16].replace('T',' ')}</td>
+            <td>{grade_label(row['grade'])} — {row['subject']}</td>
+            <td>{row['title']}</td>
+            <td>{row['tutor']}</td>
+            <td>{row['created_at'][:16].replace('T',' ')}</td>
             <td>{status}</td>
-            <td>{unlock_btn}</td>
+            <td>{action}</td>
         </tr>
         """)
+
+    # pager logic
+    start = max(1, page_num - 3)
+    end = min(total_pages, page_num + 3)
+
+    page_links = []
+
+    if page_num > 1:
+        page_links.append(f"<a class='links' href='?page=1'>« First</a>")
+        page_links.append(f"<a class='links' href='?page={page_num-1}'>‹ Prev</a>")
+
+    for p in range(start, end + 1):
+
+        if p == page_num:
+            page_links.append(
+                f"<span class='current' style='padding:4px 8px;background:#0f172a;color:white;border-radius:6px'>{p}</span>"
+            )
+        else:
+            page_links.append(f"<a class='links' href='?page={p}'>{p}</a>")
+
+    if page_num < total_pages:
+        page_links.append(f"<a class='links' href='?page={page_num+1}'>Next ›</a>")
+        page_links.append(f"<a class='links' href='?page={total_pages}'>Last »</a>")
+
+    nav = f"""
+    <div class='pager' style="
+        display:flex;
+        align-items:center;
+        gap:8px;
+        flex-wrap:wrap;
+        margin:10px 0">
+
+        <span class="mini muted">
+            Page {page_num} of {total_pages}
+        </span>
+
+        {"".join(page_links)}
+
+        <form method="get"
+              style="display:inline-flex;align-items:center;gap:6px;margin-left:10px">
+
+            <span class="mini muted">Go to page</span>
+
+            <input type="number"
+                   name="page"
+                   min="1"
+                   max="{total_pages}"
+                   value="{page_num}"
+                   style="width:70px;padding:4px;border-radius:6px;border:1px solid #ccc">
+
+            <button class="btn mini">Go</button>
+
+        </form>
+
+    </div>
+    """
 
     body = f"""
     {admin_nav()}
 
-    <section class='card'>
+    <section class='card' id="materials">
+
         <h1>Unlock Tutor Uploads</h1>
 
+        {nav}
+
         <div class="scroll-x">
+
         <table>
 
         <thead>
@@ -5998,16 +6068,20 @@ def admin_materials():
         </thead>
 
         <tbody>
-        {''.join(trs)}
+        {''.join(trs) or "<tr><td colspan='6'>No uploads.</td></tr>"}
         </tbody>
 
         </table>
+
         </div>
+
+        {nav}
 
     </section>
     """
 
     return page("Unlock Uploads", body)
+
    
 
     
@@ -6018,22 +6092,21 @@ def admin_unlock_material(mid):
     if r:
         return r
 
+    page_num = request.form.get("page", 1)
+
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("""
-        UPDATE materials
-        SET admin_unlocked=1
-        WHERE id=?
-    """, (mid,))
+    cur.execute(
+        "UPDATE materials SET admin_unlocked=1 WHERE id=?",
+        (mid,)
+    )
 
     conn.commit()
     conn.close()
 
-    return page(
-        "Unlocked",
-        card_msg("Upload or assignment unlocked successfully.")
-    )
+    return redirect(url_for('admin_materials', page=page_num))
+
 
 
 @app.post('/admin/materials/<int:mid>/relock')
@@ -6043,22 +6116,21 @@ def admin_relock_material(mid):
     if r:
         return r
 
+    page_num = request.form.get("page", 1)
+
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("""
-        UPDATE materials
-        SET admin_unlocked=0
-        WHERE id=?
-    """, (mid,))
+    cur.execute(
+        "UPDATE materials SET admin_unlocked=0 WHERE id=?",
+        (mid,)
+    )
 
     conn.commit()
     conn.close()
 
-    return page(
-        "Relocked",
-        card_msg("Upload locked again.")
-    )
+    return redirect(url_for('admin_materials', page=page_num))
+
 
 
 # --- Admin: Groups ---
