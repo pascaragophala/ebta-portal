@@ -1720,7 +1720,6 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("Assignments", "#assignments"),
                 ("Attendance", "#attendance"),
                 ("Messages", "#messages"),
-                ("Students","#students")
                 ("Logout", url_for('tutor_logout'))
             ]
             stats_grid = f"""
