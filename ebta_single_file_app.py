@@ -4664,12 +4664,86 @@ def tutor_assignment_manage(mid:int):
     <a class='links' href='{url_for('tutor_home')}'>← Back</a>
     <section class='grid'>
         <div class='card'><h1>{m['title']}</h1>
-        <p class='muted'>{grade_label(m['grade'])} — {m['subject_name']} • Due: {m['due_date'] or '—'} • Total: {total}</p>
+        <p class='muted'>
+        {grade_label(m['grade'])} — {m['subject_name']}
+        • Due: {m['due_date'] or '—'}
+        • Total: {total}
+        </p>
+
+        <div class="card soft" style="margin-top:10px;border-left:5px solid #f59e0b">
+
+            <form method="post"
+                  action="{url_for('tutor_extend_due_date', mid=mid)}"
+                  class="inlineform"
+                  style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+
+                <div>
+                    <label class="mini muted">Extend due date</label>
+                    <input type="date"
+                           name="due_date"
+                           value="{m['due_date'] or ''}"
+                           required>
+                </div>
+
+                <button class="btn success mini">
+                    Update Due Date
+                </button>
+
+            </form>
+
+        </div>
+
         {table}
         </div>
     </section>
     """
     return page("Manage Assignment", body, extra_js=js_alert)
+    
+    
+@app.post('/tutor/assignment/<int:mid>/extend')
+def tutor_extend_due_date(mid:int):
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    new_due = request.form.get("due_date", "").strip()
+
+    if not new_due:
+        return page("Error", card_msg("Due date required."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # security check — tutor owns assignment
+    cur.execute("""
+        SELECT id
+        FROM materials
+        WHERE id=? AND tutor_id=?
+    """, (mid, tid))
+
+    if not cur.fetchone():
+        conn.close()
+        return page("Error", card_msg("Assignment not found."))
+
+    # update due date
+    cur.execute("""
+        UPDATE materials
+        SET due_date=?
+        WHERE id=?
+    """, (new_due, mid))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for(
+        'tutor_assignment_manage',
+        mid=mid,
+        saved=1
+    ))
+
 
 @app.post('/tutor/assignment/<int:mid>/grade/<int:sid>')
 def tutor_assignment_grade(mid:int, sid:int):
