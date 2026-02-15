@@ -236,6 +236,8 @@ def init_db():
     ensure_column(conn, "enrollments", "amount_paid", "INTEGER")
     ensure_column(conn, "groups", "is_visible", "INTEGER NOT NULL DEFAULT 1")
     ensure_column(conn, "sessions", "is_visible", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "subjects", "uploads_locked", "INTEGER NOT NULL DEFAULT 0")
+
 
     # --- Performance indexes ---
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollments_month ON enrollments(month)")
@@ -4520,9 +4522,26 @@ def tutor_upload():
     if not (subject_id and title): return page("Error", card_msg("Subject and title required."))
 
     conn=get_db(); cur=conn.cursor()
-    cur.execute("SELECT 1 FROM tutor_subjects WHERE tutor_id=? AND subject_id=?", (tid,subject_id))
-    if not cur.fetchone():
-        conn.close(); return page("Error", card_msg("This subject is not assigned to you."))
+    cur.execute("""
+        SELECT s.uploads_locked
+        FROM tutor_subjects ts
+        JOIN subjects s ON s.id = ts.subject_id
+        WHERE ts.tutor_id=? AND ts.subject_id=?
+    """, (tid, subject_id))
+
+    row = cur.fetchone()
+
+    if not row:
+        conn.close()
+        return page("Error", card_msg("This subject is not assigned to you."))
+
+    if row["uploads_locked"] == 1:
+        conn.close()
+        return page(
+            "Uploads Locked",
+            card_msg("Uploads and assignments are currently locked for this subject. Contact Admin.")
+        )
+
     file_path=None
     if file and file.filename:
         safe=f"{int(datetime.datetime.now().timestamp())}_{secure_name(file.filename)}"
@@ -4954,6 +4973,7 @@ def admin_nav():
         <a class="btn secondary" href="{url_for('admin_messages')}">Inbox</a>
         <a class="btn secondary" href="{url_for('admin_direct_messages')}">Direct Msgs</a>
         <a class="btn secondary" href="{url_for('admin_settings')}">Settings</a>
+        <a class="btn secondary" href="{url_for('admin_uploads_control')}">Uploads Control</a>
     </nav>
     """
 
@@ -4987,6 +5007,8 @@ def admin_home():
     <a class='btn secondary' href='{url_for('admin_messages')}'>Inbox</a>
     <a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct messages</a>
     <a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>
+    <a class="btn secondary" href="{url_for('admin_uploads_control')}">Uploads Control</a>
+
     </div></section>"""
     return page("Admin", body)
 
@@ -5749,6 +5771,110 @@ def admin_tutor_add_subject(tid:int):
     finally:
         conn.close()
     return redirect(url_for('admin_tutors'))
+    
+    
+@app.get('/admin/uploads-control')
+def admin_uploads_control():
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, name, grade, uploads_locked
+        FROM subjects
+        ORDER BY grade, name
+    """)
+
+    subs = cur.fetchall()
+    conn.close()
+
+    rows = []
+
+    for s in subs:
+
+        status = "Locked" if s["uploads_locked"] else "Unlocked"
+
+        btn = (
+            f"<a class='btn danger mini' href='/admin/uploads-lock/{s['id']}'>Lock</a>"
+            if not s["uploads_locked"]
+            else
+            f"<a class='btn success mini' href='/admin/uploads-unlock/{s['id']}'>Unlock</a>"
+        )
+
+        rows.append(f"""
+        <tr>
+            <td>{grade_label(s['grade'])}</td>
+            <td>{s['name']}</td>
+            <td>{status}</td>
+            <td>{btn}</td>
+        </tr>
+        """)
+
+    table = f"""
+    <div class='card'>
+        <h2>Uploads & Assignments Control</h2>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Grade</th>
+                    <th>Subject</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {''.join(rows)}
+            </tbody>
+        </table>
+    </div>
+    """
+
+    return page("Uploads Control", table)
+    
+@app.get('/admin/uploads-lock/<int:subject_id>')
+def admin_uploads_lock(subject_id):
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE subjects
+        SET uploads_locked=1
+        WHERE id=?
+    """, (subject_id,))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('admin_uploads_control'))
+   
+@app.get('/admin/uploads-unlock/<int:subject_id>')
+def admin_uploads_unlock(subject_id):
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE subjects
+        SET uploads_locked=0
+        WHERE id=?
+    """, (subject_id,))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('admin_uploads_control'))
+    
+    
+
 
 # --- Admin: Groups ---
 
