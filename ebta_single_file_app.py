@@ -4260,7 +4260,6 @@ def tutor_home():
                 <form method='post'
                       action='{url_for('admin_unlock_material', mid=m['id'])}'
                       style='display:inline'>
-                    <button class='btn success mini'>Admin Unlock</button>
                 </form>
             """
 
