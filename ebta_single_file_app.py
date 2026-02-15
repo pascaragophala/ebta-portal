@@ -1749,7 +1749,6 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("Direct messages", "#messages"),
                 ("Analytics", "#analytics"),
                 ("Settings", "#settings"),
-                ("Export remove list", "#export"),
                 ("Logout", url_for('admin_logout'))
             ]
             stats_grid = f"""
