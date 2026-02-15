@@ -237,6 +237,8 @@ def init_db():
     ensure_column(conn, "groups", "is_visible", "INTEGER NOT NULL DEFAULT 1")
     ensure_column(conn, "sessions", "is_visible", "INTEGER NOT NULL DEFAULT 1")
     ensure_column(conn, "subjects", "uploads_locked", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "materials", "admin_unlocked", "INTEGER NOT NULL DEFAULT 0")
+
 
 
     # --- Performance indexes ---
@@ -1385,6 +1387,7 @@ const pairs = [
     {id:'tutors', keys:['tutors']},
     {id:'groups', keys:['group links','whatsapp links']},
     {id:'sessions', keys:['sessions & qr','sessions','qr']},
+    {id:'materials', keys:['unlock uploads','uploads','materials']},
     {id:'inbox', keys:['inbox']},
     {id:'messages', keys:['direct messages','messages']},
     {id:'analytics', keys:['analytics','dashboard']},
@@ -1480,17 +1483,31 @@ if(location.hash){ setTimeout(()=>{ mapAdminAnchors(); highlightSectionByHash(lo
 
 // --- Admin sidebar -> real content navigation (robust) ---
 const ADMIN_MAP = {
+
+'#dashboard': ['dashboard','overview','analytics'],
+
 '#enrollments': ['manage enrollments','enrollments','manage enrollment','enrollment'],
+
 '#students': ['students','student list'],
+
 '#tutors': ['tutors','tutor list'],
+
 '#groups': ['group links','whatsapp links','links','groups'],
+
 '#sessions': ['sessions & qr','sessions','qr'],
+
+'#materials': ['unlock uploads','uploads','materials','assignments'],
+
 '#inbox': ['inbox'],
+
 '#messages': ['direct messages','messages'],
+
 '#analytics': ['analytics','dashboard','reports'],
-'#settings': ['settings','configuration'],
-'#export': ['export remove list','export','remove list']
+
+'#settings': ['settings','configuration']
+
 };
+
 
 function normalizeText(t){ return (t||'').replace(/\\s+/g,' ').trim().toLowerCase(); }
 
@@ -4204,12 +4221,18 @@ def tutor_home():
                 FROM materials m JOIN subjects s ON s.id=m.subject_id
                 WHERE m.tutor_id=? ORDER BY m.created_at DESC LIMIT 200""",(tid,))
     mymats=cur.fetchall()
-    def can_delete(ts):
+    def can_delete(ts, admin_unlocked):
+        if admin_unlocked == 1:
+            return True
+
         try:
-            created=datetime.datetime.fromisoformat(ts)
-            return (datetime.datetime.now(datetime.timezone.utc) - created) <= datetime.timedelta(hours=24)
+            created = datetime.datetime.fromisoformat(ts)
+            return (
+                datetime.datetime.now(datetime.timezone.utc) - created
+            ) <= datetime.timedelta(hours=24)
         except Exception:
             return False
+
         
     rows = []
     for m in mymats:
@@ -4223,7 +4246,7 @@ def tutor_home():
             link = f"<a class='links' target='_blank' href='{m['youtube_url']}'>Open video</a>"
 
         # delete button (only within 24h)
-        if can_delete(m['created_at']):
+        if can_delete(m['created_at'], m['admin_unlocked']):
             action = f"""
             <form method="post"
                   action="{url_for('tutor_delete_material', mid=m['id'])}"
@@ -4233,7 +4256,15 @@ def tutor_home():
             </form>
             """
         else:
-            action = "<span class='muted mini'>Locked</span>"
+            action = f"""
+                <span class='muted mini'>Locked</span>
+                <form method='post'
+                      action='{url_for('admin_unlock_material', mid=m['id'])}'
+                      style='display:inline'>
+                    <button class='btn success mini'>Admin Unlock</button>
+                </form>
+            """
+
 
         rows.append(f"""
             <tr>
@@ -4974,6 +5005,8 @@ def admin_nav():
         <a class="btn secondary" href="{url_for('admin_direct_messages')}">Direct Msgs</a>
         <a class="btn secondary" href="{url_for('admin_settings')}">Settings</a>
         <a class="btn secondary" href="{url_for('admin_uploads_control')}">Uploads Control</a>
+        <a class="btn secondary" href="{url_for('admin_materials')}">Unlock Uploads</a>
+
     </nav>
     """
 
@@ -5008,6 +5041,7 @@ def admin_home():
     <a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct messages</a>
     <a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>
     <a class="btn secondary" href="{url_for('admin_uploads_control')}">Uploads Control</a>
+    <a class="btn secondary" href="{url_for('admin_materials')}">Unlock Uploads</a>
 
     </div></section>"""
     return page("Admin", body)
@@ -5873,7 +5907,159 @@ def admin_uploads_unlock(subject_id):
 
     return redirect(url_for('admin_uploads_control'))
     
+@app.get('/admin/materials')
+def admin_materials():
+
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            m.id,
+            m.title,
+            m.created_at,
+            m.admin_unlocked,
+            s.name AS subject,
+            s.grade,
+            t.full_name AS tutor
+        FROM materials m
+        JOIN subjects s ON s.id = m.subject_id
+        JOIN tutors t ON t.id = m.tutor_id
+        ORDER BY m.created_at DESC
+        LIMIT 300
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = []
+
+    for r in rows:
+
+        locked = r["admin_unlocked"] == 0
+
+        status = (
+            "<span class='chip'>Locked</span>"
+            if locked else
+            "<span class='chip success'>Unlocked</span>"
+        )
+
+        unlock_btn = ""
+
+        if locked:
+            unlock_btn = f"""
+            <form method='post'
+                  action='{url_for('admin_unlock_material', mid=r['id'])}'
+                  style='display:inline'>
+                <button class='btn success mini'>Unlock</button>
+            </form>
+            """
+        else:
+            unlock_btn = f"""
+            <form method='post'
+                  action='{url_for('admin_relock_material', mid=r['id'])}'
+                  style='display:inline'>
+                <button class='btn danger mini'>Relock</button>
+            </form>
+            """
+
+        trs.append(f"""
+        <tr>
+            <td>{grade_label(r['grade'])} — {r['subject']}</td>
+            <td>{r['title']}</td>
+            <td>{r['tutor']}</td>
+            <td>{r['created_at'][:16].replace('T',' ')}</td>
+            <td>{status}</td>
+            <td>{unlock_btn}</td>
+        </tr>
+        """)
+
+    body = f"""
+    {admin_nav()}
+
+    <section class='card'>
+        <h1>Unlock Tutor Uploads</h1>
+
+        <div class="scroll-x">
+        <table>
+
+        <thead>
+        <tr>
+            <th>Subject</th>
+            <th>Title</th>
+            <th>Tutor</th>
+            <th>Created</th>
+            <th>Status</th>
+            <th>Action</th>
+        </tr>
+        </thead>
+
+        <tbody>
+        {''.join(trs)}
+        </tbody>
+
+        </table>
+        </div>
+
+    </section>
+    """
+
+    return page("Unlock Uploads", body)
+   
+
     
+@app.post('/admin/materials/<int:mid>/unlock')
+def admin_unlock_material(mid):
+
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE materials
+        SET admin_unlocked=1
+        WHERE id=?
+    """, (mid,))
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "Unlocked",
+        card_msg("Upload or assignment unlocked successfully.")
+    )
+
+
+@app.post('/admin/materials/<int:mid>/relock')
+def admin_relock_material(mid):
+
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE materials
+        SET admin_unlocked=0
+        WHERE id=?
+    """, (mid,))
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "Relocked",
+        card_msg("Upload locked again.")
+    )
 
 
 # --- Admin: Groups ---
