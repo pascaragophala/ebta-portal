@@ -1718,10 +1718,12 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("Dashboard", "#dashboard"),
                 ("Upload Material", "#upload"),
                 ("Assignments", "#assignments"),
+                ("Students", "#students"),   # ADD THIS LINE
                 ("Attendance", "#attendance"),
                 ("Messages", "#messages"),
                 ("Logout", url_for('tutor_logout'))
             ]
+
             stats_grid = f"""
             <div class='stats-mini'>
             <div class='s'><div class='k'>{subs}</div><div class='t'>Subjects</div></div>
@@ -1871,6 +1873,8 @@ def page(title, body_html, extra_head="", extra_js=""):
     </footer>{extra_js}
     </body></html>
     """
+
+
 # ===================== File routes ==============
 @app.route('/uploads/<path:filename>')
 def uploads(filename): return send_from_directory(UPLOAD_DIR, filename)
@@ -4363,7 +4367,13 @@ def tutor_home():
                  f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
         )
 
-        stu_sections.append(f"<div class='card'><h3>{grade_label(s['grade'])} — {s['subject_name']}</h3>{table}</div>")
+        stu_sections.append(f"""
+        <div class='card' id='students'>
+            <h3>{grade_label(s['grade'])} — {s['subject_name']}</h3>
+            {table}
+        </div>
+        """)
+
 
     # Tutor inbox
     cur.execute("""SELECT dm.*,
@@ -4525,7 +4535,10 @@ def tutor_home():
 
     {inbox_card}
 
-    {''.join(stu_sections)}
+    <div id="students">
+        {''.join(stu_sections)}
+    </div>
+
     </section>
     """
     return page("Tutor Portal", body)
