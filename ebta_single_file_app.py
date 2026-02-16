@@ -4499,6 +4499,15 @@ def tutor_home():
         f"<option value='SUBJECT_ALL|{s['subject_id']}'>All students — {grade_label(s['grade'])} {s['subject_name']}</option>"
         for s in subs
     ])
+    
+    # Broadcast per grade
+    grades = sorted({s['grade'] for s in subs})
+
+    grade_broadcast_opts = "".join([
+        f"<option value='GRADE_ALL|{g}'>All students — {grade_label(g)}</option>"
+        for g in grades
+    ])
+
 
     # Individual students
     individual_opts = "".join([
@@ -4508,11 +4517,15 @@ def tutor_home():
 
     # Final dropdown with categories
     stud_opts = f"""
-    <optgroup label="Broadcast">
+    <optgroup label="Broadcast All">
         {broadcast_all}
     </optgroup>
 
-    <optgroup label="By Subject">
+    <optgroup label="Broadcast by Grade">
+        {grade_broadcast_opts}
+    </optgroup>
+
+    <optgroup label="Broadcast by Subject">
         {subject_broadcast_opts}
     </optgroup>
 
@@ -4520,6 +4533,7 @@ def tutor_home():
         {individual_opts}
     </optgroup>
     """
+
 
 
     # =========================
@@ -4615,7 +4629,12 @@ def tutor_home():
 
         msgs = cur.fetchall()
 
-        subject_id_for_chat = msgs[0]["subject_id"] if msgs and msgs[0]["subject_id"] else 0
+        subject_id_for_chat = (
+            msgs[0]["subject_id"]
+            if msgs and msgs[0].get("subject_id")
+            else 0
+        )
+
 
         for m in msgs:
 
@@ -4639,6 +4658,33 @@ def tutor_home():
             {next((c['full_name'] for c in conversations if str(c['student_id'])==str(selected)), '')}
         </div>
         """
+        
+    message_form = f"""
+    <div class="card">
+    <h2>Send Message</h2>
+
+    <form method="post" action="{url_for('tutor_message_student')}" class="grid">
+
+    <label>Send to</label>
+
+    <select name="combo" required>
+    {stud_opts}
+    </select>
+
+    <label>Message</label>
+
+    <textarea name="body" required></textarea>
+
+    <button class="btn success">
+    Send Message
+    </button>
+
+    </form>
+
+    </div>
+    """
+
+    
     inbox_card = f"""
     <div class="card">
 
@@ -4667,7 +4713,8 @@ def tutor_home():
     <textarea name="body" placeholder="Type message..." required {"disabled" if not selected else ""}></textarea>
 
 
-    <button class="btn success mini">Send</button>
+    <button class="btn success mini" {"disabled" if not selected else ""}>Send</button>
+
 
     </form>
 
@@ -4710,7 +4757,7 @@ def tutor_home():
     <div class='card'><h2>Your assignments</h2>
         <div class="scroll-x"><table><thead><tr><th>Subject</th><th>Title</th><th>Due</th><th>Total</th><th>Manage</th></tr></thead><tbody>{asg_rows}</tbody></table></div>
     </div>
-
+    {message_form}
     {inbox_card}
 
     <div id="students">
@@ -5013,34 +5060,41 @@ def tutor_message_student():
         return redirect(url_for('tutor_home'))
 
     # ========================
-    # SEND TO ALL STUDENTS IN ONE SUBJECT
+    # SEND TO ALL STUDENTS IN ONE GRADE
     # ========================
-    if combo.startswith("SUBJECT_ALL|"):
+    if combo.startswith("GRADE_ALL|"):
 
         try:
-            subject_id = int(combo.split('|')[1])
+            grade = combo.split('|')[1]
         except:
             conn.close()
-            return page("Error", card_msg("Invalid subject."))
+            return page("Error", card_msg("Invalid grade."))
 
-        # verify tutor teaches subject
+        # verify tutor teaches this grade
         cur.execute("""
-            SELECT 1
-            FROM tutor_subjects
-            WHERE tutor_id=? AND subject_id=?
-        """, (tid, subject_id))
+            SELECT DISTINCT s.id
+            FROM tutor_subjects ts
+            JOIN subjects s ON s.id = ts.subject_id
+            WHERE ts.tutor_id=? AND s.grade=?
+        """, (tid, grade))
 
-        if not cur.fetchone():
+        subjects = cur.fetchall()
+
+        if not subjects:
             conn.close()
-            return page("Error", card_msg("You are not assigned to that subject."))
+            return page("Error", card_msg("You are not assigned to that grade."))
 
-        cur.execute("""
-            SELECT student_id
+        subject_ids = [s["id"] for s in subjects]
+
+        q = f"""
+            SELECT DISTINCT student_id, subject_id
             FROM enrollments
-            WHERE subject_id=?
+            WHERE subject_id IN ({','.join(['?']*len(subject_ids))})
             AND month=?
             AND status='ACTIVE'
-        """, (subject_id, month))
+        """
+
+        cur.execute(q, subject_ids + [month])
 
         students = cur.fetchall()
 
@@ -5048,12 +5102,13 @@ def tutor_message_student():
             INSERT INTO direct_messages
             (from_role, from_id, to_role, to_id, subject_id, body, created_at)
             VALUES ('tutor', ?, 'student', ?, ?, ?, ?)
-        """, [(tid, s['student_id'], subject_id, body, now) for s in students])
+        """, [(tid, s['student_id'], s['subject_id'], body, now) for s in students])
 
         conn.commit()
         conn.close()
 
         return redirect(url_for('tutor_home'))
+
 
     # ========================
     # SEND TO INDIVIDUAL STUDENT
