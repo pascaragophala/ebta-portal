@@ -4206,14 +4206,14 @@ def tutor_home():
         <div><label>Subject</label><select name='subject_id' required>{subjects_options}</select></div>
         <div><label>Title</label><input name='title' required/></div>
         <div><label>Upload File</label><input type='file' name='file' accept='.pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.zip'/></div>
-        <div><label>YouTube URL</label><input name='youtube' placeholder='https://youtube.com/...'/></div>
+        <div><label>Video Link</label><input name='youtube' placeholder='https://lesson1.com/...'/></div>
         <div class='grid' style='grid-template-columns:1fr 1fr 1fr;gap:10px'>
             <label style='display:flex;align-items:center;gap:8px'><input type='checkbox' name='is_assignment'/> Mark as assignment</label>
             <div><label>Due date (YYYY-MM-DD)</label><input name='due' placeholder='e.g. 2025-10-01'/></div>
             <div><label>Out of (default 100)</label><input name='max_points' type='number' min='1' max='1000' placeholder='100'/></div>
         </div>
         <button class='btn'>Save</button>
-        <p class='muted mini'>Attach a file and/or paste a YouTube link. Assignments show first to students.</p>
+        <p class='muted mini'>Attach a file and/or paste a Video link. Assignments show first to students.</p>
         </form>
     </div>
     """
