@@ -1278,6 +1278,97 @@ overflow-x:auto;
   }
 }
 
+/* ================= CHAT UI ================= */
+
+.chat-layout{
+display:grid;
+grid-template-columns:280px 1fr;
+gap:12px;
+height:600px;
+border:1px solid var(--border);
+border-radius:14px;
+overflow:hidden;
+background:#fff;
+}
+
+/* left conversation list */
+
+.chat-list{
+border-right:1px solid var(--border);
+overflow-y:auto;
+background:#f8fafc;
+}
+
+.chat-user{
+padding:12px;
+border-bottom:1px solid var(--border-light);
+cursor:pointer;
+transition:.15s;
+}
+
+.chat-user:hover{
+background:#eef6ee;
+}
+
+.chat-user.active{
+background:#e8f5e9;
+border-left:4px solid var(--primary);
+}
+
+/* right chat window */
+
+.chat-window{
+display:flex;
+flex-direction:column;
+height:100%;
+}
+
+.chat-messages{
+flex:1;
+overflow-y:auto;
+padding:14px;
+display:flex;
+flex-direction:column;
+gap:8px;
+background:#f1f5f9;
+}
+
+/* message bubbles */
+
+.bubble{
+max-width:70%;
+padding:10px 14px;
+border-radius:14px;
+font-size:14px;
+box-shadow:var(--shadow-sm);
+}
+
+.bubble.them{
+align-self:flex-start;
+background:#ffffff;
+border:1px solid var(--border);
+}
+
+.bubble.me{
+align-self:flex-end;
+background:linear-gradient(135deg,var(--primary),var(--primary-dark));
+color:#fff;
+}
+
+.bubble .time{
+font-size:11px;
+opacity:.7;
+margin-top:4px;
+}
+
+/* input area */
+
+.chat-input{
+border-top:1px solid var(--border);
+padding:10px;
+background:#fff;
+}
+
 
 </style>
 """
@@ -1635,6 +1726,12 @@ if (wideBtn) wideBtn.addEventListener('click', toggleWide);
 applyState();
 });
 
+document.addEventListener("DOMContentLoaded", function(){
+    const box = document.querySelector(".chat-messages");
+    if(box){
+        box.scrollTop = box.scrollHeight;
+    }
+});
 
 </script>
 """
@@ -4428,79 +4525,161 @@ def tutor_home():
     # =========================
     # Inbox Card UI
     # =========================
+    # get all conversations
 
+    cur.execute("""
+    SELECT DISTINCT
+        CASE
+            WHEN from_role='student' THEN from_id
+            ELSE to_id
+        END AS student_id,
+        st.full_name
+    FROM direct_messages dm
+    JOIN students st
+    ON st.id =
+        CASE
+            WHEN dm.from_role='student' THEN dm.from_id
+            ELSE dm.to_id
+        END
+    WHERE
+        (dm.to_role='tutor' AND dm.to_id=?)
+        OR
+        (dm.from_role='tutor' AND dm.from_id=?)
+    ORDER BY st.full_name
+    """,(tid,tid))
+
+    conversations = cur.fetchall()
+
+    selected = request.args.get("chat")
+
+    # build conversation list
+
+    chat_list = ""
+
+    for c in conversations:
+
+        cur.execute("""
+            SELECT body, created_at
+            FROM direct_messages
+            WHERE
+            (from_role='student' AND from_id=? AND to_role='tutor' AND to_id=?)
+            OR
+            (from_role='tutor' AND from_id=? AND to_role='student' AND to_id=?)
+            ORDER BY created_at DESC LIMIT 1
+        """,(c["student_id"],tid,tid,c["student_id"]))
+
+        last = cur.fetchone()
+
+        preview = (last["body"][:30] + "...") if last else ""
+        time = last["created_at"][11:16] if last else ""
+
+        active = "active" if str(c["student_id"]) == str(selected) else ""
+
+        chat_list += f"""
+        <a href="?chat={c['student_id']}" class="chat-user {active}">
+            <div style="font-weight:600">{c['full_name']}</div>
+            <div class="mini muted">{preview}</div>
+            <div class="mini muted">{time}</div>
+        </a>
+        """
+
+    chat_messages = ""
+    subject_id_for_chat = 0
+
+    if selected:
+
+        cur.execute("""
+        SELECT dm.*, st.full_name, dm.subject_id
+        FROM direct_messages dm
+        LEFT JOIN students st ON st.id =
+            CASE
+                WHEN dm.from_role='student' THEN dm.from_id
+                ELSE dm.to_id
+            END
+        WHERE
+        (
+            dm.from_role='student'
+            AND dm.from_id=?
+            AND dm.to_role='tutor'
+            AND dm.to_id=?
+        )
+        OR
+        (
+            dm.from_role='tutor'
+            AND dm.from_id=?
+            AND dm.to_role='student'
+            AND dm.to_id=?
+        )
+        ORDER BY dm.created_at ASC
+        """,(selected,tid,tid,selected))
+
+        msgs = cur.fetchall()
+
+        subject_id_for_chat = msgs[0]["subject_id"] if msgs and msgs[0]["subject_id"] else 0
+
+        for m in msgs:
+
+            side = "me" if m["from_role"]=="tutor" else "them"
+
+            time = m["created_at"][11:16]
+
+            chat_messages += f"""
+            <div class="bubble {side}">
+                {m['body']}
+                <div class="time">{time}</div>
+            </div>
+            """
+
+     
+    chat_header = ""
+
+    if selected:
+        chat_header = f"""
+        <div style="padding:12px;border-bottom:1px solid var(--border);font-weight:600">
+            {next((c['full_name'] for c in conversations if str(c['student_id'])==str(selected)), '')}
+        </div>
+        """
     inbox_card = f"""
-    <div class='card'>
+    <div class="card">
 
-        <h2>Inbox & Messages</h2>
+    <h2>Messages</h2>
 
-        <div class='grid' style='grid-template-columns:1fr;gap:8px'>
+    <div class="chat-layout">
 
-            <!-- Message students -->
-            <form method='post' action='{url_for('tutor_message_student')}' class='grid'>
+    <div class="chat-list">
+    {chat_list or "<div class='empty'>No conversations</div>"}
+    </div>
 
-                <div>
-                    <label>Message students</label>
+    <div class="chat-window">
 
-                    <select name='combo' required>
-                        {stud_opts}
-                    </select>
+    {chat_header}
 
-                    <div class='mini muted'>
-                        You can message an individual student, a subject, or all students.
-                    </div>
+    <div class="chat-messages">
+    {chat_messages or "<div class='empty'>Select conversation</div>"}
+    </div>
 
-                </div>
+    <div class="chat-input">
 
-                <div>
-                    <label>Your message</label>
+    <form method="post" action="{url_for('tutor_message_student')}">
 
-                    <textarea name='body'
-                              required
-                              placeholder='Type your message...'></textarea>
+    {"<input type='hidden' name='combo' value='" + str(selected) + "|" + str(subject_id_for_chat) + "'>" if selected else ""}
 
-                </div>
-
-                <button class='btn'>
-                    Send to students
-                </button>
-
-            </form>
+    <textarea name="body" placeholder="Type message..." required {"disabled" if not selected else ""}></textarea>
 
 
-            <!-- Message admin -->
-            <form method='post'
-                  action='{url_for('tutor_message_admin')}'
-                  class='grid'>
+    <button class="btn success mini">Send</button>
 
-                <div>
+    </form>
 
-                    <label>Message Admin</label>
+    </div>
 
-                    <textarea name='body'
-                              required
-                              placeholder='Type your message for Admin...'></textarea>
+    </div>
 
-                </div>
-
-                <button class='btn secondary'>
-                    Send to Admin
-                </button>
-
-            </form>
-
-        </div>
-
-
-        <!-- Inbox messages -->
-        <div style='margin-top:10px'>
-
-            {inbox_list}
-
-        </div>
+    </div>
 
     </div>
     """
+
 
 
     conn.close()
