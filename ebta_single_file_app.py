@@ -4629,12 +4629,7 @@ def tutor_home():
 
         msgs = cur.fetchall()
 
-        subject_id_for_chat = (
-            msgs[0]["subject_id"]
-            if msgs and msgs[0].get("subject_id")
-            else 0
-        )
-
+        subject_id_for_chat = msgs[0]["subject_id"] if msgs and msgs[0]["subject_id"] else 0
 
         for m in msgs:
 
