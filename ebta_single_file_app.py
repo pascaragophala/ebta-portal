@@ -3730,9 +3730,9 @@ def student_home():
         """, (month, *active_sub_ids))
 
         mats = cur.fetchall()
-
+        
         if mats:
-
+            assignments = []
             grouped = {}
 
             for m in mats:
@@ -3767,8 +3767,10 @@ def student_home():
 
                 if is_assignment:
                     grouped[subject_key]["assignments"].append(row_html)
+                    assignments.append(m)   # <-- ADD THIS LINE
                 else:
                     grouped[subject_key]["materials"].append(row_html)
+
 
             blocks = []
 
