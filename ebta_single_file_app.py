@@ -1889,10 +1889,10 @@ def page(title, body_html, extra_head="", extra_js=""):
             role_title, user_name = "Student", session.get('student_name','Student')
             links = [
                 ("Dashboard", "#dashboard"),
+                ("Status", "#status"),
                 ("Assignments", "#assignments"),
                 ("Materials", "#materials"),
                 ("Messages", "#messages"),
-                ("Status", "#status"),
                 ("Logout", url_for('student_logout'))
             ]
             stats_grid = f"""
