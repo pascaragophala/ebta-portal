@@ -1423,6 +1423,63 @@ background:#fff;
 
 }
 
+/* MAIN CHAT CONTAINER */
+.chat-layout {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    height: 520px;              /* IMPORTANT: fixed height */
+    max-height: 520px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid #e5e7eb;
+    background: white;
+}
+
+/* LEFT LIST */
+.chat-list {
+    overflow-y: auto;
+    border-right: 1px solid #e5e7eb;
+    background: #f9fafb;
+}
+
+/* RIGHT SIDE */
+.chat-window {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+/* THIS FIXES YOUR ISSUE */
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+}
+
+/* SEND AREA ALWAYS VISIBLE */
+.chat-input {
+    flex-shrink: 0;
+    border-top: 1px solid #e5e7eb;
+    padding: 10px;
+    background: white;
+}
+
+/* MOBILE FIX */
+@media (max-width: 768px) {
+
+    .chat-layout {
+        grid-template-columns: 1fr;
+        height: 75vh;
+        max-height: 75vh;
+    }
+
+    .chat-list {
+        max-height: 140px;
+    }
+
+}
+
 
 
 </style>
