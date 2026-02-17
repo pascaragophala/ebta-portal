@@ -1369,6 +1369,61 @@ padding:10px;
 background:#fff;
 }
 
+.chat-layout {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 0;
+    height: 500px;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+/* LEFT SIDE LIST */
+.chat-list {
+    border-right: 1px solid #e5e7eb;
+    overflow-y: auto;
+    background: #f9fafb;
+}
+
+/* RIGHT SIDE WINDOW */
+.chat-window {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: white;
+}
+
+/* THIS IS THE IMPORTANT FIX */
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    min-height: 0;
+}
+
+/* INPUT STAYS FIXED */
+.chat-input {
+    border-top: 1px solid #e5e7eb;
+    padding: 10px;
+    background: white;
+}
+
+/* MOBILE FIX */
+@media (max-width: 768px) {
+
+    .chat-layout {
+        grid-template-columns: 1fr;
+        height: 70vh;
+    }
+
+    .chat-list {
+        max-height: 150px;
+    }
+
+}
+
+
 
 </style>
 """
