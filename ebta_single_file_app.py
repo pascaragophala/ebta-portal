@@ -3732,7 +3732,7 @@ def student_home():
         ORDER BY s.grade, s.name
     """, (sid, sid))
 
-    conversations = cur.fetchall()
+    conversations = [dict(row) for row in cur.fetchall()]
 
     # include tutors even if no conversation exists yet
     for subid in active_sub_ids:
@@ -3763,18 +3763,34 @@ def student_home():
 
     # conversation selector
     conv_list = ""
+
     for c in conversations:
+
+        grade_val = ""
+
+        # works for BOTH sqlite3.Row and dict
+        if isinstance(c, dict):
+            grade_val = c.get("grade") or ""
+        else:
+            grade_val = c["grade"] if "grade" in c.keys() else ""
+
+        grade_text = grade_label(grade_val) if grade_val else ""
+
         conv_list += f"""
         <div class="chat-user"
              onclick="loadChat({c['tutor_id']},{c['subject_id']})">
+
             <div style="font-weight:600">
                 {c['tutor_name']}
             </div>
+
             <div class="mini muted">
-                {grade_label(c['grade']) if c.get('grade') else ''} {c['subject_name']}
+                {grade_text} {c['subject_name']}
             </div>
+
         </div>
         """
+
 
     if not conv_list:
         conv_list = "<div class='empty'>No conversations yet.</div>"
