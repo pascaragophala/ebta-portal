@@ -3833,36 +3833,100 @@ def student_home():
             materials_html = "".join(blocks)
 
     # Assignment submission blocks (top priority)
-    submit_blocks=[]
+    submit_blocks = []
+
     if assignments:
-        for m,_ in assignments:
+
+        for m in assignments:
+
             due = m['due_date'] or ''
-            # submission status
-            cur.execute("SELECT id,file_path,mark,feedback,submitted_at FROM submissions WHERE material_id=? AND student_id=?", (m['id'], sid))
+
+            cur.execute(
+                "SELECT id,file_path,mark,feedback,submitted_at "
+                "FROM submissions WHERE material_id=? AND student_id=?",
+                (m['id'], sid)
+            )
+
             sub = cur.fetchone()
+
             maxp = m['max_points'] if m['max_points'] else 100
+
             if sub:
+
                 mark = f" • Mark: {sub['mark']} / {maxp}" if sub['mark'] is not None else ""
-                fb = f"<div class='muted mini'>Feedback: {sub['feedback']}</div>" if sub['feedback'] else ""
-                submit_blocks.append(f"<div class='card'><b>{m['title']}</b> — {grade_label(m['grade'])} {m['subject_name']} • Due: {due or '—'}<br/>Submitted: {sub['submitted_at'][:16].replace('T',' ')}{mark}{fb} <a class='links' href='{sub['file_path']}' target='_blank'>Download your file</a></div>")
+
+                fb = (
+                    f"<div class='muted mini'>Feedback: {sub['feedback']}</div>"
+                    if sub['feedback'] else ""
+                )
+
+                submit_blocks.append(f"""
+                    <div class='card'>
+                        <b>{m['title']}</b> —
+                        {grade_label(m['grade'])} {m['subject_name']}
+                        • Due: {due or '—'}
+                        <br>
+                        Submitted:
+                        {sub['submitted_at'][:16].replace('T',' ')}
+                        {mark}
+                        {fb}
+                        <a class='links' href='{sub['file_path']}' target='_blank'>
+                            Download your file
+                        </a>
+                    </div>
+                """)
+
             else:
-                allow=True
+
+                allow = True
+
                 if due:
                     try:
-                        end=datetime.datetime.fromisoformat(due+"T23:59:59+00:00")
-                        allow = datetime.datetime.now(datetime.timezone.utc) <= end
-                    except Exception: pass
+                        end = datetime.datetime.fromisoformat(
+                            due+"T23:59:59+00:00"
+                        )
+                        allow = datetime.datetime.now(
+                            datetime.timezone.utc
+                        ) <= end
+                    except Exception:
+                        pass
+
                 if allow:
+
                     submit_blocks.append(f"""
-                    <div class='card'>
-                        <b>{m['title']}</b> — {grade_label(m['grade'])} {m['subject_name']} • Due: {due or '—'} • Total: {maxp}
-                        <form method='post' action='{url_for('student_submit_assignment', mid=m['id'])}' enctype='multipart/form-data' class='grid' style='grid-template-columns:1fr auto;gap:10px;margin-top:8px'>
-                        <input type='file' name='file' required accept='.pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.txt'/>
-                        <button class='btn'>Submit</button>
-                        </form>
-                    </div>""")
+                        <div class='card'>
+                            <b>{m['title']}</b> —
+                            {grade_label(m['grade'])} {m['subject_name']}
+                            • Due: {due or '—'}
+                            • Total: {maxp}
+
+                            <form method='post'
+                                  action='{url_for('student_submit_assignment', mid=m['id'])}'
+                                  enctype='multipart/form-data'
+                                  class='grid'
+                                  style='grid-template-columns:1fr auto;gap:10px;margin-top:8px'>
+
+                                <input type='file'
+                                       name='file'
+                                       required
+                                       accept='.pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.txt'/>
+
+                                <button class='btn'>Submit</button>
+
+                            </form>
+                        </div>
+                    """)
+
                 else:
-                    submit_blocks.append(f"<div class='card'><b>{m['title']}</b> — Due: {due} <span class='chip'>Closed</span></div>")
+
+                    submit_blocks.append(f"""
+                        <div class='card'>
+                            <b>{m['title']}</b>
+                            — Due: {due}
+                            <span class='chip'>Closed</span>
+                        </div>
+                    """)
+
 
     # Feedback & Results (graded items)
     feedback_card = ""
