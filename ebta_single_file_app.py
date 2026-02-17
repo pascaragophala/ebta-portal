@@ -3955,6 +3955,30 @@ def student_home():
     # Messages (compose to tutor + inbox)
     # Compose: pick "Tutor (Subject)"
     # ================= STUDENT CHAT SYSTEM =================
+    
+    # build tutors_for_subject lookup (REQUIRED for chat system)
+    tutors_for_subject = {}
+
+    if has_active_enrollment and active_sub_ids:
+
+        cur.execute(f"""
+            SELECT ts.subject_id, t.id AS tutor_id, t.full_name
+            FROM tutor_subjects ts
+            JOIN tutors t ON t.id = ts.tutor_id
+            WHERE ts.subject_id IN ({','.join('?'*len(active_sub_ids))})
+        """, (*active_sub_ids,))
+
+        for row in cur.fetchall():
+
+            subject_id = row["subject_id"]
+
+            if subject_id not in tutors_for_subject:
+                tutors_for_subject[subject_id] = []
+
+            tutors_for_subject[subject_id].append(
+                (row["tutor_id"], row["full_name"])
+            )
+
 
     # Build conversation list (one per tutor + subject)
     cur.execute(f"""
