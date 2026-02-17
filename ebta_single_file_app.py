@@ -3710,29 +3710,141 @@ def student_home():
 
     # Messages (compose to tutor + inbox)
     # Compose: pick "Tutor (Subject)"
-    options=[]
+    # ================= STUDENT CHAT SYSTEM =================
+
+    # Build conversation list (one per tutor + subject)
+    cur.execute(f"""
+        SELECT DISTINCT
+            dm.subject_id,
+            t.id AS tutor_id,
+            t.full_name AS tutor_name,
+            s.name AS subject_name,
+            s.grade
+        FROM direct_messages dm
+        JOIN tutors t ON t.id = CASE
+            WHEN dm.from_role='tutor' THEN dm.from_id
+            ELSE dm.to_id END
+        JOIN subjects s ON s.id = dm.subject_id
+        WHERE
+            (dm.from_role='student' AND dm.from_id=?)
+            OR
+            (dm.to_role='student' AND dm.to_id=?)
+        ORDER BY s.grade, s.name
+    """, (sid, sid))
+
+    conversations = cur.fetchall()
+
+    # include tutors even if no conversation exists yet
     for subid in active_sub_ids:
         sid_int = int(subid)
-        for (tid, tname) in tutors_for_subject.get(sid_int, []):
-            # label: Tutor Name — Subject
-            subj = next((f"{grade_label(e['grade'])} {e['subject_name']}" for e in enrolls if e['subject_id']==sid_int), "Subject")
-            options.append((tid, sid_int, f"{tname} — {subj}"))
-    msg_opts = "".join([f"<option value='{tid}|{sid_int}'>{label}</option>" for tid,sid_int,label in options]) or "<option value=''>No tutors available</option>"
 
-    cur.execute("""SELECT dm.*, 
-                        CASE dm.from_role 
-                            WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
-                            WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
-                            ELSE 'Admin' END AS from_name,
-                        CASE dm.to_role 
-                            WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
-                            WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
-                            ELSE 'Admin' END AS to_name
-                FROM direct_messages dm
-                WHERE (to_role='student' AND to_id=?) OR (from_role='student' AND from_id=?)
-                ORDER BY created_at ASC LIMIT 30""",(sid,sid))
-    msgs = cur.fetchall()
-    msg_list = "".join([f"<div class='msg {'me' if m['from_role']=='student' else 'them'}'><div class='meta'>{m['from_name']} → {m['to_name']} • {m['created_at'][:16].replace('T',' ')}</div><div>{m['body']}</div></div>" for m in msgs]) or "<div class='empty'>No messages yet.</div>"
+        for (tid, tname) in tutors_for_subject.get(sid_int, []):
+
+            exists = any(
+                c["tutor_id"] == tid and c["subject_id"] == sid_int
+                for c in conversations
+            )
+
+            if not exists:
+
+                subj = next(
+                    (f"{grade_label(e['grade'])} — {e['subject_name']}"
+                     for e in enrolls if e['subject_id'] == sid_int),
+                    "Subject"
+                )
+
+                conversations.append({
+                    "tutor_id": tid,
+                    "subject_id": sid_int,
+                    "tutor_name": tname,
+                    "subject_name": subj,
+                    "grade": ""
+                })
+
+    # conversation selector
+    conv_list = ""
+    for c in conversations:
+        conv_list += f"""
+        <div class="chat-user"
+             onclick="loadChat({c['tutor_id']},{c['subject_id']})">
+            <div style="font-weight:600">
+                {c['tutor_name']}
+            </div>
+            <div class="mini muted">
+                {grade_label(c['grade']) if c.get('grade') else ''} {c['subject_name']}
+            </div>
+        </div>
+        """
+
+    if not conv_list:
+        conv_list = "<div class='empty'>No conversations yet.</div>"
+
+    # messages window (default empty)
+    chat_window = """
+    <div class="chat-window">
+        <div class="chat-messages" id="chatMessages">
+            <div class="empty">Select a conversation</div>
+        </div>
+
+        <form method="post"
+              action="/student/message"
+              class="chat-input"
+              id="chatForm">
+
+            <input type="hidden" name="combo" id="chatCombo">
+
+            <div style="display:flex;gap:8px">
+                <input type="text"
+                       name="body"
+                       placeholder="Type message..."
+                       required
+                       style="flex:1">
+
+                <button class="btn success">
+                    Send
+                </button>
+            </div>
+
+        </form>
+    </div>
+    """
+
+    compose_block = f"""
+    <div class="card">
+        <h2>Messages</h2>
+
+        <div class="chat-layout">
+
+            <div class="chat-list">
+                {conv_list}
+            </div>
+
+            {chat_window}
+
+        </div>
+
+    </div>
+
+    <script>
+
+    function loadChat(tutor_id, subject_id)
+    {{
+        document.getElementById("chatCombo").value =
+            tutor_id + "|" + subject_id;
+
+        fetch(`/student/messages/thread?tutor_id=${{tutor_id}}&subject_id=${{subject_id}}`)
+        .then(r => r.text())
+        .then(html =>
+        {{
+            document.getElementById("chatMessages").innerHTML = html;
+
+            var box = document.getElementById("chatMessages");
+            box.scrollTop = box.scrollHeight;
+        }});
+    }}
+
+    </script>
+    """
 
     conn.close()
 
@@ -3804,17 +3916,6 @@ def student_home():
             </form>
         </div>
         """
-
-    compose_block = f"""
-    <div class='card'><h2>Messages</h2>
-        <form method='post' action='{url_for('student_send_message')}' class='grid'>
-        <div><label>To Tutor</label><select name='combo' required>{msg_opts}</select></div>
-        <div><label>Your message</label><textarea name='body' required placeholder='Type your message...'></textarea></div>
-        <button class='btn'>Send</button>
-        </form>
-        <div style='margin-top:10px'>{msg_list}</div>
-    </div>
-    """
 
 
     body=fr"""
@@ -3978,6 +4079,58 @@ def student_send_message():
                 (sid,'tutor',tutor_id,subject_id,body,now_utc_iso()))
     conn.commit(); conn.close()
     return redirect(url_for('student_home'))
+    
+    
+@app.get("/student/messages/thread")
+def student_message_thread():
+
+    r = require_student()
+    if r: return r
+
+    sid = is_student()
+
+    tutor_id = request.args.get("tutor_id")
+    subject_id = request.args.get("subject_id")
+
+    if not tutor_id or not subject_id:
+        return ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM direct_messages
+        WHERE subject_id=?
+        AND (
+            (from_role='student' AND from_id=? AND to_role='tutor' AND to_id=?)
+            OR
+            (from_role='tutor' AND from_id=? AND to_role='student' AND to_id=?)
+        )
+        ORDER BY created_at ASC
+    """, (subject_id, sid, tutor_id, tutor_id, sid))
+
+    msgs = cur.fetchall()
+
+    conn.close()
+
+    html = ""
+
+    for m in msgs:
+
+        cls = "me" if m["from_role"] == "student" else "them"
+
+        time = m["created_at"][:16].replace("T"," ")
+
+        html += f"""
+        <div class="bubble {cls}">
+            {m['body']}
+            <div class="time">{time}</div>
+        </div>
+        """
+
+    return html
+
 
 # Student: submit monthly ratings
 @app.post('/student/ratings')
