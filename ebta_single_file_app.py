@@ -9,6 +9,8 @@ import secrets
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from pathlib import Path
+from html import escape
+
 
 from flask import Flask, request, redirect, url_for, render_template_string, send_from_directory, session, flash, make_response
 
@@ -249,6 +251,12 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_created ON students(created_at)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollments_month_created ON enrollments(month, created_at)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at DESC)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_students_full_name ON students(full_name)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_students_phone ON students(phone_whatsapp)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_students_guardian ON students(guardian_phone)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_students_email ON students(email)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_students_school ON students(school)")
+
 
 
 
@@ -6207,10 +6215,15 @@ def enrollment_action(id: int, action: str):
 
 @app.get('/admin/students')
 def admin_students():
+    q = request.args.get("q", "").strip()
+    q_safe = escape(q)
+    if q:
+        page_num = 1
+
     r = require_admin()
     if r:
         return r
-
+    
     page_num = int(request.args.get("page", 1))
     limit = 20
     offset = (page_num - 1) * limit
@@ -6218,25 +6231,62 @@ def admin_students():
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("SELECT COUNT(*) AS c FROM students")
+    if q:
+        cur.execute("""
+            SELECT COUNT(*) AS c
+            FROM students
+            WHERE
+                full_name LIKE ?
+                OR phone_whatsapp LIKE ?
+                OR guardian_phone LIKE ?
+                OR email LIKE ?
+                OR school LIKE ?
+        """, (f"%{q}%",)*5)
+    else:
+        cur.execute("SELECT COUNT(*) AS c FROM students")
+
     total = cur.fetchone()['c']
     total_pages = (total + limit - 1) // limit
 
-    cur.execute("""
-        SELECT
-            id,
-            full_name,
-            phone_whatsapp,
-            guardian_phone,
-            email,
-            grade,
-            province,
-            school,
-            pin
-        FROM students
-        ORDER BY created_at DESC
-        LIMIT ? OFFSET ?
-    """, (limit, offset))
+    if q:
+        cur.execute("""
+            SELECT
+                id,
+                full_name,
+                phone_whatsapp,
+                guardian_phone,
+                email,
+                grade,
+                province,
+                school,
+                pin
+            FROM students
+            WHERE
+                full_name LIKE ?
+                OR phone_whatsapp LIKE ?
+                OR guardian_phone LIKE ?
+                OR email LIKE ?
+                OR school LIKE ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, (f"%{q}%",)*5 + (limit, offset))
+    else:
+        cur.execute("""
+            SELECT
+                id,
+                full_name,
+                phone_whatsapp,
+                guardian_phone,
+                email,
+                grade,
+                province,
+                school,
+                pin
+            FROM students
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, (limit, offset))
+
     students = cur.fetchall()
 
     ids = [s['id'] for s in students]
@@ -6294,20 +6344,20 @@ def admin_students():
 
     # First
     if page_num > 1:
-        page_links.append(f"<a class='links' href='?page=1'>« First</a>")
-        page_links.append(f"<a class='links' href='?page={page_num-1}'>‹ Prev</a>")
+        page_links.append(f"<a class='links' href='?page=1&q={q}'>« First</a>")
+        page_links.append(f"<a class='links' href='?page={page_num-1}&q={q}'>‹ Prev</a>")
 
     # Numbered pages
     for p in range(start, end + 1):
         if p == page_num:
             page_links.append(f"<span class='current'>{p}</span>")
         else:
-            page_links.append(f"<a class='links' href='?page={p}'>{p}</a>")
+            page_links.append(f"<a class='links' href='?page={p}&q={q}'>{p}</a>")
 
     # Next
     if page_num < total_pages:
-        page_links.append(f"<a class='links' href='?page={page_num+1}'>Next ›</a>")
-        page_links.append(f"<a class='links' href='?page={total_pages}'>Last »</a>")
+        page_links.append(f"<a class='links' href='?page={page_num+1}&q={q}'>Next ›</a>")
+        page_links.append(f"<a class='links' href='?page={total_pages}&q={q}'>Last »</a>")
 
 
     nav = f"""
@@ -6340,9 +6390,14 @@ def admin_students():
         <h1>Students</h1>
 
         <div class='toolbar'>
-            <input id='stu_q' class='pill'
-                   placeholder='Search students'
-                   oninput="filterTable('stu_q','stu_tbl')"/>
+            <form method="get" style="display:flex;gap:8px">
+                <input name="q"
+                       value="{q_safe}"
+                       placeholder="Search students (name, phone, email, school)"
+                       style="padding:6px;border-radius:8px;border:1px solid #ccc">
+                <button class="btn mini">Search</button>
+            </form>
+
         </div>
 
         {nav}
