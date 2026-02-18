@@ -3036,10 +3036,6 @@ def register():
             return page("Error", card_msg("Incorrect PIN for this phone number."))
         sid = srow['id']
     else:
-        if pin_in_use(conn, pin):
-            conn.close()
-            return page("Error", card_msg("PIN already in use. Pick another."))
-
         # Derive grade from first subject
         cur.execute("SELECT grade FROM subjects WHERE id=?", (subject_ids[0],))
         r0 = cur.fetchone()
