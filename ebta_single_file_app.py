@@ -2412,6 +2412,76 @@ def home():
 
         </form>
     </div>
+    
+    <div class="card soft" style="margin-top:18px;">
+
+    <h2>Portal Help Videos</h2>
+    <div class="mini muted" style="margin-bottom:10px;">
+    Watch these videos if you need help using the EBTA Portal.
+    </div>
+
+    <div style="
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+    gap:16px;
+    ">
+
+    <div>
+    <div class="mini" style="font-weight:600;margin-bottom:6px;">
+    How to Enroll on EBTA Portal
+    </div>
+    <iframe
+    src="https://drive.google.com/file/d/1z3kRXeO0iTvcofjQKWH0TJx7MKs7IIdg/preview"
+    width="100%"
+    height="180"
+    allow="autoplay"
+    style="border-radius:10px;border:1px solid #e2e8f0;"
+    ></iframe>
+    </div>
+
+    <div>
+    <div class="mini" style="font-weight:600;margin-bottom:6px;">
+    How to Join WhatsApp Group
+    </div>
+    <iframe
+    src="https://drive.google.com/file/d/1shB3HSinhvBinC7_RUeB0OhxwLyN6ZV8/preview"
+    width="100%"
+    height="180"
+    allow="autoplay"
+    style="border-radius:10px;border:1px solid #e2e8f0;"
+    ></iframe>
+    </div>
+
+    <div>
+    <div class="mini" style="font-weight:600;margin-bottom:6px;">
+    How to Log into Portal
+    </div>
+    <iframe
+    src="https://drive.google.com/file/d/18J666KbFvxMY2K9PhbgDmZQOWLH-8uz4/preview"
+    width="100%"
+    height="180"
+    allow="autoplay"
+    style="border-radius:10px;border:1px solid #e2e8f0;"
+    ></iframe>
+    </div>
+
+    <div>
+    <div class="mini" style="font-weight:600;margin-bottom:6px;">
+    How to Upload Assignment
+    </div>
+    <iframe
+    src="https://drive.google.com/file/d/1cPluM63tebmvAuwt157sFhZ7LtOHNkti/preview"
+    width="100%"
+    height="180"
+    allow="autoplay"
+    style="border-radius:10px;border:1px solid #e2e8f0;"
+    ></iframe>
+    </div>
+
+    </div>
+    </div>
+
+    
     </section>
     """
 
