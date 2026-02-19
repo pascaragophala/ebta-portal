@@ -8151,124 +8151,231 @@ def admin_direct_messages():
     if r:
         return r
 
-    page_num = int(request.args.get("page", 1))
-    limit = 30
-    offset = (page_num - 1) * limit
+    selected = request.args.get("chat")
 
     conn = get_db()
     cur = conn.cursor()
 
     # =========================
-    # TOTAL COUNT
-    # =========================
-
-    cur.execute("SELECT COUNT(*) AS c FROM direct_messages")
-    total = cur.fetchone()['c']
-    total_pages = (total + limit - 1) // limit
-
-
-    # =========================
-    # LOAD PAGINATED MESSAGES
+    # LOAD CONVERSATIONS
+    # PRIORITY: tutors first
     # =========================
 
     cur.execute("""
+    SELECT DISTINCT
+        CASE
+            WHEN dm.from_role='tutor' THEN dm.from_id
+            WHEN dm.to_role='tutor' THEN dm.to_id
+        END AS tutor_id,
+
+        t.full_name,
+
+        MAX(dm.created_at) AS last_time
+
+    FROM direct_messages dm
+    JOIN tutors t
+    ON t.id =
+        CASE
+            WHEN dm.from_role='tutor' THEN dm.from_id
+            ELSE dm.to_id
+        END
+
+    WHERE dm.from_role='tutor'
+       OR dm.to_role='tutor'
+
+    GROUP BY tutor_id
+    ORDER BY last_time DESC
+    """)
+
+    tutor_conversations = cur.fetchall()
+
+
+    cur.execute("""
+    SELECT DISTINCT
+        CASE
+            WHEN dm.from_role='student' THEN dm.from_id
+            WHEN dm.to_role='student' THEN dm.to_id
+        END AS student_id,
+
+        s.full_name,
+
+        MAX(dm.created_at) AS last_time
+
+    FROM direct_messages dm
+    JOIN students s
+    ON s.id =
+        CASE
+            WHEN dm.from_role='student' THEN dm.from_id
+            ELSE dm.to_id
+        END
+
+    WHERE dm.from_role='student'
+       OR dm.to_role='student'
+
+    GROUP BY student_id
+    ORDER BY last_time DESC
+    """)
+
+    student_conversations = cur.fetchall()
+
+
+    # =========================
+    # BUILD SIDEBAR LIST
+    # =========================
+
+    chat_list = ""
+
+    if tutor_conversations:
+
+        chat_list += "<div class='chat-section'>Tutors</div>"
+
+        for c in tutor_conversations:
+
+            active = "active" if selected == f"tutor|{c['tutor_id']}" else ""
+
+            chat_list += f"""
+            <a href="?chat=tutor|{c['tutor_id']}"
+               class="chat-user {active} tutor">
+
+                <div class="chat-name">
+                    {c['full_name']}
+                </div>
+
+                <div class="chat-role">
+                    Tutor
+                </div>
+
+            </a>
+            """
+
+
+    if student_conversations:
+
+        chat_list += "<div class='chat-section'>Students</div>"
+
+        for c in student_conversations:
+
+            active = "active" if selected == f"student|{c['student_id']}" else ""
+
+            chat_list += f"""
+            <a href="?chat=student|{c['student_id']}"
+               class="chat-user {active} student">
+
+                <div class="chat-name">
+                    {c['full_name']}
+                </div>
+
+                <div class="chat-role">
+                    Student
+                </div>
+
+            </a>
+            """
+
+
+    if not chat_list:
+        chat_list = "<div class='empty'>No conversations</div>"
+
+
+    # =========================
+    # LOAD CHAT MESSAGES
+    # =========================
+
+    chat_messages = ""
+    target_role = None
+    target_id = None
+
+    if selected:
+
+        target_role, target_id = selected.split("|", 1)
+        target_id = int(target_id)
+
+        cur.execute("""
         SELECT dm.*,
 
-            CASE dm.from_role 
+            CASE dm.from_role
+                WHEN 'admin' THEN 'You'
                 WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
-                WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.from_id)
-                ELSE 'Admin'
-            END AS from_name,
-
-            CASE dm.to_role 
-                WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.to_id)
-                WHEN 'student' THEN (SELECT full_name FROM students WHERE id=dm.to_id)
-                ELSE 'Admin'
-            END AS to_name
+                ELSE (SELECT full_name FROM students WHERE id=dm.from_id)
+            END AS sender
 
         FROM direct_messages dm
 
-        ORDER BY dm.created_at DESC
+        WHERE
+        (
+            dm.from_role='admin'
+            AND dm.to_role=?
+            AND dm.to_id=?
+        )
+        OR
+        (
+            dm.to_role='admin'
+            AND dm.from_role=?
+            AND dm.from_id=?
+        )
 
-        LIMIT ? OFFSET ?
-    """, (limit, offset))
+        ORDER BY dm.created_at ASC
+        """, (target_role, target_id, target_role, target_id))
 
-    dms = cur.fetchall()
+        msgs = cur.fetchall()
+
+        for m in msgs:
+
+            side = "me" if m['from_role']=='admin' else "them"
+
+            time = m['created_at'][11:16]
+
+            chat_messages += f"""
+            <div class="bubble {side}">
+
+                {m['body']}
+
+                <div class="time">{time}</div>
+
+            </div>
+            """
 
 
-    # mark admin messages as read
-    cur.execute("""
+        # mark read
+        cur.execute("""
         UPDATE direct_messages
-        SET is_read = 1
-        WHERE to_role = 'admin'
-    """)
+        SET is_read=1
+        WHERE to_role='admin'
+        AND from_role=?
+        AND from_id=?
+        """, (target_role, target_id))
 
-
-    # =========================
-    # RECIPIENT LISTS
-    # =========================
-
-    cur.execute("SELECT id, full_name FROM tutors ORDER BY full_name")
-    tutors = cur.fetchall()
-
-    cur.execute("SELECT id, full_name FROM students ORDER BY full_name")
-    students = cur.fetchall()
 
     conn.commit()
     conn.close()
 
 
     # =========================
-    # MESSAGE LIST DISPLAY
+    # MESSAGE INPUT
     # =========================
 
-    dm_list = "".join([
-        f"""
-        <div class='msg {'me' if m['from_role']=='admin' else 'them'}'>
+    message_input = ""
 
-            <div class='meta'>
-                {m['from_name']} → {m['to_name']}
-                • {m['created_at'][:16].replace('T',' ')}
-            </div>
+    if selected:
 
-            <div>{m['body']}</div>
+        message_input = f"""
+        <form method="post"
+              action="{url_for('admin_send_dm')}">
 
-        </div>
+            <input type="hidden"
+                   name="target"
+                   value="{target_role}|{target_id}">
+
+            <textarea name="body"
+                      placeholder="Type message..."
+                      required></textarea>
+
+            <button class="btn success">
+                Send
+            </button>
+
+        </form>
         """
-        for m in dms
-    ]) or "<div class='empty'>No messages yet.</div>"
-
-
-    # =========================
-    # PAGINATION NAV
-    # =========================
-
-    nav = f"""
-    <div class='pager' style="margin:10px 0">
-
-        Page {page_num} of {total_pages}
-
-        {"<a class='links' href='?page="+str(page_num-1)+"'>Prev</a>" if page_num>1 else ""}
-
-        {"<a class='links' href='?page="+str(page_num+1)+"'>Next</a>" if page_num<total_pages else ""}
-
-    </div>
-    """
-
-
-    # =========================
-    # DROPDOWN OPTIONS
-    # =========================
-
-    tut_opts = "".join([
-        f"<option value='tutor|{t['id']}'>{t['full_name']}</option>"
-        for t in tutors
-    ])
-
-    stu_opts = "".join([
-        f"<option value='student|{s['id']}'>{s['full_name']}</option>"
-        for s in students
-    ])
 
 
     # =========================
@@ -8278,59 +8385,33 @@ def admin_direct_messages():
     body = f"""
     {admin_nav()}
 
-    <section class='grid'>
+    <section class="card">
 
-        <div class='card'>
+        <h1>Direct Messages</h1>
 
-            <h1>Direct Messages</h1>
+        <div class="chat-layout">
 
-            <form method='post'
-                  action='{url_for('admin_send_dm')}'
-                  class='grid'>
+            <div class="chat-list">
 
-                <input type="hidden" name="page" value="{page_num}">
+                {chat_list}
 
-                <div>
-
-                    <label>Send to</label>
-
-                    <select name='target' required>
-
-                        <optgroup label='Broadcast'>
-                            <option value='ALL_TUTORS'>All Tutors</option>
-                            <option value='ALL_STUDENTS'>All Students</option>
-                        </optgroup>
-
-                        <optgroup label='Tutors'>
-                            {tut_opts}
-                        </optgroup>
-
-                        <optgroup label='Students'>
-                            {stu_opts}
-                        </optgroup>
-
-                    </select>
-
-                </div>
-
-                <div>
-                    <label>Message</label>
-                    <textarea name='body'
-                              required
-                              placeholder='Type your message...'></textarea>
-                </div>
-
-                <button class='btn'>Send</button>
-
-            </form>
-
-            {nav}
-
-            <div style='margin-top:15px'>
-                {dm_list}
             </div>
 
-            {nav}
+            <div class="chat-window">
+
+                <div class="chat-messages">
+
+                    {chat_messages or "<div class='empty'>Select conversation</div>"}
+
+                </div>
+
+                <div class="chat-input">
+
+                    {message_input}
+
+                </div>
+
+            </div>
 
         </div>
 
