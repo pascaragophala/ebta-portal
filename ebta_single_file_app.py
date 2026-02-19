@@ -1489,7 +1489,7 @@ background:#fff;
 }
 
 .chat-list {
-    width: 340px;
+    width: 300px;
     max-height: 600px;
     overflow-y: auto;
     border-right: 1px solid #ddd;
