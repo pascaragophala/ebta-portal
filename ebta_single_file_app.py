@@ -8346,7 +8346,16 @@ def admin_direct_messages():
     """
 
     # Tutors grouped by grade
-    tutor_grades = sorted(set([t['grade'] for t in tutors if t['grade']]))
+    tutors_by_grade = {}
+
+    for t in tutors:
+
+        grade = t['grade'] or "OTHER"
+
+        if grade not in tutors_by_grade:
+            tutors_by_grade[grade] = {}
+
+        tutors_by_grade[grade][t['id']] = t['full_name']
 
     for grade in sorted(tutors_by_grade.keys()):
 
@@ -8376,8 +8385,7 @@ def admin_direct_messages():
             """
 
     # Students grouped by grade
-    student_grades = sorted(set([s['grade'] for s in students if s['grade']]))
-
+    
     students_by_grade = {}
 
     for s in students:
