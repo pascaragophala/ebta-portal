@@ -5002,6 +5002,46 @@ def tutor_home():
                 ORDER BY created_at ASC LIMIT 40""",(tid,tid))
     inbox = cur.fetchall()
     inbox_list = "".join([f"<div class='msg {'me' if m['from_role']=='tutor' else 'them'}'><div class='meta'>{m['from_name']} → {m['to_name']} • {m['created_at'][:16].replace('T',' ')}</div><div>{m['body']}</div></div>" for m in inbox]) or "<div class='empty'>No messages yet.</div>"
+    
+    # =========================
+    # Tutor ↔ Admin chat
+    # =========================
+
+    cur.execute("""
+        SELECT dm.*, 
+               CASE dm.from_role
+                    WHEN 'admin' THEN 'Admin'
+                    ELSE (SELECT full_name FROM tutors WHERE id=dm.from_id)
+               END AS from_name
+        FROM direct_messages dm
+        WHERE
+            (dm.from_role='admin' AND dm.to_role='tutor' AND dm.to_id=?)
+            OR
+            (dm.from_role='tutor' AND dm.from_id=? AND dm.to_role='admin')
+        ORDER BY dm.created_at ASC
+        LIMIT 100
+    """, (tid, tid))
+
+    admin_msgs = cur.fetchall()
+
+    admin_chat_html = ""
+
+    for m in admin_msgs:
+
+        side = "me" if m["from_role"] == "tutor" else "them"
+
+        time = m["created_at"][11:16]
+
+        admin_chat_html += f"""
+        <div class="bubble {side}">
+            {m['body']}
+            <div class="time">{time}</div>
+        </div>
+        """
+
+    if not admin_chat_html:
+        admin_chat_html = "<div class='empty'>No admin messages yet.</div>"
+
 
     # =========================
     # Compose forms (UPDATED)
@@ -5237,6 +5277,39 @@ def tutor_home():
 
     </div>
     """
+    
+    admin_chat_card = f"""
+    <div class="card">
+
+        <h2>Message Admin</h2>
+
+        <div class="chat-window">
+
+            <div class="chat-messages">
+                {admin_chat_html}
+            </div>
+
+            <div class="chat-input">
+
+                <form method="post"
+                      action="{url_for('tutor_message_admin')}">
+
+                    <textarea name="body"
+                              placeholder="Message admin..."
+                              required></textarea>
+
+                    <button class="btn success mini">
+                        Send
+                    </button>
+
+                </form>
+
+            </div>
+
+        </div>
+
+    </div>
+    """
 
 
 
@@ -5270,6 +5343,7 @@ def tutor_home():
     </div>
     {message_form}
     {inbox_card}
+    {admin_chat_card}
 
     <div id="students">
         {''.join(stu_sections)}
@@ -8210,6 +8284,34 @@ def admin_send_dm():
     conn.close()
 
     return redirect(url_for('admin_direct_messages', page=page_num))
+    
+    
+@app.post('/admin/message-tutor')
+def admin_message_tutor():
+
+    r = require_admin()
+    if r:
+        return r
+
+    tutor_id = int(request.form.get("tutor_id"))
+    body = request.form.get("body","").strip()
+
+    if not body:
+        return page("Error", card_msg("Empty message."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO direct_messages
+        (from_role, from_id, to_role, to_id, subject_id, body, created_at)
+        VALUES ('admin', 0, 'tutor', ?, NULL, ?, ?)
+    """, (tutor_id, body, now_utc_iso()))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_home"))
 
 
 
