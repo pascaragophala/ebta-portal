@@ -8309,18 +8309,98 @@ def admin_direct_messages():
 
     if q:
         cur.execute("""
-            SELECT id, full_name, grade
-            FROM students
-            WHERE full_name LIKE ?
-            ORDER BY full_name
-            LIMIT 50
+            SELECT
+                s.id,
+                s.full_name,
+                s.grade,
+
+                (
+                    SELECT body
+                    FROM direct_messages dm
+                    WHERE
+                    (
+                        (dm.to_role='student' AND dm.to_id=s.id)
+                        OR
+                        (dm.from_role='student' AND dm.from_id=s.id)
+                    )
+                    ORDER BY dm.created_at DESC
+                    LIMIT 1
+                ) AS last_message,
+
+                (
+                    SELECT created_at
+                    FROM direct_messages dm
+                    WHERE
+                    (
+                        (dm.to_role='student' AND dm.to_id=s.id)
+                        OR
+                        (dm.from_role='student' AND dm.from_id=s.id)
+                    )
+                    ORDER BY dm.created_at DESC
+                    LIMIT 1
+                ) AS last_time,
+
+                (
+                    SELECT COUNT(*)
+                    FROM direct_messages dm
+                    WHERE dm.to_role='admin'
+                    AND dm.from_role='student'
+                    AND dm.from_id=s.id
+                    AND dm.is_read=0
+                ) AS unread
+
+            FROM students s
+
+            WHERE s.full_name LIKE ?
+
+            ORDER BY last_time DESC NULLS LAST, s.full_name
         """, (f"%{q}%",))
+
     else:
         cur.execute("""
-            SELECT id, full_name, grade
-            FROM students
-            ORDER BY full_name
-            LIMIT 50
+            SELECT
+                s.id,
+                s.full_name,
+                s.grade,
+
+                (
+                    SELECT body
+                    FROM direct_messages dm
+                        WHERE
+                    (
+                        (dm.to_role='student' AND dm.to_id=s.id)
+                        OR
+                        (dm.from_role='student' AND dm.from_id=s.id)
+                    )
+                    ORDER BY dm.created_at DESC
+                    LIMIT 1
+                ) AS last_message,
+
+                (
+                    SELECT created_at
+                    FROM direct_messages dm
+                        WHERE
+                    (
+                        (dm.to_role='student' AND dm.to_id=s.id)
+                        OR
+                        (dm.from_role='student' AND dm.from_id=s.id)
+                    )
+                    ORDER BY dm.created_at DESC
+                    LIMIT 1
+                ) AS last_time,
+
+                (
+                    SELECT COUNT(*)
+                    FROM direct_messages dm
+                    WHERE dm.to_role='admin'
+                    AND dm.from_role='student'
+                    AND dm.from_id=s.id
+                    AND dm.is_read=0
+                ) AS unread
+
+            FROM students s
+
+            ORDER BY last_time DESC NULLS LAST, s.full_name
         """)
 
     students = cur.fetchall()
@@ -8392,35 +8472,54 @@ def admin_direct_messages():
         if grade not in students_by_grade:
             students_by_grade[grade] = {}
 
-        students_by_grade[grade][s['id']] = s['full_name']
+        students_by_grade[grade][s['id']] = s
 
 
-    for grade in sorted(students:=[*students_by_grade.keys()]):
+    chat_list += """
+    <div class="chat-section">
+    Students
+    </div>
+    """
+
+    for s in students:
+
+        sid = s['id']
+        name = s['full_name']
+        unread = s['unread']
+        last_msg = s['last_message'] or ""
+        last_msg = last_msg[:40] + ("..." if len(last_msg) > 40 else "")
+
+        badge = f"<span class='badge'>{unread}</span>" if unread else ""
+
+        active = "active" if selected == f"student|{sid}" else ""
+
+        time = ""
+        if s['last_time']:
+            time = s['last_time'][11:16]
 
         chat_list += f"""
-        <div class="chat-section">
-            Students — {grade_label(grade)}
-        </div>
-        """
+        <a href="?chat=student|{sid}"
+           class="chat-user student {active}">
 
-        for sid, name in sorted(students_by_grade[grade].items(), key=lambda x: x[1]):
-
-            active = "active" if selected == f"student|{sid}" else ""
-
-            chat_list += f"""
-            <a href="?chat=student|{sid}"
-               class="chat-user student {active}">
+            <div style="display:flex;justify-content:space-between">
 
                 <div class="chat-name">
                     {name}
                 </div>
 
-                <div class="chat-role">
-                    Student
+                <div style="text-align:right">
+                    <div class="mini">{time}</div>
+                    {badge}
                 </div>
 
-            </a>
-            """
+            </div>
+
+            <div class="chat-role">
+                {last_msg}
+            </div>
+
+        </a>
+        """
 
     # =========================
     # LOAD CHAT
@@ -8496,6 +8595,15 @@ def admin_direct_messages():
 
         </form>
         """
+        
+        cur.execute("""
+        UPDATE direct_messages
+        SET is_read=1
+        WHERE to_role='admin'
+        AND from_role=?
+        AND from_id=?
+        """, (role, rid))
+        conn.commit()
 
     # Broadcast message form
     broadcast_form = """
