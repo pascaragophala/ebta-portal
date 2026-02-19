@@ -6940,6 +6940,7 @@ def admin_materials():
         )
 
         if locked:
+
             action = f"""
             <form method='post'
                   action='{url_for('admin_unlock_material', mid=row["id"])}'
@@ -6948,15 +6949,35 @@ def admin_materials():
                 <button class='btn success mini'>Unlock</button>
             </form>
             """
+
         else:
+
             action = f"""
             <form method='post'
                   action='{url_for('admin_relock_material', mid=row["id"])}'
                   style='display:inline'>
                 <input type="hidden" name="page" value="{page_num}">
-                <button class='btn danger mini'>Relock</button>
+                <button class='btn warning mini'>Relock</button>
             </form>
             """
+
+        # ADD DELETE BUTTON (always visible)
+
+        action += f"""
+        <form method='post'
+              action='{url_for('admin_delete_material', mid=row["id"])}'
+              style='display:inline'
+              onsubmit="return confirm('Delete this material permanently?')">
+
+            <input type="hidden" name="page" value="{page_num}">
+
+            <button class='btn danger mini'>
+                Delete
+            </button>
+
+        </form>
+        """
+
 
         trs.append(f"""
         <tr>
@@ -7112,6 +7133,47 @@ def admin_relock_material(mid):
     conn.close()
 
     return redirect(url_for('admin_materials', page=page_num))
+    
+
+@app.post('/admin/materials/<int:mid>/delete')
+def admin_delete_material(mid):
+
+    r = require_admin()
+    if r:
+        return r
+
+    page_num = request.form.get("page", 1)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # delete submissions first
+    cur.execute("""
+        DELETE FROM submissions
+        WHERE material_id=?
+    """, (mid,))
+
+    # delete enrollment files linked via submissions if applicable
+    cur.execute("""
+        DELETE FROM enrollment_files
+        WHERE enrollment_id IN (
+            SELECT enrollment_id
+            FROM submissions
+            WHERE material_id=?
+        )
+    """, (mid,))
+
+    # delete the material itself
+    cur.execute("""
+        DELETE FROM materials
+        WHERE id=?
+    """, (mid,))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('admin_materials', page=page_num))
+
 
 
 
