@@ -256,6 +256,10 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_guardian ON students(guardian_phone)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_email ON students(email)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_school ON students(school)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_subjects_tutor ON tutor_subjects(tutor_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_subjects_tutor ON tutor_subjects(tutor_id)")
+
+
 
 
 
@@ -8225,18 +8229,29 @@ def admin_direct_messages():
 
     if q:
         cur.execute("""
-            SELECT id, full_name, grade
-            FROM tutors
-            WHERE full_name LIKE ?
-            ORDER BY full_name
+            SELECT DISTINCT
+                t.id,
+                t.full_name,
+                s.grade
+            FROM tutors t
+            LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
+            LEFT JOIN subjects s ON s.id = ts.subject_id
+            WHERE t.full_name LIKE ?
+            ORDER BY t.full_name
             LIMIT 50
         """, (f"%{q}%",))
     else:
         cur.execute("""
-            SELECT id, full_name, grade
-            FROM tutors
-            ORDER BY full_name
+            SELECT DISTINCT
+                t.id,
+                t.full_name,
+                s.grade
+            FROM tutors t
+            LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
+            LEFT JOIN subjects s ON s.id = ts.subject_id
+            ORDER BY t.full_name
             LIMIT 50
+
         """)
 
     tutors = cur.fetchall()
@@ -8536,8 +8551,12 @@ def admin_send_dm():
         grade = target.split("|")[1]
 
         cur.execute("""
-        SELECT id FROM tutors
-        WHERE grade=?
+        SELECT DISTINCT t.id
+        FROM tutors t
+        JOIN tutor_subjects ts ON ts.tutor_id = t.id
+        JOIN subjects s ON s.id = ts.subject_id
+        WHERE s.grade=?
+
         """, (grade,))
 
         rows = cur.fetchall()
