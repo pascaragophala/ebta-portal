@@ -8287,7 +8287,6 @@ def admin_direct_messages():
             LEFT JOIN subjects s ON s.id = ts.subject_id
             WHERE t.full_name LIKE ?
             ORDER BY t.full_name
-            LIMIT 50
         """, (f"%{q}%",))
     else:
         cur.execute("""
@@ -8299,7 +8298,6 @@ def admin_direct_messages():
             LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
             LEFT JOIN subjects s ON s.id = ts.subject_id
             ORDER BY t.full_name
-            LIMIT 50
 
         """)
 
