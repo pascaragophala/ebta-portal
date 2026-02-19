@@ -8214,143 +8214,130 @@ def admin_direct_messages():
         return r
 
     selected = request.args.get("chat")
+    q = request.args.get("q", "").strip()
 
     conn = get_db()
     cur = conn.cursor()
 
     # =========================
-    # LOAD CONVERSATIONS
-    # PRIORITY: tutors first
+    # SEARCH tutors
     # =========================
 
-    cur.execute("""
-    SELECT DISTINCT
-        CASE
-            WHEN dm.from_role='tutor' THEN dm.from_id
-            WHEN dm.to_role='tutor' THEN dm.to_id
-        END AS tutor_id,
+    if q:
+        cur.execute("""
+            SELECT id, full_name, grade
+            FROM tutors
+            WHERE full_name LIKE ?
+            ORDER BY full_name
+            LIMIT 50
+        """, (f"%{q}%",))
+    else:
+        cur.execute("""
+            SELECT id, full_name, grade
+            FROM tutors
+            ORDER BY full_name
+            LIMIT 50
+        """)
 
-        t.full_name,
-
-        MAX(dm.created_at) AS last_time
-
-    FROM direct_messages dm
-    JOIN tutors t
-    ON t.id =
-        CASE
-            WHEN dm.from_role='tutor' THEN dm.from_id
-            ELSE dm.to_id
-        END
-
-    WHERE dm.from_role='tutor'
-       OR dm.to_role='tutor'
-
-    GROUP BY tutor_id
-    ORDER BY last_time DESC
-    """)
-
-    tutor_conversations = cur.fetchall()
-
-
-    cur.execute("""
-    SELECT DISTINCT
-        CASE
-            WHEN dm.from_role='student' THEN dm.from_id
-            WHEN dm.to_role='student' THEN dm.to_id
-        END AS student_id,
-
-        s.full_name,
-
-        MAX(dm.created_at) AS last_time
-
-    FROM direct_messages dm
-    JOIN students s
-    ON s.id =
-        CASE
-            WHEN dm.from_role='student' THEN dm.from_id
-            ELSE dm.to_id
-        END
-
-    WHERE dm.from_role='student'
-       OR dm.to_role='student'
-
-    GROUP BY student_id
-    ORDER BY last_time DESC
-    """)
-
-    student_conversations = cur.fetchall()
-
+    tutors = cur.fetchall()
 
     # =========================
-    # BUILD SIDEBAR LIST
+    # SEARCH students
     # =========================
 
-    chat_list = ""
+    if q:
+        cur.execute("""
+            SELECT id, full_name, grade
+            FROM students
+            WHERE full_name LIKE ?
+            ORDER BY full_name
+            LIMIT 50
+        """, (f"%{q}%",))
+    else:
+        cur.execute("""
+            SELECT id, full_name, grade
+            FROM students
+            ORDER BY full_name
+            LIMIT 50
+        """)
 
-    if tutor_conversations:
+    students = cur.fetchall()
 
-        chat_list += "<div class='chat-section'>Tutors</div>"
+    # =========================
+    # SIDEBAR LIST
+    # =========================
 
-        for c in tutor_conversations:
+    chat_list = """
 
-            active = "active" if selected == f"tutor|{c['tutor_id']}" else ""
+    <div class='chat-section'>Broadcast</div>
+
+    <a href='?chat=ALL_TUTORS' class='chat-user'>
+        All Tutors
+    </a>
+
+    <a href='?chat=ALL_STUDENTS' class='chat-user'>
+        All Students
+    </a>
+
+    """
+
+    # Tutors grouped by grade
+    tutor_grades = sorted(set([t['grade'] for t in tutors if t['grade']]))
+
+    for g in tutor_grades:
+
+        chat_list += f"<div class='chat-section'>Tutors — {grade_label(g)}</div>"
+
+        for t in tutors:
+
+            if t['grade'] != g:
+                continue
+
+            active = "active" if selected == f"tutor|{t['id']}" else ""
 
             chat_list += f"""
-            <a href="?chat=tutor|{c['tutor_id']}"
+            <a href="?chat=tutor|{t['id']}"
                class="chat-user {active} tutor">
 
-                <div class="chat-name">
-                    {c['full_name']}
-                </div>
-
-                <div class="chat-role">
-                    Tutor
-                </div>
+                {t['full_name']}
 
             </a>
             """
 
+    # Students grouped by grade
+    student_grades = sorted(set([s['grade'] for s in students if s['grade']]))
 
-    if student_conversations:
+    for g in student_grades:
 
-        chat_list += "<div class='chat-section'>Students</div>"
+        chat_list += f"<div class='chat-section'>Students — {grade_label(g)}</div>"
 
-        for c in student_conversations:
+        for s in students:
 
-            active = "active" if selected == f"student|{c['student_id']}" else ""
+            if s['grade'] != g:
+                continue
+
+            active = "active" if selected == f"student|{s['id']}" else ""
 
             chat_list += f"""
-            <a href="?chat=student|{c['student_id']}"
+            <a href="?chat=student|{s['id']}"
                class="chat-user {active} student">
 
-                <div class="chat-name">
-                    {c['full_name']}
-                </div>
-
-                <div class="chat-role">
-                    Student
-                </div>
+                {s['full_name']}
 
             </a>
             """
 
-
-    if not chat_list:
-        chat_list = "<div class='empty'>No conversations</div>"
-
-
     # =========================
-    # LOAD CHAT MESSAGES
+    # LOAD CHAT
     # =========================
 
     chat_messages = ""
-    target_role = None
-    target_id = None
+    message_input = ""
 
-    if selected:
+    if selected and "|" in selected:
 
-        target_role, target_id = selected.split("|", 1)
-        target_id = int(target_id)
+        role, rid = selected.split("|")
+        rid = int(rid)
 
         cur.execute("""
         SELECT dm.*,
@@ -8377,13 +8364,13 @@ def admin_direct_messages():
         )
 
         ORDER BY dm.created_at ASC
-        """, (target_role, target_id, target_role, target_id))
+        """, (role, rid, role, rid))
 
         msgs = cur.fetchall()
 
         for m in msgs:
 
-            side = "me" if m['from_role']=='admin' else "them"
+            side = "me" if m['from_role']=="admin" else "them"
 
             time = m['created_at'][11:16]
 
@@ -8397,39 +8384,15 @@ def admin_direct_messages():
             </div>
             """
 
-
-        # mark read
-        cur.execute("""
-        UPDATE direct_messages
-        SET is_read=1
-        WHERE to_role='admin'
-        AND from_role=?
-        AND from_id=?
-        """, (target_role, target_id))
-
-
-    conn.commit()
-    conn.close()
-
-
-    # =========================
-    # MESSAGE INPUT
-    # =========================
-
-    message_input = ""
-
-    if selected:
-
         message_input = f"""
         <form method="post"
               action="{url_for('admin_send_dm')}">
 
             <input type="hidden"
                    name="target"
-                   value="{target_role}|{target_id}">
+                   value="{selected}">
 
             <textarea name="body"
-                      placeholder="Type message..."
                       required></textarea>
 
             <button class="btn success">
@@ -8439,37 +8402,84 @@ def admin_direct_messages():
         </form>
         """
 
+    # Broadcast message form
+    broadcast_form = """
+    <div class="card">
 
-    # =========================
-    # PAGE BODY
-    # =========================
+        <h3>Broadcast Message</h3>
+
+        <form method="post"
+              action="/admin/direct-messages/send">
+
+            <select name="target">
+
+                <option value="ALL_TUTORS">All Tutors</option>
+
+                <option value="ALL_STUDENTS">All Students</option>
+
+                <optgroup label="Tutors by grade">
+                    <option value="GRADE_TUTORS|G8">Grade 8 tutors</option>
+                    <option value="GRADE_TUTORS|G9">Grade 9 tutors</option>
+                    <option value="GRADE_TUTORS|G10">Grade 10 tutors</option>
+                    <option value="GRADE_TUTORS|G11">Grade 11 tutors</option>
+                    <option value="GRADE_TUTORS|G12">Grade 12 tutors</option>
+                </optgroup>
+
+                <optgroup label="Students by grade">
+                    <option value="GRADE_STUDENTS|G8">Grade 8 students</option>
+                    <option value="GRADE_STUDENTS|G9">Grade 9 students</option>
+                    <option value="GRADE_STUDENTS|G10">Grade 10 students</option>
+                    <option value="GRADE_STUDENTS|G11">Grade 11 students</option>
+                    <option value="GRADE_STUDENTS|G12">Grade 12 students</option>
+                </optgroup>
+
+            </select>
+
+            <textarea name="body" required></textarea>
+
+            <button class="btn success">
+                Send Broadcast
+            </button>
+
+        </form>
+
+    </div>
+    """
+
+    conn.close()
 
     body = f"""
     {admin_nav()}
 
-    <section class="card">
+    <section class="grid">
 
-        <h1>Direct Messages</h1>
+        {broadcast_form}
 
-        <div class="chat-layout">
+        <div class="card">
 
-            <div class="chat-list">
+            <form>
 
-                {chat_list}
+                <input name="q"
+                       placeholder="Search tutors or students"
+                       value="{q}">
 
-            </div>
+            </form>
 
-            <div class="chat-window">
+            <div class="chat-layout">
 
-                <div class="chat-messages">
-
-                    {chat_messages or "<div class='empty'>Select conversation</div>"}
-
+                <div class="chat-list">
+                    {chat_list}
                 </div>
 
-                <div class="chat-input">
+                <div class="chat-window">
 
-                    {message_input}
+                    <div class="chat-messages">
+                        {chat_messages or "Select conversation"}
+                    </div>
+
+                    <div class="chat-input">
+                        {message_input}
+                    </div>
 
                 </div>
 
@@ -8483,7 +8493,6 @@ def admin_direct_messages():
     return page("Direct Messages", body)
 
 
-
 @app.post('/admin/direct-messages/send')
 def admin_send_dm():
 
@@ -8491,57 +8500,85 @@ def admin_send_dm():
     if r:
         return r
 
-    page_num = request.form.get("page", 1)
-
-    target = request.form.get('target', '')
-    body = request.form.get('body', '').strip()
-
-    if not body:
-        return page("Error", card_msg("Message cannot be empty."))
+    target = request.form.get('target')
+    body = request.form.get('body').strip()
 
     conn = get_db()
     cur = conn.cursor()
 
     now = now_utc_iso()
 
+    # ALL tutors
     if target == "ALL_TUTORS":
 
         cur.execute("SELECT id FROM tutors")
-        tutors = cur.fetchall()
+        rows = cur.fetchall()
 
         cur.executemany("""
-            INSERT INTO direct_messages
-            (from_role, from_id, to_role, to_id, subject_id, body, created_at)
-            VALUES ('admin', 0, 'tutor', ?, NULL, ?, ?)
-        """, [(t['id'], body, now) for t in tutors])
+        INSERT INTO direct_messages
+        VALUES(NULL,'admin',0,'tutor',?,NULL,?, ?,0)
+        """, [(r['id'], body, now) for r in rows])
 
+    # ALL students
     elif target == "ALL_STUDENTS":
 
         cur.execute("SELECT id FROM students")
-        students = cur.fetchall()
+        rows = cur.fetchall()
 
         cur.executemany("""
-            INSERT INTO direct_messages
-            (from_role, from_id, to_role, to_id, subject_id, body, created_at)
-            VALUES ('admin', 0, 'student', ?, NULL, ?, ?)
-        """, [(s['id'], body, now) for s in students])
+        INSERT INTO direct_messages
+        VALUES(NULL,'admin',0,'student',?,NULL,?, ?,0)
+        """, [(r['id'], body, now) for r in rows])
 
-    else:
+    # tutors by grade
+    elif target.startswith("GRADE_TUTORS|"):
 
-        role, id_str = target.split('|', 1)
-        rid = int(id_str)
+        grade = target.split("|")[1]
 
         cur.execute("""
-            INSERT INTO direct_messages
-            (from_role, from_id, to_role, to_id, subject_id, body, created_at)
-            VALUES ('admin', 0, ?, ?, NULL, ?, ?)
+        SELECT id FROM tutors
+        WHERE grade=?
+        """, (grade,))
+
+        rows = cur.fetchall()
+
+        cur.executemany("""
+        INSERT INTO direct_messages
+        VALUES(NULL,'admin',0,'tutor',?,NULL,?, ?,0)
+        """, [(r['id'], body, now) for r in rows])
+
+    # students by grade
+    elif target.startswith("GRADE_STUDENTS|"):
+
+        grade = target.split("|")[1]
+
+        cur.execute("""
+        SELECT id FROM students
+        WHERE grade=?
+        """, (grade,))
+
+        rows = cur.fetchall()
+
+        cur.executemany("""
+        INSERT INTO direct_messages
+        VALUES(NULL,'admin',0,'student',?,NULL,?, ?,0)
+        """, [(r['id'], body, now) for r in rows])
+
+    # individual
+    else:
+
+        role, rid = target.split("|")
+
+        cur.execute("""
+        INSERT INTO direct_messages
+        VALUES(NULL,'admin',0,?, ?,NULL,?, ?,0)
         """, (role, rid, body, now))
 
     conn.commit()
     conn.close()
 
-    return redirect(url_for('admin_direct_messages', page=page_num))
-    
+    return redirect(url_for('admin_direct_messages'))
+
     
 @app.post('/admin/message-tutor')
 def admin_message_tutor():
