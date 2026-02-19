@@ -262,10 +262,6 @@ def init_db():
 
 
 
-
-
-
-
     cur.execute("""
     CREATE TABLE IF NOT EXISTS submissions(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
