@@ -1488,6 +1488,59 @@ background:#fff;
 
 }
 
+.chat-list {
+    width: 320px;
+    max-height: 600px;
+    overflow-y: auto;
+    border-right: 1px solid #ddd;
+    padding: 8px;
+}
+
+.chat-section {
+    font-size: 12px;
+    font-weight: 700;
+    color: #64748b;
+    padding: 8px 6px;
+    margin-top: 10px;
+    border-bottom: 1px solid #eee;
+}
+
+.chat-user {
+    display: block;
+    padding: 10px;
+    border-radius: 8px;
+    text-decoration: none;
+    margin-bottom: 4px;
+    transition: background 0.15s;
+}
+
+.chat-user:hover {
+    background: #f1f5f9;
+}
+
+.chat-user.active {
+    background: #e0f2fe;
+}
+
+.chat-name {
+    font-weight: 600;
+    font-size: 14px;
+    color: #0f172a;
+}
+
+.chat-role {
+    font-size: 12px;
+    color: #64748b;
+}
+
+.chat-user.tutor .chat-name {
+    color: #2563eb;
+}
+
+.chat-user.student .chat-name {
+    color: #059669;
+}
+
 
 
 </style>
@@ -8295,22 +8348,29 @@ def admin_direct_messages():
     # Tutors grouped by grade
     tutor_grades = sorted(set([t['grade'] for t in tutors if t['grade']]))
 
-    for g in tutor_grades:
+    for grade in sorted(tutors_by_grade.keys()):
 
-        chat_list += f"<div class='chat-section'>Tutors — {grade_label(g)}</div>"
+        chat_list += f"""
+        <div class="chat-section">
+            Tutors — {grade_label(grade)}
+        </div>
+        """
 
-        for t in tutors:
+        for tid, name in sorted(tutors_by_grade[grade].items(), key=lambda x: x[1]):
 
-            if t['grade'] != g:
-                continue
-
-            active = "active" if selected == f"tutor|{t['id']}" else ""
+            active = "active" if selected == f"tutor|{tid}" else ""
 
             chat_list += f"""
-            <a href="?chat=tutor|{t['id']}"
-               class="chat-user {active} tutor">
+            <a href="?chat=tutor|{tid}"
+               class="chat-user tutor {active}">
 
-                {t['full_name']}
+                <div class="chat-name">
+                    {name}
+                </div>
+
+                <div class="chat-role">
+                    Tutor
+                </div>
 
             </a>
             """
@@ -8318,22 +8378,40 @@ def admin_direct_messages():
     # Students grouped by grade
     student_grades = sorted(set([s['grade'] for s in students if s['grade']]))
 
-    for g in student_grades:
+    students_by_grade = {}
 
-        chat_list += f"<div class='chat-section'>Students — {grade_label(g)}</div>"
+    for s in students:
+        grade = s['grade'] or "OTHER"
 
-        for s in students:
+        if grade not in students_by_grade:
+            students_by_grade[grade] = {}
 
-            if s['grade'] != g:
-                continue
+        students_by_grade[grade][s['id']] = s['full_name']
 
-            active = "active" if selected == f"student|{s['id']}" else ""
+
+    for grade in sorted(students:=[*students_by_grade.keys()]):
+
+        chat_list += f"""
+        <div class="chat-section">
+            Students — {grade_label(grade)}
+        </div>
+        """
+
+        for sid, name in sorted(students_by_grade[grade].items(), key=lambda x: x[1]):
+
+            active = "active" if selected == f"student|{sid}" else ""
 
             chat_list += f"""
-            <a href="?chat=student|{s['id']}"
-               class="chat-user {active} student">
+            <a href="?chat=student|{sid}"
+               class="chat-user student {active}">
 
-                {s['full_name']}
+                <div class="chat-name">
+                    {name}
+                </div>
+
+                <div class="chat-role">
+                    Student
+                </div>
 
             </a>
             """
