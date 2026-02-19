@@ -7975,6 +7975,22 @@ def admin_messages():
     <section class='card'>
 
         <h1>Admin Inbox</h1>
+        <div class="toolbar">
+
+            <form method="post"
+                  action="{url_for('admin_messages_resolve_all')}"
+                  onsubmit="return confirm('Resolve ALL tickets?')">
+
+                <input type="hidden" name="q" value="{q}">
+
+                <button class="btn success mini">
+                    Resolve All
+                </button>
+
+            </form>
+
+        </div>
+
 
         <form method="get" class="toolbar">
             <input name="q" class="pill" placeholder="Search..." value="{q}">
@@ -8025,6 +8041,39 @@ def admin_message_resolve(mid:int):
     conn.close()
 
     return redirect(url_for('admin_messages', page=page_num, q=q))
+    
+
+@app.post('/admin/messages/resolve-all')
+def admin_messages_resolve_all():
+
+    r = require_admin()
+    if r:
+        return r
+
+    q = request.form.get("q", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    if q:
+        cur.execute("""
+            UPDATE messages
+            SET resolved = 1
+            WHERE resolved = 0
+            AND (kind LIKE ? OR payload LIKE ?)
+        """, (f"%{q}%", f"%{q}%"))
+    else:
+        cur.execute("""
+            UPDATE messages
+            SET resolved = 1
+            WHERE resolved = 0
+        """)
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_messages", q=q))
+
 
 
 
