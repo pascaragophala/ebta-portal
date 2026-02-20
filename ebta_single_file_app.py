@@ -3681,7 +3681,7 @@ def student_home():
     active_months = {r['month'] for r in cur.fetchall()}
     
     month_selector = f"""
-    <div class="card soft" style="margin-bottom:14px;border-left:5px solid #3b82f6">
+    <div class="card soft" style="margin-bottom:14px;border-left:5px solid #25D366">
 
         <div style="font-weight:600;font-size:16px;margin-bottom:6px">
             Switch Month
@@ -3702,7 +3702,7 @@ def student_home():
                         padding:12px;
                         font-size:16px;
                         border-radius:10px;
-                        border:2px solid #3b82f6;
+                        border:2px solid #25D366;
                         background:#fff;
                         cursor:pointer;
                     ">
