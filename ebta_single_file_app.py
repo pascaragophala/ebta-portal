@@ -3850,6 +3850,8 @@ def student_home():
     # Materials & Assignments grouped by subject
     materials_html = "<div class='empty'>No materials yet.</div>"
 
+    assignments = []
+    
     if has_active_enrollment and active_sub_ids:
 
         cur.execute(f"""
@@ -3864,7 +3866,6 @@ def student_home():
         mats = cur.fetchall()
         
         if mats:
-            assignments = []
             grouped = {}
 
             for m in mats:
