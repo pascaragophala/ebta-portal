@@ -1933,6 +1933,9 @@ def page(title, body_html, extra_head="", extra_js=""):
 
         if is_student():
             sid = is_student()
+            
+            month = get_active_month('student')
+            
             cur.execute("SELECT COUNT(*) FROM enrollments WHERE student_id=? AND month=? AND status='ACTIVE'", (sid, month))
             active_subjects = cur.fetchone()[0] or 0
             cur.execute("""
@@ -1965,6 +1968,8 @@ def page(title, body_html, extra_head="", extra_js=""):
             </div>"""
         elif is_tutor():
             tid = is_tutor()
+            month = get_active_month('tutor')
+            
             cur.execute("SELECT COUNT(*) FROM tutor_subjects WHERE tutor_id=?", (tid,))
             subs = cur.fetchone()[0] or 0
             cur.execute("""
@@ -5472,12 +5477,61 @@ def tutor_home():
 
     body=fr"""
     <section class='grid'>
+
     <div class='card'>
+
         <h1>Welcome, {session.get('tutor_name','Tutor')}</h1>
-        <p class='muted'>
-            Viewing: {pretty_month_label(month)} {month_selector}
-        </p>
-        <div>{assigned_list}</div>
+
+        <div class="card soft"
+             style="margin-top:12px;border-left:5px solid #3b82f6">
+
+            <div style="font-weight:600;font-size:16px;margin-bottom:4px">
+                Viewing Month
+            </div>
+
+            <div style="font-size:20px;font-weight:700;margin-bottom:8px">
+                {pretty_month_label(month)}
+            </div>
+
+            <div class="mini muted" style="margin-bottom:10px">
+                Switch month to new view
+            </div>
+
+            <form method="post"
+                  action="{url_for('tutor_set_month')}">
+
+                <select name="month"
+                        onchange="this.form.submit()"
+                        style="
+                            width:100%;
+                            padding:12px;
+                            font-size:16px;
+                            border-radius:10px;
+                            border:2px solid #3b82f6;
+                            background:#fff;
+                            cursor:pointer;
+                        ">
+
+                    {''.join(
+                        f"<option value='{m}' "
+                        f"{'selected' if m == month else ''}>"
+                        f"{'✓ ' if m in active_months else ''}"
+                        f"{pretty_month_label(m)}"
+                        f"{'' if m in active_months else ' (no students)'}"
+                        f"</option>"
+                        for m in all_months
+                    )}
+
+                </select>
+
+            </form>
+
+        </div>
+
+        <div style="margin-top:12px">
+            {assigned_list}
+        </div>
+
     </div>
 
 
@@ -5601,7 +5655,7 @@ def tutor_assignment_manage(mid:int):
     total = m['max_points'] if m['max_points'] else 100
 
     # active students in subject (this month)
-    month=get_setting('current_month')
+    month = get_active_month('tutor')
     cur.execute("""SELECT st.id, st.full_name
                 FROM enrollments e JOIN students st ON st.id=e.student_id
                 WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
@@ -5768,7 +5822,7 @@ def tutor_message_student():
     conn = get_db()
     cur = conn.cursor()
 
-    month = get_setting('current_month')
+    month = get_active_month('tutor')
     now = now_utc_iso()
 
     # ========================
@@ -5923,7 +5977,7 @@ def tutor_session_attendance(sid:int):
     cur = conn.cursor()
 
     # Get current academic month (FIX)
-    month = get_setting('current_month')
+    month = get_active_month('tutor')
 
     # Session + subject
     cur.execute("""
