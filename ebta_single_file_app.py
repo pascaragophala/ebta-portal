@@ -3681,19 +3681,59 @@ def student_home():
     active_months = {r['month'] for r in cur.fetchall()}
     
     month_selector = f"""
-    <form method="post" action="{url_for('student_set_month')}" class="inlineform">
-        <select name="month" onchange="this.form.submit()">
-            {''.join(
-                f"<option value='{m}' "
-                f"{'selected' if m == month else ''}>"
-                f"{pretty_month_label(m)}"
-                f"{'' if m in active_months else ' (not enrolled)'}"
-                f"</option>"
-                for m in all_months
-            )}
-        </select>
-    </form>
+    <div class="card soft" style="margin-bottom:14px;border-left:5px solid #3b82f6">
+
+        <div style="font-weight:600;font-size:16px;margin-bottom:6px">
+            Switch Month
+        </div>
+
+        <div class="mini muted" style="margin-bottom:10px">
+            Select a month to view your subjects, assignments, and sessions.
+            <br>
+            Green = enrolled • Grey = not enrolled
+        </div>
+
+        <form method="post" action="{url_for('student_set_month')}">
+
+            <select name="month"
+                    onchange="this.form.submit()"
+                    style="
+                        width:100%;
+                        padding:12px;
+                        font-size:16px;
+                        border-radius:10px;
+                        border:2px solid #3b82f6;
+                        background:#fff;
+                        cursor:pointer;
+                    ">
+
+                {''.join(
+                    f"<option value='{m}' "
+                    f"{'selected' if m == month else ''}>"
+                    f"{'✓ ' if m in active_months else ''}"
+                    f"{pretty_month_label(m)}"
+                    f"{'' if m in active_months else ' (not enrolled)'}"
+                    f"</option>"
+                    for m in all_months
+                )}
+
+            </select>
+
+        </form>
+
+    </div>
     """
+    
+    # Add quick button to jump to current enrolled month
+    if system_month in active_months and month != system_month:
+        month_selector += f"""
+        <form method="post" action="{url_for('student_set_month')}" style="margin-top:8px">
+            <input type="hidden" name="month" value="{system_month}">
+            <button class="btn success mini">
+                Go to your enrolled month ({pretty_month_label(system_month)})
+            </button>
+        </form>
+        """
 
     # Enrollments this month
     cur.execute("""
@@ -4339,9 +4379,11 @@ def student_home():
     <section class='grid'>
     <div class='card'>
         <h1>Welcome, {session.get('student_name','Student')}</h1>
-            <p class='muted'>
-                Viewing: {pretty_month_label(month)} {month_selector}
+            <p class='muted' style="margin-bottom:6px">
+                Currently viewing: <b>{pretty_month_label(month)}</b>
             </p>
+
+            {month_selector}
 
         <h2>Your Enrollments</h2>
         {enr_html}
