@@ -4483,33 +4483,91 @@ def tutor_set_month():
 
 @app.post('/student/assignment/<int:mid>/submit')
 def student_submit_assignment(mid:int):
-    r=require_student()
-    if r: return r
-    sid=is_student(); file=request.files.get('file')
-    if not file or not file.filename: return page("Error", card_msg("File required."))
-    conn=get_db(); cur=conn.cursor()
-    month=get_setting('current_month')
-    cur.execute("SELECT subject_id,is_assignment,kind,month,due_date FROM materials WHERE id=?", (mid,))
-    m=cur.fetchone()
-    if not m or (m['kind']!='assignment' and m['is_assignment']!=1) or m['month']!=month:
-        conn.close(); return page("Error", card_msg("Assignment not available."))
-    cur.execute("SELECT 1 FROM enrollments WHERE student_id=? AND subject_id=? AND month=? AND status='ACTIVE'", (sid, m['subject_id'], month))
-    if not cur.fetchone():
-        conn.close(); return page("Error", card_msg("You are not ACTIVE in this subject."))
+
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+    file = request.files.get('file')
+
+    if not file or not file.filename:
+        return page("Error", card_msg("Please select a file."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Get assignment
+    cur.execute("""
+        SELECT id, subject_id, month, due_date,
+               is_assignment, kind
+        FROM materials
+        WHERE id=?
+    """, (mid,))
+    m = cur.fetchone()
+
+    # Validate assignment exists and is assignment
+    if not m or (m['kind'] != 'assignment' and m['is_assignment'] != 1):
+        conn.close()
+        return page("Error", card_msg("Invalid assignment."))
+
+    assignment_month = m['month']
+
+    # Check student was ACTIVE in that assignment month
+    cur.execute("""
+        SELECT 1
+        FROM enrollments
+        WHERE student_id=?
+        AND subject_id=?
+        AND month=?
+        AND status='ACTIVE'
+        LIMIT 1
+    """, (sid, m['subject_id'], assignment_month))
+
+    enrolled = cur.fetchone()
+
+    if not enrolled:
+        conn.close()
+        return page("Error", card_msg(
+            f"You were not enrolled for this subject in {pretty_month_label(assignment_month)}."
+        ))
+
+    # Check due date ONLY (NOT system month)
     if m['due_date']:
         try:
-            end=datetime.datetime.fromisoformat(m['due_date']+"T23:59:59+00:00")
-            if datetime.datetime.now(datetime.timezone.utc) > end:
-                conn.close(); return page("Closed", card_msg("Submission window has closed."))
-        except Exception: pass
-    safe=f"{int(datetime.datetime.now().timestamp())}_{sid}_{secure_name(file.filename)}"
-    dest=SUBMISSIONS_DIR/safe; file.save(dest)
-    path=f"/submission-files/{safe}"
-    now=now_utc_iso()
-    cur.execute("INSERT OR REPLACE INTO submissions(material_id,student_id,file_path,submitted_at) VALUES(?,?,?,?)",
-                (mid, sid, path, now))
-    conn.commit(); conn.close()
-    return page("Submitted", card_msg("Your assignment was submitted."))
+            end = datetime.datetime.fromisoformat(
+                m['due_date'] + "T23:59:59+00:00"
+            )
+            now = datetime.datetime.now(datetime.timezone.utc)
+
+            if now > end:
+                conn.close()
+                return page("Closed", card_msg("Submission window has closed."))
+
+        except Exception:
+            pass
+
+    # Save submission
+    safe = f"{int(datetime.datetime.now().timestamp())}_{sid}_{secure_name(file.filename)}"
+
+    dest = SUBMISSIONS_DIR / safe
+
+    file.save(dest)
+
+    path = f"/submission-files/{safe}"
+
+    now = now_utc_iso()
+
+    cur.execute("""
+        INSERT OR REPLACE INTO submissions
+        (material_id, student_id, file_path, submitted_at)
+        VALUES (?, ?, ?, ?)
+    """, (mid, sid, path, now))
+
+    conn.commit()
+    conn.close()
+
+    return page("Submitted", card_msg("Assignment submitted successfully."))
 
 # Student → Tutor message
 @app.post('/student/message')
