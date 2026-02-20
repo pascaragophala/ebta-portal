@@ -3653,13 +3653,23 @@ def student_logout():
 def get_active_month(role):
     """
     Returns the effective month for the current session.
-    Falls back to admin global month if no override is set.
+
+    Priority:
+    1. User-selected month (session)
+    2. Real current calendar month
     """
+
+    # Real calendar month in SA timezone
+    now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))
+    real_month = now.strftime("%Y-%m")
+
     if role == 'student':
-        return session.get('student_month') or get_setting('current_month')
+        return session.get('student_month') or real_month
+
     if role == 'tutor':
-        return session.get('tutor_month') or get_setting('current_month')
-    return get_setting('current_month')
+        return session.get('tutor_month') or real_month
+
+    return real_month
 
 @app.get('/student')
 def student_home():
@@ -4824,6 +4834,19 @@ def tutor_home():
         </select>
     </form>
     """
+    
+    # ADD THIS BLOCK HERE time slots
+    real_month = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).strftime("%Y-%m")
+
+    if month != real_month:
+        month_selector += f"""
+        <form method="post" action="{url_for('tutor_set_month')}" style="margin-top:8px">
+            <input type="hidden" name="month" value="{real_month}">
+            <button class="btn success mini">
+                Go to current month ({pretty_month_label(real_month)})
+            </button>
+        </form>
+        """
 
     # Assigned subjects
     cur.execute("""SELECT s.id AS subject_id, s.name AS subject_name, s.grade
@@ -5560,6 +5583,8 @@ def tutor_home():
     </section>
     """
     return page("Tutor Portal", body)
+
+
 
 @app.post('/tutor/upload')
 def tutor_upload():
