@@ -36,10 +36,6 @@ QR_DIR = Path(BASE_DATA_DIR) / "qr"
 for d in (UPLOADS_DIR, MATERIALS_DIR, SUBMISSIONS_DIR, QR_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-# NOW initialize DB
-with app.app_context():
-    init_db()
-
 LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/SqocnYt.png")
 # =============================================================
 
@@ -556,7 +552,9 @@ def init_db():
     conn.close()
 
 
-
+# Initialize database AFTER function exists
+with app.app_context():
+    init_db()
 
 
 # ===================== Registration helper/table ==============
