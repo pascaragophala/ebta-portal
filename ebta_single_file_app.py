@@ -5078,7 +5078,7 @@ def tutor_home():
                 </div>
 
                 <div class="mini muted" style="margin-bottom:8px">
-                    Paste the Google Meet, Zoom, or YouTube recording link
+                    Paste the Google drive link, YouTube recording link
                 </div>
 
                 <input name='youtube'
