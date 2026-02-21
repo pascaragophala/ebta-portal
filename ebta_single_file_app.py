@@ -5036,21 +5036,122 @@ def tutor_home():
     subjects_options="".join([f"<option value='{r['subject_id']}'>{grade_label(r['grade'])} — {r['subject_name']}</option>" for r in subs]) or "<option value=''>No assigned subjects</option>"
 
     upload_block=f"""
-    <div class='card'>
-        <h2>Upload materials (Month: {month})</h2>
-        <form method='post' action='{url_for('tutor_upload')}' enctype='multipart/form-data' class='grid'>
-        <div><label>Subject</label><select name='subject_id' required>{subjects_options}</select></div>
-        <div><label>Title</label><input name='title' required/></div>
-        <div><label>Upload File</label><input type='file' name='file' accept='.pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.zip'/></div>
-        <div><label>Video Link</label><input name='youtube' placeholder='https://lesson1.com/...'/></div>
-        <div class='grid' style='grid-template-columns:1fr 1fr 1fr;gap:10px'>
-            <label style='display:flex;align-items:center;gap:8px'><input type='checkbox' name='is_assignment'/> Mark as assignment</label>
-            <div><label>Due date (YYYY-MM-DD)</label><input name='due' placeholder='e.g. 2025-10-01'/></div>
-            <div><label>Out of (default 100)</label><input name='max_points' type='number' min='1' max='1000' placeholder='100'/></div>
+    <div class='card' style="border-left:5px solid #22c55e">
+
+        <h2 style="margin-bottom:6px">
+            Upload Teaching Material
+        </h2>
+
+        <div class="mini muted" style="margin-bottom:16px">
+            Choose what you are uploading. Recordings, documents, and assignments are organised automatically.
         </div>
-        <button class='btn'>Save</button>
-        <p class='muted mini'>Attach a file and/or paste a Video link. Assignments show first to students.</p>
+
+        <form method='post'
+              action='{url_for('tutor_upload')}'
+              enctype='multipart/form-data'>
+
+            <!-- SUBJECT -->
+            <div style="margin-bottom:14px">
+                <label><b>Subject</b></label>
+                <select name='subject_id' required style="width:100%">
+                    {subjects_options}
+                </select>
+            </div>
+
+
+            <!-- TITLE -->
+            <div style="margin-bottom:18px">
+                <label><b>Title</b></label>
+                <input name='title'
+                       placeholder="Example: Photosynthesis Lesson 1"
+                       required
+                       style="width:100%">
+            </div>
+
+
+            <!-- RECORDING SECTION -->
+            <div class="card soft"
+                 style="border-left:5px solid #2563eb;margin-bottom:16px">
+
+                <div style="font-weight:600">
+                    🎥 Session Recording
+                </div>
+
+                <div class="mini muted" style="margin-bottom:8px">
+                    Paste the Google Meet, Zoom, or YouTube recording link
+                </div>
+
+                <input name='youtube'
+                       placeholder="https://youtube.com/..."
+                       style="width:100%">
+            </div>
+
+
+            <!-- DOCUMENT SECTION -->
+            <div class="card soft"
+                 style="border-left:5px solid #16a34a;margin-bottom:16px">
+
+                <div style="font-weight:600">
+                    📄 Document / Notes
+                </div>
+
+                <div class="mini muted" style="margin-bottom:8px">
+                    Upload slides, notes, worksheets, or resources
+                </div>
+
+                <input type='file'
+                       name='file'
+                       accept='.pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.ppt,.pptx'
+                       style="width:100%">
+            </div>
+
+
+            <!-- ASSIGNMENT SECTION -->
+            <div class="card soft"
+                 style="border-left:5px solid #f59e0b;margin-bottom:16px">
+
+                <div style="font-weight:600;margin-bottom:8px">
+                    📝 Assignment (optional)
+                </div>
+
+                <label style="display:flex;gap:8px;margin-bottom:10px">
+                    <input type='checkbox' name='is_assignment'>
+                    Mark this upload as an assignment
+                </label>
+
+                <div class="grid"
+                     style="grid-template-columns:1fr 1fr;gap:10px">
+
+                    <div>
+                        <label class="mini muted">Due date</label>
+                        <input name='due'
+                               type="date"
+                               style="width:100%">
+                    </div>
+
+                    <div>
+                        <label class="mini muted">Total marks</label>
+                        <input name='max_points'
+                               type='number'
+                               min='1'
+                               max='1000'
+                               placeholder='100'
+                               style="width:100%">
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <!-- SUBMIT -->
+            <button class='btn success'
+                    style="width:100%;padding:14px;font-size:16px">
+                Upload Material
+            </button>
+
         </form>
+
     </div>
     """
 
