@@ -3930,7 +3930,8 @@ def student_home():
                 if subject_key not in grouped:
                     grouped[subject_key] = {
                         "assignments": [],
-                        "materials": []
+                        "recordings": [],
+                        "documents": []
                     }
 
                 is_assignment = (m['is_assignment']==1 or m['kind']=='assignment')
@@ -3944,20 +3945,31 @@ def student_home():
                     f"<a class='links' target='_blank' href='{m['youtube_url']}'>Open</a>"
                 )
 
+                icon = "🎥 " if is_recording else "📄 "
+
                 row_html = f"""
                 <tr>
-                    <td>{m['title']} {"<span class='badge'>assignment</span>" if is_assignment else ""}</td>
+                    <td>{icon}{m['title']} {"<span class='badge'>assignment</span>" if is_assignment else ""}</td>
                     <td>{m['tutor_name']}</td>
                     <td>{when}</td>
                     <td>{link}</td>
                 </tr>
                 """
 
+                is_recording = bool(m['youtube_url'])
+
                 if is_assignment:
+
                     grouped[subject_key]["assignments"].append(row_html)
-                    assignments.append(m)   # <-- ADD THIS LINE
+                    assignments.append(m)
+
+                elif is_recording:
+
+                    grouped[subject_key]["recordings"].append(row_html)
+
                 else:
-                    grouped[subject_key]["materials"].append(row_html)
+
+                    grouped[subject_key]["documents"].append(row_html)
 
 
             blocks = []
@@ -3992,23 +4004,49 @@ def student_home():
                     </div>
                     """
 
-                if content["materials"]:
+                if content["recordings"]:
 
                     subject_block += f"""
-                    <h4 class="mini muted" style="margin-top:12px">Materials</h4>
+                    <h4 class="mini muted" style="margin-top:12px;color:#2563eb">
+                        Session Recordings
+                    </h4>
 
                     <div class="scroll-x">
                     <table>
                     <thead>
                         <tr>
-                            <th>Title</th>
+                            <th>Recording</th>
                             <th>Tutor</th>
                             <th>Uploaded</th>
-                            <th>Link</th>
+                            <th>Watch</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {''.join(content["materials"])}
+                        {''.join(content["recordings"])}
+                    </tbody>
+                    </table>
+                    </div>
+                    """
+
+                if content["documents"]:
+
+                    subject_block += f"""
+                    <h4 class="mini muted" style="margin-top:12px;color:#16a34a">
+                        Documents & Notes
+                    </h4>
+
+                    <div class="scroll-x">
+                    <table>
+                    <thead>
+                        <tr>
+                            <th>Document</th>
+                            <th>Tutor</th>
+                            <th>Uploaded</th>
+                            <th>Open</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {''.join(content["documents"])}
                     </tbody>
                     </table>
                     </div>
