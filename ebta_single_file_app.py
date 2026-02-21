@@ -6358,11 +6358,12 @@ def admin_nav():
         <a class="btn secondary" href="{url_for('admin_groups')}">Groups</a>
         <a class="btn secondary" href="{url_for('admin_sessions')}">Sessions</a>
         <a class="btn secondary" href="{url_for('admin_messages')}">Inbox</a>
-        <a class="btn secondary" href="{url_for('admin_direct_messages')}">Direct Msgs</a>
         <a class="btn secondary" href="{url_for('admin_settings')}">Settings</a>
         <a class="btn secondary" href="{url_for('admin_uploads_control')}">Uploads Control</a>
         <a class="btn secondary" href="{url_for('admin_materials')}">Unlock Uploads</a>
+        <a class="btn secondary" href="{url_for('admin_direct_messages')}">Direct Msgs</a>
         <a class="btn secondary" href="{url_for('admin_sms_dashboard')}">SMS Dashboard</a>
+        <a class="btn secondary" href="{url_for('admin_process_sms')}">Processed SMS</a>
 
     </nav>
     """
