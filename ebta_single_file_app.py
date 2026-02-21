@@ -8158,7 +8158,7 @@ def admin_sessions():
                 }
             </td>
 
-            <td>
+            <td style="white-space:nowrap">
                 <a class='links' href='{url_for('session_qr', id=r['id'])}'>QR</a>
 
                 ·
