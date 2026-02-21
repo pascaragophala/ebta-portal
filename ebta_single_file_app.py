@@ -5860,7 +5860,7 @@ def tutor_upload():
                 VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                 (subject_id, tid, month, title, kind, file_path, youtube if youtube else None, now, is_assignment, due, max_points))
     conn.commit(); conn.close()
-    return page("Uploaded", card_msg("Saved. Students with ACTIVE enrollments will see it."))
+    return redirect(url_for('tutor_home'))
 
 @app.post('/tutor/materials/<int:mid>/delete')
 def tutor_delete_material(mid:int):
@@ -5880,7 +5880,7 @@ def tutor_delete_material(mid:int):
         pass
     cur.execute("DELETE FROM materials WHERE id=?", (mid,))
     conn.commit(); conn.close()
-    return page("Deleted", card_msg("Upload removed."))
+    return redirect(url_for('tutor_home'))
 
 # Tutor: manage one assignment (submissions + grading)
 @app.get('/tutor/assignment/<int:mid>')
