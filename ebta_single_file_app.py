@@ -3914,9 +3914,10 @@ def student_home():
             FROM materials m
             JOIN subjects sub ON sub.id=m.subject_id
             JOIN tutors t ON t.id=m.tutor_id
-            WHERE m.month=? AND m.subject_id IN ({','.join('?'*len(active_sub_ids))})
+            WHERE m.subject_id IN ({','.join('?'*len(active_sub_ids))})
+              AND m.month IN (?, ?)
             ORDER BY sub.grade, sub.name, m.created_at DESC
-        """, (month, *active_sub_ids))
+        """, (*active_sub_ids, month, system_month))
 
         mats = cur.fetchall()
         
@@ -5794,7 +5795,7 @@ def tutor_home():
 def tutor_upload():
     r=require_tutor()
     if r: return r
-    tid=is_tutor(); month=get_setting('current_month')
+    tid=is_tutor(); month = get_active_month('tutor')
     subject_id=request.form.get('subject_id','').strip()
     title=request.form.get('title','').strip()
     youtube=request.form.get('youtube','').strip()
