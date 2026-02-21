@@ -6836,19 +6836,30 @@ def admin_students():
             <td>{nz(s['school'])}</td>
             <td>{nz(s['email'])}</td>
             <td>{pin}</td>
-            <td>
+            <td style="white-space:nowrap">
+
                 <a class='btn mini'
                    href='{url_for("admin_student_edit", sid=s["id"])}'>
                    Edit
                 </a>
-                
-                <form method='post' action='{url_for('admin_student_reset_pin', sid=s['id'])}' style='display:inline'>
-                    <button class='btn success'>Reset PIN</button>
+
+                <form method='post'
+                      action='{url_for('admin_student_reset_pin', sid=s['id'])}'
+                      style='display:inline'>
+                    <button class='btn success mini'>
+                        Reset
+                    </button>
                 </form>
-                <form method='post' action='{url_for('admin_student_delete', sid=s['id'])}' style='display:inline'
+
+                <form method='post'
+                      action='{url_for('admin_student_delete', sid=s['id'])}'
+                      style='display:inline'
                       onsubmit='return confirm("Delete this student?")'>
-                    <button class='btn danger'>Delete</button>
+                    <button class='btn danger mini'>
+                        Delete
+                    </button>
                 </form>
+
             </td>
         </tr>
         """)
@@ -7010,11 +7021,15 @@ def admin_student_edit(sid):
             </div>
 
             <div>
-                < hookup for your existing grade system:
-
                 <label>Grade</label>
-                <input name="grade"
-                       value="{val(s['grade'])}">
+                <select name="grade" required>
+
+                    {''.join(
+                        f"<option value='G{i}' {'selected' if s['grade']==f'G{i}' else ''}>Grade {i}</option>"
+                        for i in range(8, 13)
+                    )}
+
+                </select>
             </div>
 
             <div>
@@ -7100,6 +7115,7 @@ def admin_student_update(sid):
     conn.close()
 
     return redirect(url_for("admin_students"))
+
 
 @app.post('/admin/students/add')
 def admin_student_add():
