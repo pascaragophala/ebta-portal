@@ -6474,7 +6474,7 @@ def admin_enrollments():
             <td><span class='mini'>{r['created_at']}</span></td>
             <td>{pop_html}</td>
             <td><strong>R{r['amount_paid']}</strong></td>
-            <td>
+            <td style="white-space:nowrap">
                 <form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>
                     <input type="hidden" name="page" value="{page_num}">
                     <button class='btn success'>Approve</button>
