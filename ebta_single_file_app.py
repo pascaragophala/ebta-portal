@@ -5072,18 +5072,33 @@ def tutor_home():
             return False
 
         
-    rows = []
+    assign_rows = []
+    record_rows = []
+    doc_rows = []
+
     for m in mymats:
+
         when = m['created_at'][:16].replace('T', ' ')
 
-        # file or video link
+        is_assignment = (m['is_assignment'] == 1 or m['kind'] == 'assignment')
+        is_recording = bool(m['youtube_url'])
+
+        # link
         link = "—"
         if m['file_path']:
             link = f"<a class='links' target='_blank' href='{m['file_path']}'>Download</a>"
         elif m['youtube_url']:
-            link = f"<a class='links' target='_blank' href='{m['youtube_url']}'>Open video</a>"
+            link = f"<a class='links' target='_blank' href='{m['youtube_url']}'>Watch</a>"
 
-        # delete button (only within 24h)
+        # icon
+        if is_assignment:
+            icon = "📝 "
+        elif is_recording:
+            icon = "🎥 "
+        else:
+            icon = "📄 "
+
+        # delete button
         if can_delete(m['created_at'], m['admin_unlocked']):
             action = f"""
             <form method="post"
@@ -5094,48 +5109,95 @@ def tutor_home():
             </form>
             """
         else:
-            action = f"""
-                <span class='muted mini'>Locked</span>
-                <form method='post'
-                      action='{url_for('admin_unlock_material', mid=m['id'])}'
-                      style='display:inline'>
-                </form>
-            """
+            action = "<span class='muted mini'>Locked</span>"
 
-
-        rows.append(f"""
-            <tr>
-                <td>{grade_label(m['grade'])} — {m['subject_name']}</td>
-                <td>{m['title']}</td>
-                <td>{link}</td>
-                <td>{when}</td>
-                <td>{action}</td>
-            </tr>
-        """)
-
-    uploads_html = (
-        "<div class='empty'>No uploads yet.</div>"
-        if not rows else
-        f"""
-        <div class="scroll-x">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Subject</th>
-                        <th>Title</th>
-                        <th>File</th>
-                        <th>Uploaded</th>
-                        <th>Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {''.join(rows)}
-                </tbody>
-            </table>
-        </div>    
+        row = f"""
+        <tr>
+            <td>{grade_label(m['grade'])} — {m['subject_name']}</td>
+            <td>{icon}{m['title']}</td>
+            <td>{link}</td>
+            <td>{when}</td>
+            <td>{action}</td>
+        </tr>
         """
-    )
 
+        if is_assignment:
+            assign_rows.append(row)
+        elif is_recording:
+            record_rows.append(row)
+        else:
+            doc_rows.append(row)
+
+    uploads_html = ""
+
+    if assign_rows:
+
+        uploads_html += f"""
+        <h3 style="margin-top:10px">📝 Assignments</h3>
+        <div class="scroll-x">
+        <table>
+        <thead>
+            <tr>
+                <th>Subject</th>
+                <th>Title</th>
+                <th>File</th>
+                <th>Uploaded</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {''.join(assign_rows)}
+        </tbody>
+        </table>
+        </div>
+        """
+
+    if record_rows:
+
+        uploads_html += f"""
+        <h3 style="margin-top:20px;color:#2563eb">🎥 Recordings</h3>
+        <div class="scroll-x">
+        <table>
+        <thead>
+            <tr>
+                <th>Subject</th>
+                <th>Recording</th>
+                <th>Watch</th>
+                <th>Uploaded</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {''.join(record_rows)}
+        </tbody>
+        </table>
+        </div>
+        """
+
+    if doc_rows:
+
+        uploads_html += f"""
+        <h3 style="margin-top:20px;color:#16a34a">📄 Documents</h3>
+        <div class="scroll-x">
+        <table>
+        <thead>
+            <tr>
+                <th>Subject</th>
+                <th>Document</th>
+                <th>File</th>
+                <th>Uploaded</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {''.join(doc_rows)}
+        </tbody>
+        </table>
+        </div>
+        """
+
+    if not uploads_html:
+        uploads_html = "<div class='empty'>No uploads yet.</div>"
 
     # Assignments you posted (manage submissions)
     cur.execute("""SELECT m.id, m.title, m.due_date, m.max_points, s.name AS subject_name, s.grade
