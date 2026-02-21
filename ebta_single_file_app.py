@@ -273,9 +273,6 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_school ON students(school)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_subjects_tutor ON tutor_subjects(tutor_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_subjects_tutor ON tutor_subjects(tutor_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_sms_queue_status ON sms_queue(status)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_sms_queue_created ON sms_queue(created_at)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_sms_queue_unique_daily ON sms_queue(phone, body, created_at)")
 
 
 
