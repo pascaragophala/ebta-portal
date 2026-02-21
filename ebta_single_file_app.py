@@ -19,23 +19,26 @@ from flask import Flask, request, redirect, url_for, render_template_string, sen
 app = Flask(__name__)
 app.secret_key = os.environ.get('EBTA_SECRET_KEY', 'ebta-dev-secret')
 
-
-
 # =============================================================
-# RENDER PERSISTENT STORAGE (SAFE + ORDERED)
+# RENDER PERSISTENT STORAGE
 # =============================================================
+
 BASE_DATA_DIR = os.environ.get("RENDER_DATA_DIR", "/var/data")
 os.makedirs(BASE_DATA_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
+
 UPLOADS_DIR = Path(BASE_DATA_DIR) / "uploads"
-UPLOAD_DIR = UPLOADS_DIR
 MATERIALS_DIR = Path(BASE_DATA_DIR) / "materials"
 SUBMISSIONS_DIR = Path(BASE_DATA_DIR) / "submissions"
 QR_DIR = Path(BASE_DATA_DIR) / "qr"
 
 for d in (UPLOADS_DIR, MATERIALS_DIR, SUBMISSIONS_DIR, QR_DIR):
     d.mkdir(parents=True, exist_ok=True)
+
+# NOW initialize DB
+with app.app_context():
+    init_db()
 
 LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/SqocnYt.png")
 # =============================================================
@@ -551,7 +554,6 @@ def init_db():
 
     conn.commit()
     conn.close()
-
 
 
 
