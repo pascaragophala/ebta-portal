@@ -7026,7 +7026,7 @@ def admin_student_edit(sid):
 
                     {''.join(
                         f"<option value='G{i}' {'selected' if s['grade']==f'G{i}' else ''}>Grade {i}</option>"
-                        for i in range(8, 13)
+                        for i in range(8, 14)
                     )}
 
                 </select>
