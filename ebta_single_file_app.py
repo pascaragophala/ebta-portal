@@ -6,6 +6,8 @@ import calendar
 import random
 import base64
 import secrets
+import threading
+import time
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -229,6 +231,19 @@ def init_db():
     );
     """)
     
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS sms_queue(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        phone TEXT NOT NULL,
+        body TEXT NOT NULL,
+        recipient_type TEXT,
+        status TEXT DEFAULT 'PENDING',  -- PENDING | SENT | FAILED
+        retry_count INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        sent_at TEXT
+    );
+    """)
+    
     ensure_column(conn, "students", "guardian_name", "TEXT")
     ensure_column(conn, "materials", "is_assignment", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "materials", "due_date", "TEXT")
@@ -258,6 +273,9 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_school ON students(school)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_subjects_tutor ON tutor_subjects(tutor_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_subjects_tutor ON tutor_subjects(tutor_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_sms_queue_status ON sms_queue(status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_sms_queue_created ON sms_queue(created_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_sms_queue_unique_daily ON sms_queue(phone, body, created_at)")
 
 
 
@@ -6347,6 +6365,7 @@ def admin_nav():
         <a class="btn secondary" href="{url_for('admin_settings')}">Settings</a>
         <a class="btn secondary" href="{url_for('admin_uploads_control')}">Uploads Control</a>
         <a class="btn secondary" href="{url_for('admin_materials')}">Unlock Uploads</a>
+        <a class="btn secondary" href="{url_for('admin_sms_dashboard')}">SMS Dashboard</a>
 
     </nav>
     """
@@ -9204,6 +9223,22 @@ def admin_direct_messages():
             </button>
 
         </form>
+        
+        <form method="post" action="/admin/broadcast-sms">
+
+            <h3>Broadcast SMS</h3>
+
+            <textarea name="body" required></textarea>
+
+            <button class="btn success">
+                Send SMS to All Students & Guardians
+            </button>
+
+        </form>
+        
+        <form method="get" action="/admin/process-sms">
+            <button class="btn success">Send Pending SMS Now</button>
+        </form>
 
     </div>
     """
@@ -9225,6 +9260,10 @@ def admin_direct_messages():
                        placeholder="Search tutors or students"
                        value="{q}">
 
+            </form>
+            
+            <form method="post" action="/admin/remind-tutors">
+            <button class="btn success">Send Tutor Reminders</button>
             </form>
 
             <div class="chat-layout">
@@ -9253,6 +9292,7 @@ def admin_direct_messages():
     """
 
     return page("Direct Messages", body)
+    
 
 
 @app.post('/admin/direct-messages/send')
@@ -9373,6 +9413,283 @@ def admin_message_tutor():
 
     return redirect(url_for("admin_home"))
 
+
+def queue_sms_bulk(phones, body, recipient_type="student"):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    now = now_utc_iso()
+
+    unique = set(phones)
+
+    for phone in unique:
+
+        if not phone:
+            continue
+
+        cur.execute("""
+            INSERT INTO sms_queue(phone, body, recipient_type, created_at, status)
+            SELECT ?, ?, ?, ?, 'PENDING'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM sms_queue
+                WHERE phone=? AND body=? AND date(created_at)=date(?)
+            )
+        """, (phone, body, recipient_type, now, phone, body, now))
+
+    conn.commit()
+    conn.close()
+    
+    
+def sms_worker():
+    while True:
+        try:
+            process_sms_queue(100)
+        except Exception:
+            pass
+        time.sleep(15)
+
+
+if not globals().get("_sms_worker_started"):
+    threading.Thread(target=sms_worker, daemon=True).start()
+    _sms_worker_started = True
+    
+def process_sms_queue(batch_size=100):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, phone, body
+        FROM sms_queue
+        WHERE status IN ('PENDING','FAILED')
+        ORDER BY id
+        LIMIT ?
+    """, (batch_size,))
+
+    rows = cur.fetchall()
+
+    for r in rows:
+
+        try:
+
+            send_sms_notification(r["phone"], r["body"])
+
+            cur.execute("""
+                UPDATE sms_queue
+                SET status='SENT', sent_at=?
+                WHERE id=?
+            """, (now_utc_iso(), r["id"]))
+
+        except Exception:
+
+            cur.execute("""
+                UPDATE sms_queue
+                SET status='FAILED'
+                WHERE id=?
+            """, (r["id"],))
+
+    conn.commit()
+    conn.close()
+
+    return len(rows)
+
+@app.post('/admin/broadcast-sms')
+def admin_broadcast_sms():
+
+    r = require_admin()
+    if r:
+        return r
+
+    body = request.form.get("body","").strip()
+
+    if not body:
+        return page("Error", card_msg("Message required"))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # students
+    cur.execute("SELECT phone_whatsapp FROM students")
+    student_phones = [r["phone_whatsapp"] for r in cur.fetchall()]
+
+    # guardians
+    cur.execute("SELECT guardian_phone FROM students WHERE guardian_phone IS NOT NULL")
+    guardian_phones = [r["guardian_phone"] for r in cur.fetchall()]
+
+    conn.close()
+
+    queue_sms_bulk(student_phones, body, "student")
+    queue_sms_bulk(guardian_phones, body, "guardian")
+
+    return page("Success", card_msg("SMS queued successfully"))
+    
+    
+def remind_tutors_about_sessions():
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).weekday()
+
+    cur.execute("""
+        SELECT DISTINCT t.phone, t.full_name, s.start_time
+        FROM sessions s
+        JOIN tutors t ON t.id = s.tutor_id
+        WHERE s.active=1
+        AND s.day_of_week=?
+    """, (today,))
+    rows = cur.fetchall()
+
+    for r in rows:
+
+        message = f"EBTA Reminder: Hi {r['full_name']}, you have a session today at {r['start_time']}. Please be ready."
+
+        queue_sms_bulk([r["phone"]], message, "tutor")
+
+    conn.close()
+    
+    
+@app.post('/admin/remind-tutors')
+def admin_remind_tutors():
+
+    r = require_admin()
+    if r:
+        return r
+
+    remind_tutors_about_sessions()
+
+    return page("Success", card_msg("Tutor reminders queued"))
+    
+@app.get('/admin/process-sms')
+def admin_process_sms():
+
+    r = require_admin()
+    if r:
+        return r
+
+    count = process_sms_queue()
+
+    return page("SMS Processed", card_msg(f"{count} messages sent"))
+    
+    
+    
+@app.get('/admin/sms-dashboard')
+def admin_sms_dashboard():
+
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Summary stats
+    cur.execute("""
+        SELECT status, COUNT(*) AS count
+        FROM sms_queue
+        GROUP BY status
+    """)
+
+    stats = {r["status"]: r["count"] for r in cur.fetchall()}
+
+    pending = stats.get("PENDING", 0)
+    sent = stats.get("SENT", 0)
+    failed = stats.get("FAILED", 0)
+
+    # Recent messages
+    cur.execute("""
+        SELECT phone, body, recipient_type, status, created_at, sent_at
+        FROM sms_queue
+        ORDER BY created_at DESC
+        LIMIT 50
+    """)
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    table_rows = ""
+
+    for r in rows:
+
+        created = r["created_at"][:16].replace("T"," ")
+        sent_time = r["sent_at"][:16].replace("T"," ") if r["sent_at"] else "—"
+
+        table_rows += f"""
+        <tr>
+            <td>{r['phone']}</td>
+            <td>{r['recipient_type']}</td>
+            <td>{r['status']}</td>
+            <td>{created}</td>
+            <td>{sent_time}</td>
+            <td style="max-width:300px">{r['body']}</td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="grid">
+
+        <div class="card">
+            <h1>SMS Dashboard</h1>
+
+            <div class="stats-mini">
+
+                <div class="s">
+                    <div class="k">{pending}</div>
+                    <div class="t">Pending</div>
+                </div>
+
+                <div class="s">
+                    <div class="k">{sent}</div>
+                    <div class="t">Sent</div>
+                </div>
+
+                <div class="s">
+                    <div class="k">{failed}</div>
+                    <div class="t">Failed</div>
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <div class="card">
+
+            <h2>Recent SMS</h2>
+
+            <div class="scroll-x">
+
+            <table>
+
+                <thead>
+                    <tr>
+                        <th>Phone</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                        <th>Sent</th>
+                        <th>Message</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {table_rows or "<tr><td colspan='6'>No messages</td></tr>"}
+                </tbody>
+
+            </table>
+
+            </div>
+
+        </div>
+
+    </section>
+    """
+
+    return page("SMS Dashboard", body)
 
 
 # --- Admin: Analytics dashboard ---
@@ -9545,6 +9862,7 @@ def admin_analytics():
         {stat('New students', new_students)}
         {stat('Returning', returning)}
         {stat('Lapsed', lapsed)}
+        
     </section>
 
     <section class='grid'>
