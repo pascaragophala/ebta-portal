@@ -3936,6 +3936,9 @@ def student_home():
 
                 is_assignment = (m['is_assignment']==1 or m['kind']=='assignment')
 
+                # DEFINE FIRST
+                is_recording = bool(m['youtube_url'])
+
                 when = m['created_at'][:16].replace('T',' ')
 
                 link = (
@@ -3945,6 +3948,7 @@ def student_home():
                     f"<a class='links' target='_blank' href='{m['youtube_url']}'>Open</a>"
                 )
 
+                # USE AFTER DEFINITION
                 icon = "🎥 " if is_recording else "📄 "
 
                 row_html = f"""
@@ -3956,8 +3960,7 @@ def student_home():
                 </tr>
                 """
 
-                is_recording = bool(m['youtube_url'])
-
+                # classification
                 if is_assignment:
 
                     grouped[subject_key]["assignments"].append(row_html)
