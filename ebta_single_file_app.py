@@ -6837,6 +6837,11 @@ def admin_students():
             <td>{nz(s['email'])}</td>
             <td>{pin}</td>
             <td>
+                <a class='btn mini'
+                   href='{url_for("admin_student_edit", sid=s["id"])}'>
+                   Edit
+                </a>
+                
                 <form method='post' action='{url_for('admin_student_reset_pin', sid=s['id'])}' style='display:inline'>
                     <button class='btn success'>Reset PIN</button>
                 </form>
@@ -6942,6 +6947,159 @@ def admin_students():
     return page("Students", body)
 
 
+@app.get('/admin/students/<int:sid>/edit')
+def admin_student_edit(sid):
+
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM students
+        WHERE id=?
+    """, (sid,))
+
+    s = cur.fetchone()
+    conn.close()
+
+    if not s:
+        return page("Not found", card_msg("Student not found."))
+
+    def val(x):
+        return escape(x) if x else ""
+
+    body = f"""
+    {admin_nav()}
+
+    <section class='card' style='max-width:600px'>
+
+        <h1>Edit Student</h1>
+
+        <form method="post"
+              action="{url_for('admin_student_update', sid=sid)}"
+              class="grid">
+
+            <div>
+                <label>Full Name</label>
+                <input name="full_name"
+                       value="{val(s['full_name'])}"
+                       required>
+            </div>
+
+            <div>
+                <label>WhatsApp Phone</label>
+                <input name="phone_whatsapp"
+                       value="{val(s['phone_whatsapp'])}"
+                       required>
+            </div>
+
+            <div>
+                <label>Guardian Phone</label>
+                <input name="guardian_phone"
+                       value="{val(s['guardian_phone'])}">
+            </div>
+
+            <div>
+                <label>Email</label>
+                <input name="email"
+                       value="{val(s['email'])}">
+            </div>
+
+            <div>
+                < hookup for your existing grade system:
+
+                <label>Grade</label>
+                <input name="grade"
+                       value="{val(s['grade'])}">
+            </div>
+
+            <div>
+                <label>Province</label>
+                <input name="province"
+                       value="{val(s['province'])}">
+            </div>
+
+            <div>
+                <label>School</label>
+                <input name="school"
+                       value="{val(s['school'])}">
+            </div>
+
+            <div style="display:flex;gap:10px;margin-top:10px">
+
+                <button class="btn success">
+                    Save Changes
+                </button>
+
+                <a class="btn"
+                   href="{url_for('admin_students')}">
+                   Cancel
+                </a>
+
+            </div>
+
+        </form>
+
+    </section>
+    """
+
+    return page("Edit Student", body)
+    
+    
+@app.post('/admin/students/<int:sid>/edit')
+def admin_student_update(sid):
+
+    r = require_admin()
+    if r:
+        return r
+
+    full_name = request.form.get("full_name","").strip()
+    phone = request.form.get("phone_whatsapp","").strip()
+    guardian = request.form.get("guardian_phone","").strip()
+    email = request.form.get("email","").strip()
+    grade = request.form.get("grade","").strip()
+    province = request.form.get("province","").strip()
+    school = request.form.get("school","").strip()
+
+    if not full_name or not phone:
+        return page(
+            "Error",
+            card_msg("Full name and phone are required.")
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE students
+        SET
+            full_name=?,
+            phone_whatsapp=?,
+            guardian_phone=?,
+            email=?,
+            grade=?,
+            province=?,
+            school=?
+        WHERE id=?
+    """, (
+        full_name,
+        phone,
+        guardian,
+        email,
+        grade,
+        province,
+        school,
+        sid
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_students"))
 
 @app.post('/admin/students/add')
 def admin_student_add():
