@@ -3858,7 +3858,7 @@ def student_home():
                     <a class="btn success mini"
                        target="_blank"
                        href="{r['meet_link']}">
-                       Join Session
+                       Join Class Session
                     </a>
                     """
 
