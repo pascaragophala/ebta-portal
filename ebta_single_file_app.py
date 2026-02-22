@@ -1556,9 +1556,7 @@ background:#fff;
     color: #059669;
 }
 
-.section-hidden {
-    display:none;
-}
+
 
 </style>
 """
@@ -1921,45 +1919,6 @@ document.addEventListener("DOMContentLoaded", function(){
     if(box){
         box.scrollTop = box.scrollHeight;
     }
-});
-
-function showTutorSection(hash){
-
-    if(!hash) hash = "#dashboard";
-
-    document.querySelectorAll('.card[id]').forEach(card=>{
-        card.classList.add('section-hidden');
-    });
-
-    const active = document.querySelector(hash);
-
-    if(active){
-        active.classList.remove('section-hidden');
-    }
-}
-
-document.addEventListener('DOMContentLoaded', ()=>{
-
-    showTutorSection(location.hash);
-
-    document.querySelectorAll('.side-links a').forEach(link=>{
-
-        link.addEventListener('click', e=>{
-
-            if(link.getAttribute('href').startsWith("#")){
-                e.preventDefault();
-
-                const hash = link.getAttribute('href');
-
-                history.pushState(null,null,hash);
-
-                showTutorSection(hash);
-            }
-
-        });
-
-    });
-
 });
 
 </script>
@@ -5759,61 +5718,85 @@ def tutor_home():
     conn.close()
 
 
-    body = f"""
+    body=fr"""
     <section class='grid'>
 
-    <div class='card' id='dashboard'>
+    <div class='card'>
+
         <h1>Welcome, {session.get('tutor_name','Tutor')}</h1>
-        {month_selector}
-        <div style="margin-top:12px">{assigned_list}</div>
+
+        <div class="card soft"
+             style="margin-top:12px;border-left:5px solid #3b82f6">
+
+            <div style="font-weight:600;font-size:16px;margin-bottom:4px">
+                Viewing Month
+            </div>
+
+            <div style="font-size:20px;font-weight:700;margin-bottom:8px">
+                {pretty_month_label(month)}
+            </div>
+
+            <div class="mini muted" style="margin-bottom:10px">
+                Switch month to new view
+            </div>
+
+            <form method="post"
+                  action="{url_for('tutor_set_month')}">
+
+                <select name="month"
+                        onchange="this.form.submit()"
+                        style="
+                            width:100%;
+                            padding:12px;
+                            font-size:16px;
+                            border-radius:10px;
+                            border:2px solid #3b82f6;
+                            background:#fff;
+                            cursor:pointer;
+                        ">
+
+                    {''.join(
+                        f"<option value='{m}' "
+                        f"{'selected' if m == month else ''}>"
+                        f"{'✓ ' if m in active_months else ''}"
+                        f"{pretty_month_label(m)}"
+                        f"{'' if m in active_months else ' (no students)'}"
+                        f"</option>"
+                        for m in all_months
+                    )}
+
+                </select>
+
+            </form>
+
+        </div>
+
+        <div style="margin-top:12px">
+            {assigned_list}
+        </div>
+
     </div>
 
-    <div class='card' id='groups'>
-        <h2>WhatsApp Group Links</h2>
-        {groups_html}
-    </div>
 
-    <div class='card' id='sessions'>
-        <h2>Your Sessions</h2>
+    <div class='card'><h2>WhatsApp Group Links</h2>{groups_html}</div>
+
+    <div class='card'><h2>Your sessions</h2>
         {sessions_html}
     </div>
 
-    <div class='card' id='upload'>
-        {upload_block}
-    </div>
 
-    <div class='card' id='assignments'>
-        <h2>Your Assignments</h2>
-        <div class="scroll-x">
-            <table>
-            <thead>
-                <tr>
-                    <th>Subject</th>
-                    <th>Title</th>
-                    <th>Due</th>
-                    <th>Total</th>
-                    <th>Manage</th>
-                </tr>
-            </thead>
-            <tbody>
-                {asg_rows}
-            </tbody>
-            </table>
-        </div>
-    </div>
+    {upload_block}
 
-    <div class='card' id='materials'>
-        <h2>Your Uploads</h2>
-        {uploads_html}
-    </div>
+    <div class='card'><h2>Your uploads</h2>{uploads_html}</div>
 
-    <div class='card' id='messages'>
-        {inbox_card}
-        {admin_chat_card}
+    <div class='card'><h2>Your assignments</h2>
+        <div class="scroll-x"><table><thead><tr><th>Subject</th><th>Title</th><th>Due</th><th>Total</th><th>Manage</th></tr></thead><tbody>{asg_rows}</tbody></table></div>
     </div>
+    {message_form}
+    {inbox_card}
+    {admin_chat_card}
 
-    <div class='card' id='students'>
-        <h2>Students</h2>
+    <div id="students">
         {''.join(stu_sections)}
     </div>
 
