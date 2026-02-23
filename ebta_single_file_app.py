@@ -3159,7 +3159,7 @@ def register():
     ts = int(datetime.datetime.now().timestamp())
     for idx, pop in enumerate(pops, start=1):
         safe = f"{ts}_{idx}_{secure_name(pop.filename)}"
-        dest = UPLOAD_DIR / safe
+        dest = UPLOADS_DIR / safe
         pop.save(dest)
         saved_paths.append(f"/uploads/{safe}")
 
