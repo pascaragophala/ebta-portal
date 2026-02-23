@@ -29,6 +29,7 @@ os.makedirs(BASE_DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
 
 UPLOADS_DIR = Path(BASE_DATA_DIR) / "uploads"
+UPLOAD_DIR = UPLOADS_DIR
 MATERIALS_DIR = Path(BASE_DATA_DIR) / "materials"
 SUBMISSIONS_DIR = Path(BASE_DATA_DIR) / "submissions"
 QR_DIR = Path(BASE_DATA_DIR) / "qr"
@@ -3159,7 +3160,7 @@ def register():
     ts = int(datetime.datetime.now().timestamp())
     for idx, pop in enumerate(pops, start=1):
         safe = f"{ts}_{idx}_{secure_name(pop.filename)}"
-        dest = UPLOADS_DIR / safe
+        dest = UPLOAD_DIR / safe
         pop.save(dest)
         saved_paths.append(f"/uploads/{safe}")
 
