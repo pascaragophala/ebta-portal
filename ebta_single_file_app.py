@@ -3923,7 +3923,7 @@ def student_home():
 
     assignments = []
     
-    if has_active_enrollment and active_sub_ids:
+    if active_sub_ids:
 
         cur.execute(f"""
             SELECT m.*, sub.name AS subject_name, sub.grade, t.full_name AS tutor_name
