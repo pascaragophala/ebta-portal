@@ -3931,9 +3931,9 @@ def student_home():
             JOIN subjects sub ON sub.id=m.subject_id
             JOIN tutors t ON t.id=m.tutor_id
             WHERE m.subject_id IN ({','.join('?'*len(active_sub_ids))})
-              AND m.month IN (?, ?)
+              AND m.month = ?
             ORDER BY sub.grade, sub.name, m.created_at DESC
-        """, (*active_sub_ids, month, system_month))
+        """, (*active_sub_ids, month))
 
         mats = cur.fetchall()
         
