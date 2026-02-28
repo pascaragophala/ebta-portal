@@ -3925,25 +3925,29 @@ def student_logout():
 
 
 def get_active_month(role):
-    """
-    Returns the effective month for the current session.
-
-    Priority:
-    1. User-selected month (session)
-    2. Real current calendar month
-    """
-
-    # Real calendar month in SA timezone
     now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))
     real_month = now.strftime("%Y-%m")
 
     if role == 'student':
-        return session.get('student_month') or real_month
+        selected = session.get('student_month')
+        if selected:
+            return selected
 
-    if role == 'tutor':
-        return session.get('tutor_month') or real_month
+        # AUTO fallback to latest ACTIVE month
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT MAX(month) as m
+            FROM enrollments
+            WHERE student_id=? AND status='ACTIVE'
+        """, (is_student(),))
+        row = cur.fetchone()
+        conn.close()
 
-    return real_month
+        if row and row["m"]:
+            return row["m"]
+
+        return real_month
 
 @app.get('/student')
 def student_home():
