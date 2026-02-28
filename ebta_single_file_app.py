@@ -4052,12 +4052,23 @@ def student_home():
     # Enrollments this month
     cur.execute("""
     SELECT e.subject_id, e.status, s.name AS subject_name, s.grade
-    FROM enrollments e JOIN subjects s ON s.id=e.subject_id
+    FROM enrollments e 
+    JOIN subjects s ON s.id=e.subject_id
     WHERE e.student_id=? 
-    AND substr(e.month,1,7) = ?
+    AND e.month LIKE ?
     ORDER BY s.grade,s.name
-    """,(sid,month))
-    enrolls=cur.fetchall()
+    """,(sid, month + "%"))
+
+    enrolls = cur.fetchall()   # FETCH IMMEDIATELY
+
+    # Debug AFTER fetching
+    cur.execute("""
+        SELECT month, LENGTH(month) as len
+        FROM enrollments
+        WHERE student_id=?
+    """, (sid,))
+    print("DEBUG RAW MONTHS IN DB:", [dict(r) for r in cur.fetchall()])
+    
     active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status'].upper()=='ACTIVE']
     has_active_enrollment = any(x['status'].upper() == 'ACTIVE' for x in enrolls)
     
@@ -4233,9 +4244,9 @@ def student_home():
             JOIN subjects sub ON sub.id=m.subject_id
             JOIN tutors t ON t.id=m.tutor_id
             WHERE m.subject_id IN ({','.join('?'*len(active_sub_ids))})
-              AND substr(m.month,1,7) = ?
+              AND m.month LIKE ?
             ORDER BY sub.grade, sub.name, m.created_at DESC
-        """, (*active_sub_ids, month))
+        """, (*active_sub_ids, month + "%"))
 
         mats = cur.fetchall()
         
