@@ -6704,6 +6704,8 @@ def admin_enrollments():
     year = month.split('-')[0]
 
     page_num = int(request.args.get("page", 1))
+    q = request.args.get("q", "").strip()
+    q_safe = escape(q)
     limit = 30
     offset = (page_num - 1) * limit
 
@@ -6711,12 +6713,46 @@ def admin_enrollments():
     cur = conn.cursor()
 
     # Total count
-    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,))
+    # -----------------------
+    # Build filters
+    # -----------------------
+    params = [month]
+    where_sql = "WHERE e.month = ?"
+
+    if q:
+        where_sql += """
+        AND (
+            st.full_name LIKE ?
+            OR st.phone_whatsapp LIKE ?
+            OR st.grade LIKE ?
+            OR sub.name LIKE ?
+            OR e.status LIKE ?
+        )
+        """
+        search_term = f"%{q}%"
+        params.extend([search_term] * 5)
+
+    # -----------------------
+    # COUNT query
+    # -----------------------
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM enrollments e
+        JOIN students st ON st.id = e.student_id
+        JOIN subjects sub ON sub.id = e.subject_id
+        {where_sql}
+    """, params)
+
     total = cur.fetchone()['c']
     total_pages = (total + limit - 1) // limit
 
-    # Main query
-    cur.execute("""
+    # -----------------------
+    # MAIN query
+    # -----------------------
+    data_params = list(params)
+    data_params.extend([limit, offset])
+
+    cur.execute(f"""
         SELECT 
             e.id, e.student_id, e.status, e.amount_paid,
             e.pop_url, e.status_token,
@@ -6726,10 +6762,11 @@ def admin_enrollments():
         FROM enrollments e
         JOIN students st ON st.id = e.student_id
         JOIN subjects sub ON sub.id = e.subject_id
-        WHERE e.month = ?
+        {where_sql}
         ORDER BY e.created_at DESC
         LIMIT ? OFFSET ?
-    """, (month, limit, offset))
+    """, data_params)
+
     rows = cur.fetchall()
 
     # Returning students
@@ -6795,22 +6832,37 @@ def admin_enrollments():
 
     page_links = []
 
+    # Base query string (preserve search)
+    query_string = f"&q={q_safe}" if q else ""
+
     # First + Prev
     if page_num > 1:
-        page_links.append(f"<a class='links' href='?page=1'>« First</a>")
-        page_links.append(f"<a class='links' href='?page={page_num-1}'>‹ Prev</a>")
+        page_links.append(
+            f"<a class='links' href='?page=1{query_string}'>« First</a>"
+        )
+        page_links.append(
+            f"<a class='links' href='?page={page_num-1}{query_string}'>‹ Prev</a>"
+        )
 
     # Numbered pages
     for p in range(start, end + 1):
         if p == page_num:
-            page_links.append(f"<span class='current' style='padding:4px 8px;background:#0f172a;color:white;border-radius:6px'>{p}</span>")
+            page_links.append(
+                f"<span class='current' style='padding:4px 8px;background:#0f172a;color:white;border-radius:6px'>{p}</span>"
+            )
         else:
-            page_links.append(f"<a class='links' href='?page={p}'>{p}</a>")
+            page_links.append(
+                f"<a class='links' href='?page={p}{query_string}'>{p}</a>"
+            )
 
     # Next + Last
     if page_num < total_pages:
-        page_links.append(f"<a class='links' href='?page={page_num+1}'>Next ›</a>")
-        page_links.append(f"<a class='links' href='?page={total_pages}'>Last »</a>")
+        page_links.append(
+            f"<a class='links' href='?page={page_num+1}{query_string}'>Next ›</a>"
+        )
+        page_links.append(
+            f"<a class='links' href='?page={total_pages}{query_string}'>Last »</a>"
+        )
 
 
     nav = f"""
@@ -6860,9 +6912,17 @@ def admin_enrollments():
         <h1>Enrollments — {month}</h1>
 
         <div class='toolbar'>
-            <input id='enr_q' class='pill'
-                   placeholder='Search by name, phone, grade, subject'
-                   oninput="filterTable('enr_q','enr_tbl')"/>
+            <form method="get" style="display:flex;gap:8px;align-items:center">
+                <input type="text"
+                       name="q"
+                       value="{q_safe}"
+                       placeholder="Search name, phone, grade, subject, status"
+                       class="pill">
+
+                <input type="hidden" name="page" value="1">
+
+                <button class="btn mini">Search</button>
+            </form>
         </div>
 
         {nav}
@@ -7022,10 +7082,10 @@ def enrollment_action(id: int, action: str):
 
 @app.get('/admin/students')
 def admin_students():
+    
     q = request.args.get("q", "").strip()
+    selected_month = request.args.get("month", "").strip()
     q_safe = escape(q)
-    if q:
-        page_num = 1
 
     r = require_admin()
     if r:
@@ -7038,67 +7098,87 @@ def admin_students():
     conn = get_db()
     cur = conn.cursor()
 
-    if q:
-        cur.execute("""
-            SELECT COUNT(*) AS c
-            FROM students
-            WHERE
-                full_name LIKE ?
-                OR phone_whatsapp LIKE ?
-                OR guardian_phone LIKE ?
-                OR email LIKE ?
-                OR school LIKE ?
-        """, (f"%{q}%",)*5)
-    else:
-        cur.execute("SELECT COUNT(*) AS c FROM students")
+    params = []
+    where_clauses = []
 
-    total = cur.fetchone()['c']
-    total_pages = (total + limit - 1) // limit
+    if selected_month:
+        where_clauses.append("e.month = ?")
+        params.append(selected_month)
 
     if q:
-        cur.execute("""
-            SELECT
-                s.id,
-                s.full_name,
-                s.phone_whatsapp,
-                s.guardian_phone,
-                s.email,
-                s.grade,
-                s.province,
-                s.school,
-                s.pin,
-                strftime('%Y-%m-%d', datetime(MIN(e.created_at), '+2 hours')) AS first_enrolled
-            FROM students s
-            LEFT JOIN enrollments e ON e.student_id = s.id
-            WHERE
+        where_clauses.append("""
+            (
                 s.full_name LIKE ?
                 OR s.phone_whatsapp LIKE ?
                 OR s.guardian_phone LIKE ?
                 OR s.email LIKE ?
                 OR s.school LIKE ?
-            GROUP BY s.id
-            ORDER BY s.created_at DESC
-            LIMIT ? OFFSET ?
-        """, (f"%{q}%",)*5 + (limit, offset))
-    else:
-        cur.execute("""
-            SELECT
-                s.id,
-                s.full_name,
-                s.phone_whatsapp,
-                s.guardian_phone,
-                s.email,
-                s.grade,
-                s.province,
-                s.school,
-                s.pin,
-                strftime('%Y-%m-%d', datetime(MIN(e.created_at), '+2 hours')) AS first_enrolled
-            FROM students s
-            LEFT JOIN enrollments e ON e.student_id = s.id
-            GROUP BY s.id
-            ORDER BY s.created_at DESC
-            LIMIT ? OFFSET ?
-        """, (limit, offset))
+            )
+        """)
+        search_term = f"%{q}%"
+        params.extend([search_term]*5)
+
+    where_sql = ""
+    if where_clauses:
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+
+    cur.execute(f"""
+        SELECT COUNT(DISTINCT s.id) AS c
+        FROM students s
+        LEFT JOIN enrollments e ON e.student_id = s.id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()['c']
+    total_pages = (total + limit - 1) // limit
+    if total_pages == 0:
+        total_pages = 1
+
+    params = []
+    where_clauses = []
+
+    if selected_month:
+        where_clauses.append("e.month = ?")
+        params.append(selected_month)
+
+    if q:
+        where_clauses.append("""
+            (
+                s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR s.guardian_phone LIKE ?
+                OR s.email LIKE ?
+                OR s.school LIKE ?
+            )
+        """)
+        search_term = f"%{q}%"
+        params.extend([search_term]*5)
+
+    where_sql = ""
+    if where_clauses:
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+
+    params.extend([limit, offset])
+
+    cur.execute(f"""
+        SELECT
+            s.id,
+            s.full_name,
+            s.phone_whatsapp,
+            s.guardian_phone,
+            s.email,
+            s.grade,
+            s.province,
+            s.school,
+            s.pin,
+            strftime('%Y-%m-%d', datetime(MIN(e.created_at), '+2 hours')) AS first_enrolled
+        FROM students s
+        LEFT JOIN enrollments e ON e.student_id = s.id
+        {where_sql}
+        GROUP BY s.id
+        ORDER BY s.created_at DESC
+        LIMIT ? OFFSET ?
+    """, params)
 
     students = cur.fetchall()
 
@@ -7107,12 +7187,22 @@ def admin_students():
 
     if ids:
         qmarks = ",".join("?" * len(ids))
-        cur.execute(f"""
-            SELECT e.student_id, sub.name
-            FROM enrollments e
-            JOIN subjects sub ON sub.id = e.subject_id
-            WHERE e.student_id IN ({qmarks})
-        """, ids)
+
+        if selected_month:
+            cur.execute(f"""
+                SELECT DISTINCT e.student_id, sub.name
+                FROM enrollments e
+                JOIN subjects sub ON sub.id = e.subject_id
+                WHERE e.student_id IN ({qmarks})
+                  AND e.month = ?
+            """, ids + [selected_month])
+        else:
+            cur.execute(f"""
+                SELECT DISTINCT e.student_id, sub.name
+                FROM enrollments e
+                JOIN subjects sub ON sub.id = e.subject_id
+                WHERE e.student_id IN ({qmarks})
+            """, ids)
 
         for r in cur.fetchall():
             subject_map.setdefault(r['student_id'], []).append(r['name'])
@@ -7174,20 +7264,20 @@ def admin_students():
 
     # First
     if page_num > 1:
-        page_links.append(f"<a class='links' href='?page=1&q={q}'>« First</a>")
-        page_links.append(f"<a class='links' href='?page={page_num-1}&q={q}'>‹ Prev</a>")
+        page_links.append(f"<a class='links' href='?page=1&q={q}&month={selected_month}'>« First</a>")
+        page_links.append(f"<a class='links' href='?page={page_num-1}&q={q}&month={selected_month}'>‹ Prev</a>")
 
     # Numbered pages
     for p in range(start, end + 1):
         if p == page_num:
             page_links.append(f"<span class='current'>{p}</span>")
         else:
-            page_links.append(f"<a class='links' href='?page={p}&q={q}'>{p}</a>")
+            page_links.append(f"<a class='links' href='?page={p}&q={q}&month={selected_month}'>{p}</a>")
 
     # Next
     if page_num < total_pages:
-        page_links.append(f"<a class='links' href='?page={page_num+1}&q={q}'>Next ›</a>")
-        page_links.append(f"<a class='links' href='?page={total_pages}&q={q}'>Last »</a>")
+        page_links.append(f"<a class='links' href='?page={page_num+1}&q={q}&month={selected_month}'>Next ›</a>")
+        page_links.append(f"<a class='links' href='?page={total_pages}&q={q}&month={selected_month}'>Last »</a>")
 
 
     nav = f"""
@@ -7220,14 +7310,16 @@ def admin_students():
         <h1>Students</h1>
 
         <div class='toolbar'>
-            <form method="get" style="display:flex;gap:8px">
-                <input name="q"
-                       value="{q_safe}"
-                       placeholder="Search students (name, phone, email, school)"
-                       style="padding:6px;border-radius:8px;border:1px solid #ccc">
+            <form method="get" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <input type="text" name="q" placeholder="Search name, phone, email, school"
+                       value="{q_safe}" style="min-width:220px">
+
+                <input type="month" name="month" value="{selected_month}">
+
                 <button class="btn mini">Search</button>
             </form>
 
+            {"<a class='btn success mini' href='"+url_for('admin_students_export')+"?month="+selected_month+"'>Export Excel</a>" if selected_month else ""}
         </div>
 
         {nav}
@@ -7259,6 +7351,85 @@ def admin_students():
     """
 
     return page("Students", body)
+    
+@app.get('/admin/students/export')
+def admin_students_export():
+    r = require_admin()
+    if r:
+        return r
+
+    month = request.args.get("month")
+    if not month:
+        return redirect(url_for('admin_students'))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            s.full_name,
+            s.phone_whatsapp,
+            s.guardian_phone,
+            s.email,
+            s.grade,
+            s.province,
+            s.school,
+            GROUP_CONCAT(DISTINCT sub.name) AS subjects
+        FROM students s
+        JOIN enrollments e ON e.student_id = s.id
+        JOIN subjects sub ON sub.id = e.subject_id
+        WHERE e.month = ?
+        GROUP BY s.id
+        ORDER BY s.full_name ASC
+    """, (month,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"Students {month}"
+
+    headers = [
+        "Full Name",
+        "Phone",
+        "Guardian",
+        "Email",
+        "Grade",
+        "Province",
+        "School",
+        "Subjects"
+    ]
+
+    ws.append(headers)
+
+    for col in ws[1]:
+        col.font = Font(bold=True)
+        col.alignment = Alignment(horizontal="center")
+
+    for r in rows:
+        ws.append([
+            r["full_name"],
+            r["phone_whatsapp"],
+            r["guardian_phone"],
+            r["email"],
+            grade_label(r["grade"]),
+            r["province"],
+            r["school"],
+            r["subjects"]
+        ])
+
+    for col in ws.columns:
+        max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = max_length + 4
+
+    file_path = f"/tmp/students_{month}.xlsx"
+    wb.save(file_path)
+
+    return send_from_directory("/tmp", f"students_{month}.xlsx", as_attachment=True)
 
 
 @app.get('/admin/students/<int:sid>/edit')
