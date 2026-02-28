@@ -255,6 +255,8 @@ def init_db():
     ensure_column(conn, "sessions", "is_visible", "INTEGER NOT NULL DEFAULT 1")
     ensure_column(conn, "subjects", "uploads_locked", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "materials", "admin_unlocked", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "students", "phone_type", "TEXT DEFAULT 'SA'")
+    ensure_column(conn, "students", "guardian_phone_type", "TEXT DEFAULT 'SA'")
 
 
 
@@ -265,7 +267,6 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollment_files_enr ON enrollment_files(enrollment_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_created ON students(created_at)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollments_month_created ON enrollments(month, created_at)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at DESC)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_full_name ON students(full_name)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_phone ON students(phone_whatsapp)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_guardian ON students(guardian_phone)")
@@ -317,6 +318,9 @@ def init_db():
         resolved INTEGER NOT NULL DEFAULT 0
     );
     """)
+    
+    # THEN indexes
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at DESC)")    
 
     # Students rate their classes monthly (24th to end-of-month)
     cur.execute("""
@@ -642,10 +646,87 @@ def secure_name(name):
     return ''.join(ch if ch in keep else '_' for ch in name)
 
 
-def normalize_phone(phone: str) -> str:
+def normalize_phone(phone: str, phone_type: str = "SA", strict: bool = False) -> str:
+
     if not phone:
         return ""
-    return ''.join(ch for ch in phone if ch.isdigit())
+
+    phone = str(phone).strip()
+    phone = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+
+    digits = ''.join(ch for ch in phone if ch.isdigit())
+
+    # INTERNATIONAL
+    if phone_type == "INT":
+        if phone.startswith("+"):
+            return "+" + digits
+        return "+" + digits
+
+    # SOUTH AFRICA
+    if phone.startswith("+27") and len(digits) == 11:
+        return "+27" + digits[-9:]
+
+    if digits.startswith("27") and len(digits) == 11:
+        return "+27" + digits[2:]
+
+    if len(digits) == 10 and digits.startswith("0"):
+        return "+27" + digits[1:]
+
+    if strict:
+        raise ValueError("South African numbers must be 10 digits starting with 0.")
+
+    return ""
+    
+def phone_variants(phone: str):
+    """
+    Generate all possible phone variants so login works
+    regardless of format entered.
+    Supports:
+    0821234567
+    +27821234567
+    27821234567
+    international numbers
+    """
+
+    if not phone:
+        return []
+
+    raw = str(phone).strip()
+
+    # remove spaces, brackets, dashes
+    clean = raw.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+
+    # digits only
+    digits = ''.join(ch for ch in clean if ch.isdigit())
+
+    variants = set()
+
+    # always include original clean input
+    variants.add(clean)
+
+    # include digits-only version
+    if digits:
+        variants.add(digits)
+        variants.add("+" + digits)
+
+    # South Africa conversions
+
+    # 0821234567 → 27821234567 and +27821234567
+    if digits.startswith("0") and len(digits) == 10:
+        variants.add("27" + digits[1:])
+        variants.add("+27" + digits[1:])
+
+    # 27821234567 → 0821234567 and +27821234567
+    elif digits.startswith("27") and len(digits) == 11:
+        variants.add("0" + digits[2:])
+        variants.add("+27" + digits[2:])
+
+    # +27821234567 → 27821234567 and 0821234567
+    if clean.startswith("+") and digits.startswith("27") and len(digits) == 11:
+        variants.add(digits)
+        variants.add("0" + digits[2:])
+
+    return list(variants)
 
 
 def gen_pin(existing):
@@ -793,7 +874,7 @@ def send_sms_notification(to_phone: str, body: str):
         phone = "+" + phone
 
     # already correct format
-    elif phone.startswith("+27"):
+    elif phone.startswith("+"):
         pass
 
     else:
@@ -810,7 +891,7 @@ def send_sms_notification(to_phone: str, body: str):
             conn.close()
         except:
             pass
-        return
+        return  
 
     to_phone = phone
 
@@ -2425,16 +2506,37 @@ def home():
             </div>
             <div>
             <label>Student WhatsApp Number</label>
-            <input name='phone' required/>
+
+            <select name="phone_type" id="phone_type">
+                <option value="SA">South African</option>
+                <option value="INT">International</option>
+            </select>
+
+            <input name="phone"
+                   id="phone_input"
+                   required
+                   placeholder="Enter your number here">
             </div>
+            
             <div>
-            <label>Guardian Name</label>
-            <input name='guardian_name' required/>
+            <label>Guardian Name & Surname</label>
+            <input name="guardian_name" required />
             </div>
+            
             <div>
             <label>Guardian WhatsApp Number</label>
-            <input name='guardian' required/>
+
+            <select name="guardian_phone_type" id="guardian_phone_type">
+                <option value="SA">South African</option>
+                <option value="INT">International</option>
+            </select>
+
+            <input name="guardian"
+                   id="guardian_input"
+                   required
+                   placeholder="Enter your guardian number here">
             </div>
+ 
             <div>
             <label>Student Email (optional)</label>
             <input name='email'/>
@@ -2675,6 +2777,8 @@ function showPopup(message, type='info', timeout=4000){
     }
 
     form.addEventListener('submit', function(e){
+        const studentPhoneInput = document.getElementById("phone_input");
+        const guardianPhoneInput = document.getElementById("guardian_input");
         const termsCheck = document.getElementById('terms_check');
 
         if(!termsCheck || !termsCheck.checked){
@@ -2688,27 +2792,77 @@ function showPopup(message, type='info', timeout=4000){
         const grade = gradeSelect.value;
 
         // Validate phone numbers: ensure 10 digits for student and guardian WhatsApp numbers
-        const studentPhoneInput = form.querySelector("input[name='phone']") || form.querySelector("input[name='phone_whatsap']") || form.querySelector("input[name='phone_whatsapp']");
-        const guardianPhoneInput = form.querySelector("input[name='guardian_phone']") || form.querySelector("input[name='guardian']");
-        function digitsOnly(str){ return (str||'').replace(/\\D/g,''); }
+        const studentType =
+            document.querySelector("select[name='phone_type']")?.value || "SA";
+
+        const guardianType =
+            document.querySelector("select[name='guardian_phone_type']")?.value || "SA";
+
+
+        function digitsOnly(str){
+            return (str ||'').replace(/\\D/g,'');
+        }
+
+        // Student validation
         if(studentPhoneInput){
-            const sdigits = digitsOnly(studentPhoneInput.value);
-            if(sdigits.length !== 10){
-                e.preventDefault();
-                showPopup('Student WhatsApp number must be exactly 10 digits.', 'error');
-                studentPhoneInput.focus();
-                return;
+
+            if(studentType === "SA"){
+                const digits = digitsOnly(studentPhoneInput.value);
+
+                if(digits.length !== 10){
+                    e.preventDefault();
+                    showPopup("South African number must be exactly 10 digits (e.g. 0821234567).","error");
+                    studentPhoneInput.focus();
+                    return;
+                }
+
+                if(!digits.startsWith("0")){
+                    e.preventDefault();
+                    showPopup("South African number must start with 0.","error");
+                    studentPhoneInput.focus();
+                    return;
+                }
+
+            } else {
+                if(!studentPhoneInput.value.startsWith("+")){
+                    e.preventDefault();
+                    showPopup("International number must start with +","error");
+                    studentPhoneInput.focus();
+                    return;
+                }
             }
         }
+
+        // Guardian validation
         if(guardianPhoneInput){
-            const gdigits = digitsOnly(guardianPhoneInput.value);
-            if(gdigits.length !== 10){
-                e.preventDefault();
-                showPopup('Guardian WhatsApp number must be exactly 10 digits.', 'error');
-                guardianPhoneInput.focus();
-                return;
+
+            if(guardianType === "SA"){
+                const digits = digitsOnly(guardianPhoneInput.value);
+
+                if(digits.length !== 10){
+                    e.preventDefault();
+                    showPopup("Guardian SA number must be exactly 10 digits.","error");
+                    guardianPhoneInput.focus();
+                    return;
+                }
+
+                if(!digits.startsWith("0")){
+                    e.preventDefault();
+                    showPopup("Guardian SA number must start with 0.","error");
+                    guardianPhoneInput.focus();
+                    return;
+                }
+
+            } else {
+                if(!guardianPhoneInput.value.startsWith("+")){
+                    e.preventDefault();
+                    showPopup("Guardian international number must start with +","error");
+                    guardianPhoneInput.focus();
+                    return;
+                }
             }
         }
+        
         // Validate optional student email ends with @gmail.com if provided
         const emailInput = form.querySelector("input[name='email']") || form.querySelector("input[name='student_email']");
         if(emailInput && emailInput.value.trim() !== ''){
@@ -3072,8 +3226,17 @@ def register():
             )
         )
     full_name = request.form.get('full_name','').strip()
-    phone = normalize_phone(request.form.get('phone',''))
-    guardian = request.form.get('guardian','').strip()
+    phone_type = request.form.get("phone_type", "SA")
+    guardian_phone_type = request.form.get("guardian_phone_type", "SA")
+
+    try:
+        phone = normalize_phone(request.form.get("phone",""), phone_type, strict=True)
+
+        guardian = normalize_phone(request.form.get("guardian",""),guardian_phone_type, strict=True)
+        
+    except ValueError as e:
+        return page("Error", card_msg(str(e)))
+    
     guardian_name = request.form.get('guardian_name','').strip()
     email = request.form.get('email','').strip() or None
     subject_ids = request.form.getlist('subject_ids')
@@ -3138,8 +3301,10 @@ def register():
             pin,
             province,
             school,
+            phone_type,
+            guardian_phone_type,
             created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)
+        )VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             full_name,
             phone,
@@ -3150,6 +3315,8 @@ def register():
             pin,
             province,
             school,
+            phone_type,
+            guardian_phone_type,
             now_utc_iso()
         ))
 
@@ -3471,7 +3638,12 @@ def student_login():
         <form method='post' action='{url_for('student_login_post')}' class='grid'>
             <div>
                 <label>WhatsApp number</label>
-                <input name='phone' required />
+                <select name="phone_type">
+                    <option value="SA">South Africa</option>
+                    <option value="INT">International</option>
+                </select>
+
+                <input name='phone' required placeholder="Enter your WhatsApp number here"/>
             </div>
 
             <div>
@@ -3496,7 +3668,12 @@ def student_login():
                 </div>
                 <div>
                     <label>WhatsApp number</label>
-                    <input name='phone' required />
+                    <select name="phone_type">
+                        <option value="SA">South Africa</option>
+                        <option value="INT">International</option>
+                    </select>
+
+                    <input name='phone' required/>
                 </div>
                 <button class='btn secondary'>Notify Admin</button>
             </form>
@@ -3527,22 +3704,51 @@ def student_login():
 
 @app.post('/student/login')
 def student_login_post():
-    phone = normalize_phone(request.form.get('phone',''))
-    pin=request.form.get('pin','').strip()
-    conn=get_db(); cur=conn.cursor()
-    cur.execute("SELECT id,pin,full_name FROM students WHERE phone_whatsapp=?", (phone,))
-    row=cur.fetchone(); conn.close()
-    if not row or not row['pin'] or row['pin']!=pin:
+
+    raw_phone = request.form.get('phone','').strip()
+    pin = request.form.get('pin','').strip()
+
+    if raw_phone.startswith("+"):
+        normalized = normalize_phone(raw_phone, "INT")
+    else:
+        normalized = normalize_phone(raw_phone, "SA")
+
+    variants = phone_variants(normalized)
+
+    if not variants:
+        return page("Login failed", card_msg("Incorrect Phone Number."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    placeholders = ",".join("?" * len(variants))
+
+    cur.execute(f"""
+        SELECT id, pin, full_name
+        FROM students
+        WHERE phone_whatsapp IN ({placeholders})
+        LIMIT 1
+    """, variants)
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row['pin'] or row['pin'] != pin:
         return page("Login failed", card_msg("Wrong phone or PIN."))
-    session['student_id']=row['id']; session['student_name']=row['full_name']
+
+    session['student_id'] = row['id']
+    session['student_name'] = row['full_name']
+
     return redirect(url_for('student_home'))
 
 @app.post('/student/forgot-pin')
 def student_forgot_pin():
 
-    phone = normalize_phone(request.form.get('phone',''))
+    raw_phone = request.form.get('phone','').strip()
 
-    if not phone:
+    variants = phone_variants(raw_phone)
+
+    if not variants:
         return page(
             "Error",
             card_msg("Please enter your WhatsApp number.")
@@ -3551,14 +3757,19 @@ def student_forgot_pin():
     conn = get_db()
     cur = conn.cursor()
 
-    # Find student
-    cur.execute("""
+    placeholders = ",".join("?" * len(variants))
+
+    cur.execute(f"""
         SELECT id, full_name, phone_whatsapp, pin
         FROM students
-        WHERE phone_whatsapp=?
-    """, (phone,))
+        WHERE phone_whatsapp IN ({placeholders})
+        LIMIT 1
+    """, variants)
 
     student = cur.fetchone()
+
+    # Use the actual stored phone
+    phone = student["phone_whatsapp"] if student else raw_phone
 
     # Student not found
     if not student:
@@ -3923,7 +4134,7 @@ def student_home():
 
     assignments = []
     
-    if has_active_enrollment and active_sub_ids:
+    if active_sub_ids:
 
         cur.execute(f"""
             SELECT m.*, sub.name AS subject_name, sub.grade, t.full_name AS tutor_name
@@ -3931,9 +4142,18 @@ def student_home():
             JOIN subjects sub ON sub.id=m.subject_id
             JOIN tutors t ON t.id=m.tutor_id
             WHERE m.subject_id IN ({','.join('?'*len(active_sub_ids))})
-              AND m.month = ?
+              AND (
+                    m.month = ?
+                    OR EXISTS (
+                        SELECT 1 FROM enrollments e
+                        WHERE e.student_id = ?
+                        AND e.subject_id = m.subject_id
+                        AND e.status = 'ACTIVE'
+                        AND e.month = m.month
+                    )
+              )
             ORDER BY sub.grade, sub.name, m.created_at DESC
-        """, (*active_sub_ids, month))
+        """, (*active_sub_ids, month, sid))
 
         mats = cur.fetchall()
         
@@ -4772,7 +4992,12 @@ def tutor_login():
         <form method='post' action='{url_for('tutor_login_post')}' class='grid'>
             <div>
                 <label>Phone number</label>
-                <input name='phone' required />
+                <select name="phone_type">
+                    <option value="SA">South Africa</option>
+                    <option value="INT">International</option>
+                </select>
+
+                <input name='phone' required/>
             </div>
 
             <div>
@@ -4797,7 +5022,12 @@ def tutor_login():
                 </div>
                 <div>
                     <label>Phone number</label>
-                    <input name='phone' required />
+                    <select name="phone_type">
+                        <option value="SA">South Africa</option>
+                        <option value="INT">International</option>
+                    </select>
+
+                    <input name='phone' required/>
                 </div>
                 <button class='btn secondary'>Notify Admin</button>
             </form>
@@ -4825,20 +5055,66 @@ def tutor_login():
 
     return page("Tutor Login", body, extra_js=extra_js)
 
+
 @app.post('/tutor/login')
 def tutor_login_post():
-    phone = normalize_phone(request.form.get('phone','')); pin=request.form.get('pin','').strip()
-    conn=get_db(); cur=conn.cursor()
-    cur.execute("SELECT id,pin,full_name FROM tutors WHERE phone=?", (phone,))
-    row=cur.fetchone(); conn.close()
-    if not row or not row['pin'] or row['pin']!=pin:
-        return page("Login failed", card_msg("Wrong phone or PIN."))
-    session['tutor_id']=row['id']; session['tutor_name']=row['full_name']
+
+    # Get raw input
+    raw_phone = request.form.get('phone', '').strip()
+    pin = request.form.get('pin', '').strip()
+
+    # Normalize first (remove spaces, symbols)
+    if raw_phone.startswith("+"):
+        normalized = normalize_phone(raw_phone, "INT")
+    else:
+        normalized = normalize_phone(raw_phone, "SA")
+
+    # Generate all possible variants
+    variants = phone_variants(normalized)
+
+    if not variants:
+        return page(
+            "Login failed",
+            card_msg("Phone number required.")
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Build safe SQL placeholders (?, ?, ?, ...)
+    placeholders = ",".join("?" * len(variants))
+
+    cur.execute(f"""
+        SELECT id, pin, full_name
+        FROM tutors
+        WHERE phone IN ({placeholders})
+        LIMIT 1
+    """, variants)
+
+    tutor = cur.fetchone()
+
+    conn.close()
+
+    # Validate credentials
+    if not tutor or not tutor['pin'] or tutor['pin'] != pin:
+        return page(
+            "Login failed",
+            card_msg("Wrong phone or PIN.")
+        )
+
+    # Create session
+    session['tutor_id'] = tutor['id']
+    session['tutor_name'] = tutor['full_name']
+
     return redirect(url_for('tutor_home'))
 
 @app.post('/tutor/forgot-pin')
 def tutor_forgot_pin():
-    phone = normalize_phone(request.form.get('phone',''))
+    raw_phone = request.form.get('phone','').strip()
+
+    variants = phone_variants(raw_phone)
+
+    phone = variants[0] if variants else ""
     if not phone: return page("Error", card_msg("Phone required."))
     conn=get_db(); cur=conn.cursor()
     cur.execute("INSERT INTO messages(kind,payload,created_at) VALUES(?,?,?)",
@@ -6405,6 +6681,7 @@ def admin_home():
     </div></section>"""
     return page("Admin", body)
 
+
 # --- Admin: Enrollments (show all PoP files) ---
 
 def format_datetime(dt_str):
@@ -6781,39 +7058,45 @@ def admin_students():
     if q:
         cur.execute("""
             SELECT
-                id,
-                full_name,
-                phone_whatsapp,
-                guardian_phone,
-                email,
-                grade,
-                province,
-                school,
-                pin
-            FROM students
+                s.id,
+                s.full_name,
+                s.phone_whatsapp,
+                s.guardian_phone,
+                s.email,
+                s.grade,
+                s.province,
+                s.school,
+                s.pin,
+                strftime('%Y-%m-%d', datetime(MIN(e.created_at), '+2 hours')) AS first_enrolled
+            FROM students s
+            LEFT JOIN enrollments e ON e.student_id = s.id
             WHERE
-                full_name LIKE ?
-                OR phone_whatsapp LIKE ?
-                OR guardian_phone LIKE ?
-                OR email LIKE ?
-                OR school LIKE ?
-            ORDER BY created_at DESC
+                s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR s.guardian_phone LIKE ?
+                OR s.email LIKE ?
+                OR s.school LIKE ?
+            GROUP BY s.id
+            ORDER BY s.created_at DESC
             LIMIT ? OFFSET ?
         """, (f"%{q}%",)*5 + (limit, offset))
     else:
         cur.execute("""
             SELECT
-                id,
-                full_name,
-                phone_whatsapp,
-                guardian_phone,
-                email,
-                grade,
-                province,
-                school,
-                pin
-            FROM students
-            ORDER BY created_at DESC
+                s.id,
+                s.full_name,
+                s.phone_whatsapp,
+                s.guardian_phone,
+                s.email,
+                s.grade,
+                s.province,
+                s.school,
+                s.pin,
+                strftime('%Y-%m-%d', datetime(MIN(e.created_at), '+2 hours')) AS first_enrolled
+            FROM students s
+            LEFT JOIN enrollments e ON e.student_id = s.id
+            GROUP BY s.id
+            ORDER BY s.created_at DESC
             LIMIT ? OFFSET ?
         """, (limit, offset))
 
@@ -6853,6 +7136,7 @@ def admin_students():
             <td>{nz(s['province'])}</td>
             <td>{nz(s['school'])}</td>
             <td>{nz(s['email'])}</td>
+            <td>{s['first_enrolled'] or 'N/A'}</td>
             <td>{pin}</td>
             <td style="white-space:nowrap">
 
@@ -6959,12 +7243,13 @@ def admin_students():
                         <th>Province</th>
                         <th>School</th>
                         <th>Email</th>
+                        <th>First Enrolled</th>
                         <th>PIN</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {''.join(trs) or "<tr><td colspan='9'>No students.</td></tr>"}
+                    {''.join(trs) or "<tr><td colspan='10'>No students.</td></tr>"}
                 </tbody>
             </table>
         </div>
