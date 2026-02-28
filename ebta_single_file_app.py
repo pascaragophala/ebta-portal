@@ -3959,7 +3959,7 @@ def student_home():
     conn=get_db(); cur=conn.cursor()
     
     # Determine year to show (use current system month year)
-    system_month = get_setting('current_month')
+    system_month = get_setting('current_month') or month
     year = int(system_month.split('-')[0])
 
     all_months = all_months_for_year(year)
@@ -4063,16 +4063,25 @@ def student_home():
     
     enroll_cta = ""
 
-    if month == system_month and not has_active_enrollment:
+    if not enrolls:
         enroll_cta = f"""
         <div class='card soft' style="display:block !important; width:100%; margin-top:12px;">
             <h3>Not enrolled for {pretty_month_label(month)}</h3>
             <p class='muted'>
-                Enrollments status pending. You can add subjects now.
+                You were not enrolled for this month.
             </p>
             <a class='btn' href='{url_for("home")}' style="display:inline-block;">
                 Enroll now
             </a>
+        </div>
+        """
+    elif not has_active_enrollment:
+        enroll_cta = f"""
+        <div class='card soft' style="display:block !important; width:100%; margin-top:12px;">
+            <h3>Enrollment pending for {pretty_month_label(month)}</h3>
+            <p class='muted'>
+                Your enrollment is still pending approval.
+            </p>
         </div>
         """
 
@@ -4224,18 +4233,9 @@ def student_home():
             JOIN subjects sub ON sub.id=m.subject_id
             JOIN tutors t ON t.id=m.tutor_id
             WHERE m.subject_id IN ({','.join('?'*len(active_sub_ids))})
-              AND (
-                    m.month = ?
-                    OR EXISTS (
-                        SELECT 1 FROM enrollments e
-                        WHERE e.student_id = ?
-                        AND e.subject_id = m.subject_id
-                        AND UPPER(e.status) = 'ACTIVE'
-                        AND substr(e.month,1,7) = substr(m.month,1,7)
-                    )
-              )
+              AND substr(m.month,1,7) = ?
             ORDER BY sub.grade, sub.name, m.created_at DESC
-        """, (*active_sub_ids, month, sid))
+        """, (*active_sub_ids, month))
 
         mats = cur.fetchall()
         
