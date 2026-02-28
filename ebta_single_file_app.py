@@ -7555,7 +7555,7 @@ def admin_students_compare_export():
         FROM students s
         JOIN enrollments e ON e.student_id = s.id
         WHERE e.month = ?
-          AND e.status = 'ACTIVE'
+          AND e.status IN ('ACTIVE','PENDING')
     """, (curr_month,))
     curr_rows = cur.fetchall()
 
