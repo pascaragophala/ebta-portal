@@ -3925,29 +3925,25 @@ def student_logout():
 
 
 def get_active_month(role):
+    """
+    Returns the effective month for the current session.
+
+    Priority:
+    1. User-selected month (session)
+    2. Real current calendar month
+    """
+
+    # Real calendar month in SA timezone
     now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))
     real_month = now.strftime("%Y-%m")
 
     if role == 'student':
-        selected = session.get('student_month')
-        if selected:
-            return selected
+        return session.get('student_month') or real_month
 
-        # AUTO fallback to latest ACTIVE month
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT MAX(month) as m
-            FROM enrollments
-            WHERE student_id=? AND status='ACTIVE'
-        """, (is_student(),))
-        row = cur.fetchone()
-        conn.close()
+    if role == 'tutor':
+        return session.get('tutor_month') or real_month
 
-        if row and row["m"]:
-            return row["m"]
-
-        return real_month
+    return real_month
 
 @app.get('/student')
 def student_home():
@@ -3967,7 +3963,7 @@ def student_home():
 
     # Months where student had at least one ACTIVE enrollment
     cur.execute("""
-        SELECT DISTINCT month
+        SELECT DISTINCT substr(month,1,7) AS month
         FROM enrollments
         WHERE student_id=? AND status='ACTIVE'
     """, (sid,))
@@ -4032,7 +4028,8 @@ def student_home():
     cur.execute("""
     SELECT e.subject_id, e.status, s.name AS subject_name, s.grade
     FROM enrollments e JOIN subjects s ON s.id=e.subject_id
-    WHERE e.student_id=? AND e.month=? ORDER BY s.grade,s.name
+    WHERE e.student_id=? AND substr(e.month,1,7)=?
+    ORDER BY s.grade,s.name
     """,(sid,month))
     enrolls=cur.fetchall()
     active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status']=='ACTIVE']
