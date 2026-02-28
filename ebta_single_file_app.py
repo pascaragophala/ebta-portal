@@ -3952,6 +3952,8 @@ def student_home():
     if r: return r
     sid = is_student()
     month = get_active_month('student')
+    print("DEBUG STUDENT ID:", sid)
+    print("DEBUG ACTIVE MONTH:", month)
 
     conn=get_db(); cur=conn.cursor()
     
@@ -3968,6 +3970,10 @@ def student_home():
         WHERE student_id=? AND status='ACTIVE'
     """, (sid,))
     active_months = {r['month'] for r in cur.fetchall()}
+    
+    rows = cur.fetchall()
+    print("DEBUG ACTIVE MONTHS IN DB:", rows)
+    active_months = {r['month'] for r in rows}
     
     month_selector = f"""
     <div class="card soft" style="margin-bottom:14px;border-left:5px solid #25D366">
@@ -4028,7 +4034,8 @@ def student_home():
     cur.execute("""
     SELECT e.subject_id, e.status, s.name AS subject_name, s.grade
     FROM enrollments e JOIN subjects s ON s.id=e.subject_id
-    WHERE e.student_id=? AND substr(e.month,1,7)=?
+    WHERE e.student_id=? 
+    AND strftime('%Y-%m', e.month) = ?
     ORDER BY s.grade,s.name
     """,(sid,month))
     enrolls=cur.fetchall()
