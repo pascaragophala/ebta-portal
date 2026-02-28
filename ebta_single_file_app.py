@@ -3969,10 +3969,10 @@ def student_home():
         FROM enrollments
         WHERE student_id=? AND status='ACTIVE'
     """, (sid,))
-    active_months = {r['month'] for r in cur.fetchall()}
-    
+
     rows = cur.fetchall()
     print("DEBUG ACTIVE MONTHS IN DB:", rows)
+
     active_months = {r['month'] for r in rows}
     
     month_selector = f"""
@@ -4035,7 +4035,7 @@ def student_home():
     SELECT e.subject_id, e.status, s.name AS subject_name, s.grade
     FROM enrollments e JOIN subjects s ON s.id=e.subject_id
     WHERE e.student_id=? 
-    AND strftime('%Y-%m', e.month) = ?
+    AND substr(e.month,1,7) = ?
     ORDER BY s.grade,s.name
     """,(sid,month))
     enrolls=cur.fetchall()
