@@ -3963,17 +3963,26 @@ def student_home():
 
     all_months = all_months_for_year(year)
 
-    # Months where student had at least one ACTIVE enrollment
+    # Months where student enrolled (any status)
+    cur.execute("""
+        SELECT DISTINCT substr(month,1,7) AS month
+        FROM enrollments
+        WHERE student_id=?
+    """, (sid,))
+
+    rows_all = cur.fetchall()
+    enrolled_months = {r['month'] for r in rows_all}
+
+    # Months where student was ACTIVE
     cur.execute("""
         SELECT DISTINCT substr(month,1,7) AS month
         FROM enrollments
         WHERE student_id=? AND status='ACTIVE'
     """, (sid,))
 
-    rows = cur.fetchall()
-    print("DEBUG ACTIVE MONTHS IN DB:", rows)
-
-    active_months = {r['month'] for r in rows}
+    rows_active = cur.fetchall()
+    active_months = {r['month'] for r in rows_active}
+    
     
     month_selector = f"""
     <div class="card soft" style="margin-bottom:14px;border-left:5px solid #25D366">
@@ -4007,11 +4016,11 @@ def student_home():
                     f"{'selected' if m == month else ''}>"
                     f"{'✓ ' if m in active_months else ''}"
                     f"{pretty_month_label(m)}"
-                    f"{'' if m in active_months else ' (not enrolled)'}"
+                    f"{' (pending)' if m in enrolled_months and m not in active_months else ''}"
+                    f"{' (not enrolled)' if m not in enrolled_months else ''}"
                     f"</option>"
                     for m in all_months
                 )}
-
             </select>
 
         </form>
@@ -4040,7 +4049,7 @@ def student_home():
     """,(sid,month))
     enrolls=cur.fetchall()
     active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status']=='ACTIVE']
-    has_active_enrollment = month in active_months
+    has_active_enrollment = any(x['status'] == 'ACTIVE' for x in enrolls)
     
     enroll_cta = ""
 
