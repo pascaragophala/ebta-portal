@@ -2086,7 +2086,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 SELECT COUNT(*)
                 FROM materials m
                 WHERE (m.is_assignment=1 OR m.kind='assignment') AND m.month=?
-                AND m.subject_id IN (SELECT subject_id FROM enrollments WHERE student_id=? AND month=? AND status='ACTIVE')
+                AND m.subject_id IN (SELECT subject_id FROM enrollments WHERE student_id=? AND month=? AND UPPER(status)='ACTIVE')
                 AND NOT EXISTS (SELECT 1 FROM submissions s WHERE s.material_id=m.id AND s.student_id=?)
             """, (month, sid, month, sid))
             pending = cur.fetchone()[0] or 0
@@ -3954,6 +3954,7 @@ def student_home():
     month = get_active_month('student')
     print("DEBUG STUDENT ID:", sid)
     print("DEBUG ACTIVE MONTH:", month)
+    print("DEBUG TYPE OF month:", month, len(month))
 
     conn=get_db(); cur=conn.cursor()
     
@@ -4039,6 +4040,15 @@ def student_home():
         </form>
         """
 
+
+    cur.execute("""
+        SELECT student_id, month, status
+        FROM enrollments
+        WHERE student_id=?
+    """, (sid,))
+    debug_rows = cur.fetchall()
+    print("DEBUG ENROLLMENTS:", [dict(r) for r in debug_rows])
+    
     # Enrollments this month
     cur.execute("""
     SELECT e.subject_id, e.status, s.name AS subject_name, s.grade
@@ -4048,8 +4058,8 @@ def student_home():
     ORDER BY s.grade,s.name
     """,(sid,month))
     enrolls=cur.fetchall()
-    active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status']=='ACTIVE']
-    has_active_enrollment = any(x['status'] == 'ACTIVE' for x in enrolls)
+    active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status'].upper()=='ACTIVE']
+    has_active_enrollment = any(x['status'].upper() == 'ACTIVE' for x in enrolls)
     
     enroll_cta = ""
 
@@ -4220,8 +4230,8 @@ def student_home():
                         SELECT 1 FROM enrollments e
                         WHERE e.student_id = ?
                         AND e.subject_id = m.subject_id
-                        AND e.status = 'ACTIVE'
-                        AND e.month = m.month
+                        AND UPPER(e.status) = 'ACTIVE'
+                        AND substr(e.month,1,7) = substr(m.month,1,7)
                     )
               )
             ORDER BY sub.grade, sub.name, m.created_at DESC
