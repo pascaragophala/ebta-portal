@@ -3319,7 +3319,16 @@ def register():
     cur = conn.cursor()
 
     # Check existing student
-    cur.execute("SELECT id, pin FROM students WHERE phone_whatsapp=?", (phone,))
+    variants = phone_variants(phone)
+
+    placeholders = ",".join("?" * len(variants))
+
+    cur.execute(f"""
+        SELECT id, pin
+        FROM students
+        WHERE phone_whatsapp IN ({placeholders})
+        LIMIT 1
+    """, variants)
     srow = cur.fetchone()
 
     if srow:
@@ -3594,6 +3603,33 @@ def admin_registered():
     """
     return page('Registered students', body)
 
+@app.get("/admin/normalize-phones")
+def normalize_all_phones():
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT id, phone_whatsapp, phone_type FROM students")
+    rows = cur.fetchall()
+
+    for row in rows:
+        phone_type = row["phone_type"] or "SA"
+        normalized = normalize_phone(row["phone_whatsapp"], phone_type)
+
+        if normalized:
+            cur.execute(
+                "UPDATE students SET phone_whatsapp=? WHERE id=?",
+                (normalized, row["id"])
+            )
+
+    conn.commit()
+    conn.close()
+
+    return "All student numbers normalized safely."
+
 # ===================== Status page ==============
 @app.get('/status/<int:id>')
 def status(id: int):
@@ -3774,10 +3810,17 @@ def student_login_post():
         SELECT id, pin, full_name
         FROM students
         WHERE phone_whatsapp IN ({placeholders})
-        LIMIT 1
+        ORDER BY id DESC
     """, variants)
 
-    row = cur.fetchone()
+    rows = cur.fetchall()
+
+    row = None
+    for r in rows:
+        if r["pin"] == pin:
+            row = r
+            break
+
     conn.close()
 
     if not row or not row['pin'] or row['pin'] != pin:
