@@ -255,6 +255,10 @@ def init_db():
     ensure_column(conn, "sessions", "is_visible", "INTEGER NOT NULL DEFAULT 1")
     ensure_column(conn, "subjects", "uploads_locked", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "materials", "admin_unlocked", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "students", "phone_type", "TEXT DEFAULT 'SA'")
+    ensure_column(conn, "students", "guardian_phone_type", "TEXT DEFAULT 'SA'")
+    ensure_column(conn, "sessions", "meeting_id", "TEXT")
+    ensure_column(conn, "sessions", "meeting_passcode", "TEXT")
 
 
 
@@ -265,7 +269,6 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollment_files_enr ON enrollment_files(enrollment_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_created ON students(created_at)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollments_month_created ON enrollments(month, created_at)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at DESC)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_full_name ON students(full_name)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_phone ON students(phone_whatsapp)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_guardian ON students(guardian_phone)")
@@ -317,6 +320,9 @@ def init_db():
         resolved INTEGER NOT NULL DEFAULT 0
     );
     """)
+    
+    # THEN indexes
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at DESC)")    
 
     # Students rate their classes monthly (24th to end-of-month)
     cur.execute("""
@@ -334,7 +340,24 @@ def init_db():
     );
     """)
     
-    
+    # ================= FOLLOW UPS =================
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS followups(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT,
+        grade TEXT,
+        subjects TEXT,
+        followup_status TEXT DEFAULT 'OPEN',
+        payment_date TEXT,
+        date_communicated TEXT,
+        notes TEXT,
+        created_at TEXT NOT NULL
+    );
+    """)
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_followups_name ON followups(full_name)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_followups_status ON followups(followup_status)")
     
 
     # Defaults & seed
@@ -642,10 +665,87 @@ def secure_name(name):
     return ''.join(ch if ch in keep else '_' for ch in name)
 
 
-def normalize_phone(phone: str) -> str:
+def normalize_phone(phone: str, phone_type: str = "SA", strict: bool = False) -> str:
+
     if not phone:
         return ""
-    return ''.join(ch for ch in phone if ch.isdigit())
+
+    phone = str(phone).strip()
+    phone = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+
+    digits = ''.join(ch for ch in phone if ch.isdigit())
+
+    # INTERNATIONAL
+    if phone_type == "INT":
+        if phone.startswith("+"):
+            return "+" + digits
+        return "+" + digits
+
+    # SOUTH AFRICA
+    if phone.startswith("+27") and len(digits) == 11:
+        return "+27" + digits[-9:]
+
+    if digits.startswith("27") and len(digits) == 11:
+        return "+27" + digits[2:]
+
+    if len(digits) == 10 and digits.startswith("0"):
+        return "+27" + digits[1:]
+
+    if strict:
+        raise ValueError("South African numbers must be 10 digits starting with 0.")
+
+    return ""
+    
+def phone_variants(phone: str):
+    """
+    Generate all possible phone variants so login works
+    regardless of format entered.
+    Supports:
+    0821234567
+    +27821234567
+    27821234567
+    international numbers
+    """
+
+    if not phone:
+        return []
+
+    raw = str(phone).strip()
+
+    # remove spaces, brackets, dashes
+    clean = raw.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+
+    # digits only
+    digits = ''.join(ch for ch in clean if ch.isdigit())
+
+    variants = set()
+
+    # always include original clean input
+    variants.add(clean)
+
+    # include digits-only version
+    if digits:
+        variants.add(digits)
+        variants.add("+" + digits)
+
+    # South Africa conversions
+
+    # 0821234567 → 27821234567 and +27821234567
+    if digits.startswith("0") and len(digits) == 10:
+        variants.add("27" + digits[1:])
+        variants.add("+27" + digits[1:])
+
+    # 27821234567 → 0821234567 and +27821234567
+    elif digits.startswith("27") and len(digits) == 11:
+        variants.add("0" + digits[2:])
+        variants.add("+27" + digits[2:])
+
+    # +27821234567 → 27821234567 and 0821234567
+    if clean.startswith("+") and digits.startswith("27") and len(digits) == 11:
+        variants.add(digits)
+        variants.add("0" + digits[2:])
+
+    return list(variants)
 
 
 def gen_pin(existing):
@@ -793,7 +893,7 @@ def send_sms_notification(to_phone: str, body: str):
         phone = "+" + phone
 
     # already correct format
-    elif phone.startswith("+27"):
+    elif phone.startswith("+"):
         pass
 
     else:
@@ -810,7 +910,7 @@ def send_sms_notification(to_phone: str, body: str):
             conn.close()
         except:
             pass
-        return
+        return  
 
     to_phone = phone
 
@@ -1557,8 +1657,36 @@ background:#fff;
     color: #059669;
 }
 
+/* Followups table improvements */
+.followups-table th,
+.followups-table td{
+    min-width:120px;
+    vertical-align:middle;
+}
 
+.followups-table input,
+.followups-table select{
+    min-width:120px;
+}
 
+.followups-table textarea{
+    min-width:180px;
+}
+
+.followups-table td.notes-cell{
+    min-width:220px;
+}
+
+.follow-open{
+    background:#d94848 !important;
+}
+
+.follow-paid{
+    background:#35db37 !important;
+}
+.overdue{
+    border-left:6px solid #dc2626 !important;
+}
 </style>
 """
 
@@ -2425,16 +2553,37 @@ def home():
             </div>
             <div>
             <label>Student WhatsApp Number</label>
-            <input name='phone' required/>
+
+            <select name="phone_type" id="phone_type">
+                <option value="SA">South African</option>
+                <option value="INT">International</option>
+            </select>
+
+            <input name="phone"
+                   id="phone_input"
+                   required
+                   placeholder="Enter your number here">
             </div>
+            
             <div>
-            <label>Guardian Name</label>
-            <input name='guardian_name' required/>
+            <label>Guardian Name & Surname</label>
+            <input name="guardian_name" required />
             </div>
+            
             <div>
             <label>Guardian WhatsApp Number</label>
-            <input name='guardian' required/>
+
+            <select name="guardian_phone_type" id="guardian_phone_type">
+                <option value="SA">South African</option>
+                <option value="INT">International</option>
+            </select>
+
+            <input name="guardian"
+                   id="guardian_input"
+                   required
+                   placeholder="Enter your guardian number here">
             </div>
+ 
             <div>
             <label>Student Email (optional)</label>
             <input name='email'/>
@@ -2675,6 +2824,8 @@ function showPopup(message, type='info', timeout=4000){
     }
 
     form.addEventListener('submit', function(e){
+        const studentPhoneInput = document.getElementById("phone_input");
+        const guardianPhoneInput = document.getElementById("guardian_input");
         const termsCheck = document.getElementById('terms_check');
 
         if(!termsCheck || !termsCheck.checked){
@@ -2688,27 +2839,77 @@ function showPopup(message, type='info', timeout=4000){
         const grade = gradeSelect.value;
 
         // Validate phone numbers: ensure 10 digits for student and guardian WhatsApp numbers
-        const studentPhoneInput = form.querySelector("input[name='phone']") || form.querySelector("input[name='phone_whatsap']") || form.querySelector("input[name='phone_whatsapp']");
-        const guardianPhoneInput = form.querySelector("input[name='guardian_phone']") || form.querySelector("input[name='guardian']");
-        function digitsOnly(str){ return (str||'').replace(/\\D/g,''); }
+        const studentType =
+            document.querySelector("select[name='phone_type']")?.value || "SA";
+
+        const guardianType =
+            document.querySelector("select[name='guardian_phone_type']")?.value || "SA";
+
+
+        function digitsOnly(str){
+            return (str ||'').replace(/\\D/g,'');
+        }
+
+        // Student validation
         if(studentPhoneInput){
-            const sdigits = digitsOnly(studentPhoneInput.value);
-            if(sdigits.length !== 10){
-                e.preventDefault();
-                showPopup('Student WhatsApp number must be exactly 10 digits.', 'error');
-                studentPhoneInput.focus();
-                return;
+
+            if(studentType === "SA"){
+                const digits = digitsOnly(studentPhoneInput.value);
+
+                if(digits.length !== 10){
+                    e.preventDefault();
+                    showPopup("South African number must be exactly 10 digits (e.g. 0821234567).","error");
+                    studentPhoneInput.focus();
+                    return;
+                }
+
+                if(!digits.startsWith("0")){
+                    e.preventDefault();
+                    showPopup("South African number must start with 0.","error");
+                    studentPhoneInput.focus();
+                    return;
+                }
+
+            } else {
+                if(!studentPhoneInput.value.startsWith("+")){
+                    e.preventDefault();
+                    showPopup("International number must start with +","error");
+                    studentPhoneInput.focus();
+                    return;
+                }
             }
         }
+
+        // Guardian validation
         if(guardianPhoneInput){
-            const gdigits = digitsOnly(guardianPhoneInput.value);
-            if(gdigits.length !== 10){
-                e.preventDefault();
-                showPopup('Guardian WhatsApp number must be exactly 10 digits.', 'error');
-                guardianPhoneInput.focus();
-                return;
+
+            if(guardianType === "SA"){
+                const digits = digitsOnly(guardianPhoneInput.value);
+
+                if(digits.length !== 10){
+                    e.preventDefault();
+                    showPopup("Guardian SA number must be exactly 10 digits.","error");
+                    guardianPhoneInput.focus();
+                    return;
+                }
+
+                if(!digits.startsWith("0")){
+                    e.preventDefault();
+                    showPopup("Guardian SA number must start with 0.","error");
+                    guardianPhoneInput.focus();
+                    return;
+                }
+
+            } else {
+                if(!guardianPhoneInput.value.startsWith("+")){
+                    e.preventDefault();
+                    showPopup("Guardian international number must start with +","error");
+                    guardianPhoneInput.focus();
+                    return;
+                }
             }
         }
+        
         // Validate optional student email ends with @gmail.com if provided
         const emailInput = form.querySelector("input[name='email']") || form.querySelector("input[name='student_email']");
         if(emailInput && emailInput.value.trim() !== ''){
@@ -3072,8 +3273,17 @@ def register():
             )
         )
     full_name = request.form.get('full_name','').strip()
-    phone = normalize_phone(request.form.get('phone',''))
-    guardian = request.form.get('guardian','').strip()
+    phone_type = request.form.get("phone_type", "SA")
+    guardian_phone_type = request.form.get("guardian_phone_type", "SA")
+
+    try:
+        phone = normalize_phone(request.form.get("phone",""), phone_type, strict=True)
+
+        guardian = normalize_phone(request.form.get("guardian",""),guardian_phone_type, strict=True)
+        
+    except ValueError as e:
+        return page("Error", card_msg(str(e)))
+    
     guardian_name = request.form.get('guardian_name','').strip()
     email = request.form.get('email','').strip() or None
     subject_ids = request.form.getlist('subject_ids')
@@ -3138,8 +3348,10 @@ def register():
             pin,
             province,
             school,
+            phone_type,
+            guardian_phone_type,
             created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)
+        )VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             full_name,
             phone,
@@ -3150,6 +3362,8 @@ def register():
             pin,
             province,
             school,
+            phone_type,
+            guardian_phone_type,
             now_utc_iso()
         ))
 
@@ -3471,7 +3685,12 @@ def student_login():
         <form method='post' action='{url_for('student_login_post')}' class='grid'>
             <div>
                 <label>WhatsApp number</label>
-                <input name='phone' required />
+                <select name="phone_type">
+                    <option value="SA">South Africa</option>
+                    <option value="INT">International</option>
+                </select>
+
+                <input name='phone' required placeholder="Enter your WhatsApp number here"/>
             </div>
 
             <div>
@@ -3496,7 +3715,12 @@ def student_login():
                 </div>
                 <div>
                     <label>WhatsApp number</label>
-                    <input name='phone' required />
+                    <select name="phone_type">
+                        <option value="SA">South Africa</option>
+                        <option value="INT">International</option>
+                    </select>
+
+                    <input name='phone' required/>
                 </div>
                 <button class='btn secondary'>Notify Admin</button>
             </form>
@@ -3527,22 +3751,51 @@ def student_login():
 
 @app.post('/student/login')
 def student_login_post():
-    phone = normalize_phone(request.form.get('phone',''))
-    pin=request.form.get('pin','').strip()
-    conn=get_db(); cur=conn.cursor()
-    cur.execute("SELECT id,pin,full_name FROM students WHERE phone_whatsapp=?", (phone,))
-    row=cur.fetchone(); conn.close()
-    if not row or not row['pin'] or row['pin']!=pin:
+
+    raw_phone = request.form.get('phone','').strip()
+    pin = request.form.get('pin','').strip()
+
+    if raw_phone.startswith("+"):
+        normalized = normalize_phone(raw_phone, "INT")
+    else:
+        normalized = normalize_phone(raw_phone, "SA")
+
+    variants = phone_variants(normalized)
+
+    if not variants:
+        return page("Login failed", card_msg("Incorrect Phone Number."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    placeholders = ",".join("?" * len(variants))
+
+    cur.execute(f"""
+        SELECT id, pin, full_name
+        FROM students
+        WHERE phone_whatsapp IN ({placeholders})
+        LIMIT 1
+    """, variants)
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row['pin'] or row['pin'] != pin:
         return page("Login failed", card_msg("Wrong phone or PIN."))
-    session['student_id']=row['id']; session['student_name']=row['full_name']
+
+    session['student_id'] = row['id']
+    session['student_name'] = row['full_name']
+
     return redirect(url_for('student_home'))
 
 @app.post('/student/forgot-pin')
 def student_forgot_pin():
 
-    phone = normalize_phone(request.form.get('phone',''))
+    raw_phone = request.form.get('phone','').strip()
 
-    if not phone:
+    variants = phone_variants(raw_phone)
+
+    if not variants:
         return page(
             "Error",
             card_msg("Please enter your WhatsApp number.")
@@ -3551,14 +3804,19 @@ def student_forgot_pin():
     conn = get_db()
     cur = conn.cursor()
 
-    # Find student
-    cur.execute("""
+    placeholders = ",".join("?" * len(variants))
+
+    cur.execute(f"""
         SELECT id, full_name, phone_whatsapp, pin
         FROM students
-        WHERE phone_whatsapp=?
-    """, (phone,))
+        WHERE phone_whatsapp IN ({placeholders})
+        LIMIT 1
+    """, variants)
 
     student = cur.fetchone()
+
+    # Use the actual stored phone
+    phone = student["phone_whatsapp"] if student else raw_phone
 
     # Student not found
     if not student:
@@ -3694,6 +3952,8 @@ def student_home():
     if r: return r
     sid = is_student()
     month = get_active_month('student')
+    print("DEBUG STUDENT ID:", sid)
+    print("DEBUG ACTIVE MONTH:", month)
 
     conn=get_db(); cur=conn.cursor()
     
@@ -3705,11 +3965,15 @@ def student_home():
 
     # Months where student had at least one ACTIVE enrollment
     cur.execute("""
-        SELECT DISTINCT month
+        SELECT DISTINCT substr(month,1,7) AS month
         FROM enrollments
         WHERE student_id=? AND status='ACTIVE'
     """, (sid,))
-    active_months = {r['month'] for r in cur.fetchall()}
+
+    rows = cur.fetchall()
+    print("DEBUG ACTIVE MONTHS IN DB:", rows)
+
+    active_months = {r['month'] for r in rows}
     
     month_selector = f"""
     <div class="card soft" style="margin-bottom:14px;border-left:5px solid #25D366">
@@ -3770,7 +4034,9 @@ def student_home():
     cur.execute("""
     SELECT e.subject_id, e.status, s.name AS subject_name, s.grade
     FROM enrollments e JOIN subjects s ON s.id=e.subject_id
-    WHERE e.student_id=? AND e.month=? ORDER BY s.grade,s.name
+    WHERE e.student_id=? 
+    AND substr(e.month,1,7) = ?
+    ORDER BY s.grade,s.name
     """,(sid,month))
     enrolls=cur.fetchall()
     active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status']=='ACTIVE']
@@ -3855,7 +4121,7 @@ def student_home():
     # Sessions + Meet link for enrolled subjects
     sessions_html="<div class='empty'>No sessions yet.</div>"
     if has_active_enrollment and active_sub_ids:
-        q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link
+        q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link,s.meeting_id,s.meeting_passcode
             FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
             WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(active_sub_ids))})
             ORDER BY s.day_of_week, s.start_time"""
@@ -3897,7 +4163,15 @@ def student_home():
 
                             <div class="mini muted">
                                 {DOW[r['day_of_week']]} • {r['start_time']} - {r['end_time']}
+
                             </div>
+                            
+                            {f"""
+                            <div style="margin-top:6px;font-size:13px">
+                                <div><b>Meeting ID:</b> {r['meeting_id']}</div>
+                                <div><b>Passcode:</b> {r['meeting_passcode']}</div>
+                            </div>
+                            """ if r['meeting_id'] or r['meeting_passcode'] else ""}
 
                         </div>
 
@@ -3923,7 +4197,7 @@ def student_home():
 
     assignments = []
     
-    if has_active_enrollment and active_sub_ids:
+    if active_sub_ids:
 
         cur.execute(f"""
             SELECT m.*, sub.name AS subject_name, sub.grade, t.full_name AS tutor_name
@@ -3931,9 +4205,18 @@ def student_home():
             JOIN subjects sub ON sub.id=m.subject_id
             JOIN tutors t ON t.id=m.tutor_id
             WHERE m.subject_id IN ({','.join('?'*len(active_sub_ids))})
-              AND m.month = ?
+              AND (
+                    m.month = ?
+                    OR EXISTS (
+                        SELECT 1 FROM enrollments e
+                        WHERE e.student_id = ?
+                        AND e.subject_id = m.subject_id
+                        AND e.status = 'ACTIVE'
+                        AND e.month = m.month
+                    )
+              )
             ORDER BY sub.grade, sub.name, m.created_at DESC
-        """, (*active_sub_ids, month))
+        """, (*active_sub_ids, month, sid))
 
         mats = cur.fetchall()
         
@@ -4772,7 +5055,12 @@ def tutor_login():
         <form method='post' action='{url_for('tutor_login_post')}' class='grid'>
             <div>
                 <label>Phone number</label>
-                <input name='phone' required />
+                <select name="phone_type">
+                    <option value="SA">South Africa</option>
+                    <option value="INT">International</option>
+                </select>
+
+                <input name='phone' required/>
             </div>
 
             <div>
@@ -4797,7 +5085,12 @@ def tutor_login():
                 </div>
                 <div>
                     <label>Phone number</label>
-                    <input name='phone' required />
+                    <select name="phone_type">
+                        <option value="SA">South Africa</option>
+                        <option value="INT">International</option>
+                    </select>
+
+                    <input name='phone' required/>
                 </div>
                 <button class='btn secondary'>Notify Admin</button>
             </form>
@@ -4825,20 +5118,66 @@ def tutor_login():
 
     return page("Tutor Login", body, extra_js=extra_js)
 
+
 @app.post('/tutor/login')
 def tutor_login_post():
-    phone = normalize_phone(request.form.get('phone','')); pin=request.form.get('pin','').strip()
-    conn=get_db(); cur=conn.cursor()
-    cur.execute("SELECT id,pin,full_name FROM tutors WHERE phone=?", (phone,))
-    row=cur.fetchone(); conn.close()
-    if not row or not row['pin'] or row['pin']!=pin:
-        return page("Login failed", card_msg("Wrong phone or PIN."))
-    session['tutor_id']=row['id']; session['tutor_name']=row['full_name']
+
+    # Get raw input
+    raw_phone = request.form.get('phone', '').strip()
+    pin = request.form.get('pin', '').strip()
+
+    # Normalize first (remove spaces, symbols)
+    if raw_phone.startswith("+"):
+        normalized = normalize_phone(raw_phone, "INT")
+    else:
+        normalized = normalize_phone(raw_phone, "SA")
+
+    # Generate all possible variants
+    variants = phone_variants(normalized)
+
+    if not variants:
+        return page(
+            "Login failed",
+            card_msg("Phone number required.")
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Build safe SQL placeholders (?, ?, ?, ...)
+    placeholders = ",".join("?" * len(variants))
+
+    cur.execute(f"""
+        SELECT id, pin, full_name
+        FROM tutors
+        WHERE phone IN ({placeholders})
+        LIMIT 1
+    """, variants)
+
+    tutor = cur.fetchone()
+
+    conn.close()
+
+    # Validate credentials
+    if not tutor or not tutor['pin'] or tutor['pin'] != pin:
+        return page(
+            "Login failed",
+            card_msg("Wrong phone or PIN.")
+        )
+
+    # Create session
+    session['tutor_id'] = tutor['id']
+    session['tutor_name'] = tutor['full_name']
+
     return redirect(url_for('tutor_home'))
 
 @app.post('/tutor/forgot-pin')
 def tutor_forgot_pin():
-    phone = normalize_phone(request.form.get('phone',''))
+    raw_phone = request.form.get('phone','').strip()
+
+    variants = phone_variants(raw_phone)
+
+    phone = variants[0] if variants else ""
     if not phone: return page("Error", card_msg("Phone required."))
     conn=get_db(); cur=conn.cursor()
     cur.execute("INSERT INTO messages(kind,payload,created_at) VALUES(?,?,?)",
@@ -4980,9 +5319,24 @@ def tutor_home():
 
 
     # Sessions for this tutor
-    cur.execute("""SELECT se.id, se.subject_id, s.name AS subject_name, s.grade, se.day_of_week, se.start_time, se.end_time, se.meet_link
-                FROM sessions se JOIN subjects s ON s.id=se.subject_id
-                WHERE se.tutor_id=? AND se.active=1 ORDER BY se.day_of_week,se.start_time""",(tid,))
+    cur.execute("""
+        SELECT 
+            se.id,
+            se.subject_id,
+            s.name AS subject_name,
+            s.grade,
+            se.day_of_week,
+            se.start_time,
+            se.end_time,
+            se.meet_link,
+            se.meeting_id,
+            se.meeting_passcode
+        FROM sessions se
+        JOIN subjects s ON s.id = se.subject_id
+        WHERE se.tutor_id = ?
+          AND se.active = 1
+        ORDER BY se.day_of_week, se.start_time
+    """, (tid,))
     sess=cur.fetchall()
     session_cards = []
 
@@ -5027,6 +5381,13 @@ def tutor_home():
                     <div class="mini muted">
                         {DOW[r['day_of_week']]} • {r['start_time']} - {r['end_time']}
                     </div>
+                    
+                    {f"""
+                    <div style="margin-top:6px;font-size:13px">
+                        <div><b>Meeting ID:</b> {r['meeting_id']}</div>
+                        <div><b>Passcode:</b> {r['meeting_passcode']}</div>
+                    </div>
+                    """ if r['meeting_id'] or r['meeting_passcode'] else ""}
 
                 </div>
 
@@ -6365,7 +6726,7 @@ def admin_nav():
         <a class="btn secondary" href="{url_for('admin_direct_messages')}">Direct Msgs</a>
         <a class="btn secondary" href="{url_for('admin_sms_dashboard')}">SMS Dashboard</a>
         <a class="btn secondary" href="{url_for('admin_process_sms')}">Processed SMS</a>
-
+        <a class="btn secondary" href="{url_for('admin_followups')}">Follow-Ups</a>
     </nav>
     """
 
@@ -6405,6 +6766,7 @@ def admin_home():
     </div></section>"""
     return page("Admin", body)
 
+
 # --- Admin: Enrollments (show all PoP files) ---
 
 def format_datetime(dt_str):
@@ -6427,6 +6789,8 @@ def admin_enrollments():
     year = month.split('-')[0]
 
     page_num = int(request.args.get("page", 1))
+    q = request.args.get("q", "").strip()
+    q_safe = escape(q)
     limit = 30
     offset = (page_num - 1) * limit
 
@@ -6434,12 +6798,46 @@ def admin_enrollments():
     cur = conn.cursor()
 
     # Total count
-    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,))
+    # -----------------------
+    # Build filters
+    # -----------------------
+    params = [month]
+    where_sql = "WHERE e.month = ?"
+
+    if q:
+        where_sql += """
+        AND (
+            st.full_name LIKE ?
+            OR st.phone_whatsapp LIKE ?
+            OR st.grade LIKE ?
+            OR sub.name LIKE ?
+            OR e.status LIKE ?
+        )
+        """
+        search_term = f"%{q}%"
+        params.extend([search_term] * 5)
+
+    # -----------------------
+    # COUNT query
+    # -----------------------
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM enrollments e
+        JOIN students st ON st.id = e.student_id
+        JOIN subjects sub ON sub.id = e.subject_id
+        {where_sql}
+    """, params)
+
     total = cur.fetchone()['c']
     total_pages = (total + limit - 1) // limit
 
-    # Main query
-    cur.execute("""
+    # -----------------------
+    # MAIN query
+    # -----------------------
+    data_params = list(params)
+    data_params.extend([limit, offset])
+
+    cur.execute(f"""
         SELECT 
             e.id, e.student_id, e.status, e.amount_paid,
             e.pop_url, e.status_token,
@@ -6449,10 +6847,11 @@ def admin_enrollments():
         FROM enrollments e
         JOIN students st ON st.id = e.student_id
         JOIN subjects sub ON sub.id = e.subject_id
-        WHERE e.month = ?
+        {where_sql}
         ORDER BY e.created_at DESC
         LIMIT ? OFFSET ?
-    """, (month, limit, offset))
+    """, data_params)
+
     rows = cur.fetchall()
 
     # Returning students
@@ -6518,22 +6917,37 @@ def admin_enrollments():
 
     page_links = []
 
+    # Base query string (preserve search)
+    query_string = f"&q={q_safe}" if q else ""
+
     # First + Prev
     if page_num > 1:
-        page_links.append(f"<a class='links' href='?page=1'>« First</a>")
-        page_links.append(f"<a class='links' href='?page={page_num-1}'>‹ Prev</a>")
+        page_links.append(
+            f"<a class='links' href='?page=1{query_string}'>« First</a>"
+        )
+        page_links.append(
+            f"<a class='links' href='?page={page_num-1}{query_string}'>‹ Prev</a>"
+        )
 
     # Numbered pages
     for p in range(start, end + 1):
         if p == page_num:
-            page_links.append(f"<span class='current' style='padding:4px 8px;background:#0f172a;color:white;border-radius:6px'>{p}</span>")
+            page_links.append(
+                f"<span class='current' style='padding:4px 8px;background:#0f172a;color:white;border-radius:6px'>{p}</span>"
+            )
         else:
-            page_links.append(f"<a class='links' href='?page={p}'>{p}</a>")
+            page_links.append(
+                f"<a class='links' href='?page={p}{query_string}'>{p}</a>"
+            )
 
     # Next + Last
     if page_num < total_pages:
-        page_links.append(f"<a class='links' href='?page={page_num+1}'>Next ›</a>")
-        page_links.append(f"<a class='links' href='?page={total_pages}'>Last »</a>")
+        page_links.append(
+            f"<a class='links' href='?page={page_num+1}{query_string}'>Next ›</a>"
+        )
+        page_links.append(
+            f"<a class='links' href='?page={total_pages}{query_string}'>Last »</a>"
+        )
 
 
     nav = f"""
@@ -6583,9 +6997,17 @@ def admin_enrollments():
         <h1>Enrollments — {month}</h1>
 
         <div class='toolbar'>
-            <input id='enr_q' class='pill'
-                   placeholder='Search by name, phone, grade, subject'
-                   oninput="filterTable('enr_q','enr_tbl')"/>
+            <form method="get" style="display:flex;gap:8px;align-items:center">
+                <input type="text"
+                       name="q"
+                       value="{q_safe}"
+                       placeholder="Search name, phone, grade, subject, status"
+                       class="pill">
+
+                <input type="hidden" name="page" value="1">
+
+                <button class="btn mini">Search</button>
+            </form>
         </div>
 
         {nav}
@@ -6745,10 +7167,10 @@ def enrollment_action(id: int, action: str):
 
 @app.get('/admin/students')
 def admin_students():
+    
     q = request.args.get("q", "").strip()
+    selected_month = request.args.get("month", "").strip()
     q_safe = escape(q)
-    if q:
-        page_num = 1
 
     r = require_admin()
     if r:
@@ -6761,61 +7183,87 @@ def admin_students():
     conn = get_db()
     cur = conn.cursor()
 
+    params = []
+    where_clauses = []
+
+    if selected_month:
+        where_clauses.append("e.month = ?")
+        params.append(selected_month)
+
     if q:
-        cur.execute("""
-            SELECT COUNT(*) AS c
-            FROM students
-            WHERE
-                full_name LIKE ?
-                OR phone_whatsapp LIKE ?
-                OR guardian_phone LIKE ?
-                OR email LIKE ?
-                OR school LIKE ?
-        """, (f"%{q}%",)*5)
-    else:
-        cur.execute("SELECT COUNT(*) AS c FROM students")
+        where_clauses.append("""
+            (
+                s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR s.guardian_phone LIKE ?
+                OR s.email LIKE ?
+                OR s.school LIKE ?
+            )
+        """)
+        search_term = f"%{q}%"
+        params.extend([search_term]*5)
+
+    where_sql = ""
+    if where_clauses:
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+
+    cur.execute(f"""
+        SELECT COUNT(DISTINCT s.id) AS c
+        FROM students s
+        LEFT JOIN enrollments e ON e.student_id = s.id
+        {where_sql}
+    """, params)
 
     total = cur.fetchone()['c']
     total_pages = (total + limit - 1) // limit
+    if total_pages == 0:
+        total_pages = 1
+
+    params = []
+    where_clauses = []
+
+    if selected_month:
+        where_clauses.append("e.month = ?")
+        params.append(selected_month)
 
     if q:
-        cur.execute("""
-            SELECT
-                id,
-                full_name,
-                phone_whatsapp,
-                guardian_phone,
-                email,
-                grade,
-                province,
-                school,
-                pin
-            FROM students
-            WHERE
-                full_name LIKE ?
-                OR phone_whatsapp LIKE ?
-                OR guardian_phone LIKE ?
-                OR email LIKE ?
-                OR school LIKE ?
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
-        """, (f"%{q}%",)*5 + (limit, offset))
-    else:
-        cur.execute("""
-            SELECT
-                id,
-                full_name,
-                phone_whatsapp,
-                guardian_phone,
-                email,
-                grade,
-                province,
-                school,
-                pin
-            FROM students
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
-        """, (limit, offset))
+        where_clauses.append("""
+            (
+                s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR s.guardian_phone LIKE ?
+                OR s.email LIKE ?
+                OR s.school LIKE ?
+            )
+        """)
+        search_term = f"%{q}%"
+        params.extend([search_term]*5)
+
+    where_sql = ""
+    if where_clauses:
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+
+    params.extend([limit, offset])
+
+    cur.execute(f"""
+        SELECT
+            s.id,
+            s.full_name,
+            s.phone_whatsapp,
+            s.guardian_phone,
+            s.email,
+            s.grade,
+            s.province,
+            s.school,
+            s.pin,
+            strftime('%Y-%m-%d', datetime(MIN(e.created_at), '+2 hours')) AS first_enrolled
+        FROM students s
+        LEFT JOIN enrollments e ON e.student_id = s.id
+        {where_sql}
+        GROUP BY s.id
+        ORDER BY s.created_at DESC
+        LIMIT ? OFFSET ?
+    """, params)
 
     students = cur.fetchall()
 
@@ -6824,12 +7272,22 @@ def admin_students():
 
     if ids:
         qmarks = ",".join("?" * len(ids))
-        cur.execute(f"""
-            SELECT e.student_id, sub.name
-            FROM enrollments e
-            JOIN subjects sub ON sub.id = e.subject_id
-            WHERE e.student_id IN ({qmarks})
-        """, ids)
+
+        if selected_month:
+            cur.execute(f"""
+                SELECT DISTINCT e.student_id, sub.name
+                FROM enrollments e
+                JOIN subjects sub ON sub.id = e.subject_id
+                WHERE e.student_id IN ({qmarks})
+                  AND e.month = ?
+            """, ids + [selected_month])
+        else:
+            cur.execute(f"""
+                SELECT DISTINCT e.student_id, sub.name
+                FROM enrollments e
+                JOIN subjects sub ON sub.id = e.subject_id
+                WHERE e.student_id IN ({qmarks})
+            """, ids)
 
         for r in cur.fetchall():
             subject_map.setdefault(r['student_id'], []).append(r['name'])
@@ -6853,6 +7311,7 @@ def admin_students():
             <td>{nz(s['province'])}</td>
             <td>{nz(s['school'])}</td>
             <td>{nz(s['email'])}</td>
+            <td>{s['first_enrolled'] or 'N/A'}</td>
             <td>{pin}</td>
             <td style="white-space:nowrap">
 
@@ -6890,20 +7349,20 @@ def admin_students():
 
     # First
     if page_num > 1:
-        page_links.append(f"<a class='links' href='?page=1&q={q}'>« First</a>")
-        page_links.append(f"<a class='links' href='?page={page_num-1}&q={q}'>‹ Prev</a>")
+        page_links.append(f"<a class='links' href='?page=1&q={q}&month={selected_month}'>« First</a>")
+        page_links.append(f"<a class='links' href='?page={page_num-1}&q={q}&month={selected_month}'>‹ Prev</a>")
 
     # Numbered pages
     for p in range(start, end + 1):
         if p == page_num:
             page_links.append(f"<span class='current'>{p}</span>")
         else:
-            page_links.append(f"<a class='links' href='?page={p}&q={q}'>{p}</a>")
+            page_links.append(f"<a class='links' href='?page={p}&q={q}&month={selected_month}'>{p}</a>")
 
     # Next
     if page_num < total_pages:
-        page_links.append(f"<a class='links' href='?page={page_num+1}&q={q}'>Next ›</a>")
-        page_links.append(f"<a class='links' href='?page={total_pages}&q={q}'>Last »</a>")
+        page_links.append(f"<a class='links' href='?page={page_num+1}&q={q}&month={selected_month}'>Next ›</a>")
+        page_links.append(f"<a class='links' href='?page={total_pages}&q={q}&month={selected_month}'>Last »</a>")
 
 
     nav = f"""
@@ -6936,14 +7395,32 @@ def admin_students():
         <h1>Students</h1>
 
         <div class='toolbar'>
-            <form method="get" style="display:flex;gap:8px">
-                <input name="q"
-                       value="{q_safe}"
-                       placeholder="Search students (name, phone, email, school)"
-                       style="padding:6px;border-radius:8px;border:1px solid #ccc">
+            <form method="get" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <input type="text" name="q" placeholder="Search name, phone, email, school"
+                       value="{q_safe}" style="min-width:220px">
+
+                <input type="month" name="month" value="{selected_month}">
+
                 <button class="btn mini">Search</button>
             </form>
 
+            {"<a class='btn success mini' href='"+url_for('admin_students_export')+"?month="+selected_month+"'>Export Excel</a>" if selected_month else ""}
+            <div style="margin-top:10px">
+                <form method="get" action="{url_for('admin_students_compare_export')}"
+                      style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+
+                    <label>Previous:</label>
+                    <input type="month" name="prev" required>
+
+                    <label>Current:</label>
+                    <input type="month" name="curr" required>
+
+                    <button class="btn success mini">
+                        Compare & Export
+                    </button>
+
+                </form>
+            </div>
         </div>
 
         {nav}
@@ -6959,12 +7436,13 @@ def admin_students():
                         <th>Province</th>
                         <th>School</th>
                         <th>Email</th>
+                        <th>First Enrolled</th>
                         <th>PIN</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {''.join(trs) or "<tr><td colspan='9'>No students.</td></tr>"}
+                    {''.join(trs) or "<tr><td colspan='10'>No students.</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -6974,8 +7452,251 @@ def admin_students():
     """
 
     return page("Students", body)
+    
+@app.get('/admin/students/export')
+def admin_students_export():
+    r = require_admin()
+    if r:
+        return r
+
+    month = request.args.get("month")
+    if not month:
+        return redirect(url_for('admin_students'))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            s.full_name,
+            s.phone_whatsapp,
+            s.guardian_phone,
+            s.email,
+            s.grade,
+            s.province,
+            s.school,
+            GROUP_CONCAT(DISTINCT sub.name) AS subjects
+        FROM students s
+        JOIN enrollments e ON e.student_id = s.id
+        JOIN subjects sub ON sub.id = e.subject_id
+        WHERE e.month = ?
+        GROUP BY s.id
+        ORDER BY s.full_name ASC
+    """, (month,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"Students {month}"
+
+    headers = [
+        "Full Name",
+        "Phone",
+        "Guardian",
+        "Email",
+        "Grade",
+        "Province",
+        "School",
+        "Subjects"
+    ]
+
+    ws.append(headers)
+
+    for col in ws[1]:
+        col.font = Font(bold=True)
+        col.alignment = Alignment(horizontal="center")
+
+    for r in rows:
+        ws.append([
+            r["full_name"],
+            r["phone_whatsapp"],
+            r["guardian_phone"],
+            r["email"],
+            grade_label(r["grade"]),
+            r["province"],
+            r["school"],
+            r["subjects"]
+        ])
+
+    for col in ws.columns:
+        max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = max_length + 4
+
+    file_path = f"/tmp/students_{month}.xlsx"
+    wb.save(file_path)
+
+    return send_from_directory("/tmp", f"students_{month}.xlsx", as_attachment=True)
 
 
+@app.get('/admin/students/compare')
+def admin_students_compare_export():
+    r = require_admin()
+    if r:
+        return r
+
+    prev_month = request.args.get("prev")
+    curr_month = request.args.get("curr")
+
+    if not prev_month or not curr_month:
+        return redirect(url_for('admin_students'))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # ACTIVE students only
+    cur.execute("""
+        SELECT DISTINCT s.id, s.full_name, s.phone_whatsapp, s.grade
+        FROM students s
+        JOIN enrollments e ON e.student_id = s.id
+        WHERE e.month = ?
+          AND e.status = 'ACTIVE'
+    """, (prev_month,))
+    prev_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT DISTINCT s.id, s.full_name, s.phone_whatsapp, s.grade
+        FROM students s
+        JOIN enrollments e ON e.student_id = s.id
+        WHERE e.month = ?
+          AND e.status IN ('ACTIVE','PENDING')
+    """, (curr_month,))
+    curr_rows = cur.fetchall()
+
+    conn.close()
+
+    prev_dict = {r["id"]: r for r in prev_rows}
+    curr_dict = {r["id"]: r for r in curr_rows}
+
+    all_ids = set(prev_dict.keys()) | set(curr_dict.keys())
+
+    continued = []
+    lost = []
+    new = []
+
+    for sid in all_ids:
+        in_prev = sid in prev_dict
+        in_curr = sid in curr_dict
+        base = prev_dict.get(sid) or curr_dict.get(sid)
+
+        row = [
+            base["full_name"],
+            base["phone_whatsapp"],
+            grade_label(base["grade"]),
+            "YES" if in_prev else "NO",
+            "YES" if in_curr else "NO",
+        ]
+
+        if in_prev and in_curr:
+            continued.append(row)
+        elif in_prev and not in_curr:
+            lost.append(row)
+        elif not in_prev and in_curr:
+            new.append(row)
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    wb = Workbook()
+
+    # ---------- SUMMARY SHEET ----------
+    ws = wb.active
+    ws.title = "Summary"
+
+    headers = [
+        "Full Name",
+        "Phone",
+        "Grade",
+        f"Enrolled {prev_month}",
+        f"Enrolled {curr_month}",
+        "Status"
+    ]
+
+    ws.append([f"Comparison: {prev_month} vs {curr_month}"])
+    ws.append([])
+
+    total_prev = len(prev_dict)
+    total_curr = len(curr_dict)
+    total_cont = len(continued)
+
+    retention_pct = round((total_cont / total_prev) * 100, 2) if total_prev else 0
+
+    ws.append(["Previous Month Students", total_prev])
+    ws.append(["Current Month Students", total_curr])
+    ws.append(["Continued Students", total_cont])
+    ws.append(["Lost Students", len(lost)])
+    ws.append(["New Students", len(new)])
+    ws.append(["Retention %", f"{retention_pct}%"])
+    ws.append([])
+
+    ws.append(headers)
+
+    for col in ws[ws.max_row]:
+        col.font = Font(bold=True)
+        col.alignment = Alignment(horizontal="center")
+
+    green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    red = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    yellow = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+
+    # Add all students to summary
+    for row in continued:
+        ws.append(row + ["CONTINUED"])
+        for c in ws[ws.max_row]:
+            c.fill = green
+
+    for row in lost:
+        ws.append(row + ["LOST"])
+        for c in ws[ws.max_row]:
+            c.fill = red
+
+    for row in new:
+        ws.append(row + ["NEW"])
+        for c in ws[ws.max_row]:
+            c.fill = yellow
+
+    # Auto column width
+    for col in ws.columns:
+        max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = max_length + 4
+
+    # ---------- CONTINUED SHEET ----------
+    ws_cont = wb.create_sheet("Continued")
+    ws_cont.append(headers[:-1])
+    for col in ws_cont[1]:
+        col.font = Font(bold=True)
+
+    for row in continued:
+        ws_cont.append(row)
+
+    # ---------- LOST SHEET ----------
+    ws_lost = wb.create_sheet("Lost")
+    ws_lost.append(headers[:-1])
+    for col in ws_lost[1]:
+        col.font = Font(bold=True)
+
+    for row in lost:
+        ws_lost.append(row)
+
+    # ---------- NEW SHEET ----------
+    ws_new = wb.create_sheet("New")
+    ws_new.append(headers[:-1])
+    for col in ws_new[1]:
+        col.font = Font(bold=True)
+
+    for row in new:
+        ws_new.append(row)
+
+    file_name = f"compare_{prev_month}_vs_{curr_month}.xlsx"
+    file_path = f"/tmp/{file_name}"
+    wb.save(file_path)
+
+    return send_from_directory("/tmp", file_name, as_attachment=True)
+    
 @app.get('/admin/students/<int:sid>/edit')
 def admin_student_edit(sid):
 
@@ -8120,7 +8841,6 @@ def admin_sessions():
     FROM sessions se
     JOIN subjects s ON s.id = se.subject_id
     JOIN tutors t ON t.id = se.tutor_id
-
     ORDER BY
         CAST(REPLACE(s.grade, 'G', '') AS INTEGER) ASC,
         s.name ASC,
@@ -8192,6 +8912,10 @@ def admin_sessions():
                 </form>
 
                 ·
+                <a class="links"
+                   href="{url_for('admin_session_edit', sid=r['id'])}">
+                   Edit
+                </a>·
 
                 <form method='post'
                       action='{url_for('admin_session_delete', sid=r['id'])}'
@@ -8201,6 +8925,8 @@ def admin_sessions():
                     <button class='btn danger mini'>Delete</button>
 
                 </form>
+                
+                
 
             </td>
 
@@ -8247,6 +8973,12 @@ def admin_sessions():
 
                 <input name='meet'
                        placeholder='Meet link (optional)' />
+                
+                <input name='meeting_id'
+                       placeholder='Meeting ID (optional)' />
+
+                <input name='meeting_passcode'
+                       placeholder='Meeting Passcode (optional)' />
 
                 <button class='btn'>Add</button>
 
@@ -8327,6 +9059,8 @@ def admin_sessions_post():
     start = request.form.get('start', '')
     end = request.form.get('end', '')
     meet = request.form.get('meet', '') or None
+    meeting_id = request.form.get('meeting_id') or None
+    meeting_passcode = request.form.get('meeting_passcode') or None
 
     conn = get_db()
     cur = conn.cursor()
@@ -8365,14 +9099,122 @@ def admin_sessions_post():
         tutor_id = cur.lastrowid
 
     cur.execute("""
-    INSERT INTO sessions(subject_id,tutor_id,day_of_week,start_time,end_time,meet_link)
-    VALUES(?,?,?,?,?,?)
-    """, (subject_id, tutor_id, dow, start, end, meet))
+    INSERT INTO sessions(
+        subject_id,
+        tutor_id,
+        day_of_week,
+        start_time,
+        end_time,
+        meet_link,
+        meeting_id,
+        meeting_passcode
+    )
+    VALUES(?,?,?,?,?,?,?,?)
+    """, (
+        subject_id,
+        tutor_id,
+        dow,
+        start,
+        end,
+        meet,
+        meeting_id,
+        meeting_passcode
+    ))
     # Ensure tutor-subject mapping exists for uploads and messaging
     cur.execute("INSERT OR IGNORE INTO tutor_subjects(tutor_id,subject_id) VALUES(?,?)",(tutor_id,subject_id))
     conn.commit()
     conn.close()
     return redirect(url_for('admin_sessions'))
+    
+    
+
+@app.get('/admin/sessions/edit/<int:sid>')
+def admin_session_edit(sid):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM sessions WHERE id=?", (sid,))
+    session_row = cur.fetchone()
+    conn.close()
+
+    if not session_row:
+        return redirect(url_for('admin_sessions'))
+
+    body = f"""
+    {admin_nav()}
+    <section class='card'>
+        <h1>Edit Session</h1>
+
+        <form method="post"
+              action="{url_for('admin_session_update', sid=sid)}"
+              class="grid"
+              style="gap:10px">
+
+            <input name="start_time"
+                   value="{session_row['start_time']}"
+                   required>
+
+            <input name="end_time"
+                   value="{session_row['end_time']}"
+                   required>
+
+            <input name="meet_link"
+                   value="{session_row['meet_link'] or ''}"
+                   placeholder="Meet link">
+
+            <input name="meeting_id"
+                   value="{session_row['meeting_id'] or ''}"
+                   placeholder="Meeting ID">
+
+            <input name="meeting_passcode"
+                   value="{session_row['meeting_passcode'] or ''}"
+                   placeholder="Meeting Passcode">
+
+            <button class="btn success">
+                Update
+            </button>
+
+        </form>
+    </section>
+    """
+
+    return page("Edit Session", body)
+    
+@app.post('/admin/sessions/update/<int:sid>')
+def admin_session_update(sid):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE sessions
+        SET start_time=?,
+            end_time=?,
+            meet_link=?,
+            meeting_id=?,
+            meeting_passcode=?
+        WHERE id=?
+    """, (
+        request.form.get("start_time"),
+        request.form.get("end_time"),
+        request.form.get("meet_link"),
+        request.form.get("meeting_id"),
+        request.form.get("meeting_passcode"),
+        sid
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('admin_sessions'))
+
 
 # --- Session QR (uses PNG endpoint) ---
 
@@ -9689,7 +10531,328 @@ def admin_sms_dashboard():
     """
 
     return page("SMS Dashboard", body)
+    
+@app.get('/admin/followups')
+def admin_followups():
+    r = require_admin()
+    if r:
+        return r
 
+    conn = get_db()
+    cur = conn.cursor()
+
+    q = request.args.get("q", "").strip()
+
+    if q:
+        search = f"%{q}%"
+        cur.execute("""
+            SELECT * FROM followups
+            WHERE full_name LIKE ?
+               OR phone LIKE ?
+               OR subjects LIKE ?
+               OR followup_status LIKE ?
+            ORDER BY created_at DESC
+        """, (search, search, search, search))
+    else:
+        cur.execute("SELECT * FROM followups ORDER BY created_at DESC")
+
+    rows = cur.fetchall()
+
+    # get subjects for dropdown
+    cur.execute("SELECT DISTINCT name FROM subjects ORDER BY name")
+    subjects = [row["name"] for row in cur.fetchall()]
+    conn.close()
+
+    subject_options = "".join(
+        f"<option value='{escape(s)}'>{escape(s)}</option>"
+        for s in subjects
+    )
+
+    trs = []
+
+    for row in rows:
+
+        # -------- Row Color --------
+        row_class = ""
+        if row["followup_status"] == "OPEN":
+            row_class = "follow-open"
+        elif row["followup_status"] == "PAID":
+            row_class = "follow-paid"
+
+        # -------- Overdue --------
+        overdue_class = ""
+        if row["payment_date"] and row["followup_status"] == "OPEN":
+            try:
+                pay_date = datetime.datetime.strptime(
+                    row["payment_date"], "%Y-%m-%d"
+                ).date()
+                if pay_date < datetime.date.today():
+                    overdue_class = "overdue"
+            except:
+                pass
+
+        # -------- WhatsApp --------
+        wa_link = ""
+        if row["phone"]:
+            phone = normalize_phone(row["phone"])
+            if phone:
+                wa_link = f"""
+                <a class="btn mini success"
+                   target="_blank"
+                   href="https://wa.me/{phone.replace('+','')}">
+                   WA
+                </a>
+                """
+
+        # -------- Build row --------
+        trs.append(f"""
+        <tr class="{row_class} {overdue_class}">
+        <form method="post" action="{url_for('admin_followup_update', fid=row['id'])}">
+            <td><input name="full_name" value="{escape(row['full_name'])}"></td>
+
+            <td>
+                <input name="phone" value="{escape(row['phone'] or '')}">
+                {wa_link}
+            </td>
+
+            <td>
+                <select name="grade">
+                    <option value="">Select</option>
+                    {''.join(
+                        f"<option value='{g}' {'selected' if row['grade']==g else ''}>{grade_label(g)}</option>"
+                        for g in ["G8","G9","G10","G11","G12","G13"]
+                    )}
+                </select>
+            </td>
+
+            <td>
+                <select name="subjects">
+                    <option value="">Select</option>
+                    {''.join(
+                        f"<option value='{escape(s)}' {'selected' if row['subjects']==s else ''}>{escape(s)}</option>"
+                        for s in subjects
+                    )}
+                </select>
+            </td>
+
+            <td>
+                <select name="followup_status">
+                    <option {'selected' if row['followup_status']=="OPEN" else ""}>OPEN</option>
+                    <option {'selected' if row['followup_status']=="PAID" else ""}>PAID</option>
+                    <option {'selected' if row['followup_status']=="NO RESPONSE" else ""}>NO RESPONSE</option>
+                    <option {'selected' if row['followup_status']=="DECLINED" else ""}>DECLINED</option>
+                </select>
+            </td>
+
+            <td><input type="date" name="payment_date" value="{row['payment_date'] or ''}"></td>
+            <td><input type="date" name="date_communicated" value="{row['date_communicated'] or ''}"></td>
+            <td><input name="notes" value="{escape(row['notes'] or '')}"></td>
+
+            <td><button class="btn mini success">Save</button></td>
+        </form>
+        </tr>
+        """)
+
+    body = f"""
+    {admin_nav()}
+
+    <section class='card'>
+        <h1>Follow-Up Tracker</h1>
+
+        <div class='toolbar'>
+            <form method="get">
+                <input type="text" name="q" value="{escape(q)}" placeholder="Search">
+                <button class="btn mini">Search</button>
+            </form>
+
+            <a class="btn success mini" href="{url_for('admin_followup_add')}">Add New</a>
+            <a class="btn secondary mini" href="{url_for('export_followups')}">Export Excel</a>
+        </div>
+
+        <div class="scroll-x">
+        <table class="followups-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Phone</th>
+                    <th>Grade</th>
+                    <th>Subjects</th>
+                    <th>Status</th>
+                    <th>Payment</th>
+                    <th>Communicated</th>
+                    <th>Notes</th>
+                    <th>Save</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(trs) or "<tr><td colspan='9'>No followups yet.</td></tr>"}
+            </tbody>
+        </table>
+        </div>
+    </section>
+    """
+
+    return page("Followups", body)
+    
+@app.get('/admin/followups/add')
+def admin_followup_add():
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT name FROM subjects ORDER BY name")
+    subjects = [row["name"] for row in cur.fetchall()]
+    conn.close()
+
+    subject_options = "".join(
+        f"<option value='{escape(s)}'>{escape(s)}</option>"
+        for s in subjects
+    )
+
+    body = f"""
+    {admin_nav()}
+    <section class='card'>
+        <h1>Add Follow-Up</h1>
+
+        <form method="post" action="{url_for('admin_followup_create')}" class="grid" style="gap:10px">
+            <input name="full_name" placeholder="Full name" required>
+            <input name="phone" placeholder="Phone">
+
+            <select name="grade">
+                <option value="">Select</option>
+                <option value="G8">Grade 8</option>
+                <option value="G9">Grade 9</option>
+                <option value="G10">Grade 10</option>
+                <option value="G11">Grade 11</option>
+                <option value="G12">Grade 12</option>
+                <option value="G13">Grade 13</option>
+            </select>
+
+            <select name="subjects">
+                <option value="">Select</option>
+                {subject_options}
+            </select>
+
+            <input type="date" name="payment_date">
+            <input type="date" name="date_communicated">
+            <textarea name="notes" placeholder="Notes"></textarea>
+
+            <button class="btn success">Save</button>
+        </form>
+    </section>
+    """
+    return page("Add Followup", body)
+    
+@app.post('/admin/followups/create')
+def admin_followup_create():
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO followups(
+            full_name, phone, grade, subjects,
+            payment_date, date_communicated,
+            notes, created_at
+        )
+        VALUES (?,?,?,?,?,?,?,?)
+    """, (
+        request.form.get("full_name"),
+        request.form.get("phone"),
+        request.form.get("grade"),
+        request.form.get("subjects"),
+        request.form.get("payment_date"),
+        request.form.get("date_communicated"),
+        request.form.get("notes"),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('admin_followups'))
+    
+@app.post('/admin/followups/update/<int:fid>')
+def admin_followup_update(fid):
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE followups SET
+            full_name=?,
+            phone=?,
+            grade=?,
+            subjects=?,
+            followup_status=?,
+            payment_date=?,
+            date_communicated=?,
+            notes=?
+        WHERE id=?
+    """, (
+        request.form.get("full_name"),
+        request.form.get("phone"),
+        request.form.get("grade"),
+        request.form.get("subjects"),
+        request.form.get("followup_status"),
+        request.form.get("payment_date"),
+        request.form.get("date_communicated"),
+        request.form.get("notes"),
+        fid
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('admin_followups'))
+    
+
+@app.get("/admin/followups/export")
+def export_followups():
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM followups ORDER BY created_at DESC")
+    rows = cur.fetchall()
+    conn.close()
+
+    import csv
+    from io import StringIO
+
+    si = StringIO()
+    writer = csv.writer(si)
+
+    writer.writerow([
+        "Name","Phone","Grade","Subjects",
+        "Status","Payment Date",
+        "Communicated","Notes"
+    ])
+
+    for row in rows:
+        writer.writerow([
+            row["full_name"],
+            row["phone"],
+            row["grade"],
+            row["subjects"],
+            row["followup_status"],
+            row["payment_date"],
+            row["date_communicated"],
+            row["notes"]
+        ])
+
+    output = make_response(si.getvalue())
+    output.headers["Content-Disposition"] = "attachment; filename=followups.csv"
+    output.headers["Content-type"] = "text/csv"
+    return output
 
 # --- Admin: Analytics dashboard ---
 
