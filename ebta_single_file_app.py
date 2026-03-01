@@ -7183,56 +7183,56 @@ def enrollment_action(id: int, action: str):
     conn.close()
 
     # --- Notifications: enrollment approved ---
-    try:
-        if action == 'approve' and notify_phone and notify_pin:
-            base_url = (request.url_root or '').rstrip('/')
-            portal_link = base_url
-            login_link = base_url + url_for('student_login')
+    #   try:
+    #       if action == 'approve' and notify_phone and notify_pin:
+    #           base_url = (request.url_root or '').rstrip('/')
+    #           portal_link = base_url
+    #           login_link = base_url + url_for('student_login')
+    #
+    #           month_label = pretty_month_label(notify_month) if notify_month else ""
+    #           grade_label_txt = grade_label(notify_grade) if notify_grade else ""
+    #           first_name = notify_name.split()[0] if notify_name else ""
 
-            month_label = pretty_month_label(notify_month) if notify_month else ""
-            grade_label_txt = grade_label(notify_grade) if notify_grade else ""
-            first_name = notify_name.split()[0] if notify_name else ""
+    #           email_subject = "EBTA enrollment approved"
+    #           email_body_lines = [
+    #               f"Hi {notify_name},",
+    #               "",
+    #               "Your EBTA enrollment has been approved.",
+    #           ]
+    #           if grade_label_txt or notify_subject or month_label:
+    #               detail = " ".join(x for x in [grade_label_txt, notify_subject, month_label] if x)
+    #               if detail.strip():
+    #                   email_body_lines.append(f"Subject/month: {detail}")
+    #                   email_body_lines.append("")
+    #           email_body_lines.extend([
+    #               "Login details (keep these safe):",
+    #               f"WhatsApp number: {notify_phone}",
+    #               f"PIN: {notify_pin}",
+    #               f"Portal: {portal_link}",
+    #               f"Student login: {login_link}",
+    #               "",
+    #               "You can now log in to your EBTA portal to access materials, assignments, and WhatsApp links (where available).",
+    #               "",
+    #               "If you did not request this change, please contact EBTA support.",
+    #           ])
+    #           email_body = "\n".join(email_body_lines)
 
-            email_subject = "EBTA enrollment approved"
-            email_body_lines = [
-                f"Hi {notify_name},",
-                "",
-                "Your EBTA enrollment has been approved.",
-            ]
-            if grade_label_txt or notify_subject or month_label:
-                detail = " ".join(x for x in [grade_label_txt, notify_subject, month_label] if x)
-                if detail.strip():
-                    email_body_lines.append(f"Subject/month: {detail}")
-                    email_body_lines.append("")
-            email_body_lines.extend([
-                "Login details (keep these safe):",
-                f"WhatsApp number: {notify_phone}",
-                f"PIN: {notify_pin}",
-                f"Portal: {portal_link}",
-                f"Student login: {login_link}",
-                "",
-                "You can now log in to your EBTA portal to access materials, assignments, and WhatsApp links (where available).",
-                "",
-                "If you did not request this change, please contact EBTA support.",
-            ])
-            email_body = "\n".join(email_body_lines)
-
-            sms_body_parts = [
-                f"EBTA: Hi {first_name}, your enrollment is APPROVED.",
-            ]
-            if month_label or grade_label_txt or notify_subject:
-                detail = " ".join(x for x in [grade_label_txt, notify_subject, month_label] if x)
-                sms_body_parts.append(detail + ".")
-            sms_body_parts.append(f"Login with WhatsApp {notify_phone} + PIN {notify_pin} at {login_link}.")
-            sms_body = " ".join(sms_body_parts)
-
-            if notify_email:
-                send_email_notification(notify_email, email_subject, email_body)
-            if notify_phone:
-                send_sms_notification(notify_phone, sms_body)
-    except Exception:
-        # Never break the admin flow if notifications fail
-        pass
+    #           sms_body_parts = [
+    #               f"EBTA: Hi {first_name}, your enrollment is APPROVED.",
+    #           ]
+    #           if month_label or grade_label_txt or notify_subject:
+    #               detail = " ".join(x for x in [grade_label_txt, notify_subject, month_label] if x)
+    #               sms_body_parts.append(detail + ".")
+    #           sms_body_parts.append(f"Login with WhatsApp {notify_phone} + PIN {notify_pin} at {login_link}.")
+    #           sms_body = " ".join(sms_body_parts)
+    #
+    #           if notify_email:
+    #               send_email_notification(notify_email, email_subject, email_body)
+    #           if notify_phone:
+    #               send_sms_notification(notify_phone, sms_body)
+    #   except Exception:
+            # Never break the admin flow if notifications fail
+    #       pass
 
     return redirect(url_for('admin_enrollments', page=page_num))
 
