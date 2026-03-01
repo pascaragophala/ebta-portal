@@ -8,10 +8,12 @@ import base64
 import secrets
 import threading
 import time
+import hmac
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from html import escape
+from functools import wraps
 
 
 from flask import Flask, request, redirect, url_for, render_template_string, send_from_directory, session, flash, make_response
@@ -650,6 +652,13 @@ def set_setting(key, value):
 def grade_label(g): return g.replace("G","Grade ")
 
 def is_admin(): return bool(session.get("admin"))
+
+def is_high_admin():
+    return session.get("admin_role") == "HIGH"
+
+def is_lower_admin():
+    return session.get("admin_role") == "LOWER"
+
 def is_student(): return session.get("student_id")
 def is_tutor(): return session.get("tutor_id")
 
@@ -3541,7 +3550,7 @@ def register():
     return page("Submitted", f"""
     <section class='wrap small'>
         <div class='card'>
-            <h1>Registration submitted</h1>
+            <h1>Enrollment submitted</h1>
             <ul>{links}</ul>
         </div>
     </section>
@@ -6754,33 +6763,97 @@ def tutor_session_attendance(sid:int):
 def card_msg(msg): return f"<section class='wrap small'><div class='card'><p>{msg}</p></div></section>"
 def stat(title,value): return f"<div class='stat'><div class='muted'>{title}</div><div class='k'>{value}</div></div>"
 
+
+
+
+def require_high_admin(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        r = require_admin()
+        if r:
+            return r
+        if not is_high_admin():
+            return page("Access Denied", card_msg("You do not have permission to access this page."))
+        return f(*args, **kwargs)
+    return wrapper
+
 @app.get('/admin/login')
 def admin_login():
-    if is_admin(): return redirect(url_for('admin_home'))
-    body=fr"""<section class='wrap small'><div class='card auth-card'><h1>Admin login</h1>
+    if is_admin():
+        return redirect(url_for('admin_home'))
+
+    body = f"""
+    <section class='wrap small'>
+    <div class='card auth-card'>
+    <h1>Admin login</h1>
     <form method='post' action='{url_for('admin_login_post')}' class='grid'>
-        <div><label>Password</label><input type='password' name='pwd' required/></div>
+        <div>
+            <label>Username</label>
+            <input type='text' name='username' required/>
+        </div>
+        <div>
+            <label>Password</label>
+            <input type='password' name='password' required/>
+        </div>
         <button class='btn'>Login</button>
-    </form></div></section>"""
+    </form>
+    </div>
+    </section>
+    """
     return page("Admin Login", body)
+
+
+
+def parse_admin_accounts():
+    raw = os.environ.get("EBTA_ADMIN_ACCOUNTS", "")
+    accounts = {}
+
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            username, password, role = item.split(":")
+            accounts[username.strip()] = {
+                "password": password.strip(),
+                "role": role.strip().upper()
+            }
+        except ValueError:
+            continue
+
+    return accounts
+
 
 @app.post('/admin/login')
 def admin_login_post():
-    pwd = request.form.get('pwd', '')
-    expected = os.environ.get('EBTA_ADMIN_PASSWORD')
+    username = request.form.get('username', '').strip()
+    password = request.form.get('password', '').strip()
 
-    if not expected:
-        return page("Error", card_msg("Admin password is not configured."))
+    accounts = parse_admin_accounts()
 
-    if pwd == expected:
-        session['admin'] = True
-        return redirect(url_for('admin_home'))
+    if username not in accounts:
+        time.sleep(1)
+        return page("Error", card_msg("Invalid credentials."))
 
-    return page("Error", card_msg("Wrong password."))
+    stored = accounts[username]
+
+    if not hmac.compare_digest(password, stored["password"]):
+        time.sleep(1)
+        return page("Error", card_msg("Invalid credentials."))
+
+    session['admin'] = True
+    session['admin_username'] = username
+    session['admin_role'] = stored["role"]
+
+    return redirect(url_for('admin_home'))
 
 
 @app.get('/admin/logout')
-def admin_logout(): session.clear(); return redirect(url_for('admin_login'))
+def admin_logout():
+    session.pop('admin', None)
+    session.pop('admin_role', None)
+    session.pop('admin_username', None)
+    return redirect(url_for('admin_login'))
 
 
 def admin_nav():
@@ -6793,6 +6866,7 @@ def admin_nav():
         <a class="btn secondary" href="{url_for('admin_groups')}">Groups</a>
         <a class="btn secondary" href="{url_for('admin_sessions')}">Sessions</a>
         <a class="btn secondary" href="{url_for('admin_messages')}">Inbox</a>
+        <a class="btn secondary" href="{url_for('admin_analytics')}">Analytics</a>
         <a class="btn secondary" href="{url_for('admin_settings')}">Settings</a>
         <a class="btn secondary" href="{url_for('admin_uploads_control')}">Uploads Control</a>
         <a class="btn secondary" href="{url_for('admin_materials')}">Unlock Uploads</a>
@@ -6832,6 +6906,7 @@ def admin_home():
     <a class='btn secondary' href='{url_for('admin_sessions')}'>Sessions & QR</a>
     <a class='btn secondary' href='{url_for('admin_messages')}'>Inbox</a>
     <a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct messages</a>
+    <a class='btn secondary' href='{url_for('admin_analytics')}'>Analytics</a>
     <a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>
     <a class="btn secondary" href="{url_for('admin_uploads_control')}">Uploads Control</a>
     <a class="btn secondary" href="{url_for('admin_materials')}">Unlock Uploads</a>
@@ -8044,6 +8119,7 @@ def admin_student_delete(sid: int):
 # --- Admin: Tutors ---
 
 @app.get('/admin/tutors')
+@require_high_admin
 def admin_tutors():
     r = require_admin()
     if r:
@@ -8182,6 +8258,7 @@ def admin_tutor_add_subject(tid:int):
     
     
 @app.get('/admin/uploads-control')
+@require_high_admin
 def admin_uploads_control():
 
     r = require_admin()
@@ -8313,6 +8390,7 @@ def admin_uploads_unlock(subject_id):
     return redirect(url_for('admin_uploads_control'))
     
 @app.get('/admin/materials')
+@require_high_admin
 def admin_materials():
 
     r = require_admin()
@@ -8623,6 +8701,7 @@ def admin_group_toggle(gid):
 
 
 @app.get('/admin/groups')
+@require_high_admin
 def admin_groups():
     r = require_admin()
     if r:
@@ -8773,6 +8852,7 @@ def admin_group_delete(gid):
 # --- Admin: Settings ---
 
 @app.get('/admin/settings')
+@require_high_admin
 def admin_settings():
     r = require_admin()
     if r:
@@ -8894,6 +8974,7 @@ def admin_set_system_month():
     return redirect(url_for('admin_home'))
 
 @app.get('/admin/sessions')
+@require_high_admin
 def admin_sessions():
     r = require_admin()
     if r:
@@ -9752,6 +9833,7 @@ def admin_messages_resolve_all():
 # --- Admin: Direct Messages (student/tutor DMs) ---
 
 @app.get('/admin/direct-messages')
+@require_high_admin
 def admin_direct_messages():
 
     r = require_admin()
@@ -10489,6 +10571,7 @@ def admin_process_sms():
     
     
 @app.get('/admin/sms-dashboard')
+@require_high_admin
 def admin_sms_dashboard():
 
     r = require_admin()
@@ -10930,6 +11013,7 @@ def export_followups():
 # --- Admin: Analytics dashboard ---
 
 @app.get('/admin/analytics')
+@require_high_admin
 def admin_analytics():
     r = require_admin()
     if r: return r
