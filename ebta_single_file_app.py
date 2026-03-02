@@ -4004,6 +4004,10 @@ def student_home():
     if r: return r
     sid = is_student()
     month = get_active_month('student')
+    now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))
+    real_month = now.strftime("%Y-%m")
+
+    is_current_month = (month == real_month)
     print("DEBUG STUDENT ID:", sid)
     print("DEBUG ACTIVE MONTH:", month)
     print("DEBUG TYPE OF month:", month, len(month))
@@ -4153,7 +4157,7 @@ def student_home():
     # WhatsApp links for enrolled subjects
     group_html = "<div class='empty'>No group links yet.</div>"
 
-    if has_active_enrollment and active_sub_ids:
+    if is_current_month and has_active_enrollment and active_sub_ids:
 
         q = f"""
         SELECT g.subject_id, g.invite_link, s.name, s.grade
@@ -4211,7 +4215,7 @@ def student_home():
 
     # Sessions + Meet link for enrolled subjects
     sessions_html="<div class='empty'>No sessions yet.</div>"
-    if has_active_enrollment and active_sub_ids:
+    if is_current_month and has_active_enrollment and active_sub_ids:
         q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link,s.meeting_id,s.meeting_passcode
             FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
             WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(active_sub_ids))})
@@ -4812,7 +4816,32 @@ def student_home():
         </div>
         """
 
+    # ================= CONDITIONAL LIVE ACCESS =================
 
+    groups_section = ""
+    sessions_section = ""
+
+    if is_current_month and has_active_enrollment and active_sub_ids:
+
+        groups_section = f"""
+        <div class='card' style="border-left:5px solid #25D366">
+            <h2>Subject WhatsApp Groups</h2>
+
+            <div class="mini muted" style="margin-bottom:12px">
+                Join your subject-specific WhatsApp groups for class communication.
+            </div>
+
+            {group_html}
+        </div>
+        """
+
+        sessions_section = f"""
+        <div class='card'>
+            <h2>Sessions</h2>
+            {sessions_html}
+        </div>
+        """
+    
     body=fr"""
     <section class='grid'>
     <div class='card'>
@@ -4859,24 +4888,10 @@ def student_home():
         </div>
 
     </div>
+    
+    {groups_section}
+    {sessions_section}
 
-
-
-    <div class='card' style="border-left:5px solid #25D366">
-
-        <h2 style="display:flex;align-items:center;gap:8px">
-            Subject WhatsApp Groups
-        </h2>
-
-        <div class="mini muted" style="margin-bottom:12px">
-            Join your subject-specific WhatsApp groups for class communication.
-        </div>
-
-        {group_html}
-
-    </div>
-
-    <div class='card'><h2>Sessions</h2>{sessions_html}</div>
     <div class='card'><h2>Materials & Assignments</h2><div class='scroll-x'>{materials_html}</div></div>
 {(''.join(submit_blocks)) if submit_blocks else ''}
 
@@ -5616,9 +5631,15 @@ def tutor_home():
     """
 
     # Your uploads (delete within 24h)
-    cur.execute("""SELECT m.*, s.name AS subject_name, s.grade
-                FROM materials m JOIN subjects s ON s.id=m.subject_id
-                WHERE m.tutor_id=? ORDER BY m.created_at DESC LIMIT 200""",(tid,))
+    cur.execute("""
+        SELECT m.*, s.name AS subject_name, s.grade
+        FROM materials m 
+        JOIN subjects s ON s.id=m.subject_id
+        WHERE m.tutor_id=?
+          AND m.month LIKE ?
+        ORDER BY m.created_at DESC
+        LIMIT 200
+    """,(tid, month + "%"))
     mymats=cur.fetchall()
     def can_delete(ts, admin_unlocked):
         if admin_unlocked == 1:
@@ -5761,9 +5782,16 @@ def tutor_home():
         uploads_html = "<div class='empty'>No uploads yet.</div>"
 
     # Assignments you posted (manage submissions)
-    cur.execute("""SELECT m.id, m.title, m.due_date, m.max_points, s.name AS subject_name, s.grade
-                FROM materials m JOIN subjects s ON s.id=m.subject_id
-                WHERE m.tutor_id=? AND (m.is_assignment=1 OR m.kind='assignment') ORDER BY m.created_at DESC""",(tid,))
+    cur.execute("""
+        SELECT m.id, m.title, m.due_date, m.max_points,
+               s.name AS subject_name, s.grade
+        FROM materials m 
+        JOIN subjects s ON s.id=m.subject_id
+        WHERE m.tutor_id=? 
+          AND (m.is_assignment=1 OR m.kind='assignment')
+          AND m.month LIKE ?
+        ORDER BY m.created_at DESC
+    """,(tid, month + "%"))
     asg=cur.fetchall()
     asg_rows="".join([f"<tr><td>{grade_label(a['grade'])} — {a['subject_name']}</td><td>{a['title']}</td><td>Due: {a['due_date'] or '—'}</td><td>Total: {a['max_points'] or 100}</td><td><a class='links' href='{url_for('tutor_assignment_manage', mid=a['id'])}'>Manage</a></td></tr>" for a in asg]) or "<tr><td colspan='5'><div class='empty'>No assignments yet.</div></td></tr>"
 
@@ -7274,11 +7302,13 @@ def enrollment_action(id: int, action: str):
                 "",
                 "Your EBTA enrollment has been approved.",
             ]
+
             if grade_label_txt or notify_subject or month_label:
                 detail = " ".join(x for x in [grade_label_txt, notify_subject, month_label] if x)
                 if detail.strip():
                     email_body_lines.append(f"Subject/month: {detail}")
                     email_body_lines.append("")
+
             email_body_lines.extend([
                 "Login details (keep these safe):",
                 f"WhatsApp number: {notify_phone}",
@@ -7286,19 +7316,33 @@ def enrollment_action(id: int, action: str):
                 f"Portal: {portal_link}",
                 f"Student login: {login_link}",
                 "",
-                "You can now log in to your EBTA portal to access materials, assignments, and WhatsApp links (where available).",
+                "You can now log in to your EBTA portal to access materials, assignments, session links and WhatsApp groups.",
                 "",
-                "If you did not request this change, please contact EBTA support.",
+                "IMPORTANT:",
+                "Please make sure you join ALL WhatsApp groups for the subjects you are enrolled in.",
+                "These groups are used for class communication, updates and live session reminders.",
+                "If you do not join the groups, you may miss important information.",
+                "",
+                "If you have any questions, please contact EBTA support.",
             ])
             email_body = "\n".join(email_body_lines)
 
             sms_body_parts = [
                 f"EBTA: Hi {first_name}, your enrollment is APPROVED.",
             ]
+
             if month_label or grade_label_txt or notify_subject:
                 detail = " ".join(x for x in [grade_label_txt, notify_subject, month_label] if x)
                 sms_body_parts.append(detail + ".")
-            sms_body_parts.append(f"Login with WhatsApp {notify_phone} + PIN {notify_pin} at {login_link}.")
+
+            sms_body_parts.append(
+                f"Login with WhatsApp {notify_phone} + PIN {notify_pin} at {login_link}."
+            )
+
+            sms_body_parts.append(
+                "Join ALL subject WhatsApp groups inside your portal."
+            )
+
             sms_body = " ".join(sms_body_parts)
 
             if notify_email:
