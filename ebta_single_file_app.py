@@ -8786,12 +8786,18 @@ def admin_groups():
                 <td>{grade_label(s['grade'])} — {s['name']}</td>
                 <td><a class='links' target='_blank' href='{g['invite_link']}'>Open</a></td>
                 <td>{visibility}</td>
-                <td>
+                <td>                    
+                    <a class='btn mini' href='{url_for("admin_group_edit", gid=g["id"])}'>
+                        Edit
+                    </a>    
+                
                     <form method='post' action='{url_for('admin_group_toggle', gid=g['id'])}' style='display:inline'>
                         <button class='btn mini secondary'>
                             {'Hide' if g['is_visible'] else 'Show'}
                         </button>
                     </form>
+                    
+                    
                     <form method='post' action='{url_for('admin_group_delete', gid=g['id'])}'
                           style='display:inline'
                           onsubmit='return confirm("Delete this group link?")'>
@@ -8878,6 +8884,84 @@ def admin_groups_post():
     conn.close()
     return redirect(url_for('admin_groups'))
 
+    
+@app.get('/admin/groups/edit/<int:gid>')
+@require_high_admin
+def admin_group_edit(gid):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT g.id, g.invite_link, g.is_visible,
+               s.name, s.grade
+        FROM groups g
+        JOIN subjects s ON s.id = g.subject_id
+        WHERE g.id=?
+    """, (gid,))
+    g = cur.fetchone()
+    conn.close()
+
+    if not g:
+        return page("Error", "<div class='card'>Group not found.</div>")
+
+    body = f"""
+    {admin_nav()}
+    <section class='card'>
+        <h1>Edit Group Link</h1>
+
+        <form method='post'>
+            <label>Subject</label>
+            <input value="{grade_label(g['grade'])} — {g['name']}" disabled />
+
+            <label style="margin-top:10px;">Invite Link</label>
+            <input name='invite_link' value="{g['invite_link']}" required />
+
+            <label style="margin-top:10px;">
+                <input type='checkbox' name='is_visible'
+                       {'checked' if g['is_visible'] else ''}>
+                Visible to students
+            </label>
+
+            <div style="margin-top:14px;">
+                <button class='btn'>Save Changes</button>
+                <a class='btn secondary' href="{url_for('admin_groups')}">Cancel</a>
+            </div>
+        </form>
+    </section>
+    """
+
+    return page("Edit Group", body)    
+    
+@app.post('/admin/groups/edit/<int:gid>')
+@require_high_admin
+def admin_group_edit_post(gid):
+    r = require_admin()
+    if r:
+        return r
+
+    invite_link = request.form.get('invite_link')
+    is_visible = 1 if request.form.get('is_visible') else 0
+
+    if not invite_link:
+        return page("Error", "<div class='card'>Invite link is required.</div>")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE groups
+        SET invite_link=?, is_visible=?
+        WHERE id=?
+    """, (invite_link, is_visible, gid))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('admin_groups'))
     
 @app.post('/admin/groups/delete/<int:gid>')
 def admin_group_delete(gid):
