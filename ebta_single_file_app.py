@@ -8194,8 +8194,8 @@ def admin_tutors():
             f"<td>{pin}</td>"
             f"<td>{mapped}</td>"
             f"<td>"
-            f"<form method='post' action='{url_for('admin_tutor_reset_pin', tid=t['id'])}' style='display:inline'><button class='btn success'>Reset PIN</button></form> "
-            f"<form method='post' action='{url_for('admin_tutor_delete', tid=t['id'])}' style='display:inline' onsubmit='return confirm(\"Delete this tutor?\")'><button class='btn danger'>Delete</button></form>"
+            f"<a href='{url_for('admin_tutor_edit', tid=t['id'])}' class='btn secondary mini'>Edit</a> "
+            f"<form method='post' action='{url_for('admin_tutor_reset_pin', tid=t['id'])}' style='display:inline'><button class='btn success mini'>Reset PIN</button></form> "              
             f"<form method='post' action='{url_for('admin_tutor_add_subject', tid=t['id'])}' class='inlineform' style='margin-left:8px'>"
             f"<select name='subject_id'>{options}</select><button class='btn mini'>Add subject</button></form>"
             f"</td></tr>"
@@ -8222,6 +8222,73 @@ def admin_tutors():
     </section>
     """
     return page("Tutors", body)
+    
+@app.get('/admin/tutors/<int:tid>/edit')
+@require_high_admin
+def admin_tutor_edit(tid: int):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM tutors WHERE id=?", (tid,))
+    tutor = cur.fetchone()
+    conn.close()
+
+    if not tutor:
+        return page("Error", card_msg("Tutor not found."))
+
+    body = f"""
+    {admin_nav()}
+    <section class='card small'>
+        <h1>Edit Tutor</h1>
+        <form method='post' action='{url_for('admin_tutor_update', tid=tid)}' class='grid'>
+            <div>
+                <label>Full Name</label>
+                <input name='full_name' value="{tutor['full_name']}" required>
+            </div>
+            <div>
+                <label>Phone</label>
+                <input name='phone' value="{tutor['phone']}" required>
+            </div>
+            <div>
+                <button class='btn'>Update Tutor</button>
+                <a href='{url_for('admin_tutors')}' class='btn secondary'>Cancel</a>
+            </div>
+        </form>
+    </section>
+    """
+    return page("Edit Tutor", body)
+    
+@app.post('/admin/tutors/<int:tid>/update')
+def admin_tutor_update(tid: int):
+    r = require_admin()
+    if r:
+        return r
+
+    full_name = request.form.get('full_name', '').strip()
+    phone = normalize_phone(request.form.get('phone', ''))
+
+    if not full_name or not phone:
+        return page("Error", card_msg("All fields are required."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            UPDATE tutors
+            SET full_name=?, phone=?
+            WHERE id=?
+        """, (full_name, phone, tid))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Error", card_msg("Phone number already exists."))
+
+    conn.close()
+    return redirect(url_for('admin_tutors'))
 
 @app.post('/admin/tutors/add')
 def admin_tutor_add():
