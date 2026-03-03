@@ -9800,7 +9800,7 @@ def admin_messages():
     page_num = int(request.args.get("page", 1))
     q = request.args.get("q", "").strip()
 
-    limit = 50
+    limit = 30
     offset = (page_num - 1) * limit
 
     conn = get_db()
