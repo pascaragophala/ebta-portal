@@ -246,6 +246,24 @@ def init_db():
     );
     """)
     
+    
+    # ================= FOLLOW UPS =================
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS followups(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT,
+        grade TEXT,
+        subjects TEXT,
+        followup_status TEXT DEFAULT 'OPEN',
+        payment_date TEXT,
+        date_communicated TEXT,
+        notes TEXT,
+        created_at TEXT NOT NULL
+    );
+    """)
+
+    
     ensure_column(conn, "students", "guardian_name", "TEXT")
     ensure_column(conn, "materials", "is_assignment", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "materials", "due_date", "TEXT")
@@ -261,6 +279,10 @@ def init_db():
     ensure_column(conn, "students", "guardian_phone_type", "TEXT DEFAULT 'SA'")
     ensure_column(conn, "sessions", "meeting_id", "TEXT")
     ensure_column(conn, "sessions", "meeting_passcode", "TEXT")
+    ensure_column(conn, "followups", "issue_type", "TEXT")
+    ensure_column(conn, "followups", "captured_by", "TEXT")
+    ensure_column(conn, "followups", "updated_by", "TEXT")
+    ensure_column(conn, "followups", "updated_at", "TEXT")
 
 
 
@@ -278,6 +300,8 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_school ON students(school)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_subjects_tutor ON tutor_subjects(tutor_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_subjects_tutor ON tutor_subjects(tutor_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_followups_name ON followups(full_name)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_followups_status ON followups(followup_status)")
 
 
 
@@ -342,24 +366,7 @@ def init_db():
     );
     """)
     
-    # ================= FOLLOW UPS =================
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS followups(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        full_name TEXT NOT NULL,
-        phone TEXT,
-        grade TEXT,
-        subjects TEXT,
-        followup_status TEXT DEFAULT 'OPEN',
-        payment_date TEXT,
-        date_communicated TEXT,
-        notes TEXT,
-        created_at TEXT NOT NULL
-    );
-    """)
-
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_followups_name ON followups(full_name)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_followups_status ON followups(followup_status)")
+    
     
 
     # Defaults & seed
@@ -1666,35 +1673,66 @@ background:#fff;
     color: #059669;
 }
 
-/* Followups table improvements */
+/* ================= FOLLOWUPS TABLE ================= */
+
+.followups-table {
+    table-layout: auto;
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+
 .followups-table th,
 .followups-table td{
-    min-width:120px;
-    vertical-align:middle;
+    min-width:130px;
+    vertical-align:top;
+    padding:10px;
+    white-space:normal;
+    word-break:break-word;
 }
 
+/* Inputs fill cells properly */
 .followups-table input,
-.followups-table select{
-    min-width:120px;
-}
-
+.followups-table select,
 .followups-table textarea{
-    min-width:180px;
+    width:100%;
+    min-width:130px;
+    box-sizing:border-box;
 }
 
-.followups-table td.notes-cell{
+/* Notes wider */
+.followups-table td:nth-child(11){
     min-width:220px;
 }
 
+/* Make notes field taller */
+.followups-table input[name="notes"]{
+    min-height:38px;
+}
+
+/* Row status colours */
 .follow-open{
-    background:#d94848 !important;
+    background:#fff1f1 !important;
 }
 
 .follow-paid{
-    background:#35db37 !important;
+    background:#e9fbe9 !important;
 }
+
 .overdue{
     border-left:6px solid #dc2626 !important;
+}
+
+/* Make table horizontally scrollable nicely */
+.scroll-x{
+    overflow-x:auto;
+}
+.follow-progress {
+    background:#fff7e6 !important;
+}
+
+.follow-awaiting {
+    background:#eef6ff !important;
 }
 </style>
 """
@@ -10908,6 +10946,15 @@ def admin_followups():
         cur.execute("SELECT * FROM followups ORDER BY created_at DESC")
 
     rows = cur.fetchall()
+    
+    ISSUE_TYPES = [
+        "Missing R50 Registration Fee",
+        "Payment Missing",
+        "Fake Upload",
+        "Returning Student Owing",
+        "PoP Issues",
+        "Other"
+    ]
 
     # get subjects for dropdown
     cur.execute("SELECT DISTINCT name FROM subjects ORDER BY name")
@@ -10927,7 +10974,11 @@ def admin_followups():
         row_class = ""
         if row["followup_status"] == "OPEN":
             row_class = "follow-open"
-        elif row["followup_status"] == "PAID":
+        elif row["followup_status"] == "IN PROGRESS":
+            row_class = "follow-progress"
+        elif row["followup_status"] == "AWAITING POP":
+            row_class = "follow-awaiting"
+        elif row["followup_status"] == "RESOLVED":
             row_class = "follow-paid"
 
         # -------- Overdue --------
@@ -10985,19 +11036,35 @@ def admin_followups():
                     )}
                 </select>
             </td>
+            
+            <td>
+            <select name="issue_type">
+            <option value="">Select</option>
+            {''.join(
+            f"<option value='{i}' {'selected' if row['issue_type']==i else ''}>{i}</option>"
+            for i in ISSUE_TYPES
+            )}
+            </select>
+            </td>
 
             <td>
                 <select name="followup_status">
-                    <option {'selected' if row['followup_status']=="OPEN" else ""}>OPEN</option>
-                    <option {'selected' if row['followup_status']=="PAID" else ""}>PAID</option>
-                    <option {'selected' if row['followup_status']=="NO RESPONSE" else ""}>NO RESPONSE</option>
-                    <option {'selected' if row['followup_status']=="DECLINED" else ""}>DECLINED</option>
+                    <option value="OPEN" {'selected' if row['followup_status']=="OPEN" else ""}>OPEN</option>
+                    <option value="IN PROGRESS" {'selected' if row['followup_status']=="IN PROGRESS" else ""}>IN PROGRESS</option>
+                    <option value="AWAITING POP" {'selected' if row['followup_status']=="AWAITING POP" else ""}>AWAITING POP</option>
+                    <option value="RESOLVED" {'selected' if row['followup_status']=="RESOLVED" else ""}>RESOLVED</option>
+                    <option value="DECLINED" {'selected' if row['followup_status']=="DECLINED" else ""}>DECLINED</option>
                 </select>
             </td>
+            
+            <td><span class="badge">{escape(row['captured_by'] or '')}</span></td>
+            <td><span class="badge">{escape(row['updated_by'] or '')}</span></td>
 
             <td><input type="date" name="payment_date" value="{row['payment_date'] or ''}"></td>
             <td><input type="date" name="date_communicated" value="{row['date_communicated'] or ''}"></td>
-            <td><input name="notes" value="{escape(row['notes'] or '')}"></td>
+            <td>
+            <textarea name="notes" rows="2">{escape(row['notes'] or '')}</textarea>
+            </td>
 
             <td><button class="btn mini success">Save</button></td>
         </form>
@@ -11028,7 +11095,10 @@ def admin_followups():
                     <th>Phone</th>
                     <th>Grade</th>
                     <th>Subjects</th>
+                    <th>Issue</th>
                     <th>Status</th>
+                    <th>Captured By</th>
+                    <th>Updated By</th>
                     <th>Payment</th>
                     <th>Communicated</th>
                     <th>Notes</th>
@@ -11036,7 +11106,7 @@ def admin_followups():
                 </tr>
             </thead>
             <tbody>
-                {''.join(trs) or "<tr><td colspan='9'>No followups yet.</td></tr>"}
+                {''.join(trs) or "<tr><td colspan='12'>No followups yet.</td></tr>"}
             </tbody>
         </table>
         </div>
@@ -11050,6 +11120,15 @@ def admin_followup_add():
     r = require_admin()
     if r:
         return r
+    
+    ISSUE_TYPES = [
+        "Missing R50 Registration Fee",
+        "Payment Missing",
+        "Fake Upload",
+        "Returning Student Owing",
+        "PoP Issues",
+        "Other"
+    ]
 
     conn = get_db()
     cur = conn.cursor()
@@ -11085,6 +11164,17 @@ def admin_followup_add():
                 <option value="">Select</option>
                 {subject_options}
             </select>
+            
+            <select name="issue_type" required>
+                <option value="">Select Issue Type</option>
+                {''.join(f"<option value='{i}'>{i}</option>" for i in ISSUE_TYPES)}
+            </select>
+
+            <select name="captured_by" required>
+                <option value="">Captured By</option>
+                <option value="Admin">Admin</option>
+                <option value="Admission COD">Admission COD</option>
+            </select>
 
             <input type="date" name="payment_date">
             <input type="date" name="date_communicated">
@@ -11105,20 +11195,32 @@ def admin_followup_create():
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO followups(
-            full_name, phone, grade, subjects,
-            payment_date, date_communicated,
-            notes, created_at
-        )
-        VALUES (?,?,?,?,?,?,?,?)
+    INSERT INTO followups(
+        full_name, phone, grade, subjects,
+        issue_type,
+        followup_status,
+        payment_date,
+        date_communicated,
+        notes,
+        captured_by,
+        updated_by,
+        updated_at,
+        created_at
+    )
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         request.form.get("full_name"),
         request.form.get("phone"),
         request.form.get("grade"),
         request.form.get("subjects"),
+        request.form.get("issue_type"),
+        "OPEN",
         request.form.get("payment_date"),
         request.form.get("date_communicated"),
         request.form.get("notes"),
+        request.form.get("captured_by"),
+        request.form.get("captured_by"),
+        now_utc_iso(),
         now_utc_iso()
     ))
 
@@ -11135,26 +11237,34 @@ def admin_followup_update(fid):
     conn = get_db()
     cur = conn.cursor()
 
+    admin_role = session.get("admin_role", "Admin")
+
     cur.execute("""
-        UPDATE followups SET
-            full_name=?,
-            phone=?,
-            grade=?,
-            subjects=?,
-            followup_status=?,
-            payment_date=?,
-            date_communicated=?,
-            notes=?
-        WHERE id=?
+    UPDATE followups SET
+        full_name=?,
+        phone=?,
+        grade=?,
+        subjects=?,
+        issue_type=?,
+        followup_status=?,
+        payment_date=?,
+        date_communicated=?,
+        notes=?,
+        updated_by=?,
+        updated_at=?
+    WHERE id=?
     """, (
         request.form.get("full_name"),
         request.form.get("phone"),
         request.form.get("grade"),
         request.form.get("subjects"),
+        request.form.get("issue_type"),
         request.form.get("followup_status"),
         request.form.get("payment_date"),
         request.form.get("date_communicated"),
         request.form.get("notes"),
+        admin_role,
+        now_utc_iso(),
         fid
     ))
 
@@ -11184,8 +11294,9 @@ def export_followups():
 
     writer.writerow([
         "Name","Phone","Grade","Subjects",
-        "Status","Payment Date",
-        "Communicated","Notes"
+        "Issue Type","Status",
+        "Payment Date","Communicated",
+        "Captured By","Updated By","Notes"
     ])
 
     for row in rows:
@@ -11194,9 +11305,12 @@ def export_followups():
             row["phone"],
             row["grade"],
             row["subjects"],
+            row["issue_type"],
             row["followup_status"],
             row["payment_date"],
             row["date_communicated"],
+            row["captured_by"],
+            row["updated_by"],
             row["notes"]
         ])
 
