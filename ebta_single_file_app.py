@@ -1734,6 +1734,14 @@ background:#fff;
 .follow-awaiting {
     background:#eef6ff !important;
 }
+
+.visible-date-highlight{
+    color: var(--primary);
+    font-weight: 700;
+    background: #e8f5e9;
+    padding: 2px 6px;
+    border-radius: 6px;
+}
 </style>
 """
 
@@ -2711,7 +2719,8 @@ def home():
             <label class="payment-confirm">
                 <input type="checkbox" id="paid_check" name="paid_check" />
                 <span class="mini" id="payment_text">
-                    Payment has been made and I will upload the Proof of Payment now.
+                    Payment has been made and I will upload the Proof of Payment now that has 
+                    <span class="visible-date-highlight">visible date</span>.
                 </span>
             </label>
 
@@ -6923,23 +6932,33 @@ def admin_logout():
 
 
 def admin_nav():
+    links = []
+
+    # Always visible to all admins
+    links.append(f"<a class='btn secondary' href='{url_for('admin_home')}'>Dashboard</a>")
+    links.append(f"<a class='btn secondary' href='{url_for('admin_enrollments')}'>Enrollments</a>")
+    links.append(f"<a class='btn secondary' href='{url_for('admin_students')}'>Students</a>")
+    links.append(f"<a class='btn secondary' href='{url_for('admin_followups')}'>Follow-Ups</a>")
+
+    # Only HIGH admin can see these
+    if is_high_admin():
+        links.extend([
+            f"<a class='btn secondary' href='{url_for('admin_tutors')}'>Tutors</a>",
+            f"<a class='btn secondary' href='{url_for('admin_groups')}'>Groups</a>",
+            f"<a class='btn secondary' href='{url_for('admin_sessions')}'>Sessions</a>",
+            f"<a class='btn secondary' href='{url_for('admin_messages')}'>Inbox</a>",
+            f"<a class='btn secondary' href='{url_for('admin_analytics')}'>Analytics</a>",
+            f"<a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>",
+            f"<a class='btn secondary' href='{url_for('admin_uploads_control')}'>Uploads Control</a>",
+            f"<a class='btn secondary' href='{url_for('admin_materials')}'>Unlock Uploads</a>",
+            f"<a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct Msgs</a>",
+            f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
+            f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
+        ])
+
     return f"""
     <nav class="admin-nav">
-        <a class="btn secondary" href="{url_for('admin_home')}">Dashboard</a>
-        <a class="btn secondary" href="{url_for('admin_enrollments')}">Enrollments</a>
-        <a class="btn secondary" href="{url_for('admin_students')}">Students</a>
-        <a class="btn secondary" href="{url_for('admin_tutors')}">Tutors</a>
-        <a class="btn secondary" href="{url_for('admin_groups')}">Groups</a>
-        <a class="btn secondary" href="{url_for('admin_sessions')}">Sessions</a>
-        <a class="btn secondary" href="{url_for('admin_messages')}">Inbox</a>
-        <a class="btn secondary" href="{url_for('admin_analytics')}">Analytics</a>
-        <a class="btn secondary" href="{url_for('admin_settings')}">Settings</a>
-        <a class="btn secondary" href="{url_for('admin_uploads_control')}">Uploads Control</a>
-        <a class="btn secondary" href="{url_for('admin_materials')}">Unlock Uploads</a>
-        <a class="btn secondary" href="{url_for('admin_direct_messages')}">Direct Msgs</a>
-        <a class="btn secondary" href="{url_for('admin_sms_dashboard')}">SMS Dashboard</a>
-        <a class="btn secondary" href="{url_for('admin_process_sms')}">Processed SMS</a>
-        <a class="btn secondary" href="{url_for('admin_followups')}">Follow-Ups</a>
+        {''.join(links)}
     </nav>
     """
 
@@ -7545,6 +7564,7 @@ def admin_students():
             <td>{pin}</td>
             <td style="white-space:nowrap">
 
+                {f"""
                 <a class='btn mini'
                    href='{url_for("admin_student_edit", sid=s["id"])}'>
                    Edit
@@ -7566,6 +7586,7 @@ def admin_students():
                         Delete
                     </button>
                 </form>
+                """ if is_high_admin() else ""}
 
             </td>
         </tr>
@@ -7933,6 +7954,9 @@ def admin_student_edit(sid):
     r = require_admin()
     if r:
         return r
+        
+    if not is_high_admin():
+        return page("Access Denied", card_msg("You do not have permission to perform this action."))
 
     conn = get_db()
     cur = conn.cursor()
@@ -8040,6 +8064,9 @@ def admin_student_update(sid):
     r = require_admin()
     if r:
         return r
+        
+    if not is_high_admin():
+        return page("Access Denied", card_msg("You do not have permission to perform this action."))
 
     full_name = request.form.get("full_name","").strip()
     phone = request.form.get("phone_whatsapp","").strip()
@@ -8091,6 +8118,10 @@ def admin_student_add():
     r = require_admin()
     if r:
         return r
+        
+    if not is_high_admin():
+        return page("Access Denied", card_msg("You do not have permission to perform this action."))
+    
     full_name = request.form.get('full_name','').strip()
     phone = normalize_phone(request.form.get('phone',''))
     grade = request.form.get('grade','').strip()
@@ -8123,6 +8154,10 @@ def admin_student_reset_pin(sid:int):
     r = require_admin()
     if r:
         return r
+    
+    if not is_high_admin():
+        return page("Access Denied", card_msg("You do not have permission to perform this action."))
+    
     conn = get_db()
     cur = conn.cursor()
     pins = set()
@@ -8141,6 +8176,9 @@ def admin_student_delete(sid: int):
     r = require_admin()
     if r:
         return r
+        
+    if not is_high_admin():
+        return page("Access Denied", card_msg("You do not have permission to perform this action."))
 
     conn = get_db()
     try:
