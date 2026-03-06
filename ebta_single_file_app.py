@@ -10105,7 +10105,6 @@ def admin_messages_resolve_all():
 # --- Admin: Direct Messages (student/tutor DMs) ---
 
 @app.get('/admin/direct-messages')
-@require_high_admin
 def admin_direct_messages():
 
     r = require_admin()
