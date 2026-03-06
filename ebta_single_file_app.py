@@ -4244,7 +4244,7 @@ def student_home():
                            target="_blank"
                            href="{r['invite_link']}">
 
-                           Join Group
+                           Click to Join Whatsapp Group
 
                         </a>
 
@@ -4282,7 +4282,7 @@ def student_home():
                     <a class="btn success mini"
                        target="_blank"
                        href="{r['meet_link']}">
-                       Join Class Session
+                       Click to Join Class Session
                     </a>
                     """
 
@@ -6939,6 +6939,7 @@ def admin_nav():
     links.append(f"<a class='btn secondary' href='{url_for('admin_enrollments')}'>Enrollments</a>")
     links.append(f"<a class='btn secondary' href='{url_for('admin_students')}'>Students</a>")
     links.append(f"<a class='btn secondary' href='{url_for('admin_followups')}'>Follow-Ups</a>")
+    links.append(f"<a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct Msgs</a>")
 
     # Only HIGH admin can see these
     if is_high_admin():
@@ -6951,7 +6952,7 @@ def admin_nav():
             f"<a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>",
             f"<a class='btn secondary' href='{url_for('admin_uploads_control')}'>Uploads Control</a>",
             f"<a class='btn secondary' href='{url_for('admin_materials')}'>Unlock Uploads</a>",
-            f"<a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct Msgs</a>",
+            
             f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
             f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
         ])
