@@ -9570,6 +9570,11 @@ def admin_session_edit(sid):
     if not session_row:
         return redirect(url_for('admin_sessions'))
 
+    dow_options = ''.join([
+        f"<option value='{i}' {'selected' if i == session_row['day_of_week'] else ''}>{d}</option>"
+        for i, d in enumerate(DOW)
+    ])
+
     body = f"""
     {admin_nav()}
     <section class='card'>
@@ -9580,22 +9585,32 @@ def admin_session_edit(sid):
               class="grid"
               style="gap:10px">
 
+            <label>Day</label>
+            <select name="day_of_week">
+                {dow_options}
+            </select>
+
+            <label>Start Time</label>
             <input name="start_time"
                    value="{session_row['start_time']}"
                    required>
 
+            <label>End Time</label>
             <input name="end_time"
                    value="{session_row['end_time']}"
                    required>
 
+            <label>Meeting Link</label>
             <input name="meet_link"
                    value="{session_row['meet_link'] or ''}"
                    placeholder="Meet link">
 
+            <label>Meeting ID</label>
             <input name="meeting_id"
                    value="{session_row['meeting_id'] or ''}"
                    placeholder="Meeting ID">
 
+            <label>Meeting Passcode</label>
             <input name="meeting_passcode"
                    value="{session_row['meeting_passcode'] or ''}"
                    placeholder="Meeting Passcode">
@@ -9621,13 +9636,15 @@ def admin_session_update(sid):
 
     cur.execute("""
         UPDATE sessions
-        SET start_time=?,
+        SET day_of_week=?,
+            start_time=?,
             end_time=?,
             meet_link=?,
             meeting_id=?,
             meeting_passcode=?
         WHERE id=?
     """, (
+        request.form.get("day_of_week"),
         request.form.get("start_time"),
         request.form.get("end_time"),
         request.form.get("meet_link"),
