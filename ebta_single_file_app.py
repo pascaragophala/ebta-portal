@@ -8323,7 +8323,15 @@ def admin_tutors():
         return r
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT id, full_name, phone, pin FROM tutors ORDER BY created_at DESC")
+    cur.execute("""
+    SELECT t.id, t.full_name, t.phone, t.pin,
+           MIN(CAST(SUBSTR(s.grade,2) AS INTEGER)) AS grade_order
+    FROM tutors t
+    LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
+    LEFT JOIN subjects s ON s.id = ts.subject_id
+    GROUP BY t.id
+    ORDER BY grade_order ASC, t.full_name
+    """)
     rows = cur.fetchall()
     # subjects list for mapping
     cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
