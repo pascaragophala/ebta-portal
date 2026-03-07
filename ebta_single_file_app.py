@@ -262,6 +262,57 @@ def init_db():
         created_at TEXT NOT NULL
     );
     """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS tutor_weekly_tracker(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tutor_id INTEGER NOT NULL,
+        manager_id INTEGER,
+
+        subject TEXT,
+        grade TEXT,
+        session_date TEXT,
+
+        session_held INTEGER,
+        start_time TEXT,
+        end_time TEXT,
+        reason_missed TEXT,
+
+        recording_link TEXT,
+        recording_posted INTEGER,
+        posted_within_24h INTEGER,
+        extra_resources INTEGER,
+
+        students_attended INTEGER,
+        topic_covered TEXT,
+        activity_given TEXT,
+
+        issues_flags TEXT,
+        manager_comments TEXT,
+        cao_review_status TEXT,
+
+        created_at TEXT
+    );
+    """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS tutor_managers(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT UNIQUE,
+        pin TEXT,
+        created_at TEXT NOT NULL
+    );
+    """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS manager_tutors(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        manager_id INTEGER NOT NULL,
+        tutor_id INTEGER NOT NULL,
+        UNIQUE(manager_id, tutor_id)
+    );
+    """)
 
     
     ensure_column(conn, "students", "guardian_name", "TEXT")
@@ -283,6 +334,7 @@ def init_db():
     ensure_column(conn, "followups", "captured_by", "TEXT")
     ensure_column(conn, "followups", "updated_by", "TEXT")
     ensure_column(conn, "followups", "updated_at", "TEXT")
+    ensure_column(conn, "tutor_weekly_tracker", "manager_id", "INTEGER")
 
 
 
@@ -675,6 +727,14 @@ def require_student():
     if not is_student(): return redirect(url_for('student_login'))
 def require_tutor():
     if not is_tutor(): return redirect(url_for('tutor_login'))
+    
+    
+def is_tutor_manager():
+    return session.get("manager_id")
+
+def require_manager():
+    if not is_tutor_manager():
+        return redirect(url_for("manager_login"))    
 
 def secure_name(name):
     keep="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
@@ -2104,6 +2164,18 @@ document.addEventListener("DOMContentLoaded", function(){
         box.scrollTop = box.scrollHeight;
     }
 });
+
+function assignTutor(manager,tutor,state){
+
+fetch("/admin/assign-tutor",{
+method:"POST",
+headers:{
+"Content-Type":"application/x-www-form-urlencoded"
+},
+body:`manager_id=${manager}&tutor_id=${tutor}&state=${state?1:0}`
+})
+
+}
 
 </script>
 """
@@ -6952,9 +7024,11 @@ def admin_nav():
             f"<a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>",
             f"<a class='btn secondary' href='{url_for('admin_uploads_control')}'>Uploads Control</a>",
             f"<a class='btn secondary' href='{url_for('admin_materials')}'>Unlock Uploads</a>",
-            
+            f"<a class='btn secondary' href='{url_for('admin_tutor_tracker')}'>Tutor Tracker</a>",
+            f"<a class='btn secondary' href='{url_for('admin_tutor_operations')}'>Tutor-operations</a>",
             f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
             f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
+
         ])
 
     return f"""
@@ -6996,6 +7070,8 @@ def admin_home():
     <a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>
     <a class="btn secondary" href="{url_for('admin_uploads_control')}">Uploads Control</a>
     <a class="btn secondary" href="{url_for('admin_materials')}">Unlock Uploads</a>
+    <a class="btn secondary" href="{url_for('admin_tutor_tracker')}">Tutor Tracker</a>
+    <a class="btn secondary" href="{url_for('admin_tutor_operations')}">Tutor-operations</a>
 
     </div></section>"""
     return page("Admin", body)
@@ -11373,6 +11449,1241 @@ def export_followups():
     output.headers["Content-Disposition"] = "attachment; filename=followups.csv"
     output.headers["Content-type"] = "text/csv"
     return output
+
+
+@app.get('/admin/tutor-tracker')
+@require_high_admin
+def admin_tutor_tracker():
+
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # load tutors
+    cur.execute("""
+        SELECT id, full_name
+        FROM tutors
+        ORDER BY full_name
+    """)
+    tutors = cur.fetchall()
+
+    today = datetime.date.today()
+
+    dates = [today - datetime.timedelta(days=i) for i in range(7)]
+
+    header = "<th>Date</th>"
+    for t in tutors:
+        header += f"<th>{t['full_name']}</th>"
+
+    rows = ""
+
+    for d in dates:
+
+        date_str = d.strftime("%Y-%m-%d")
+        row = f"<td>{date_str}</td>"
+
+        for t in tutors:
+
+            cur.execute("""
+                SELECT session_held
+                FROM tutor_weekly_tracker
+                WHERE tutor_id=? AND session_date=?
+            """, (t["id"], date_str))
+
+            entry = cur.fetchone()
+
+            color = ""
+            if entry and entry["session_held"] == 0:
+                color = "style='background:#fee2e2'"
+
+            row += f"""
+            <td {color}>
+                <a href="/admin/tutor-tracker/edit?tutor_id={t['id']}&date={date_str}">
+                Update
+                </a>
+            </td>
+            """
+
+        rows += f"<tr>{row}</tr>"
+
+    # load managers
+    cur.execute("""
+        SELECT id, full_name, phone, pin
+        FROM tutor_managers
+        ORDER BY full_name
+    """)
+    managers = cur.fetchall()
+
+    manager_rows = ""
+
+    for m in managers:
+
+        manager_rows += f"""
+        <tr>
+        <td>{m['full_name']}</td>
+        <td>{m['phone']}</td>
+        <td>{m['pin']}</td>
+
+        <td style="display:flex;gap:6px">
+
+        <a class="btn mini"
+        href="/admin/managers/edit/{m['id']}">
+        Edit
+        </a>
+
+        <form method="post"
+        action="/admin/managers/reset-pin/{m['id']}">
+        <button class="btn mini warn">
+        Reset PIN
+        </button>
+        </form>
+
+        <form method="post"
+        action="/admin/managers/delete/{m['id']}"
+        onsubmit="return confirm('Delete this manager?')">
+        <button class="btn mini danger">
+        Delete
+        </button>
+        </form>
+
+        </td>
+        </tr>
+        """
+
+    # assignment grid
+    assignment_rows = ""
+
+    for m in managers:
+
+        assignment_rows += f"<tr><td>{m['full_name']}</td>"
+
+        for t in tutors:
+
+            cur.execute("""
+            SELECT 1 FROM manager_tutors
+            WHERE manager_id=? AND tutor_id=?
+            """,(m["id"], t["id"]))
+
+            assigned = cur.fetchone()
+
+            checked = "checked" if assigned else ""
+
+            assignment_rows += f"""
+            <td style='text-align:center'>
+            <input type="checkbox"
+            onchange="assignTutor({m['id']},{t['id']},this.checked)"
+            {checked}>
+            </td>
+            """
+
+        assignment_rows += "</tr>"
+
+    conn.close()
+
+    assignment_table = f"""
+
+    <section class='card'>
+
+    <h1>Manager Tutor Assignment</h1>
+
+    <div class="scroll-x">
+
+    <table>
+
+    <thead>
+    <tr>
+    <th>Manager</th>
+    {''.join(f"<th>{t['full_name']}</th>" for t in tutors)}
+    </tr>
+    </thead>
+
+    <tbody>
+    {assignment_rows}
+    </tbody>
+
+    </table>
+
+    </div>
+
+    </section>
+    """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class='card'>
+
+        <h1>Tutor Weekly Tracker</h1>
+
+        <div class='scroll-x'>
+
+            <table>
+
+                <thead>
+                    <tr>{header}</tr>
+                </thead>
+
+                <tbody>
+                    {rows}
+                </tbody>
+
+            </table>
+
+        </div>
+
+    </section>
+
+    <section class='card'>
+
+        <h1>Tutor Managers</h1>
+
+        <form method="post" action="/admin/managers/add">
+
+            <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px">
+
+                <input name="name" placeholder="Manager Name" required>
+
+                <input name="phone" placeholder="Phone Number" required>
+
+                <button class="btn">Create Manager</button>
+
+            </div>
+
+        </form>
+
+        <br>
+
+        <table>
+
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Phone</th>
+                    <th>PIN</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {manager_rows}
+            </tbody>
+
+        </table>
+
+    </section>
+
+    {assignment_table}
+
+    <script>
+    function assignTutor(manager,tutor,state){{
+
+        fetch("/admin/assign-tutor",{{
+
+        method:"POST",
+
+        headers:{{
+        "Content-Type":"application/x-www-form-urlencoded"
+        }},
+
+        body:`manager_id=${{manager}}&tutor_id=${{tutor}}&state=${{state?1:0}}`
+
+        }})
+    }}
+    </script>
+    """
+
+    return page("Tutor Tracker", body)
+    
+    
+@app.get('/admin/tutor-tracker/edit')
+def tracker_edit():
+
+    tutor_id = request.args.get("tutor_id")
+    date = request.args.get("date")
+
+    conn=get_db()
+    cur=conn.cursor()
+
+    cur.execute("SELECT full_name FROM tutors WHERE id=?", (tutor_id,))
+    tutor=cur.fetchone()
+
+    conn.close()
+
+    body=f"""
+
+    {admin_nav()}
+
+    <section class='card'>
+
+    <h1>{tutor['full_name']} — {date}</h1>
+
+    <form method="post" action="/admin/tutor-tracker/save">
+
+    <input type="hidden" name="tutor_id" value="{tutor_id}">
+    <input type="hidden" name="date" value="{date}">
+
+    <label>Session Held?</label>
+    <select name="session_held">
+    <option value="1">Yes</option>
+    <option value="0">No</option>
+    </select>
+
+    <label>Start Time</label>
+    <input name="start_time">
+
+    <label>End Time</label>
+    <input name="end_time">
+
+    <label>Students Attended</label>
+    <input name="students_attended">
+
+    <label>Topic Covered</label>
+    <input name="topic_covered">
+
+    <label>Recording Link</label>
+    <input name="recording_link">
+
+    <label>Manager Comments</label>
+    <textarea name="manager_comments"></textarea>
+
+    <button class="btn success">Save</button>
+
+    </form>
+
+    </section>
+    """
+
+    return page("Tracker Entry",body)
+    
+@app.post('/admin/tutor-tracker/save')
+def tracker_save():
+
+    conn=get_db()
+    cur=conn.cursor()
+
+    cur.execute("""
+
+    INSERT INTO tutor_weekly_tracker(
+        tutor_id,
+        session_date,
+        session_held,
+        start_time,
+        end_time,
+        recording_link,
+        students_attended,
+        topic_covered,
+        manager_comments,
+        manager_id,
+        created_at
+    )
+
+    VALUES(?,?,?,?,?,?,?,?,?,?,?)
+
+    """,(
+
+    request.form.get("tutor_id"),
+    request.form.get("date"),
+    request.form.get("session_held"),
+    request.form.get("start_time"),
+    request.form.get("end_time"),
+    request.form.get("recording_link"),
+    request.form.get("students_attended"),
+    request.form.get("topic_covered"),
+    request.form.get("manager_comments"),
+    None,
+    now_utc_iso()
+
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect("/admin/tutor-tracker")
+
+  
+@app.get('/manager/tracker')
+def manager_tracker():
+
+    r = require_manager()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT t.id, t.full_name
+    FROM tutors t
+    JOIN manager_tutors mt ON mt.tutor_id = t.id
+    WHERE mt.manager_id=?
+    ORDER BY t.full_name
+    """,(session["manager_id"],))
+
+    tutors = cur.fetchall()
+
+    conn.close()
+
+    rows = ""
+
+    for i, t in enumerate(tutors, start=1):
+
+        rows += f"""
+        <tr>
+        <td>{i}</td>
+        <td>{t['full_name']}</td>
+        <td>
+        <a class="btn mini success"
+        href="/manager/tracker/edit?tutor_id={t['id']}">
+        Log Session
+        </a>
+        </td>
+        </tr>
+        """
+
+    body=f"""
+
+    {manager_nav()}
+
+    <section class='card'>
+
+    <h1>Tutor Session Tracker</h1>
+
+    <p class='muted'>
+    Logged in as {session.get('manager_name')}
+    </p>
+
+    <div class='scroll-x'>
+
+    <table>
+
+    <thead>
+    <tr>
+    <th>#</th>
+    <th>Tutor</th>
+    <th>Action</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    {rows}
+    </tbody>
+
+    </table>
+
+    </div>
+
+    </section>
+    """
+
+    return page("Tutor Tracker",body)   
+    
+    
+@app.route('/manager/login', methods=['GET','POST'])
+def manager_login():
+
+    if request.method == 'POST':
+
+        phone = request.form.get("phone")
+        pin = request.form.get("pin")
+
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute("""
+        SELECT * FROM tutor_managers
+        WHERE phone=? AND pin=?
+        """,(phone,pin))
+
+        manager = cur.fetchone()
+        conn.close()
+
+        if manager:
+            session.clear()
+            session["manager_id"] = manager["id"]
+            session["manager_name"] = manager["full_name"]
+            return redirect(url_for("manager_dashboard"))
+
+        return page("Login failed", card_msg("Invalid login details."))
+
+
+    body = f"""
+    <section class='card auth-card'>
+        <h1>Tutor Manager Login</h1>
+
+        <form method="post" class="grid">
+
+            <div>
+                <label>Phone</label>
+                <input name="phone" required>
+            </div>
+
+            <div>
+                <label>PIN</label>
+                <input name="pin" required>
+            </div>
+
+            <button class="btn">Login</button>
+
+        </form>
+    </section>
+    """
+
+    return page("Manager Login", body)
+    
+@app.get('/manager/dashboard')
+def manager_dashboard():
+
+    r = require_manager()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT COUNT(*) AS total
+    FROM manager_tutors
+    WHERE manager_id=?
+    """,(session["manager_id"],))
+
+    total_tutors = cur.fetchone()["total"]
+
+    today = datetime.date.today()
+    week_start = today - datetime.timedelta(days=7)
+
+    cur.execute("""
+    SELECT COUNT(*) AS sessions
+    FROM tutor_weekly_tracker tw
+    JOIN manager_tutors mt ON mt.tutor_id = tw.tutor_id
+    WHERE mt.manager_id=? AND tw.session_date >= ?
+    """,(session["manager_id"], week_start.strftime("%Y-%m-%d")))
+
+    weekly_updates = cur.fetchone()["sessions"]
+
+    conn.close()
+
+    body = f"""
+    {manager_nav()}
+
+    <section class='card'>
+
+        <h1>Tutor Manager Dashboard</h1>
+
+        <p class='muted'>
+        Welcome {session.get('manager_name')}
+        </p>
+
+        <div class='stats'>
+
+            <div class='stat'>
+                <div class='k'>{total_tutors}</div>
+                <div class='t'>Your Tutors</div>
+            </div>
+
+            <div class='stat'>
+                <div class='k'>{weekly_updates}</div>
+                <div class='t'>Sessions Logged This Week</div>
+            </div>
+
+        </div>
+
+        <br>
+
+        <div class='toolbar'>
+
+            <a class='btn success'
+            href="/manager/tracker">
+
+            Open Weekly Tutor Tracker
+
+            </a>
+
+        </div>
+
+        <div class='muted'>
+
+        Use the tracker to record sessions, attendance and tutor activity.
+
+        </div>
+
+    </section>
+    """
+
+    return page("Manager Dashboard", body)
+    
+    
+    
+
+@app.get('/manager/tracker/edit')
+def manager_tracker_edit():
+
+    r = require_manager()
+    if r:
+        return r
+
+    tutor_id = request.args.get("tutor_id")
+    date = datetime.date.today().strftime("%Y-%m-%d")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT t.full_name
+    FROM tutors t
+    JOIN manager_tutors mt ON mt.tutor_id = t.id
+    WHERE t.id=? AND mt.manager_id=?
+    """,(tutor_id, session["manager_id"]))
+
+    tutor = cur.fetchone()
+
+    if not tutor:
+        conn.close()
+        return page(
+            "Access denied",
+            "<section class='card'><h1>Unauthorized tutor</h1></section>"
+        )
+
+    conn.close()
+
+    body = f"""
+
+    {manager_nav()}
+
+    <section class='card'>
+
+    <h1>{tutor['full_name']} — Session Entry</h1>
+
+    <div class='toolbar'>
+
+        <a class="btn mini" href="/manager/tracker">
+        ← Back to Tracker
+        </a>
+
+    </div>
+
+    <form method="post" action="/manager/tracker/save">
+
+    <input type="hidden" name="tutor_id" value="{tutor_id}">
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+
+        <div>
+        <label>Session Date</label>
+        <input type="date" name="date" value="{date}" required>
+        </div>
+
+        <div>
+        <label>Session Held</label>
+        <select name="session_held">
+        <option value="1">Yes</option>
+        <option value="0">No</option>
+        </select>
+        </div>
+
+        <div>
+        <label>Start Time</label>
+        <input type="time" name="start_time">
+        </div>
+
+        <div>
+        <label>End Time</label>
+        <input type="time" name="end_time">
+        </div>
+
+        <div>
+        <label>Students Attended</label>
+        <input type="number" name="students_attended" min="0">
+        </div>
+
+        <div>
+        <label>Recording Uploaded</label>
+        <select name="recording_link">
+        <option value="">No</option>
+        <option value="YES">Yes</option>
+        </select>
+        </div>
+
+    </div>
+
+    <br>
+
+    <label>Topic Covered</label>
+    <input name="topic_covered">
+
+    <label>Manager Comments</label>
+    <textarea name="manager_comments"></textarea>
+
+    <br>
+
+    <button class="btn success">
+    Save Session
+    </button>
+
+    </form>
+
+    </section>
+    """
+
+    return page("Tracker Entry", body)
+    
+
+@app.post('/manager/tracker/save')
+def manager_tracker_save():
+
+    r = require_manager()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    INSERT INTO tutor_weekly_tracker(
+        tutor_id,
+        session_date,
+        session_held,
+        start_time,
+        end_time,
+        recording_link,
+        students_attended,
+        topic_covered,
+        manager_comments,
+        manager_id,
+        created_at
+    )
+    VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    """,(
+
+    request.form.get("tutor_id"),
+    request.form.get("date"),
+    request.form.get("session_held"),
+    request.form.get("start_time"),
+    request.form.get("end_time"),
+    request.form.get("recording_link"),
+    request.form.get("students_attended"),
+    request.form.get("topic_covered"),
+    request.form.get("manager_comments"),
+    session.get("manager_id"),
+    now_utc_iso()
+
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect("/manager/tracker")
+
+@app.post('/admin/managers/add')
+@require_high_admin
+def admin_manager_add():
+
+    r = require_admin()
+    if r:
+        return r
+
+    name = request.form.get("name")
+    phone = request.form.get("phone")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    pins = set()
+
+    cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
+    pins |= {r['pin'] for r in cur.fetchall()}
+
+    cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
+    pins |= {r['pin'] for r in cur.fetchall()}
+
+    cur.execute("SELECT pin FROM tutor_managers WHERE pin IS NOT NULL")
+    pins |= {r['pin'] for r in cur.fetchall()}
+
+    pin = gen_pin(pins)
+
+    cur.execute("""
+    INSERT INTO tutor_managers(full_name, phone, pin, created_at)
+    VALUES(?,?,?,?)
+    """,(name,phone,pin,now_utc_iso()))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_tutor_tracker"))
+
+
+@app.route('/admin/managers/edit/<int:manager_id>', methods=['GET','POST'])
+@require_high_admin
+def admin_edit_manager(manager_id):
+
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    if request.method == "POST":
+
+        name = request.form.get("name")
+        phone = request.form.get("phone")
+
+        cur.execute("""
+        UPDATE tutor_managers
+        SET full_name=?, phone=?
+        WHERE id=?
+        """,(name,phone,manager_id))
+
+        conn.commit()
+        conn.close()
+
+        return redirect(url_for("admin_tutor_tracker"))
+
+    cur.execute("""
+    SELECT *
+    FROM tutor_managers
+    WHERE id=?
+    """,(manager_id,))
+
+    manager = cur.fetchone()
+    conn.close()
+
+    body = f"""
+
+    {admin_nav()}
+
+    <section class='card'>
+
+    <h1>Edit Tutor Manager</h1>
+
+    <form method="post">
+
+    <label>Name</label>
+    <input name="name" value="{manager['full_name']}" required>
+
+    <label>Phone</label>
+    <input name="phone" value="{manager['phone']}" required>
+
+    <button class="btn success">Update Manager</button>
+
+    </form>
+
+    </section>
+    """
+
+    return page("Edit Manager", body)
+    
+@app.post('/admin/managers/delete/<int:manager_id>')
+@require_high_admin
+def admin_delete_manager(manager_id):
+
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    DELETE FROM tutor_managers
+    WHERE id=?
+    """,(manager_id,))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_tutor_tracker"))
+
+
+@app.post('/admin/managers/reset-pin/<int:manager_id>')
+@require_high_admin
+def admin_reset_manager_pin(manager_id):
+
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    pins = set()
+
+    cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
+    pins |= {r['pin'] for r in cur.fetchall()}
+
+    cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
+    pins |= {r['pin'] for r in cur.fetchall()}
+
+    cur.execute("SELECT pin FROM tutor_managers WHERE pin IS NOT NULL")
+    pins |= {r['pin'] for r in cur.fetchall()}
+
+    new_pin = gen_pin(pins)
+
+    cur.execute("""
+    UPDATE tutor_managers
+    SET pin=?
+    WHERE id=?
+    """,(new_pin,manager_id))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_tutor_tracker"))
+
+
+@app.post("/admin/assign-tutor")
+@require_high_admin
+def assign_tutor():
+
+    manager_id = request.form.get("manager_id")
+    tutor_id = request.form.get("tutor_id")
+    state = request.form.get("state")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    if state == "1":
+
+        cur.execute("""
+        INSERT OR IGNORE INTO manager_tutors(manager_id,tutor_id)
+        VALUES(?,?)
+        """,(manager_id,tutor_id))
+
+    else:
+
+        cur.execute("""
+        DELETE FROM manager_tutors
+        WHERE manager_id=? AND tutor_id=?
+        """,(manager_id,tutor_id))
+
+    conn.commit()
+    conn.close()
+
+    return "ok"
+
+
+@app.get("/admin/tutor-operations")
+@require_high_admin
+def admin_tutor_operations():
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT
+        tw.session_date,
+        t.full_name AS tutor,
+        tm.full_name AS manager,
+        tw.session_held,
+        tw.students_attended,
+        tw.recording_link
+
+    FROM tutor_weekly_tracker tw
+
+    LEFT JOIN tutors t
+        ON tw.tutor_id = t.id
+
+    LEFT JOIN tutor_managers tm
+        ON tw.manager_id = tm.id
+
+    ORDER BY tw.session_date DESC
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    table_rows = ""
+
+    for r in rows:
+
+        status = "✓" if r["session_held"] else "✕"
+
+        recording = "✓" if r["recording_link"] else "—"
+
+        table_rows += f"""
+        <tr>
+        <td>{r['session_date']}</td>
+        <td>{r['tutor']}</td>
+        <td>{r['manager'] or 'Unassigned'}</td>
+        <td>{status}</td>
+        <td>{r['students_attended'] or '-'}</td>
+        <td>{recording}</td>
+        </tr>
+        """
+
+    body = f"""
+
+    {admin_nav()}
+
+    <section class='card'>
+
+    <h1>Tutor Operations Dashboard</h1>
+
+    <div class="scroll-x">
+
+    <table>
+
+    <thead>
+    <tr>
+    <th>Date</th>
+    <th>Tutor</th>
+    <th>Manager</th>
+    <th>Session Held</th>
+    <th>Students</th>
+    <th>Recording</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    {table_rows}
+    </tbody>
+
+    </table>
+
+    </div>
+
+    </section>
+    """
+
+    return page("Tutor Operations", body)
+    
+
+@app.get('/manager/logout')
+def manager_logout():
+
+    session.pop("manager_id", None)
+    session.pop("manager_name", None)
+
+    return redirect(url_for("manager_login"))
+    
+def manager_nav():
+
+    return f"""
+    <div class="admin-nav">
+
+        <a class="btn mini" href="/manager/dashboard">
+        Dashboard
+        </a>
+
+        <a class="btn mini" href="/manager/tracker">
+        Weekly Tracker
+        </a>
+
+        <a class="btn mini danger" href="/manager/logout">
+        Logout
+        </a>
+        
+        <a class="btn mini" href="/manager/tracker/history">
+        Session History
+        </a>
+
+    </div>
+    """
+    
+@app.get('/manager/tracker/history')
+def manager_tracker_history():
+
+    r = require_manager()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT
+        tw.id,
+        tw.session_date,
+        tw.start_time,
+        tw.end_time,
+        tw.students_attended,
+        tw.recording_link,
+        t.full_name AS tutor
+
+    FROM tutor_weekly_tracker tw
+    JOIN tutors t ON tw.tutor_id = t.id
+    JOIN manager_tutors mt ON mt.tutor_id = t.id
+
+    WHERE mt.manager_id=?
+
+    ORDER BY tw.session_date DESC
+    """,(session["manager_id"],))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    table_rows=""
+
+    for r in rows:
+
+        table_rows += f"""
+        <tr>
+        <td>{r['session_date']}</td>
+        <td>{r['tutor']}</td>
+        <td>{r['start_time'] or '-'}</td>
+        <td>{r['end_time'] or '-'}</td>
+        <td>{r['students_attended'] or '-'}</td>
+        <td>{'✓' if r['recording_link'] else '-'}</td>
+
+        <td>
+        <a class="btn mini"
+        href="/manager/tracker/edit-session?id={r['id']}">
+        Edit
+        </a>
+        </td>
+
+        </tr>
+        """
+
+    body=f"""
+
+    {manager_nav()}
+
+    <section class='card'>
+
+    <h1>Session History</h1>
+
+    <table>
+
+    <thead>
+    <tr>
+    <th>Date</th>
+    <th>Tutor</th>
+    <th>Start</th>
+    <th>End</th>
+    <th>Students</th>
+    <th>Recording</th>
+    <th>Edit</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    {table_rows}
+    </tbody>
+
+    </table>
+
+    </section>
+    """
+
+    return page("Session History", body)
+    
+
+@app.get('/manager/tracker/edit-session')
+def manager_edit_logged_session():
+
+    r = require_manager()
+    if r:
+        return r
+
+    session_id = request.args.get("id")
+
+    conn=get_db()
+    cur=conn.cursor()
+
+    cur.execute("""
+    SELECT *
+    FROM tutor_weekly_tracker
+    WHERE id=? AND manager_id=?
+    """,(session_id, session["manager_id"]))
+
+    s = cur.fetchone()
+    conn.close()
+
+    if not s:
+        return page("Error","<section class='card'>Session not found</section>")
+
+    body=f"""
+
+    {manager_nav()}
+
+    <section class='card'>
+
+    <h1>Edit Session</h1>
+
+    <form method="post" action="/manager/tracker/update">
+
+    <input type="hidden" name="id" value="{s['id']}">
+
+    <label>Session Held</label>
+    <select name="session_held">
+    <option value="1" {"selected" if s["session_held"] else ""}>Yes</option>
+    <option value="0" {"selected" if not s["session_held"] else ""}>No</option>
+    </select>
+
+    <label>Start Time</label>
+    <input type="time" name="start_time" value="{s['start_time'] or ''}">
+
+    <label>End Time</label>
+    <input type="time" name="end_time" value="{s['end_time'] or ''}">
+
+    <label>Students</label>
+    <input type="number" name="students_attended" value="{s['students_attended'] or ''}">
+
+    <label>Recording Uploaded</label>
+    <select name="recording_link">
+    <option value="">No</option>
+    <option value="YES" {"selected" if s["recording_link"] else ""}>Yes</option>
+    </select>
+
+    <label>Comments</label>
+    <textarea name="manager_comments">{s['manager_comments'] or ''}</textarea>
+
+    <button class="btn success">
+    Update Session
+    </button>
+
+    </form>
+
+    </section>
+    """
+
+    return page("Edit Session", body)
+    
+    
+@app.post('/manager/tracker/update')
+def manager_update_session():
+
+    r = require_manager()
+    if r:
+        return r
+
+    conn=get_db()
+    cur=conn.cursor()
+
+    cur.execute("""
+    UPDATE tutor_weekly_tracker
+
+    SET
+        session_held=?,
+        start_time=?,
+        end_time=?,
+        students_attended=?,
+        recording_link=?,
+        manager_comments=?
+
+    WHERE id=? AND manager_id=?
+
+    """,(
+
+    request.form.get("session_held"),
+    request.form.get("start_time"),
+    request.form.get("end_time"),
+    request.form.get("students_attended"),
+    request.form.get("recording_link"),
+    request.form.get("manager_comments"),
+    request.form.get("id"),
+    session["manager_id"]
+
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect("/manager/tracker/history")
+
 
 # --- Admin: Analytics dashboard ---
 
