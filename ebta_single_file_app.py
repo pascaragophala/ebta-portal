@@ -4414,14 +4414,14 @@ def student_home():
     if active_sub_ids:
 
         cur.execute(f"""
-            SELECT m.*, sub.name AS subject_name, sub.grade, t.full_name AS tutor_name
-            FROM materials m
-            JOIN subjects sub ON sub.id=m.subject_id
-            JOIN tutors t ON t.id=m.tutor_id
-            WHERE m.subject_id IN ({','.join('?'*len(active_sub_ids))})
-              AND m.month LIKE ?
-            ORDER BY sub.grade, sub.name, m.created_at DESC
-        """, (*active_sub_ids, month + "%"))
+        SELECT m.*, sub.name AS subject_name, sub.grade, t.full_name AS tutor_name
+        FROM materials m
+        JOIN subjects sub ON sub.id=m.subject_id
+        JOIN tutors t ON t.id=m.tutor_id
+        WHERE m.subject_id IN ({','.join('?'*len(active_sub_ids))})
+          AND substr(m.month,1,7) = ?
+        ORDER BY sub.grade, sub.name, m.created_at DESC
+        """, (*active_sub_ids, month))
 
         mats = cur.fetchall()
         
