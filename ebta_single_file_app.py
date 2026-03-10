@@ -12451,8 +12451,8 @@ def admin_tutor_operations():
     cur.execute(f"""
         SELECT
             tw.session_date,
-            tw.grade,
-            tw.subject,
+            s.grade,
+            s.name AS subject,
             tw.session_held,
             tw.students_attended,
             tw.recording_link,
@@ -12462,6 +12462,8 @@ def admin_tutor_operations():
         FROM tutor_weekly_tracker tw
         LEFT JOIN tutors t ON tw.tutor_id = t.id
         LEFT JOIN tutor_managers tm ON tw.manager_id = tm.id
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
+        LEFT JOIN subjects s ON s.id = ts.subject_id
         {where_clause}
         ORDER BY tw.session_date DESC
         LIMIT ? OFFSET ?
