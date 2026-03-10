@@ -12396,7 +12396,7 @@ def admin_tutor_operations():
 
     # ---------------- monitoring window ----------------
     today = datetime.date.today()
-    weekday = today.weekday()  # Monday=0
+    weekday = today.weekday()
 
     monitor_window = weekday in [0,1,2,3]  # Monday–Thursday
 
@@ -12445,21 +12445,7 @@ def admin_tutor_operations():
     if conditions:
         where_clause = "WHERE " + " AND ".join(conditions)
 
-    # ---------------- count rows ----------------
-    cur.execute(f"""
-        SELECT COUNT(DISTINCT t.id) as total
-        FROM tutors t
-        LEFT JOIN manager_tutors mt ON mt.tutor_id = t.id
-        LEFT JOIN tutor_managers tm ON tm.id = mt.manager_id
-        LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
-        LEFT JOIN subjects s ON s.id = ts.subject_id
-        {where_clause}
-    """, params)
-
-    total = cur.fetchone()["total"]
-    total_pages = (total + per_page - 1) // per_page
-
-    # ---------------- load tutor + tracker data ----------------
+    # ---------------- load data ----------------
     cur.execute(f"""
         SELECT
             t.id as tutor_id,
@@ -12494,30 +12480,55 @@ def admin_tutor_operations():
         {where_clause}
 
         ORDER BY t.full_name
-
-        LIMIT ? OFFSET ?
-    """, weekend_dates + params + [per_page, offset])
+    """, weekend_dates + params)
 
     rows = cur.fetchall()
     conn.close()
 
-    # ---------------- table rows ----------------
+    # ---------------- apply status filter ----------------
+    filtered_rows = []
+
+    for r in rows:
+
+        is_not_logged = monitor_window and not r["session_date"]
+        is_missed_session = r["session_held"] == 0
+        is_missing_recording = r["session_held"] == 1 and not r["recording_link"]
+
+        if status == "not_logged" and not is_not_logged:
+            continue
+
+        if status == "no_session" and not is_missed_session:
+            continue
+
+        if status == "no_recording" and not is_missing_recording:
+            continue
+
+        filtered_rows.append(r)
+
+    # pagination after filtering
+    total = len(filtered_rows)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    rows = filtered_rows[offset:offset + per_page]
+
+    # ---------------- build table ----------------
     table_rows = ""
 
     for r in rows:
 
         row_style = ""
 
-        # missing weekend log
-        if monitor_window and not r["session_date"]:
+        is_not_logged = monitor_window and not r["session_date"]
+        is_missed_session = r["session_held"] == 0
+        is_missing_recording = r["session_held"] == 1 and not r["recording_link"]
+
+        if is_not_logged:
             row_style = "style='background:#fde047'"
 
-        # missed session
-        elif r["session_held"] == 0:
+        elif is_missed_session:
             row_style = "style='background:#fca5a5'"
 
-        # recording missing
-        elif r["session_held"] == 1 and not r["recording_link"]:
+        elif is_missing_recording:
             row_style = "style='background:#fdba74'"
 
         session_status = "-"
@@ -12546,11 +12557,11 @@ def admin_tutor_operations():
         </tr>
         """
 
-    # ---------------- pagination buttons ----------------
+    # ---------------- pagination ----------------
     pagination = "<div class='toolbar'>"
 
     for p in range(1, total_pages + 1):
-        pagination += f"<a class='btn mini' href='?page={p}'>{p}</a>"
+        pagination += f"<a class='btn mini' href='?page={p}&status={status}&search={search}'>{p}</a>"
 
     pagination += "</div>"
 
@@ -12561,9 +12572,21 @@ def admin_tutor_operations():
     <input name="search" placeholder="Search tutor" value="{search}">
 
     <select name="status">
+
     <option value="">All</option>
-    <option value="no_session">Missed Sessions</option>
-    <option value="no_recording">Missing Recordings</option>
+
+    <option value="not_logged" {"selected" if status=="not_logged" else ""}>
+    Not Logged
+    </option>
+
+    <option value="no_session" {"selected" if status=="no_session" else ""}>
+    Missed Sessions
+    </option>
+
+    <option value="no_recording" {"selected" if status=="no_recording" else ""}>
+    Missing Recordings
+    </option>
+
     </select>
 
     <button class="btn mini">Apply Filter</button>
