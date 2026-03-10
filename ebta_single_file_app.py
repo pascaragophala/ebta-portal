@@ -12395,9 +12395,9 @@ def admin_tutor_operations():
     cur = conn.cursor()
 
     # ---------------- pagination ----------------
-    page = int(request.args.get("page", 1))
+    page_num = int(request.args.get("page", 1))
     per_page = 30
-    offset = (page - 1) * per_page
+    offset = (page_num - 1) * per_page
 
     # ---------------- filters ----------------
     search = request.args.get("search", "")
