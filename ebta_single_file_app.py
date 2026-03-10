@@ -12481,10 +12481,10 @@ def admin_tutor_operations():
         row_style = ""
 
         if r["session_held"] == 0:
-            row_style = "style='background:#fee2e2'"
+            row_style = "style='background:#c43f3f'"
 
         elif not r["recording_link"]:
-            row_style = "style='background:#fff7ed'"
+            row_style = "style='background:#e8af68'"
 
         session_status = "✓" if r["session_held"] else "✕"
         recording = "✓" if r["recording_link"] else "✕"
