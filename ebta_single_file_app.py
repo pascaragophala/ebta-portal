@@ -12749,8 +12749,8 @@ def manager_edit_logged_session():
 
     session_id = request.args.get("id")
 
-    conn=get_db()
-    cur=conn.cursor()
+    conn = get_db()
+    cur = conn.cursor()
 
     cur.execute("""
     SELECT *
@@ -12775,6 +12775,9 @@ def manager_edit_logged_session():
     <form method="post" action="/manager/tracker/update">
 
     <input type="hidden" name="id" value="{s['id']}">
+
+    <label>Session Date</label>
+    <input type="date" name="date" value="{s['session_date']}" required>
 
     <label>Session Held</label>
     <select name="session_held">
@@ -12819,13 +12822,14 @@ def manager_update_session():
     if r:
         return r
 
-    conn=get_db()
-    cur=conn.cursor()
+    conn = get_db()
+    cur = conn.cursor()
 
     cur.execute("""
     UPDATE tutor_weekly_tracker
 
     SET
+        session_date=?,
         session_held=?,
         start_time=?,
         end_time=?,
@@ -12837,6 +12841,7 @@ def manager_update_session():
 
     """,(
 
+    request.form.get("date"),
     request.form.get("session_held"),
     request.form.get("start_time"),
     request.form.get("end_time"),
