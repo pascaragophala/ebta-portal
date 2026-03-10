@@ -291,7 +291,9 @@ def init_db():
         manager_comments TEXT,
         cao_review_status TEXT,
 
-        created_at TEXT
+        created_at TEXT,
+        
+        manager_rating INTEGER
     );
     """)
     
@@ -335,6 +337,7 @@ def init_db():
     ensure_column(conn, "followups", "updated_by", "TEXT")
     ensure_column(conn, "followups", "updated_at", "TEXT")
     ensure_column(conn, "tutor_weekly_tracker", "manager_id", "INTEGER")
+    ensure_column(conn, "tutor_weekly_tracker", "manager_rating", "INTEGER")
 
 
 
@@ -12125,7 +12128,17 @@ def manager_tracker_edit():
     <textarea name="manager_comments"></textarea>
 
     <br>
-
+    
+    <label>Manager Rating (1–5)</label>
+    <select name="manager_rating">
+    <option value="">Not rated</option>
+    <option value="1">1</option>
+    <option value="2">2</option>
+    <option value="3">3</option>
+    <option value="4">4</option>
+    <option value="5">5</option>
+    </select>
+    
     <button class="btn success">
     Save Session
     </button>
@@ -12160,9 +12173,10 @@ def manager_tracker_save():
         topic_covered,
         manager_comments,
         manager_id,
+        manager_rating,
         created_at
     )
-    VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
     """,(
 
     request.form.get("tutor_id"),
@@ -12175,6 +12189,7 @@ def manager_tracker_save():
     request.form.get("topic_covered"),
     request.form.get("manager_comments"),
     session.get("manager_id"),
+    request.form.get("manager_rating"),
     now_utc_iso()
 
     ))
@@ -12379,47 +12394,141 @@ def admin_tutor_operations():
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("""
-    SELECT
-        tw.session_date,
-        t.full_name AS tutor,
-        tm.full_name AS manager,
-        tw.session_held,
-        tw.students_attended,
-        tw.recording_link
+    # ---------------- pagination ----------------
+    page = int(request.args.get("page", 1))
+    per_page = 30
+    offset = (page - 1) * per_page
 
-    FROM tutor_weekly_tracker tw
+    # ---------------- filters ----------------
+    search = request.args.get("search", "")
+    manager = request.args.get("manager", "")
+    grade = request.args.get("grade", "")
+    subject = request.args.get("subject", "")
+    status = request.args.get("status", "")
 
-    LEFT JOIN tutors t
-        ON tw.tutor_id = t.id
+    conditions = []
+    params = []
 
-    LEFT JOIN tutor_managers tm
-        ON tw.manager_id = tm.id
+    if search:
+        conditions.append("t.full_name LIKE ?")
+        params.append(f"%{search}%")
 
-    ORDER BY tw.session_date DESC
-    """)
+    if manager:
+        conditions.append("tm.id=?")
+        params.append(manager)
+
+    if grade:
+        conditions.append("tw.grade=?")
+        params.append(grade)
+
+    if subject:
+        conditions.append("tw.subject=?")
+        params.append(subject)
+
+    if status == "no_session":
+        conditions.append("tw.session_held=0")
+
+    if status == "no_recording":
+        conditions.append("(tw.recording_link IS NULL OR tw.recording_link='')")
+
+    where_clause = ""
+    if conditions:
+        where_clause = "WHERE " + " AND ".join(conditions)
+
+    # ---------------- count rows ----------------
+    cur.execute(f"""
+        SELECT COUNT(*) as total
+        FROM tutor_weekly_tracker tw
+        LEFT JOIN tutors t ON tw.tutor_id = t.id
+        LEFT JOIN tutor_managers tm ON tw.manager_id = tm.id
+        {where_clause}
+    """, params)
+
+    total = cur.fetchone()["total"]
+    total_pages = (total + per_page - 1) // per_page
+
+    # ---------------- load data ----------------
+    cur.execute(f"""
+        SELECT
+            tw.session_date,
+            tw.grade,
+            tw.subject,
+            tw.session_held,
+            tw.students_attended,
+            tw.recording_link,
+            tw.manager_rating,
+            t.full_name AS tutor,
+            tm.full_name AS manager
+        FROM tutor_weekly_tracker tw
+        LEFT JOIN tutors t ON tw.tutor_id = t.id
+        LEFT JOIN tutor_managers tm ON tw.manager_id = tm.id
+        {where_clause}
+        ORDER BY tw.session_date DESC
+        LIMIT ? OFFSET ?
+    """, params + [per_page, offset])
 
     rows = cur.fetchall()
+
     conn.close()
 
+    # ---------------- table rows ----------------
     table_rows = ""
 
     for r in rows:
 
-        status = "✓" if r["session_held"] else "✕"
+        row_style = ""
 
-        recording = "✓" if r["recording_link"] else "—"
+        if r["session_held"] == 0:
+            row_style = "style='background:#fee2e2'"
+
+        elif not r["recording_link"]:
+            row_style = "style='background:#fff7ed'"
+
+        session_status = "✓" if r["session_held"] else "✕"
+        recording = "✓" if r["recording_link"] else "✕"
+
+        rating = "-"
+        if r["manager_rating"]:
+            rating = f"{r['manager_rating']}/5"
 
         table_rows += f"""
-        <tr>
+        <tr {row_style}>
         <td>{r['session_date']}</td>
         <td>{r['tutor']}</td>
         <td>{r['manager'] or 'Unassigned'}</td>
-        <td>{status}</td>
+        <td>{r['grade'] or '-'}</td>
+        <td>{r['subject'] or '-'}</td>
+        <td>{session_status}</td>
         <td>{r['students_attended'] or '-'}</td>
         <td>{recording}</td>
+        <td>{rating}</td>
         </tr>
         """
+
+    # ---------------- pagination buttons ----------------
+    pagination = "<div class='toolbar'>"
+
+    for p in range(1, total_pages + 1):
+        pagination += f"<a class='btn mini' href='?page={p}'>{p}</a>"
+
+    pagination += "</div>"
+
+    # ---------------- filter UI ----------------
+    filter_bar = f"""
+    <form method="get" class="toolbar">
+
+    <input name="search" placeholder="Search tutor" value="{search}">
+
+    <select name="status">
+    <option value="">All</option>
+    <option value="no_session">Missed Sessions</option>
+    <option value="no_recording">Missing Recordings</option>
+    </select>
+
+    <button class="btn mini">Apply Filter</button>
+
+    </form>
+    """
 
     body = f"""
 
@@ -12428,6 +12537,8 @@ def admin_tutor_operations():
     <section class='card'>
 
     <h1>Tutor Operations Dashboard</h1>
+
+    {filter_bar}
 
     <div class="scroll-x">
 
@@ -12438,9 +12549,12 @@ def admin_tutor_operations():
     <th>Date</th>
     <th>Tutor</th>
     <th>Manager</th>
-    <th>Session Held</th>
+    <th>Grade</th>
+    <th>Subject</th>
+    <th>Session</th>
     <th>Students</th>
     <th>Recording</th>
+    <th>Rating</th>
     </tr>
     </thead>
 
@@ -12451,6 +12565,8 @@ def admin_tutor_operations():
     </table>
 
     </div>
+
+    {pagination}
 
     </section>
     """
