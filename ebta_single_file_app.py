@@ -12394,6 +12394,22 @@ def admin_tutor_operations():
     conn = get_db()
     cur = conn.cursor()
 
+    # ---------------- monitoring window ----------------
+    today = datetime.date.today()
+    weekday = today.weekday()  # Monday=0
+
+    monitor_window = weekday in [0,1,2,3]  # Monday–Thursday
+
+    last_sunday = today - datetime.timedelta(days=weekday + 1)
+    last_saturday = last_sunday - datetime.timedelta(days=1)
+    last_friday = last_sunday - datetime.timedelta(days=2)
+
+    weekend_dates = [
+        last_friday.strftime("%Y-%m-%d"),
+        last_saturday.strftime("%Y-%m-%d"),
+        last_sunday.strftime("%Y-%m-%d")
+    ]
+
     # ---------------- pagination ----------------
     page_num = int(request.args.get("page", 1))
     per_page = 30
@@ -12418,18 +12434,12 @@ def admin_tutor_operations():
         params.append(manager)
 
     if grade:
-        conditions.append("tw.grade=?")
+        conditions.append("s.grade=?")
         params.append(grade)
 
     if subject:
-        conditions.append("tw.subject=?")
+        conditions.append("s.name=?")
         params.append(subject)
-
-    if status == "no_session":
-        conditions.append("tw.session_held=0")
-
-    if status == "no_recording":
-        conditions.append("(tw.recording_link IS NULL OR tw.recording_link='')")
 
     where_clause = ""
     if conditions:
@@ -12437,40 +12447,58 @@ def admin_tutor_operations():
 
     # ---------------- count rows ----------------
     cur.execute(f"""
-        SELECT COUNT(*) as total
-        FROM tutor_weekly_tracker tw
-        LEFT JOIN tutors t ON tw.tutor_id = t.id
-        LEFT JOIN tutor_managers tm ON tw.manager_id = tm.id
+        SELECT COUNT(DISTINCT t.id) as total
+        FROM tutors t
+        LEFT JOIN manager_tutors mt ON mt.tutor_id = t.id
+        LEFT JOIN tutor_managers tm ON tm.id = mt.manager_id
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
+        LEFT JOIN subjects s ON s.id = ts.subject_id
         {where_clause}
     """, params)
 
     total = cur.fetchone()["total"]
     total_pages = (total + per_page - 1) // per_page
 
-    # ---------------- load data ----------------
+    # ---------------- load tutor + tracker data ----------------
     cur.execute(f"""
         SELECT
-            tw.session_date,
+            t.id as tutor_id,
+            t.full_name AS tutor,
+            tm.full_name AS manager,
             s.grade,
             s.name AS subject,
+            tw.session_date,
             tw.session_held,
             tw.students_attended,
             tw.recording_link,
-            tw.manager_rating,
-            t.full_name AS tutor,
-            tm.full_name AS manager
-        FROM tutor_weekly_tracker tw
-        LEFT JOIN tutors t ON tw.tutor_id = t.id
-        LEFT JOIN tutor_managers tm ON tw.manager_id = tm.id
-        LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
-        LEFT JOIN subjects s ON s.id = ts.subject_id
+            tw.manager_rating
+
+        FROM tutors t
+
+        LEFT JOIN manager_tutors mt
+        ON mt.tutor_id = t.id
+
+        LEFT JOIN tutor_managers tm
+        ON tm.id = mt.manager_id
+
+        LEFT JOIN tutor_subjects ts
+        ON ts.tutor_id = t.id
+
+        LEFT JOIN subjects s
+        ON s.id = ts.subject_id
+
+        LEFT JOIN tutor_weekly_tracker tw
+        ON tw.tutor_id = t.id
+        AND tw.session_date IN (?,?,?)
+
         {where_clause}
-        ORDER BY tw.session_date DESC
+
+        ORDER BY t.full_name
+
         LIMIT ? OFFSET ?
-    """, params + [per_page, offset])
+    """, weekend_dates + params + [per_page, offset])
 
     rows = cur.fetchall()
-
     conn.close()
 
     # ---------------- table rows ----------------
@@ -12480,14 +12508,25 @@ def admin_tutor_operations():
 
         row_style = ""
 
-        if r["session_held"] == 0:
-            row_style = "style='background:#c43f3f'"
+        # missing weekend log
+        if monitor_window and not r["session_date"]:
+            row_style = "style='background:#fde047'"
 
-        elif not r["recording_link"]:
-            row_style = "style='background:#e8af68'"
+        # missed session
+        elif r["session_held"] == 0:
+            row_style = "style='background:#fca5a5'"
 
-        session_status = "✓" if r["session_held"] else "✕"
-        recording = "✓" if r["recording_link"] else "✕"
+        # recording missing
+        elif r["session_held"] == 1 and not r["recording_link"]:
+            row_style = "style='background:#fdba74'"
+
+        session_status = "-"
+        if r["session_held"] == 1:
+            session_status = "✓"
+        elif r["session_held"] == 0:
+            session_status = "✕"
+
+        recording = "✓" if r["recording_link"] else "-"
 
         rating = "-"
         if r["manager_rating"]:
@@ -12495,7 +12534,7 @@ def admin_tutor_operations():
 
         table_rows += f"""
         <tr {row_style}>
-        <td>{r['session_date']}</td>
+        <td>{r['session_date'] or 'Not Logged'}</td>
         <td>{r['tutor']}</td>
         <td>{r['manager'] or 'Unassigned'}</td>
         <td>{r['grade'] or '-'}</td>
@@ -12539,6 +12578,10 @@ def admin_tutor_operations():
     <section class='card'>
 
     <h1>Tutor Operations Dashboard</h1>
+
+    <p class='muted'>
+    Yellow rows indicate tutors whose weekend sessions were not logged by their manager.
+    </p>
 
     {filter_bar}
 
