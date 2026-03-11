@@ -11205,7 +11205,14 @@ def admin_followups():
                 </select>
             </td>
             
-            <td><span class="badge">{escape(row['captured_by'] or '')}</span></td>
+            <td>
+            <select name="captured_by">
+            <option value="Admin" {'selected' if row['captured_by']=="Admin" else ""}>Admin</option>
+            <option value="Admission COD" {'selected' if row['captured_by']=="Admission COD" else ""}>Admission COD</option>
+            <option value="Leadership" {'selected' if row['captured_by']=="Leadership" else ""}>Leadership</option>
+            </select>
+            </td>
+            
             <td>
             <select name="updated_by">
             <option value="">Select</option>
@@ -11422,6 +11429,7 @@ def admin_followup_update(fid):
         payment_date=?,
         date_communicated=?,
         notes=?,
+        captured_by=?,
         updated_by=?,
         updated_at=?
     WHERE id=?
@@ -11435,6 +11443,7 @@ def admin_followup_update(fid):
         request.form.get("payment_date"),
         request.form.get("date_communicated"),
         request.form.get("notes"),
+        request.form.get("captured_by"),
         updated_by,
         now_utc_iso(),
         fid
