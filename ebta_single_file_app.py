@@ -11097,6 +11097,12 @@ def admin_followups():
         "PoP Issues",
         "Other"
     ]
+    
+    FOLLOWUP_ROLES = [
+        "Admin",
+        "Admission COD",
+        "Leadership"
+    ]
 
     # get subjects for dropdown
     cur.execute("SELECT DISTINCT name FROM subjects ORDER BY name")
@@ -11200,7 +11206,14 @@ def admin_followups():
             </td>
             
             <td><span class="badge">{escape(row['captured_by'] or '')}</span></td>
-            <td><span class="badge">{escape(row['updated_by'] or '')}</span></td>
+            <td>
+            <select name="updated_by">
+            <option value="">Select</option>
+            <option value="Admin" {'selected' if row['updated_by']=="Admin" else ""}>Admin</option>
+            <option value="Admission COD" {'selected' if row['updated_by']=="Admission COD" else ""}>Admission COD</option>
+            <option value="Leadership" {'selected' if row['updated_by']=="Leadership" else ""}>Leadership</option>
+            </select>
+            </td>
 
             <td><input type="date" name="payment_date" value="{row['payment_date'] or ''}"></td>
             <td><input type="date" name="date_communicated" value="{row['date_communicated'] or ''}"></td>
@@ -11272,6 +11285,12 @@ def admin_followup_add():
         "Other"
     ]
 
+    FOLLOWUP_ROLES = [
+        "Admin",
+        "Admission COD",
+        "Leadership"
+    ]
+
     conn = get_db()
     cur = conn.cursor()
     cur.execute("SELECT DISTINCT name FROM subjects ORDER BY name")
@@ -11283,13 +11302,20 @@ def admin_followup_add():
         for s in subjects
     )
 
+    role_options = "".join(
+        f"<option value='{r}'>{r}</option>"
+        for r in FOLLOWUP_ROLES
+    )
+
     body = f"""
     {admin_nav()}
     <section class='card'>
         <h1>Add Follow-Up</h1>
 
         <form method="post" action="{url_for('admin_followup_create')}" class="grid" style="gap:10px">
+
             <input name="full_name" placeholder="Full name" required>
+
             <input name="phone" placeholder="Phone">
 
             <select name="grade">
@@ -11314,18 +11340,20 @@ def admin_followup_add():
 
             <select name="captured_by" required>
                 <option value="">Captured By</option>
-                <option value="Admin">Admin</option>
-                <option value="Admission COD">Admission COD</option>
+                {role_options}
             </select>
 
             <input type="date" name="payment_date">
             <input type="date" name="date_communicated">
+
             <textarea name="notes" placeholder="Notes"></textarea>
 
             <button class="btn success">Save</button>
+
         </form>
     </section>
     """
+
     return page("Add Followup", body)
     
 @app.post('/admin/followups/create')
@@ -11373,13 +11401,15 @@ def admin_followup_create():
     
 @app.post('/admin/followups/update/<int:fid>')
 def admin_followup_update(fid):
+
     r = require_admin()
-    if r: return r
+    if r:
+        return r
 
     conn = get_db()
     cur = conn.cursor()
 
-    admin_role = session.get("admin_role", "Admin")
+    updated_by = request.form.get("updated_by") or "Admin"
 
     cur.execute("""
     UPDATE followups SET
@@ -11405,7 +11435,7 @@ def admin_followup_update(fid):
         request.form.get("payment_date"),
         request.form.get("date_communicated"),
         request.form.get("notes"),
-        admin_role,
+        updated_by,
         now_utc_iso(),
         fid
     ))
