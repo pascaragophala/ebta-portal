@@ -12703,6 +12703,7 @@ def admin_tutor_operations():
     # ---------------- load data ----------------
     cur.execute(f"""
         SELECT
+            tw.id as tracker_id,
             t.id as tutor_id,
             t.full_name AS tutor,
             tm.full_name AS manager,
@@ -12798,6 +12799,22 @@ def admin_tutor_operations():
         if r["manager_rating"]:
             rating = f"{r['manager_rating']}/5"
 
+        delete_button = ""
+        if r["tracker_id"]:
+            delete_button = f"""
+            <form method="post"
+            action="{url_for('admin_delete_tracker_session')}"
+            onsubmit="return confirm('Delete this session log permanently?')">
+
+            <input type="hidden" name="tracker_id" value="{r['tracker_id']}">
+
+            <button class="btn danger mini">
+            Delete
+            </button>
+
+            </form>
+            """
+
         table_rows += f"""
         <tr {row_style}>
         <td>{r['session_date'] or 'Not Logged'}</td>
@@ -12809,24 +12826,7 @@ def admin_tutor_operations():
         <td>{r['students_attended'] or '-'}</td>
         <td>{recording}</td>
         <td>{rating}</td>
-
-        <td>
-
-        <form method="post"
-        action="{url_for('admin_delete_tracker_session')}"
-        onsubmit="return confirm('Delete this session log permanently?')">
-
-        <input type="hidden" name="tutor_id" value="{r['tutor_id']}">
-        <input type="hidden" name="session_date" value="{r['session_date'] or ''}">
-
-        <button class="btn danger mini">
-        Delete
-        </button>
-
-        </form>
-
-        </td>
-
+        <td>{delete_button}</td>
         </tr>
         """
 
@@ -12920,10 +12920,9 @@ def admin_tutor_operations():
 @require_high_admin
 def admin_delete_tracker_session():
 
-    tutor_id = request.form.get("tutor_id")
-    session_date = request.form.get("session_date")
+    tracker_id = request.form.get("tracker_id")
 
-    if not tutor_id or not session_date:
+    if not tracker_id:
         return redirect(url_for("admin_tutor_operations"))
 
     conn = get_db()
@@ -12931,8 +12930,8 @@ def admin_delete_tracker_session():
 
     cur.execute("""
         DELETE FROM tutor_weekly_tracker
-        WHERE tutor_id=? AND session_date=?
-    """,(tutor_id,session_date))
+        WHERE id=?
+    """,(tracker_id,))
 
     conn.commit()
     conn.close()
