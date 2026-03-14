@@ -12653,17 +12653,7 @@ def admin_tutor_operations():
     today = datetime.date.today()
     weekday = today.weekday()
 
-    monitor_window = weekday in [0,1,2,3]  # Monday–Thursday
-
-    last_sunday = today - datetime.timedelta(days=weekday + 1)
-    last_saturday = last_sunday - datetime.timedelta(days=1)
-    last_friday = last_sunday - datetime.timedelta(days=2)
-
-    weekend_dates = [
-        last_friday.strftime("%Y-%m-%d"),
-        last_saturday.strftime("%Y-%m-%d"),
-        last_sunday.strftime("%Y-%m-%d")
-    ]
+    monitor_window = weekday in [0,1,2,3]
 
     # ---------------- pagination ----------------
     page_num = int(request.args.get("page", 1))
@@ -12672,13 +12662,10 @@ def admin_tutor_operations():
 
     # ---------------- filters ----------------
     search = request.args.get("search", "")
-    manager = request.args.get("manager", "")
     grade = request.args.get("grade", "")
     subject = request.args.get("subject", "")
     status = request.args.get("status", "")
 
-    # NEW filters
-    tutor = request.args.get("tutor", "")
     rating = request.args.get("rating", "")
     date_from = request.args.get("date_from", "")
     date_to = request.args.get("date_to", "")
@@ -12691,24 +12678,33 @@ def admin_tutor_operations():
         params.append(f"%{search}%")
 
     if grade:
-        conditions.append("s.grade=?")
+        conditions.append("s.grade = ?")
         params.append(grade)
 
     if subject:
-        conditions.append("s.name=?")
+        conditions.append("s.name = ?")
         params.append(subject)
 
     if rating:
-        conditions.append("tw.manager_rating=?")
+        conditions.append("tw.manager_rating = ?")
         params.append(rating)
 
     if date_from:
-        conditions.append("tw.session_date>=?")
+        conditions.append("tw.session_date >= ?")
         params.append(date_from)
 
     if date_to:
-        conditions.append("tw.session_date<=?")
+        conditions.append("tw.session_date <= ?")
         params.append(date_to)
+
+    if status == "no_session":
+        conditions.append("(tw.session_held = 0 OR tw.session_held IS NULL)")
+
+    if status == "no_recording":
+        conditions.append("(tw.session_held = 1 AND tw.recording_link IS NULL)")
+
+    if status == "not_logged":
+        conditions.append("tw.session_date IS NULL")
 
     where_clause = ""
     if conditions:
@@ -12718,7 +12714,6 @@ def admin_tutor_operations():
     cur.execute(f"""
         SELECT
             tw.id as tracker_id,
-            t.id as tutor_id,
             t.full_name AS tutor,
             tm.full_name AS manager,
             s.grade,
@@ -12732,55 +12727,47 @@ def admin_tutor_operations():
         FROM tutors t
 
         LEFT JOIN manager_tutors mt
-        ON mt.tutor_id = t.id
+            ON mt.tutor_id = t.id
 
         LEFT JOIN tutor_managers tm
-        ON tm.id = mt.manager_id
+            ON tm.id = mt.manager_id
 
         LEFT JOIN tutor_subjects ts
-        ON ts.tutor_id = t.id
+            ON ts.tutor_id = t.id
 
         LEFT JOIN subjects s
-        ON s.id = ts.subject_id
+            ON s.id = ts.subject_id
 
         LEFT JOIN tutor_weekly_tracker tw
-        ON tw.tutor_id = t.id
+            ON tw.tutor_id = t.id
 
         {where_clause}
 
-        ORDER BY 
+        ORDER BY
             CASE WHEN tw.session_date IS NULL THEN 1 ELSE 0 END,
             tw.session_date DESC
-    """, params)
+
+        LIMIT ? OFFSET ?
+    """, params + [per_page, offset])
 
     rows = cur.fetchall()
-    conn.close()
 
-    # ---------------- apply status filter ----------------
-    filtered_rows = []
+    # ---------------- count total for pagination ----------------
+    cur.execute(f"""
+        SELECT COUNT(*)
+        FROM tutors t
+        LEFT JOIN manager_tutors mt ON mt.tutor_id = t.id
+        LEFT JOIN tutor_managers tm ON tm.id = mt.manager_id
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
+        LEFT JOIN subjects s ON s.id = ts.subject_id
+        LEFT JOIN tutor_weekly_tracker tw ON tw.tutor_id = t.id
+        {where_clause}
+    """, params)
 
-    for r in rows:
-
-        is_not_logged = monitor_window and not r["session_date"]
-        is_missed_session = r["session_held"] == 0
-        is_missing_recording = r["session_held"] == 1 and not r["recording_link"]
-
-        if status == "not_logged" and not is_not_logged:
-            continue
-
-        if status == "no_session" and not is_missed_session:
-            continue
-
-        if status == "no_recording" and not is_missing_recording:
-            continue
-
-        filtered_rows.append(r)
-
-    # pagination after filtering
-    total = len(filtered_rows)
+    total = cur.fetchone()[0]
     total_pages = max(1, (total + per_page - 1) // per_page)
 
-    rows = filtered_rows[offset:offset + per_page]
+    conn.close()
 
     # ---------------- build table ----------------
     table_rows = ""
@@ -12790,7 +12777,7 @@ def admin_tutor_operations():
         row_style = ""
 
         is_not_logged = monitor_window and not r["session_date"]
-        is_missed_session = r["session_held"] == 0
+        is_missed_session = (r["session_held"] == 0)
         is_missing_recording = r["session_held"] == 1 and not r["recording_link"]
 
         if is_not_logged:
@@ -12820,13 +12807,8 @@ def admin_tutor_operations():
             <form method="post"
             action="{url_for('admin_delete_tracker_session')}"
             onsubmit="return confirm('Delete this session log permanently?')">
-
             <input type="hidden" name="tracker_id" value="{r['tracker_id']}">
-
-            <button class="btn danger mini">
-            Delete
-            </button>
-
+            <button class="btn danger mini">Delete</button>
             </form>
             """
 
@@ -12847,10 +12829,8 @@ def admin_tutor_operations():
 
     # ---------------- pagination ----------------
     pagination = "<div class='toolbar'>"
-
     for p in range(1, total_pages + 1):
         pagination += f"<a class='btn mini' href='?page={p}&status={status}&search={search}'>{p}</a>"
-
     pagination += "</div>"
 
     # ---------------- filter UI ----------------
@@ -12868,21 +12848,10 @@ def admin_tutor_operations():
     <input name="rating" placeholder="Rating (1-5)" value="{rating}">
 
     <select name="status">
-
-    <option value="">All</option>
-
-    <option value="not_logged" {"selected" if status=="not_logged" else ""}>
-    Not Logged
-    </option>
-
-    <option value="no_session" {"selected" if status=="no_session" else ""}>
-    Missed Sessions
-    </option>
-
-    <option value="no_recording" {"selected" if status=="no_recording" else ""}>
-    Missing Recordings
-    </option>
-
+        <option value="">All</option>
+        <option value="not_logged" {"selected" if status=="not_logged" else ""}>Not Logged</option>
+        <option value="no_session" {"selected" if status=="no_session" else ""}>Missed Sessions</option>
+        <option value="no_recording" {"selected" if status=="no_recording" else ""}>Missing Recordings</option>
     </select>
 
     <button class="btn mini">Apply Filter</button>
@@ -12891,11 +12860,9 @@ def admin_tutor_operations():
     """
 
     body = f"""
-
     {admin_nav()}
 
     <section class='card'>
-
     <h1>Tutor Operations Dashboard</h1>
 
     <p class='muted'>
@@ -12905,7 +12872,6 @@ def admin_tutor_operations():
     {filter_bar}
 
     <div class="scroll-x">
-
     <table>
 
     <thead>
@@ -12924,11 +12890,10 @@ def admin_tutor_operations():
     </thead>
 
     <tbody>
-    {table_rows}
+    {table_rows or "<tr><td colspan='10'>No sessions found.</td></tr>"}
     </tbody>
 
     </table>
-
     </div>
 
     {pagination}
