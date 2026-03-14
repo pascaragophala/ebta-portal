@@ -8719,19 +8719,80 @@ def admin_materials():
         return r
 
     page_num = int(request.args.get("page", 1))
+
+    f_grade = request.args.get("grade", "")
+    f_subject = request.args.get("subject", "")
+    f_tutor = request.args.get("tutor", "")
+    f_date = request.args.get("date", "")
+
     limit = 20
     offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
 
-    # total count
-    cur.execute("SELECT COUNT(*) AS c FROM materials")
-    total = cur.fetchone()["c"]
-    total_pages = (total + limit - 1) // limit
+    # -----------------------
+    # Load filter lists
+    # -----------------------
 
-    # fetch page
-    cur.execute("""
+    cur.execute("SELECT DISTINCT grade FROM subjects ORDER BY grade")
+    grades = [r["grade"] for r in cur.fetchall()]
+
+    cur.execute("SELECT DISTINCT name FROM subjects ORDER BY name")
+    subjects = [r["name"] for r in cur.fetchall()]
+
+    cur.execute("SELECT DISTINCT full_name FROM tutors ORDER BY full_name")
+    tutors = [r["full_name"] for r in cur.fetchall()]
+
+    # -----------------------
+    # Build WHERE filters
+    # -----------------------
+
+    where = []
+    params = []
+
+    if f_grade:
+        where.append("s.grade=?")
+        params.append(f_grade)
+
+    if f_subject:
+        where.append("s.name=?")
+        params.append(f_subject)
+
+    if f_tutor:
+        where.append("t.full_name=?")
+        params.append(f_tutor)
+
+    if f_date:
+        where.append("date(m.created_at)=?")
+        params.append(f_date)
+
+    where_sql = ""
+    if where:
+        where_sql = "WHERE " + " AND ".join(where)
+
+    # -----------------------
+    # Count total
+    # -----------------------
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM materials m
+        JOIN subjects s ON s.id = m.subject_id
+        JOIN tutors t ON t.id = m.tutor_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"]
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    # -----------------------
+    # Fetch data
+    # -----------------------
+
+    data_params = params + [limit, offset]
+
+    cur.execute(f"""
         SELECT
             m.id,
             m.title,
@@ -8743,9 +8804,10 @@ def admin_materials():
         FROM materials m
         JOIN subjects s ON s.id = m.subject_id
         JOIN tutors t ON t.id = m.tutor_id
+        {where_sql}
         ORDER BY m.created_at DESC
         LIMIT ? OFFSET ?
-    """, (limit, offset))
+    """, data_params)
 
     rows = cur.fetchall()
     conn.close()
@@ -8780,11 +8842,9 @@ def admin_materials():
                   action='{url_for('admin_relock_material', mid=row["id"])}'
                   style='display:inline'>
                 <input type="hidden" name="page" value="{page_num}">
-                <button class='btn warning mini'>Relock</button>
+                <button class='btn warn mini'>Relock</button>
             </form>
             """
-
-        # ADD DELETE BUTTON (always visible)
 
         action += f"""
         <form method='post'
@@ -8793,14 +8853,10 @@ def admin_materials():
               onsubmit="return confirm('Delete this material permanently?')">
 
             <input type="hidden" name="page" value="{page_num}">
-
-            <button class='btn danger mini'>
-                Delete
-            </button>
+            <button class='btn danger mini'>Delete</button>
 
         </form>
         """
-
 
         trs.append(f"""
         <tr>
@@ -8813,15 +8869,32 @@ def admin_materials():
         </tr>
         """)
 
-    # pager logic
+    # -----------------------
+    # Pagination query string
+    # -----------------------
+
+    query_string = ""
+
+    if f_grade:
+        query_string += f"&grade={f_grade}"
+
+    if f_subject:
+        query_string += f"&subject={f_subject}"
+
+    if f_tutor:
+        query_string += f"&tutor={f_tutor}"
+
+    if f_date:
+        query_string += f"&date={f_date}"
+
     start = max(1, page_num - 3)
     end = min(total_pages, page_num + 3)
 
     page_links = []
 
     if page_num > 1:
-        page_links.append(f"<a class='links' href='?page=1'>« First</a>")
-        page_links.append(f"<a class='links' href='?page={page_num-1}'>‹ Prev</a>")
+        page_links.append(f"<a class='links' href='?page=1{query_string}'>« First</a>")
+        page_links.append(f"<a class='links' href='?page={page_num-1}{query_string}'>‹ Prev</a>")
 
     for p in range(start, end + 1):
 
@@ -8830,41 +8903,22 @@ def admin_materials():
                 f"<span class='current' style='padding:4px 8px;background:#0f172a;color:white;border-radius:6px'>{p}</span>"
             )
         else:
-            page_links.append(f"<a class='links' href='?page={p}'>{p}</a>")
+            page_links.append(
+                f"<a class='links' href='?page={p}{query_string}'>{p}</a>"
+            )
 
     if page_num < total_pages:
-        page_links.append(f"<a class='links' href='?page={page_num+1}'>Next ›</a>")
-        page_links.append(f"<a class='links' href='?page={total_pages}'>Last »</a>")
+        page_links.append(f"<a class='links' href='?page={page_num+1}{query_string}'>Next ›</a>")
+        page_links.append(f"<a class='links' href='?page={total_pages}{query_string}'>Last »</a>")
 
     nav = f"""
-    <div class='pager' style="
-        display:flex;
-        align-items:center;
-        gap:8px;
-        flex-wrap:wrap;
-        margin:10px 0">
+    <div class='pager' style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0">
 
         <span class="mini muted">
             Page {page_num} of {total_pages}
         </span>
 
         {"".join(page_links)}
-
-        <form method="get"
-              style="display:inline-flex;align-items:center;gap:6px;margin-left:10px">
-
-            <span class="mini muted">Go to page</span>
-
-            <input type="number"
-                   name="page"
-                   min="1"
-                   max="{total_pages}"
-                   value="{page_num}"
-                   style="width:70px;padding:4px;border-radius:6px;border:1px solid #ccc">
-
-            <button class="btn mini">Go</button>
-
-        </form>
 
     </div>
     """
@@ -8875,6 +8929,33 @@ def admin_materials():
     <section class='card' id="materials">
 
         <h1>Unlock Tutor Uploads</h1>
+
+        <div class='toolbar'>
+
+            <form method="get" style="display:flex;gap:8px;flex-wrap:wrap">
+
+                <select name="grade">
+                    <option value="">All Grades</option>
+                    {''.join(f"<option value='{g}' {'selected' if g==f_grade else ''}>{grade_label(g)}</option>" for g in grades)}
+                </select>
+
+                <select name="subject">
+                    <option value="">All Subjects</option>
+                    {''.join(f"<option value='{s}' {'selected' if s==f_subject else ''}>{s}</option>" for s in subjects)}
+                </select>
+
+                <select name="tutor">
+                    <option value="">All Tutors</option>
+                    {''.join(f"<option value='{t}' {'selected' if t==f_tutor else ''}>{t}</option>" for t in tutors)}
+                </select>
+
+                <input type="date" name="date" value="{f_date}">
+
+                <button class="btn mini">Filter</button>
+
+            </form>
+
+        </div>
 
         {nav}
 
