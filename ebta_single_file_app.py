@@ -12677,6 +12677,12 @@ def admin_tutor_operations():
     subject = request.args.get("subject", "")
     status = request.args.get("status", "")
 
+    # NEW filters
+    tutor = request.args.get("tutor", "")
+    rating = request.args.get("rating", "")
+    date_from = request.args.get("date_from", "")
+    date_to = request.args.get("date_to", "")
+
     conditions = []
     params = []
 
@@ -12695,6 +12701,22 @@ def admin_tutor_operations():
     if subject:
         conditions.append("s.name=?")
         params.append(subject)
+        
+    if tutor:
+        conditions.append("t.id=?")
+        params.append(tutor)
+
+    if rating:
+        conditions.append("tw.manager_rating=?")
+        params.append(rating)
+
+    if date_from:
+        conditions.append("tw.session_date>=?")
+        params.append(date_from)
+
+    if date_to:
+        conditions.append("tw.session_date<=?")
+        params.append(date_to)
 
     where_clause = ""
     if conditions:
@@ -12844,6 +12866,17 @@ def admin_tutor_operations():
 
     <input name="search" placeholder="Search tutor" value="{search}">
 
+    <input type="date" name="date_from" value="{date_from}">
+    <input type="date" name="date_to" value="{date_to}">
+
+    <input name="tutor" placeholder="Tutor ID" value="{tutor}">
+    <input name="manager" placeholder="Manager ID" value="{manager}">
+
+    <input name="grade" placeholder="Grade" value="{grade}">
+    <input name="subject" placeholder="Subject" value="{subject}">
+
+    <input name="rating" placeholder="Rating (1-5)" value="{rating}">
+
     <select name="status">
 
     <option value="">All</option>
@@ -12939,6 +12972,8 @@ def admin_delete_tracker_session():
     flash("Session log deleted successfully.","success")
 
     return redirect(url_for("admin_tutor_operations"))
+
+
 
 @app.get('/manager/logout')
 def manager_logout():
