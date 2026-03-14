@@ -12809,6 +12809,24 @@ def admin_tutor_operations():
         <td>{r['students_attended'] or '-'}</td>
         <td>{recording}</td>
         <td>{rating}</td>
+
+        <td>
+
+        <form method="post"
+        action="{url_for('admin_delete_tracker_session')}"
+        onsubmit="return confirm('Delete this session log permanently?')">
+
+        <input type="hidden" name="tutor_id" value="{r['tutor_id']}">
+        <input type="hidden" name="session_date" value="{r['session_date'] or ''}">
+
+        <button class="btn danger mini">
+        Delete
+        </button>
+
+        </form>
+
+        </td>
+
         </tr>
         """
 
@@ -12878,6 +12896,7 @@ def admin_tutor_operations():
     <th>Students</th>
     <th>Recording</th>
     <th>Rating</th>
+    <th>Delete</th>
     </tr>
     </thead>
 
@@ -12896,6 +12915,31 @@ def admin_tutor_operations():
 
     return page("Tutor Operations", body)
     
+    
+@app.post("/admin/delete-tracker-session")
+@require_high_admin
+def admin_delete_tracker_session():
+
+    tutor_id = request.form.get("tutor_id")
+    session_date = request.form.get("session_date")
+
+    if not tutor_id or not session_date:
+        return redirect(url_for("admin_tutor_operations"))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        DELETE FROM tutor_weekly_tracker
+        WHERE tutor_id=? AND session_date=?
+    """,(tutor_id,session_date))
+
+    conn.commit()
+    conn.close()
+
+    flash("Session log deleted successfully.","success")
+
+    return redirect(url_for("admin_tutor_operations"))
 
 @app.get('/manager/logout')
 def manager_logout():
