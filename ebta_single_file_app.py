@@ -12745,12 +12745,11 @@ def admin_tutor_operations():
 
         LEFT JOIN tutor_weekly_tracker tw
         ON tw.tutor_id = t.id
-        AND tw.session_date IN (?,?,?)
 
         {where_clause}
 
         ORDER BY t.full_name
-    """, weekend_dates + params)
+    """, params)
 
     rows = cur.fetchall()
     conn.close()
