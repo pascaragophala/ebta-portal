@@ -12748,7 +12748,7 @@ def admin_tutor_operations():
 
     for r in rows:
 
-        is_not_logged = monitor_window and not r["session_date"]
+        is_not_logged = not r["session_date"]
         is_missed_session = r["session_held"] == 0
         is_missing_recording = r["session_held"] == 1 and not r["recording_link"]
 
@@ -12776,7 +12776,7 @@ def admin_tutor_operations():
 
         row_style = ""
 
-        is_not_logged = monitor_window and not r["session_date"]
+        is_not_logged = not r["session_date"]
         is_missed_session = r["session_held"] == 0
         is_missing_recording = r["session_held"] == 1 and not r["recording_link"]
 
