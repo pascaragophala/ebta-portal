@@ -12735,7 +12735,9 @@ def admin_tutor_operations():
 
         {where_clause}
 
-        ORDER BY t.full_name
+        ORDER BY
+            CASE WHEN tw.session_date IS NULL THEN 1 ELSE 0 END,
+            tw.session_date DESC
     """, weekend_dates + params)
 
     rows = cur.fetchall()
