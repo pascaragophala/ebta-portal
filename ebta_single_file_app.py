@@ -11072,23 +11072,68 @@ def admin_followups():
     conn = get_db()
     cur = conn.cursor()
 
+    # ================= SEARCH =================
     q = request.args.get("q", "").strip()
+
+    # ================= FILTERS =================
+    f_grade = request.args.get("grade", "")
+    f_subject = request.args.get("subject", "")
+    f_status = request.args.get("status", "")
+    f_issue = request.args.get("issue", "")
+
+    # ================= PAGINATION =================
+    page = int(request.args.get("page", 1))
+    per_page = 25
+    offset = (page - 1) * per_page
+
+    where = []
+    params = []
 
     if q:
         search = f"%{q}%"
-        cur.execute("""
-            SELECT * FROM followups
-            WHERE full_name LIKE ?
-               OR phone LIKE ?
-               OR subjects LIKE ?
-               OR followup_status LIKE ?
-            ORDER BY created_at DESC
-        """, (search, search, search, search))
-    else:
-        cur.execute("SELECT * FROM followups ORDER BY created_at DESC")
+        where.append("""(
+            full_name LIKE ?
+            OR phone LIKE ?
+            OR subjects LIKE ?
+            OR notes LIKE ?
+        )""")
+        params += [search, search, search, search]
+
+    if f_grade:
+        where.append("grade=?")
+        params.append(f_grade)
+
+    if f_subject:
+        where.append("subjects=?")
+        params.append(f_subject)
+
+    if f_status:
+        where.append("followup_status=?")
+        params.append(f_status)
+
+    if f_issue:
+        where.append("issue_type=?")
+        params.append(f_issue)
+
+    where_sql = ""
+    if where:
+        where_sql = "WHERE " + " AND ".join(where)
+
+    # ===== COUNT TOTAL ROWS =====
+    cur.execute(f"SELECT COUNT(*) as c FROM followups {where_sql}", params)
+    total_rows = cur.fetchone()["c"]
+    total_pages = max(1, (total_rows + per_page - 1) // per_page)
+
+    # ===== MAIN QUERY =====
+    cur.execute(f"""
+        SELECT * FROM followups
+        {where_sql}
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    """, params + [per_page, offset])
 
     rows = cur.fetchall()
-    
+
     ISSUE_TYPES = [
         "Missing R50 Registration Fee",
         "Payment Missing",
@@ -11097,28 +11142,22 @@ def admin_followups():
         "PoP Issues",
         "Other"
     ]
-    
+
     FOLLOWUP_ROLES = [
         "Admin",
         "Admission COD",
         "Leadership"
     ]
 
-    # get subjects for dropdown
     cur.execute("SELECT DISTINCT name FROM subjects ORDER BY name")
     subjects = [row["name"] for row in cur.fetchall()]
-    conn.close()
 
-    subject_options = "".join(
-        f"<option value='{escape(s)}'>{escape(s)}</option>"
-        for s in subjects
-    )
+    conn.close()
 
     trs = []
 
     for row in rows:
 
-        # -------- Row Color --------
         row_class = ""
         if row["followup_status"] == "OPEN":
             row_class = "follow-open"
@@ -11129,7 +11168,6 @@ def admin_followups():
         elif row["followup_status"] == "RESOLVED":
             row_class = "follow-paid"
 
-        # -------- Overdue --------
         overdue_class = ""
         if row["payment_date"] and row["followup_status"] == "OPEN":
             try:
@@ -11141,7 +11179,6 @@ def admin_followups():
             except:
                 pass
 
-        # -------- WhatsApp --------
         wa_link = ""
         if row["phone"]:
             phone = normalize_phone(row["phone"])
@@ -11154,7 +11191,6 @@ def admin_followups():
                 </a>
                 """
 
-        # -------- Build row --------
         trs.append(f"""
         <tr class="{row_class} {overdue_class}">
         <form method="post" action="{url_for('admin_followup_update', fid=row['id'])}">
@@ -11184,7 +11220,7 @@ def admin_followups():
                     )}
                 </select>
             </td>
-            
+
             <td>
             <select name="issue_type">
             <option value="">Select</option>
@@ -11204,7 +11240,7 @@ def admin_followups():
                     <option value="DECLINED" {'selected' if row['followup_status']=="DECLINED" else ""}>DECLINED</option>
                 </select>
             </td>
-            
+
             <td>
             <select name="captured_by">
             <option value="Admin" {'selected' if row['captured_by']=="Admin" else ""}>Admin</option>
@@ -11212,7 +11248,7 @@ def admin_followups():
             <option value="Leadership" {'selected' if row['captured_by']=="Leadership" else ""}>Leadership</option>
             </select>
             </td>
-            
+
             <td>
             <select name="updated_by">
             <option value="">Select</option>
@@ -11224,11 +11260,13 @@ def admin_followups():
 
             <td><input type="date" name="payment_date" value="{row['payment_date'] or ''}"></td>
             <td><input type="date" name="date_communicated" value="{row['date_communicated'] or ''}"></td>
+
             <td>
             <textarea name="notes" rows="2">{escape(row['notes'] or '')}</textarea>
             </td>
 
             <td><button class="btn mini success">Save</button></td>
+
         </form>
         </tr>
         """)
@@ -11240,38 +11278,79 @@ def admin_followups():
         <h1>Follow-Up Tracker</h1>
 
         <div class='toolbar'>
-            <form method="get">
-                <input type="text" name="q" value="{escape(q)}" placeholder="Search">
-                <button class="btn mini">Search</button>
-            </form>
 
-            <a class="btn success mini" href="{url_for('admin_followup_add')}">Add New</a>
-            <a class="btn secondary mini" href="{url_for('export_followups')}">Export Excel</a>
+        <form method="get" style="display:flex;gap:6px;flex-wrap:wrap">
+
+        <input type="text" name="q" value="{escape(q)}" placeholder="Search name or phone">
+
+        <select name="grade">
+        <option value="">All Grades</option>
+        {''.join(
+        f"<option value='{g}' {'selected' if f_grade==g else ''}>{grade_label(g)}</option>"
+        for g in ["G8","G9","G10","G11","G12","G13"]
+        )}
+        </select>
+
+        <select name="subject">
+        <option value="">All Subjects</option>
+        {''.join(
+        f"<option value='{escape(s)}' {'selected' if f_subject==s else ''}>{escape(s)}</option>"
+        for s in subjects
+        )}
+        </select>
+
+        <select name="status">
+        <option value="">All Status</option>
+        <option value="OPEN">OPEN</option>
+        <option value="IN PROGRESS">IN PROGRESS</option>
+        <option value="AWAITING POP">AWAITING POP</option>
+        <option value="RESOLVED">RESOLVED</option>
+        <option value="DECLINED">DECLINED</option>
+        </select>
+
+        <button class="btn mini">Filter</button>
+
+        </form>
+
+        <a class="btn success mini" href="{url_for('admin_followup_add')}">Add New</a>
+        <a class="btn secondary mini" href="{url_for('export_followups')}">Export Excel</a>
+
         </div>
 
         <div class="scroll-x">
         <table class="followups-table">
-            <thead>
-                <tr>
-                    <th>Name</th>
-                    <th>Phone</th>
-                    <th>Grade</th>
-                    <th>Subjects</th>
-                    <th>Issue</th>
-                    <th>Status</th>
-                    <th>Captured By</th>
-                    <th>Updated By</th>
-                    <th>Payment</th>
-                    <th>Communicated</th>
-                    <th>Notes</th>
-                    <th>Save</th>
-                </tr>
-            </thead>
-            <tbody>
-                {''.join(trs) or "<tr><td colspan='12'>No followups yet.</td></tr>"}
-            </tbody>
+        <thead>
+        <tr>
+        <th>Name</th>
+        <th>Phone</th>
+        <th>Grade</th>
+        <th>Subjects</th>
+        <th>Issue</th>
+        <th>Status</th>
+        <th>Captured</th>
+        <th>Updated</th>
+        <th>Payment</th>
+        <th>Communicated</th>
+        <th>Notes</th>
+        <th>Save</th>
+        </tr>
+        </thead>
+        <tbody>
+        {''.join(trs) or "<tr><td colspan='12'>No followups yet.</td></tr>"}
+        </tbody>
         </table>
         </div>
+
+        <div class="toolbar" style="justify-content:center;margin-top:10px">
+
+        {f"<a class='btn mini secondary' href='?page={page-1}&q={q}&grade={f_grade}&subject={f_subject}&status={f_status}'>Prev</a>" if page>1 else ""}
+
+        <span class="chip">Page {page} / {total_pages}</span>
+
+        {f"<a class='btn mini secondary' href='?page={page+1}&q={q}&grade={f_grade}&subject={f_subject}&status={f_status}'>Next</a>" if page<total_pages else ""}
+
+        </div>
+
     </section>
     """
 
