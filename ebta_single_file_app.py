@@ -12748,7 +12748,9 @@ def admin_tutor_operations():
 
         {where_clause}
 
-        ORDER BY tw.session_date ASC
+        ORDER BY 
+            CASE WHEN tw.session_date IS NULL THEN 1 ELSE 0 END,
+            tw.session_date DESC
     """, params)
 
     rows = cur.fetchall()
