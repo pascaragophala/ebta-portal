@@ -12748,7 +12748,7 @@ def admin_tutor_operations():
 
         {where_clause}
 
-        ORDER BY tw.session_date
+        ORDER BY tw.session_date DESC
     """, params)
 
     rows = cur.fetchall()
