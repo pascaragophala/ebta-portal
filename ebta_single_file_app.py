@@ -7103,19 +7103,34 @@ def admin_enrollments():
 
     page_num = int(request.args.get("page", 1))
     q = request.args.get("q", "").strip()
+    f_grade = request.args.get("grade", "")
+    f_subject = request.args.get("subject", "")
+
     q_safe = escape(q)
+
     limit = 30
     offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
 
-    # Total count
+    # Load subjects for dropdown
+    cur.execute("SELECT DISTINCT name FROM subjects ORDER BY name")
+    subjects = [r["name"] for r in cur.fetchall()]
+
     # -----------------------
     # Build filters
     # -----------------------
     params = [month]
     where_sql = "WHERE e.month = ?"
+
+    if f_grade:
+        where_sql += " AND st.grade = ?"
+        params.append(f_grade)
+
+    if f_subject:
+        where_sql += " AND sub.name = ?"
+        params.append(f_subject)
 
     if q:
         where_sql += """
@@ -7142,7 +7157,7 @@ def admin_enrollments():
     """, params)
 
     total = cur.fetchone()['c']
-    total_pages = (total + limit - 1) // limit
+    total_pages = max(1, (total + limit - 1) // limit)
 
     # -----------------------
     # MAIN query
@@ -7172,13 +7187,15 @@ def admin_enrollments():
         SELECT DISTINCT student_id
         FROM enrollments
         WHERE status='ACTIVE'
-          AND substr(month,1,4)=?
-          AND month < ?
+        AND substr(month,1,4)=?
+        AND month < ?
     """, (year, month))
+
     returning_ids = {r['student_id'] for r in cur.fetchall()}
 
     # PoP files
     cur.execute("SELECT enrollment_id, file_path FROM enrollment_files")
+
     pop_map = {}
     for r in cur.fetchall():
         pop_map.setdefault(r['enrollment_id'], []).append(r['file_path'])
@@ -7186,12 +7203,16 @@ def admin_enrollments():
     conn.close()
 
     trs = []
+
     for r in rows:
+
         history = "Returning student" if r['student_id'] in returning_ids else "First month"
 
         files = pop_map.get(r['id'], []) or ([r['pop_url']] if r['pop_url'] else [])
+
         pop_html = " ".join(
-            f"<a class='links' target='_blank' href='{p}'>PoP</a>" for p in files
+            f"<a class='links' target='_blank' href='{p}'>PoP</a>"
+            for p in files
         ) or "—"
 
         trs.append(f"""
@@ -7204,46 +7225,56 @@ def admin_enrollments():
             <td><span class='mini'>{r['created_at']}</span></td>
             <td>{pop_html}</td>
             <td><strong>R{r['amount_paid']}</strong></td>
+
             <td style="white-space:nowrap">
+
                 <form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>
                     <input type="hidden" name="page" value="{page_num}">
                     <button class='btn success'>Approve</button>
                 </form>
+
                 <form method='post' action='{url_for('enrollment_action', id=r['id'], action='lapse')}' style='display:inline'>
                     <input type="hidden" name="page" value="{page_num}">
                     <button class='btn danger'>Lapse</button>
                 </form>
+
             </td>
 
             <td>
                 <a class='links' target='_blank'
-                   href='{url_for('status', id=r['id'])}?{urlencode({'token': r['status_token']})}'>
-                   open
+                href='{url_for('status', id=r['id'])}?{urlencode({'token': r['status_token']})}'>
+                open
                 </a>
             </td>
         </tr>
         """)
 
-    # Build smart page range
+    # -----------------------
+    # Pagination query string
+    # -----------------------
+
+    query_string = ""
+
+    if q:
+        query_string += f"&q={q_safe}"
+
+    if f_grade:
+        query_string += f"&grade={f_grade}"
+
+    if f_subject:
+        query_string += f"&subject={f_subject}"
+
     start = max(1, page_num - 3)
     end = min(total_pages, page_num + 3)
 
     page_links = []
 
-    # Base query string (preserve search)
-    query_string = f"&q={q_safe}" if q else ""
-
-    # First + Prev
     if page_num > 1:
-        page_links.append(
-            f"<a class='links' href='?page=1{query_string}'>« First</a>"
-        )
-        page_links.append(
-            f"<a class='links' href='?page={page_num-1}{query_string}'>‹ Prev</a>"
-        )
+        page_links.append(f"<a class='links' href='?page=1{query_string}'>« First</a>")
+        page_links.append(f"<a class='links' href='?page={page_num-1}{query_string}'>‹ Prev</a>")
 
-    # Numbered pages
     for p in range(start, end + 1):
+
         if p == page_num:
             page_links.append(
                 f"<span class='current' style='padding:4px 8px;background:#0f172a;color:white;border-radius:6px'>{p}</span>"
@@ -7253,24 +7284,12 @@ def admin_enrollments():
                 f"<a class='links' href='?page={p}{query_string}'>{p}</a>"
             )
 
-    # Next + Last
     if page_num < total_pages:
-        page_links.append(
-            f"<a class='links' href='?page={page_num+1}{query_string}'>Next ›</a>"
-        )
-        page_links.append(
-            f"<a class='links' href='?page={total_pages}{query_string}'>Last »</a>"
-        )
-
+        page_links.append(f"<a class='links' href='?page={page_num+1}{query_string}'>Next ›</a>")
+        page_links.append(f"<a class='links' href='?page={total_pages}{query_string}'>Last »</a>")
 
     nav = f"""
-    <div class='pager' style="
-        display:flex;
-        align-items:center;
-        gap:8px;
-        flex-wrap:wrap;
-        margin:10px 0
-    ">
+    <div class='pager' style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0">
 
         <span class="mini muted">
             Page {page_num} of {total_pages}
@@ -7288,12 +7307,7 @@ def admin_enrollments():
                    min="1"
                    max="{total_pages}"
                    value="{page_num}"
-                   style="
-                       width:70px;
-                       padding:4px;
-                       border-radius:6px;
-                       border:1px solid #ccc
-                   ">
+                   style="width:70px;padding:4px;border-radius:6px;border:1px solid #ccc">
 
             <button class="btn mini">Go</button>
 
@@ -7302,32 +7316,57 @@ def admin_enrollments():
     </div>
     """
 
-
     body = f"""
     {admin_nav()}
 
     <section class='card'>
+
         <h1>Enrollments — {month}</h1>
 
         <div class='toolbar'>
-            <form method="get" style="display:flex;gap:8px;align-items:center">
+
+            <form method="get" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+
                 <input type="text"
                        name="q"
                        value="{q_safe}"
                        placeholder="Search name, phone, grade, subject, status"
                        class="pill">
 
+                <select name="grade">
+                    <option value="">All Grades</option>
+                    <option value="G8" {"selected" if f_grade=="G8" else ""}>Grade 8</option>
+                    <option value="G9" {"selected" if f_grade=="G9" else ""}>Grade 9</option>
+                    <option value="G10" {"selected" if f_grade=="G10" else ""}>Grade 10</option>
+                    <option value="G11" {"selected" if f_grade=="G11" else ""}>Grade 11</option>
+                    <option value="G12" {"selected" if f_grade=="G12" else ""}>Grade 12</option>
+                    <option value="G13" {"selected" if f_grade=="G13" else ""}>Grade 13</option>
+                </select>
+
+                <select name="subject">
+                    <option value="">All Subjects</option>
+                    {''.join(
+                        f"<option value='{escape(s)}' {'selected' if f_subject==s else ''}>{escape(s)}</option>"
+                        for s in subjects
+                    )}
+                </select>
+
                 <input type="hidden" name="page" value="1">
 
-                <button class="btn mini">Search</button>
+                <button class="btn mini">Filter</button>
+
             </form>
+
         </div>
 
         {nav}
 
         <div class="scroll-x">
+
             <table id='enr_tbl'>
+
                 <thead>
+
                     <tr>
                         <th>Student</th>
                         <th>Grade</th>
@@ -7340,14 +7379,21 @@ def admin_enrollments():
                         <th>Actions</th>
                         <th>Status link</th>
                     </tr>
+
                 </thead>
+
                 <tbody>
+
                     {''.join(trs) or "<tr><td colspan='10'>No enrollments.</td></tr>"}
+
                 </tbody>
+
             </table>
+
         </div>
 
         {nav}
+
     </section>
     """
 
