@@ -12936,10 +12936,85 @@ def manager_tracker_history():
     if r:
         return r
 
+    page_num = int(request.args.get("page", 1))
+    f_tutor = request.args.get("tutor", "")
+    f_grade = request.args.get("grade", "")
+    f_subject = request.args.get("subject", "")
+    f_date = request.args.get("date", "")
+
+    limit = 25
+    offset = (page_num - 1) * limit
+
     conn = get_db()
     cur = conn.cursor()
 
+    # -----------------------
+    # Load filter lists
+    # -----------------------
+
     cur.execute("""
+        SELECT DISTINCT t.full_name
+        FROM tutors t
+        JOIN manager_tutors mt ON mt.tutor_id=t.id
+        WHERE mt.manager_id=?
+        ORDER BY t.full_name
+    """,(session["manager_id"],))
+
+    tutors=[r["full_name"] for r in cur.fetchall()]
+
+    cur.execute("SELECT DISTINCT grade FROM tutor_weekly_tracker ORDER BY grade")
+    grades=[r["grade"] for r in cur.fetchall()]
+
+    cur.execute("SELECT DISTINCT subject FROM tutor_weekly_tracker ORDER BY subject")
+    subjects=[r["subject"] for r in cur.fetchall()]
+
+    # -----------------------
+    # Build filters
+    # -----------------------
+
+    where=["mt.manager_id=?"]
+    params=[session["manager_id"]]
+
+    if f_tutor:
+        where.append("t.full_name=?")
+        params.append(f_tutor)
+
+    if f_grade:
+        where.append("tw.grade=?")
+        params.append(f_grade)
+
+    if f_subject:
+        where.append("tw.subject=?")
+        params.append(f_subject)
+
+    if f_date:
+        where.append("tw.session_date=?")
+        params.append(f_date)
+
+    where_sql="WHERE " + " AND ".join(where)
+
+    # -----------------------
+    # Count total rows
+    # -----------------------
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM tutor_weekly_tracker tw
+        JOIN tutors t ON tw.tutor_id=t.id
+        JOIN manager_tutors mt ON mt.tutor_id=t.id
+        {where_sql}
+    """,params)
+
+    total=cur.fetchone()["c"]
+    total_pages=max(1,(total+limit-1)//limit)
+
+    # -----------------------
+    # Fetch page
+    # -----------------------
+
+    data_params=params+[limit,offset]
+
+    cur.execute(f"""
     SELECT
         tw.id,
         tw.session_date,
@@ -12947,28 +13022,33 @@ def manager_tracker_history():
         tw.end_time,
         tw.students_attended,
         tw.recording_link,
+        tw.grade,
+        tw.subject,
         t.full_name AS tutor
 
     FROM tutor_weekly_tracker tw
     JOIN tutors t ON tw.tutor_id = t.id
     JOIN manager_tutors mt ON mt.tutor_id = t.id
 
-    WHERE mt.manager_id=?
+    {where_sql}
 
     ORDER BY tw.session_date DESC
-    """,(session["manager_id"],))
+    LIMIT ? OFFSET ?
+    """,data_params)
 
-    rows = cur.fetchall()
+    rows=cur.fetchall()
     conn.close()
 
     table_rows=""
 
     for r in rows:
 
-        table_rows += f"""
+        table_rows+=f"""
         <tr>
         <td>{r['session_date']}</td>
         <td>{r['tutor']}</td>
+        <td>{r['grade'] or '-'}</td>
+        <td>{r['subject'] or '-'}</td>
         <td>{r['start_time'] or '-'}</td>
         <td>{r['end_time'] or '-'}</td>
         <td>{r['students_attended'] or '-'}</td>
@@ -12984,6 +13064,60 @@ def manager_tracker_history():
         </tr>
         """
 
+    # -----------------------
+    # Pagination links
+    # -----------------------
+
+    query_string=""
+
+    if f_tutor:
+        query_string+=f"&tutor={f_tutor}"
+
+    if f_grade:
+        query_string+=f"&grade={f_grade}"
+
+    if f_subject:
+        query_string+=f"&subject={f_subject}"
+
+    if f_date:
+        query_string+=f"&date={f_date}"
+
+    start=max(1,page_num-3)
+    end=min(total_pages,page_num+3)
+
+    page_links=[]
+
+    if page_num>1:
+        page_links.append(f"<a class='links' href='?page=1{query_string}'>« First</a>")
+        page_links.append(f"<a class='links' href='?page={page_num-1}{query_string}'>‹ Prev</a>")
+
+    for p in range(start,end+1):
+
+        if p==page_num:
+            page_links.append(
+            f"<span class='current' style='padding:4px 8px;background:#0f172a;color:white;border-radius:6px'>{p}</span>"
+            )
+        else:
+            page_links.append(
+            f"<a class='links' href='?page={p}{query_string}'>{p}</a>"
+            )
+
+    if page_num<total_pages:
+        page_links.append(f"<a class='links' href='?page={page_num+1}{query_string}'>Next ›</a>")
+        page_links.append(f"<a class='links' href='?page={total_pages}{query_string}'>Last »</a>")
+
+    nav=f"""
+    <div class='pager' style="display:flex;gap:8px;margin:10px 0">
+
+    <span class="mini muted">
+    Page {page_num} of {total_pages}
+    </span>
+
+    {"".join(page_links)}
+
+    </div>
+    """
+
     body=f"""
 
     {manager_nav()}
@@ -12992,12 +13126,43 @@ def manager_tracker_history():
 
     <h1>Session History</h1>
 
+    <div class='toolbar'>
+
+        <form method="get" style="display:flex;gap:8px;flex-wrap:wrap">
+
+            <select name="tutor">
+                <option value="">All Tutors</option>
+                {''.join(f"<option value='{t}' {'selected' if t==f_tutor else ''}>{t}</option>" for t in tutors)}
+            </select>
+
+            <select name="grade">
+                <option value="">All Grades</option>
+                {''.join(f"<option value='{g}' {'selected' if g==f_grade else ''}>{g}</option>" for g in grades)}
+            </select>
+
+            <select name="subject">
+                <option value="">All Subjects</option>
+                {''.join(f"<option value='{s}' {'selected' if s==f_subject else ''}>{s}</option>" for s in subjects)}
+            </select>
+
+            <input type="date" name="date" value="{f_date}">
+
+            <button class="btn mini">Filter</button>
+
+        </form>
+
+    </div>
+
+    {nav}
+
     <table>
 
     <thead>
     <tr>
     <th>Date</th>
     <th>Tutor</th>
+    <th>Grade</th>
+    <th>Subject</th>
     <th>Start</th>
     <th>End</th>
     <th>Students</th>
@@ -13007,10 +13172,12 @@ def manager_tracker_history():
     </thead>
 
     <tbody>
-    {table_rows}
+    {table_rows or "<tr><td colspan='9'>No sessions found.</td></tr>"}
     </tbody>
 
     </table>
+
+    {nav}
 
     </section>
     """
