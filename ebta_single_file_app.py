@@ -12691,8 +12691,8 @@ def admin_tutor_operations():
         params.append(f"%{search}%")
 
     if manager:
-        conditions.append("tm.id=?")
-        params.append(manager)
+        conditions.append("tm.full_name LIKE ?")
+        params.append(f"%{manager}%")
 
     if grade:
         conditions.append("s.grade=?")
@@ -12703,8 +12703,8 @@ def admin_tutor_operations():
         params.append(subject)
         
     if tutor:
-        conditions.append("t.id=?")
-        params.append(tutor)
+        conditions.append("t.full_name LIKE ?")
+        params.append(f"%{tutor}%")
 
     if rating:
         conditions.append("tw.manager_rating=?")
@@ -12869,8 +12869,8 @@ def admin_tutor_operations():
     <input type="date" name="date_from" value="{date_from}">
     <input type="date" name="date_to" value="{date_to}">
 
-    <input name="tutor" placeholder="Tutor ID" value="{tutor}">
-    <input name="manager" placeholder="Manager ID" value="{manager}">
+    <input name="tutor" placeholder="Tutor name" value="{tutor}">
+    <input name="manager" placeholder="Manager name" value="{manager}">
 
     <input name="grade" placeholder="Grade" value="{grade}">
     <input name="subject" placeholder="Subject" value="{subject}">
