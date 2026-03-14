@@ -11082,9 +11082,9 @@ def admin_followups():
     f_issue = request.args.get("issue", "")
 
     # ================= PAGINATION =================
-    page = int(request.args.get("page", 1))
+    current_page = int(request.args.get("page", 1))
     per_page = 25
-    offset = (page - 1) * per_page
+    offset = (current_page - 1) * per_page
 
     where = []
     params = []
@@ -11119,7 +11119,7 @@ def admin_followups():
     if where:
         where_sql = "WHERE " + " AND ".join(where)
 
-    # ===== COUNT TOTAL ROWS =====
+    # ===== COUNT TOTAL =====
     cur.execute(f"SELECT COUNT(*) as c FROM followups {where_sql}", params)
     total_rows = cur.fetchone()["c"]
     total_pages = max(1, (total_rows + per_page - 1) // per_page)
@@ -11141,12 +11141,6 @@ def admin_followups():
         "Returning Student Owing",
         "PoP Issues",
         "Other"
-    ]
-
-    FOLLOWUP_ROLES = [
-        "Admin",
-        "Admission COD",
-        "Leadership"
     ]
 
     cur.execute("SELECT DISTINCT name FROM subjects ORDER BY name")
@@ -11194,78 +11188,82 @@ def admin_followups():
         trs.append(f"""
         <tr class="{row_class} {overdue_class}">
         <form method="post" action="{url_for('admin_followup_update', fid=row['id'])}">
-            <td><input name="full_name" value="{escape(row['full_name'])}"></td>
 
-            <td>
-                <input name="phone" value="{escape(row['phone'] or '')}">
-                {wa_link}
-            </td>
+        <td><input name="full_name" value="{escape(row['full_name'])}"></td>
 
-            <td>
-                <select name="grade">
-                    <option value="">Select</option>
-                    {''.join(
-                        f"<option value='{g}' {'selected' if row['grade']==g else ''}>{grade_label(g)}</option>"
-                        for g in ["G8","G9","G10","G11","G12","G13"]
-                    )}
-                </select>
-            </td>
+        <td>
+        <input name="phone" value="{escape(row['phone'] or '')}">
+        {wa_link}
+        </td>
 
-            <td>
-                <select name="subjects">
-                    <option value="">Select</option>
-                    {''.join(
-                        f"<option value='{escape(s)}' {'selected' if row['subjects']==s else ''}>{escape(s)}</option>"
-                        for s in subjects
-                    )}
-                </select>
-            </td>
+        <td>
+        <select name="grade">
+        <option value="">Select</option>
+        {''.join(
+        f"<option value='{g}' {'selected' if row['grade']==g else ''}>{grade_label(g)}</option>"
+        for g in ["G8","G9","G10","G11","G12","G13"]
+        )}
+        </select>
+        </td>
 
-            <td>
-            <select name="issue_type">
-            <option value="">Select</option>
-            {''.join(
-            f"<option value='{i}' {'selected' if row['issue_type']==i else ''}>{i}</option>"
-            for i in ISSUE_TYPES
-            )}
-            </select>
-            </td>
+        <td>
+        <select name="subjects">
+        <option value="">Select</option>
+        {''.join(
+        f"<option value='{escape(s)}' {'selected' if row['subjects']==s else ''}>{escape(s)}</option>"
+        for s in subjects
+        )}
+        </select>
+        </td>
 
-            <td>
-                <select name="followup_status">
-                    <option value="OPEN" {'selected' if row['followup_status']=="OPEN" else ""}>OPEN</option>
-                    <option value="IN PROGRESS" {'selected' if row['followup_status']=="IN PROGRESS" else ""}>IN PROGRESS</option>
-                    <option value="AWAITING POP" {'selected' if row['followup_status']=="AWAITING POP" else ""}>AWAITING POP</option>
-                    <option value="RESOLVED" {'selected' if row['followup_status']=="RESOLVED" else ""}>RESOLVED</option>
-                    <option value="DECLINED" {'selected' if row['followup_status']=="DECLINED" else ""}>DECLINED</option>
-                </select>
-            </td>
+        <td>
+        <select name="issue_type">
+        <option value="">Select</option>
+        {''.join(
+        f"<option value='{i}' {'selected' if row['issue_type']==i else ''}>{i}</option>"
+        for i in ISSUE_TYPES
+        )}
+        </select>
+        </td>
 
-            <td>
-            <select name="captured_by">
-            <option value="Admin" {'selected' if row['captured_by']=="Admin" else ""}>Admin</option>
-            <option value="Admission COD" {'selected' if row['captured_by']=="Admission COD" else ""}>Admission COD</option>
-            <option value="Leadership" {'selected' if row['captured_by']=="Leadership" else ""}>Leadership</option>
-            </select>
-            </td>
+        <td>
+        <select name="followup_status">
+        <option value="OPEN" {'selected' if row['followup_status']=="OPEN" else ""}>OPEN</option>
+        <option value="IN PROGRESS" {'selected' if row['followup_status']=="IN PROGRESS" else ""}>IN PROGRESS</option>
+        <option value="AWAITING POP" {'selected' if row['followup_status']=="AWAITING POP" else ""}>AWAITING POP</option>
+        <option value="RESOLVED" {'selected' if row['followup_status']=="RESOLVED" else ""}>RESOLVED</option>
+        <option value="DECLINED" {'selected' if row['followup_status']=="DECLINED" else ""}>DECLINED</option>
+        </select>
+        </td>
 
-            <td>
-            <select name="updated_by">
-            <option value="">Select</option>
-            <option value="Admin" {'selected' if row['updated_by']=="Admin" else ""}>Admin</option>
-            <option value="Admission COD" {'selected' if row['updated_by']=="Admission COD" else ""}>Admission COD</option>
-            <option value="Leadership" {'selected' if row['updated_by']=="Leadership" else ""}>Leadership</option>
-            </select>
-            </td>
+        <td>
+        <select name="captured_by">
+        <option value="Admin" {'selected' if row['captured_by']=="Admin" else ""}>Admin</option>
+        <option value="Admission COD" {'selected' if row['captured_by']=="Admission COD" else ""}>Admission COD</option>
+        <option value="Leadership" {'selected' if row['captured_by']=="Leadership" else ""}>Leadership</option>
+        </select>
+        </td>
 
-            <td><input type="date" name="payment_date" value="{row['payment_date'] or ''}"></td>
-            <td><input type="date" name="date_communicated" value="{row['date_communicated'] or ''}"></td>
+        <td>
+        <select name="updated_by">
+        <option value="">Select</option>
+        <option value="Admin" {'selected' if row['updated_by']=="Admin" else ""}>Admin</option>
+        <option value="Admission COD" {'selected' if row['updated_by']=="Admission COD" else ""}>Admission COD</option>
+        <option value="Leadership" {'selected' if row['updated_by']=="Leadership" else ""}>Leadership</option>
+        </select>
+        </td>
 
-            <td>
-            <textarea name="notes" rows="2">{escape(row['notes'] or '')}</textarea>
-            </td>
+        <td><input type="date" name="payment_date" value="{row['payment_date'] or ''}"></td>
 
-            <td><button class="btn mini success">Save</button></td>
+        <td><input type="date" name="date_communicated" value="{row['date_communicated'] or ''}"></td>
+
+        <td>
+        <textarea name="notes" rows="2">{escape(row['notes'] or '')}</textarea>
+        </td>
+
+        <td>
+        <button class="btn mini success">Save</button>
+        </td>
 
         </form>
         </tr>
@@ -11275,81 +11273,93 @@ def admin_followups():
     {admin_nav()}
 
     <section class='card'>
-        <h1>Follow-Up Tracker</h1>
+    <h1>Follow-Up Tracker</h1>
 
-        <div class='toolbar'>
+    <div class='toolbar'>
 
-        <form method="get" style="display:flex;gap:6px;flex-wrap:wrap">
+    <form method="get" style="display:flex;gap:6px;flex-wrap:wrap">
 
-        <input type="text" name="q" value="{escape(q)}" placeholder="Search name or phone">
+    <input type="text" name="q" value="{escape(q)}" placeholder="Search">
 
-        <select name="grade">
-        <option value="">All Grades</option>
-        {''.join(
-        f"<option value='{g}' {'selected' if f_grade==g else ''}>{grade_label(g)}</option>"
-        for g in ["G8","G9","G10","G11","G12","G13"]
-        )}
-        </select>
+    <select name="grade">
+    <option value="">All Grades</option>
+    {''.join(
+    f"<option value='{g}' {'selected' if f_grade==g else ''}>{grade_label(g)}</option>"
+    for g in ["G8","G9","G10","G11","G12","G13"]
+    )}
+    </select>
 
-        <select name="subject">
-        <option value="">All Subjects</option>
-        {''.join(
-        f"<option value='{escape(s)}' {'selected' if f_subject==s else ''}>{escape(s)}</option>"
-        for s in subjects
-        )}
-        </select>
+    <select name="subject">
+    <option value="">All Subjects</option>
+    {''.join(
+    f"<option value='{escape(s)}' {'selected' if f_subject==s else ''}>{escape(s)}</option>"
+    for s in subjects
+    )}
+    </select>
 
-        <select name="status">
-        <option value="">All Status</option>
-        <option value="OPEN">OPEN</option>
-        <option value="IN PROGRESS">IN PROGRESS</option>
-        <option value="AWAITING POP">AWAITING POP</option>
-        <option value="RESOLVED">RESOLVED</option>
-        <option value="DECLINED">DECLINED</option>
-        </select>
+    <select name="status">
+    <option value="">All Status</option>
+    <option value="OPEN">OPEN</option>
+    <option value="IN PROGRESS">IN PROGRESS</option>
+    <option value="AWAITING POP">AWAITING POP</option>
+    <option value="RESOLVED">RESOLVED</option>
+    <option value="DECLINED">DECLINED</option>
+    </select>
 
-        <button class="btn mini">Filter</button>
+    <button class="btn mini">Filter</button>
 
-        </form>
+    </form>
 
-        <a class="btn success mini" href="{url_for('admin_followup_add')}">Add New</a>
-        <a class="btn secondary mini" href="{url_for('export_followups')}">Export Excel</a>
+    <a class="btn success mini" href="{url_for('admin_followup_add')}">Add New</a>
 
-        </div>
+    <a class="btn secondary mini" href="{url_for('export_followups')}">Export Excel</a>
 
-        <div class="scroll-x">
-        <table class="followups-table">
-        <thead>
-        <tr>
-        <th>Name</th>
-        <th>Phone</th>
-        <th>Grade</th>
-        <th>Subjects</th>
-        <th>Issue</th>
-        <th>Status</th>
-        <th>Captured</th>
-        <th>Updated</th>
-        <th>Payment</th>
-        <th>Communicated</th>
-        <th>Notes</th>
-        <th>Save</th>
-        </tr>
-        </thead>
-        <tbody>
-        {''.join(trs) or "<tr><td colspan='12'>No followups yet.</td></tr>"}
-        </tbody>
-        </table>
-        </div>
+    </div>
 
-        <div class="toolbar" style="justify-content:center;margin-top:10px">
+    <div class="scroll-x">
 
-        {f"<a class='btn mini secondary' href='?page={page-1}&q={q}&grade={f_grade}&subject={f_subject}&status={f_status}'>Prev</a>" if page>1 else ""}
+    <table class="followups-table">
 
-        <span class="chip">Page {page} / {total_pages}</span>
+    <thead>
 
-        {f"<a class='btn mini secondary' href='?page={page+1}&q={q}&grade={f_grade}&subject={f_subject}&status={f_status}'>Next</a>" if page<total_pages else ""}
+    <tr>
 
-        </div>
+    <th>Name</th>
+    <th>Phone</th>
+    <th>Grade</th>
+    <th>Subjects</th>
+    <th>Issue</th>
+    <th>Status</th>
+    <th>Captured</th>
+    <th>Updated</th>
+    <th>Payment</th>
+    <th>Communicated</th>
+    <th>Notes</th>
+    <th>Save</th>
+
+    </tr>
+
+    </thead>
+
+    <tbody>
+
+    {''.join(trs) or "<tr><td colspan='12'>No followups yet.</td></tr>"}
+
+    </tbody>
+
+    </table>
+
+    </div>
+
+    <div class="toolbar" style="justify-content:center;margin-top:10px">
+
+    {f"<a class='btn mini secondary' href='?page={current_page-1}&q={q}&grade={f_grade}&subject={f_subject}&status={f_status}'>Prev</a>" if current_page>1 else ""}
+
+    <span class="chip">Page {current_page} / {total_pages}</span>
+
+    {f"<a class='btn mini secondary' href='?page={current_page+1}&q={q}&grade={f_grade}&subject={f_subject}&status={f_status}'>Next</a>" if current_page<total_pages else ""}
+
+    </div>
 
     </section>
     """
