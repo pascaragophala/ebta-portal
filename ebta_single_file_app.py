@@ -10349,137 +10349,100 @@ def admin_direct_messages():
     cur = conn.cursor()
 
     # =========================
-    # SEARCH tutors
+    # UNIFIED CONVERSATIONS (TUTORS + STUDENTS)
     # =========================
 
-    if q:
-        cur.execute("""
-            SELECT DISTINCT
-                t.id,
-                t.full_name,
-                s.grade
-            FROM tutors t
-            LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
-            LEFT JOIN subjects s ON s.id = ts.subject_id
-            WHERE t.full_name LIKE ?
-            ORDER BY t.full_name
-        """, (f"%{q}%",))
-    else:
-        cur.execute("""
-            SELECT DISTINCT
-                t.id,
-                t.full_name,
-                s.grade
-            FROM tutors t
-            LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
-            LEFT JOIN subjects s ON s.id = ts.subject_id
-            ORDER BY t.full_name
+    search_filter = f"%{q}%"
 
-        """)
+    cur.execute("""
+    SELECT * FROM (
 
-    tutors = cur.fetchall()
+        SELECT
+            'student' AS role,
+            s.id,
+            s.full_name,
+            s.grade,
 
-    # =========================
-    # SEARCH students
-    # =========================
+            (
+                SELECT body
+                FROM direct_messages dm
+                WHERE
+                    (dm.to_role='student' AND dm.to_id=s.id)
+                    OR
+                    (dm.from_role='student' AND dm.from_id=s.id)
+                ORDER BY dm.created_at DESC
+                LIMIT 1
+            ) AS last_message,
 
-    if q:
-        cur.execute("""
-            SELECT
-                s.id,
-                s.full_name,
-                s.grade,
+            (
+                SELECT created_at
+                FROM direct_messages dm
+                WHERE
+                    (dm.to_role='student' AND dm.to_id=s.id)
+                    OR
+                    (dm.from_role='student' AND dm.from_id=s.id)
+                ORDER BY dm.created_at DESC
+                LIMIT 1
+            ) AS last_time,
 
-                (
-                    SELECT body
-                    FROM direct_messages dm
-                    WHERE
-                    (
-                        (dm.to_role='student' AND dm.to_id=s.id)
-                        OR
-                        (dm.from_role='student' AND dm.from_id=s.id)
-                    )
-                    ORDER BY dm.created_at DESC
-                    LIMIT 1
-                ) AS last_message,
+            (
+                SELECT COUNT(*)
+                FROM direct_messages dm
+                WHERE dm.to_role='admin'
+                AND dm.from_role='student'
+                AND dm.from_id=s.id
+                AND dm.is_read=0
+            ) AS unread
 
-                (
-                    SELECT created_at
-                    FROM direct_messages dm
-                    WHERE
-                    (
-                        (dm.to_role='student' AND dm.to_id=s.id)
-                        OR
-                        (dm.from_role='student' AND dm.from_id=s.id)
-                    )
-                    ORDER BY dm.created_at DESC
-                    LIMIT 1
-                ) AS last_time,
+        FROM students s
 
-                (
-                    SELECT COUNT(*)
-                    FROM direct_messages dm
-                    WHERE dm.to_role='admin'
-                    AND dm.from_role='student'
-                    AND dm.from_id=s.id
-                    AND dm.is_read=0
-                ) AS unread
+        UNION ALL
 
-            FROM students s
+        SELECT
+            'tutor' AS role,
+            t.id,
+            t.full_name,
+            NULL AS grade,
 
-            WHERE s.full_name LIKE ?
+            (
+                SELECT body
+                FROM direct_messages dm
+                WHERE
+                    (dm.to_role='tutor' AND dm.to_id=t.id)
+                    OR
+                    (dm.from_role='tutor' AND dm.from_id=t.id)
+                ORDER BY dm.created_at DESC
+                LIMIT 1
+            ) AS last_message,
 
-            ORDER BY last_time DESC NULLS LAST, s.full_name
-        """, (f"%{q}%",))
+            (
+                SELECT created_at
+                FROM direct_messages dm
+                WHERE
+                    (dm.to_role='tutor' AND dm.to_id=t.id)
+                    OR
+                    (dm.from_role='tutor' AND dm.from_id=t.id)
+                ORDER BY dm.created_at DESC
+                LIMIT 1
+            ) AS last_time,
 
-    else:
-        cur.execute("""
-            SELECT
-                s.id,
-                s.full_name,
-                s.grade,
+            (
+                SELECT COUNT(*)
+                FROM direct_messages dm
+                WHERE dm.to_role='admin'
+                AND dm.from_role='tutor'
+                AND dm.from_id=t.id
+                AND dm.is_read=0
+            ) AS unread
 
-                (
-                    SELECT body
-                    FROM direct_messages dm
-                        WHERE
-                    (
-                        (dm.to_role='student' AND dm.to_id=s.id)
-                        OR
-                        (dm.from_role='student' AND dm.from_id=s.id)
-                    )
-                    ORDER BY dm.created_at DESC
-                    LIMIT 1
-                ) AS last_message,
+        FROM tutors t
 
-                (
-                    SELECT created_at
-                    FROM direct_messages dm
-                        WHERE
-                    (
-                        (dm.to_role='student' AND dm.to_id=s.id)
-                        OR
-                        (dm.from_role='student' AND dm.from_id=s.id)
-                    )
-                    ORDER BY dm.created_at DESC
-                    LIMIT 1
-                ) AS last_time,
+    )
+    WHERE full_name LIKE ?
+    ORDER BY last_time DESC
+    """, (search_filter,))
 
-                (
-                    SELECT COUNT(*)
-                    FROM direct_messages dm
-                    WHERE dm.to_role='admin'
-                    AND dm.from_role='student'
-                    AND dm.from_id=s.id
-                    AND dm.is_read=0
-                ) AS unread
-
-            FROM students s
-
-            ORDER BY last_time DESC NULLS LAST, s.full_name
-        """)
-
-    students = cur.fetchall()
+    conversations = cur.fetchall()
 
     # =========================
     # SIDEBAR LIST
@@ -10497,85 +10460,32 @@ def admin_direct_messages():
         All Students
     </a>
 
+    <div class='chat-section'>Inbox</div>
     """
 
-    # Tutors grouped by grade
-    tutors_by_grade = {}
+    for c in conversations:
 
-    for t in tutors:
+        role = c["role"]
+        cid = c["id"]
+        name = c["full_name"]
 
-        grade = t['grade'] or "OTHER"
+        last_msg = c["last_message"] or ""
+        preview = last_msg[:40] + ("..." if len(last_msg) > 40 else "")
 
-        if grade not in tutors_by_grade:
-            tutors_by_grade[grade] = {}
-
-        tutors_by_grade[grade][t['id']] = t['full_name']
-
-    for grade in sorted(tutors_by_grade.keys()):
-
-        chat_list += f"""
-        <div class="chat-section">
-            Tutors — {grade_label(grade)}
-        </div>
-        """
-
-        for tid, name in sorted(tutors_by_grade[grade].items(), key=lambda x: x[1]):
-
-            active = "active" if selected == f"tutor|{tid}" else ""
-
-            chat_list += f"""
-            <a href="?chat=tutor|{tid}"
-               class="chat-user tutor {active}">
-
-                <div class="chat-name">
-                    {name}
-                </div>
-
-                <div class="chat-role">
-                    Tutor
-                </div>
-
-            </a>
-            """
-
-    # Students grouped by grade
-    
-    students_by_grade = {}
-
-    for s in students:
-        grade = s['grade'] or "OTHER"
-
-        if grade not in students_by_grade:
-            students_by_grade[grade] = {}
-
-        students_by_grade[grade][s['id']] = s
-
-
-    chat_list += """
-    <div class="chat-section">
-    Students
-    </div>
-    """
-
-    for s in students:
-
-        sid = s['id']
-        name = s['full_name']
-        unread = s['unread']
-        last_msg = s['last_message'] or ""
-        last_msg = last_msg[:40] + ("..." if len(last_msg) > 40 else "")
-
+        unread = c["unread"]
         badge = f"<span class='badge'>{unread}</span>" if unread else ""
 
-        active = "active" if selected == f"student|{sid}" else ""
-
         time = ""
-        if s['last_time']:
-            time = s['last_time'][11:16]
+        if c["last_time"]:
+            time = c["last_time"][11:16]
+
+        active = "active" if selected == f"{role}|{cid}" else ""
+
+        role_label = "Tutor" if role == "tutor" else f"Student ({c['grade']})"
 
         chat_list += f"""
-        <a href="?chat=student|{sid}"
-           class="chat-user student {active}">
+        <a href="?chat={role}|{cid}"
+           class="chat-user {role} {active}">
 
             <div style="display:flex;justify-content:space-between">
 
@@ -10591,7 +10501,11 @@ def admin_direct_messages():
             </div>
 
             <div class="chat-role">
-                {last_msg}
+                {preview}
+            </div>
+
+            <div class="mini">
+                {role_label}
             </div>
 
         </a>
@@ -10640,30 +10554,22 @@ def admin_direct_messages():
 
         for m in msgs:
 
-            side = "me" if m['from_role']=="admin" else "them"
-
+            side = "me" if m['from_role'] == "admin" else "them"
             time = m['created_at'][11:16]
 
             chat_messages += f"""
             <div class="bubble {side}">
-
                 {m['body']}
-
                 <div class="time">{time}</div>
-
             </div>
             """
 
         message_input = f"""
-        <form method="post"
-              action="{url_for('admin_send_dm')}">
+        <form method="post" action="{url_for('admin_send_dm')}">
 
-            <input type="hidden"
-                   name="target"
-                   value="{selected}">
+            <input type="hidden" name="target" value="{selected}">
 
-            <textarea name="body"
-                      required></textarea>
+            <textarea name="body" required></textarea>
 
             <button class="btn success">
                 Send
@@ -10671,7 +10577,7 @@ def admin_direct_messages():
 
         </form>
         """
-        
+
         cur.execute("""
         UPDATE direct_messages
         SET is_read=1
@@ -10679,9 +10585,13 @@ def admin_direct_messages():
         AND from_role=?
         AND from_id=?
         """, (role, rid))
+
         conn.commit()
 
-    # Broadcast message form
+    # =========================
+    # BROADCAST FORM (UNCHANGED)
+    # =========================
+
     broadcast_form = """
     <div class="card">
 
@@ -10761,7 +10671,7 @@ def admin_direct_messages():
             </form>
             
             <form method="post" action="/admin/remind-tutors">
-            <button class="btn success">Send Tutor Reminders</button>
+                <button class="btn success">Send Tutor Reminders</button>
             </form>
 
             <div class="chat-layout">
@@ -11189,7 +11099,8 @@ def admin_sms_dashboard():
     """
 
     return page("SMS Dashboard", body)
-    
+  
+  
 @app.get('/admin/followups')
 def admin_followups():
     r = require_admin()
