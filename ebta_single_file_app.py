@@ -7215,6 +7215,29 @@ def admin_enrollments():
             for p in files
         ) or "—"
 
+        actions = f"""
+
+        <form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>
+            <input type="hidden" name="page" value="{page_num}">
+            <button class='btn success'>Approve</button>
+        </form>
+
+        <form method='post' action='{url_for('enrollment_action', id=r['id'], action='lapse')}' style='display:inline'>
+            <input type="hidden" name="page" value="{page_num}">
+            <button class='btn danger'>Lapse</button>
+        </form>
+
+        """
+        
+        
+        if is_high_admin():
+        actions += f"""
+        <form method='post' action='{url_for('enrollment_action', id=r['id'], action='pending')}' style='display:inline'>
+            <input type="hidden" name="page" value="{page_num}">
+            <button class='btn warn'>Pending</button>
+        </form>
+        """
+        
         trs.append(f"""
         <tr>
             <td>{r['full_name']}<div class='muted'>{r['phone_whatsapp']}</div></td>
@@ -7227,17 +7250,7 @@ def admin_enrollments():
             <td><strong>R{r['amount_paid']}</strong></td>
 
             <td style="white-space:nowrap">
-
-                <form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>
-                    <input type="hidden" name="page" value="{page_num}">
-                    <button class='btn success'>Approve</button>
-                </form>
-
-                <form method='post' action='{url_for('enrollment_action', id=r['id'], action='lapse')}' style='display:inline'>
-                    <input type="hidden" name="page" value="{page_num}">
-                    <button class='btn danger'>Lapse</button>
-                </form>
-
+                {actions}
             </td>
 
             <td>
@@ -7464,6 +7477,15 @@ def enrollment_action(id: int, action: str):
 
     elif action == 'lapse':
         cur.execute("UPDATE enrollments SET status='LAPSED' WHERE id=?", (id,))
+        
+    elif action == 'pending':
+
+        # 🔒 ONLY SUPER ADMIN CAN DO THIS
+        if not is_high_admin():
+            conn.close()
+            return page("Access Denied", card_msg("Only super admin can set status to Pending."))
+
+        cur.execute("UPDATE enrollments SET status='PENDING' WHERE id=?", (id,))
 
     conn.commit()
     conn.close()
