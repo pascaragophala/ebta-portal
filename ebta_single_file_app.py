@@ -10349,7 +10349,7 @@ def admin_direct_messages():
     cur = conn.cursor()
 
     # =========================
-    # UNIFIED CONVERSATIONS (TUTORS + STUDENTS)
+    # UNIFIED CONVERSATIONS
     # =========================
 
     search_filter = f"%{q}%"
@@ -10439,13 +10439,20 @@ def admin_direct_messages():
 
     )
     WHERE full_name LIKE ?
-    ORDER BY last_time DESC
+    ORDER BY unread DESC, last_time DESC
     """, (search_filter,))
 
     conversations = cur.fetchall()
 
     # =========================
-    # SIDEBAR LIST
+    # SPLIT: UNREAD vs READ
+    # =========================
+
+    unread_list = [c for c in conversations if c["unread"] > 0]
+    read_list = [c for c in conversations if c["unread"] == 0]
+
+    # =========================
+    # SIDEBAR
     # =========================
 
     chat_list = """
@@ -10459,11 +10466,64 @@ def admin_direct_messages():
     <a href='?chat=ALL_STUDENTS' class='chat-user'>
         All Students
     </a>
-
-    <div class='chat-section'>Inbox</div>
     """
 
-    for c in conversations:
+    # =========================
+    # NEEDS REPLY
+    # =========================
+
+    chat_list += "<div class='chat-section'>Needs Reply</div>"
+
+    for c in unread_list:
+
+        role = c["role"]
+        cid = c["id"]
+        name = c["full_name"]
+
+        last_msg = c["last_message"] or ""
+        preview = last_msg[:40] + ("..." if len(last_msg) > 40 else "")
+
+        unread = c["unread"]
+        badge = f"<span class='badge'>{unread}</span>"
+
+        time = ""
+        if c["last_time"]:
+            time = c["last_time"][11:16]
+
+        active = "active" if selected == f"{role}|{cid}" else ""
+
+        chat_list += f"""
+        <a href="?chat={role}|{cid}"
+           class="chat-user {role} {active}"
+           style="background:#fff3f3">
+
+            <div style="display:flex;justify-content:space-between">
+
+                <div class="chat-name" style="font-weight:700">
+                    🔴 {name}
+                </div>
+
+                <div style="text-align:right">
+                    <div class="mini">{time}</div>
+                    {badge}
+                </div>
+
+            </div>
+
+            <div class="chat-role">
+                {preview}
+            </div>
+
+        </a>
+        """
+
+    # =========================
+    # ALL CONVERSATIONS
+    # =========================
+
+    chat_list += "<div class='chat-section'>All Conversations</div>"
+
+    for c in read_list:
 
         role = c["role"]
         cid = c["id"]
@@ -10480,8 +10540,6 @@ def admin_direct_messages():
             time = c["last_time"][11:16]
 
         active = "active" if selected == f"{role}|{cid}" else ""
-
-        role_label = "Tutor" if role == "tutor" else f"Student ({c['grade']})"
 
         chat_list += f"""
         <a href="?chat={role}|{cid}"
@@ -10502,10 +10560,6 @@ def admin_direct_messages():
 
             <div class="chat-role">
                 {preview}
-            </div>
-
-            <div class="mini">
-                {role_label}
             </div>
 
         </a>
@@ -10566,15 +10620,9 @@ def admin_direct_messages():
 
         message_input = f"""
         <form method="post" action="{url_for('admin_send_dm')}">
-
             <input type="hidden" name="target" value="{selected}">
-
             <textarea name="body" required></textarea>
-
-            <button class="btn success">
-                Send
-            </button>
-
+            <button class="btn success">Send</button>
         </form>
         """
 
@@ -10589,7 +10637,7 @@ def admin_direct_messages():
         conn.commit()
 
     # =========================
-    # BROADCAST FORM (UNCHANGED)
+    # BROADCAST FORM
     # =========================
 
     broadcast_form = """
@@ -10597,38 +10645,16 @@ def admin_direct_messages():
 
         <h3>Broadcast Message</h3>
 
-        <form method="post"
-              action="/admin/direct-messages/send">
+        <form method="post" action="/admin/direct-messages/send">
 
             <select name="target">
-
                 <option value="ALL_TUTORS">All Tutors</option>
-
                 <option value="ALL_STUDENTS">All Students</option>
-
-                <optgroup label="Tutors by grade">
-                    <option value="GRADE_TUTORS|G8">Grade 8 tutors</option>
-                    <option value="GRADE_TUTORS|G9">Grade 9 tutors</option>
-                    <option value="GRADE_TUTORS|G10">Grade 10 tutors</option>
-                    <option value="GRADE_TUTORS|G11">Grade 11 tutors</option>
-                    <option value="GRADE_TUTORS|G12">Grade 12 tutors</option>
-                </optgroup>
-
-                <optgroup label="Students by grade">
-                    <option value="GRADE_STUDENTS|G8">Grade 8 students</option>
-                    <option value="GRADE_STUDENTS|G9">Grade 9 students</option>
-                    <option value="GRADE_STUDENTS|G10">Grade 10 students</option>
-                    <option value="GRADE_STUDENTS|G11">Grade 11 students</option>
-                    <option value="GRADE_STUDENTS|G12">Grade 12 students</option>
-                </optgroup>
-
             </select>
 
             <textarea name="body" required></textarea>
 
-            <button class="btn success">
-                Send Broadcast
-            </button>
+            <button class="btn success">Send Broadcast</button>
 
         </form>
         
@@ -10663,11 +10689,9 @@ def admin_direct_messages():
         <div class="card">
 
             <form>
-
                 <input name="q"
                        placeholder="Search tutors or students"
                        value="{q}">
-
             </form>
             
             <form method="post" action="/admin/remind-tutors">
