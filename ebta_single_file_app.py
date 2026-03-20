@@ -10348,11 +10348,11 @@ def admin_direct_messages():
     conn = get_db()
     cur = conn.cursor()
 
-    # =========================
-    # UNIFIED CONVERSATIONS
-    # =========================
-
     search_filter = f"%{q}%"
+
+    # =========================
+    # ONLY ADMIN CONVERSATIONS
+    # =========================
 
     cur.execute("""
     SELECT * FROM (
@@ -10364,30 +10364,27 @@ def admin_direct_messages():
             s.grade,
 
             (
-                SELECT body
-                FROM direct_messages dm
-                WHERE
-                    (dm.to_role='student' AND dm.to_id=s.id)
+                SELECT body FROM direct_messages dm
+                WHERE (
+                    (dm.to_role='admin' AND dm.from_role='student' AND dm.from_id=s.id)
                     OR
-                    (dm.from_role='student' AND dm.from_id=s.id)
-                ORDER BY dm.created_at DESC
-                LIMIT 1
+                    (dm.from_role='admin' AND dm.to_role='student' AND dm.to_id=s.id)
+                )
+                ORDER BY dm.created_at DESC LIMIT 1
             ) AS last_message,
 
             (
-                SELECT created_at
-                FROM direct_messages dm
-                WHERE
-                    (dm.to_role='student' AND dm.to_id=s.id)
+                SELECT created_at FROM direct_messages dm
+                WHERE (
+                    (dm.to_role='admin' AND dm.from_role='student' AND dm.from_id=s.id)
                     OR
-                    (dm.from_role='student' AND dm.from_id=s.id)
-                ORDER BY dm.created_at DESC
-                LIMIT 1
+                    (dm.from_role='admin' AND dm.to_role='student' AND dm.to_id=s.id)
+                )
+                ORDER BY dm.created_at DESC LIMIT 1
             ) AS last_time,
 
             (
-                SELECT COUNT(*)
-                FROM direct_messages dm
+                SELECT COUNT(*) FROM direct_messages dm
                 WHERE dm.to_role='admin'
                 AND dm.from_role='student'
                 AND dm.from_id=s.id
@@ -10405,30 +10402,27 @@ def admin_direct_messages():
             NULL AS grade,
 
             (
-                SELECT body
-                FROM direct_messages dm
-                WHERE
-                    (dm.to_role='tutor' AND dm.to_id=t.id)
+                SELECT body FROM direct_messages dm
+                WHERE (
+                    (dm.to_role='admin' AND dm.from_role='tutor' AND dm.from_id=t.id)
                     OR
-                    (dm.from_role='tutor' AND dm.from_id=t.id)
-                ORDER BY dm.created_at DESC
-                LIMIT 1
+                    (dm.from_role='admin' AND dm.to_role='tutor' AND dm.to_id=t.id)
+                )
+                ORDER BY dm.created_at DESC LIMIT 1
             ) AS last_message,
 
             (
-                SELECT created_at
-                FROM direct_messages dm
-                WHERE
-                    (dm.to_role='tutor' AND dm.to_id=t.id)
+                SELECT created_at FROM direct_messages dm
+                WHERE (
+                    (dm.to_role='admin' AND dm.from_role='tutor' AND dm.from_id=t.id)
                     OR
-                    (dm.from_role='tutor' AND dm.from_id=t.id)
-                ORDER BY dm.created_at DESC
-                LIMIT 1
+                    (dm.from_role='admin' AND dm.to_role='tutor' AND dm.to_id=t.id)
+                )
+                ORDER BY dm.created_at DESC LIMIT 1
             ) AS last_time,
 
             (
-                SELECT COUNT(*)
-                FROM direct_messages dm
+                SELECT COUNT(*) FROM direct_messages dm
                 WHERE dm.to_role='admin'
                 AND dm.from_role='tutor'
                 AND dm.from_id=t.id
@@ -10439,14 +10433,11 @@ def admin_direct_messages():
 
     )
     WHERE full_name LIKE ?
+    AND last_time IS NOT NULL   -- 🔥 IMPORTANT FIX
     ORDER BY unread DESC, last_time DESC
     """, (search_filter,))
 
     conversations = cur.fetchall()
-
-    # =========================
-    # SPLIT: UNREAD vs READ
-    # =========================
 
     unread_list = [c for c in conversations if c["unread"] > 0]
     read_list = [c for c in conversations if c["unread"] == 0]
@@ -10457,68 +10448,37 @@ def admin_direct_messages():
 
     chat_list = """
 
-    <div class='chat-section'>Broadcast</div>
-
-    <a href='?chat=ALL_TUTORS' class='chat-user'>
-        All Tutors
-    </a>
-
-    <a href='?chat=ALL_STUDENTS' class='chat-user'>
-        All Students
-    </a>
+    <div class='chat-section'>Inbox (Needs Reply)</div>
     """
 
-    # =========================
-    # NEEDS REPLY
-    # =========================
-
-    chat_list += "<div class='chat-section'>Needs Reply</div>"
-
+    # 🔴 UNREAD FIRST
     for c in unread_list:
 
         role = c["role"]
         cid = c["id"]
         name = c["full_name"]
 
-        last_msg = c["last_message"] or ""
-        preview = last_msg[:40] + ("..." if len(last_msg) > 40 else "")
-
-        unread = c["unread"]
-        badge = f"<span class='badge'>{unread}</span>"
-
-        time = ""
-        if c["last_time"]:
-            time = c["last_time"][11:16]
+        preview = (c["last_message"] or "")[:40]
+        time = c["last_time"][11:16] if c["last_time"] else ""
 
         active = "active" if selected == f"{role}|{cid}" else ""
 
         chat_list += f"""
         <a href="?chat={role}|{cid}"
-           class="chat-user {role} {active}"
+           class="chat-user {active}"
            style="background:#fff3f3">
 
             <div style="display:flex;justify-content:space-between">
-
-                <div class="chat-name" style="font-weight:700">
-                    🔴 {name}
-                </div>
-
-                <div style="text-align:right">
-                    <div class="mini">{time}</div>
-                    {badge}
-                </div>
-
+                <div class="chat-name"><b>🔴 {name}</b></div>
+                <div class="mini">{time}</div>
             </div>
 
-            <div class="chat-role">
-                {preview}
-            </div>
-
+            <div class="chat-role">{preview}</div>
         </a>
         """
 
     # =========================
-    # ALL CONVERSATIONS
+    # ALL OTHER CHATS
     # =========================
 
     chat_list += "<div class='chat-section'>All Conversations</div>"
@@ -10529,44 +10489,26 @@ def admin_direct_messages():
         cid = c["id"]
         name = c["full_name"]
 
-        last_msg = c["last_message"] or ""
-        preview = last_msg[:40] + ("..." if len(last_msg) > 40 else "")
-
-        unread = c["unread"]
-        badge = f"<span class='badge'>{unread}</span>" if unread else ""
-
-        time = ""
-        if c["last_time"]:
-            time = c["last_time"][11:16]
+        preview = (c["last_message"] or "")[:40]
+        time = c["last_time"][11:16] if c["last_time"] else ""
 
         active = "active" if selected == f"{role}|{cid}" else ""
 
         chat_list += f"""
         <a href="?chat={role}|{cid}"
-           class="chat-user {role} {active}">
+           class="chat-user {active}">
 
             <div style="display:flex;justify-content:space-between">
-
-                <div class="chat-name">
-                    {name}
-                </div>
-
-                <div style="text-align:right">
-                    <div class="mini">{time}</div>
-                    {badge}
-                </div>
-
+                <div class="chat-name">{name}</div>
+                <div class="mini">{time}</div>
             </div>
 
-            <div class="chat-role">
-                {preview}
-            </div>
-
+            <div class="chat-role">{preview}</div>
         </a>
         """
 
     # =========================
-    # LOAD CHAT
+    # LOAD CHAT (FIXED)
     # =========================
 
     chat_messages = ""
@@ -10577,39 +10519,27 @@ def admin_direct_messages():
         role, rid = selected.split("|")
         rid = int(rid)
 
+        # 🔥 STRICT ADMIN CONVERSATION ONLY
         cur.execute("""
-        SELECT dm.*,
-
-            CASE dm.from_role
-                WHEN 'admin' THEN 'You'
-                WHEN 'tutor' THEN (SELECT full_name FROM tutors WHERE id=dm.from_id)
-                ELSE (SELECT full_name FROM students WHERE id=dm.from_id)
-            END AS sender
-
-        FROM direct_messages dm
-
+        SELECT *
+        FROM direct_messages
         WHERE
         (
-            dm.from_role='admin'
-            AND dm.to_role=?
-            AND dm.to_id=?
+            from_role='admin' AND to_role=? AND to_id=?
         )
         OR
         (
-            dm.to_role='admin'
-            AND dm.from_role=?
-            AND dm.from_id=?
+            to_role='admin' AND from_role=? AND from_id=?
         )
-
-        ORDER BY dm.created_at ASC
+        ORDER BY created_at ASC
         """, (role, rid, role, rid))
 
         msgs = cur.fetchall()
 
         for m in msgs:
 
-            side = "me" if m['from_role'] == "admin" else "them"
-            time = m['created_at'][11:16]
+            side = "me" if m["from_role"] == "admin" else "them"
+            time = m["created_at"][11:16]
 
             chat_messages += f"""
             <div class="bubble {side}">
@@ -10617,6 +10547,16 @@ def admin_direct_messages():
                 <div class="time">{time}</div>
             </div>
             """
+
+        # mark as read
+        cur.execute("""
+        UPDATE direct_messages
+        SET is_read=1
+        WHERE to_role='admin'
+        AND from_role=?
+        AND from_id=?
+        """, (role, rid))
+        conn.commit()
 
         message_input = f"""
         <form method="post" action="{url_for('admin_send_dm')}">
@@ -10626,101 +10566,38 @@ def admin_direct_messages():
         </form>
         """
 
-        cur.execute("""
-        UPDATE direct_messages
-        SET is_read=1
-        WHERE to_role='admin'
-        AND from_role=?
-        AND from_id=?
-        """, (role, rid))
-
-        conn.commit()
-
-    # =========================
-    # BROADCAST FORM
-    # =========================
-
-    broadcast_form = """
-    <div class="card">
-
-        <h3>Broadcast Message</h3>
-
-        <form method="post" action="/admin/direct-messages/send">
-
-            <select name="target">
-                <option value="ALL_TUTORS">All Tutors</option>
-                <option value="ALL_STUDENTS">All Students</option>
-            </select>
-
-            <textarea name="body" required></textarea>
-
-            <button class="btn success">Send Broadcast</button>
-
-        </form>
-        
-        <form method="post" action="/admin/broadcast-sms">
-
-            <h3>Broadcast SMS</h3>
-
-            <textarea name="body" required></textarea>
-
-            <button class="btn success">
-                Send SMS to All Students & Guardians
-            </button>
-
-        </form>
-        
-        <form method="get" action="/admin/process-sms">
-            <button class="btn success">Send Pending SMS Now</button>
-        </form>
-
-    </div>
-    """
-
     conn.close()
 
     body = f"""
     {admin_nav()}
 
-    <section class="grid">
+    <div class="card">
 
-        {broadcast_form}
+        <form>
+            <input name="q" placeholder="Search..." value="{q}">
+        </form>
 
-        <div class="card">
+        <div class="chat-layout">
 
-            <form>
-                <input name="q"
-                       placeholder="Search tutors or students"
-                       value="{q}">
-            </form>
-            
-            <form method="post" action="/admin/remind-tutors">
-                <button class="btn success">Send Tutor Reminders</button>
-            </form>
+            <div class="chat-list">
+                {chat_list}
+            </div>
 
-            <div class="chat-layout">
+            <div class="chat-window">
 
-                <div class="chat-list">
-                    {chat_list}
+                <div class="chat-messages">
+                    {chat_messages or "Select a conversation"}
                 </div>
 
-                <div class="chat-window">
-
-                    <div class="chat-messages">
-                        {chat_messages or "Select conversation"}
-                    </div>
-
-                    <div class="chat-input">
-                        {message_input}
-                    </div>
-
+                <div class="chat-input">
+                    {message_input}
                 </div>
 
             </div>
 
         </div>
 
-    </section>
+    </div>
     """
 
     return page("Direct Messages", body)
