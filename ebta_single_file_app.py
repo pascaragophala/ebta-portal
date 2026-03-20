@@ -7231,12 +7231,12 @@ def admin_enrollments():
         
         
         if is_high_admin():
-        actions += f"""
-        <form method='post' action='{url_for('enrollment_action', id=r['id'], action='pending')}' style='display:inline'>
-            <input type="hidden" name="page" value="{page_num}">
-            <button class='btn warn'>Pending</button>
-        </form>
-        """
+            actions += f"""
+            <form method='post' action='{url_for('enrollment_action', id=r['id'], action='pending')}' style='display:inline'>
+                <input type="hidden" name="page" value="{page_num}">
+                <button class='btn warn'>Pending</button>
+            </form>
+            """
         
         trs.append(f"""
         <tr>
