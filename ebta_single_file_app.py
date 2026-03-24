@@ -86,8 +86,7 @@ def ensure_column(conn, table, column, ddl_tail):
 def init_db():
     conn = get_db()
     cur = conn.cursor()
-  
-
+    
     cur.execute("""
     CREATE TABLE IF NOT EXISTS settings(
         key TEXT PRIMARY KEY,
@@ -338,6 +337,11 @@ def init_db():
     ensure_column(conn, "followups", "updated_at", "TEXT")
     ensure_column(conn, "tutor_weekly_tracker", "manager_id", "INTEGER")
     ensure_column(conn, "tutor_weekly_tracker", "manager_rating", "INTEGER")
+    
+    cur.execute("""
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_tracker
+    ON tutor_weekly_tracker(tutor_id, session_date);
+    """)
 
 
 
@@ -358,7 +362,7 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_followups_name ON followups(full_name)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_followups_status ON followups(followup_status)")
 
-
+    
 
 
     cur.execute("""
@@ -11591,18 +11595,27 @@ def admin_tutor_tracker():
                 SELECT session_held
                 FROM tutor_weekly_tracker
                 WHERE tutor_id=? AND session_date=?
+                ORDER BY id DESC
+                LIMIT 1
             """, (t["id"], date_str))
 
             entry = cur.fetchone()
 
+            status = "Not Logged"
             color = ""
-            if entry and entry["session_held"] == 0:
-                color = "style='background:#fee2e2'"
+
+            if entry:
+                if entry["session_held"] == 1:
+                    status = "Logged"
+                    color = "style='background:#dcfce7'"
+                else:
+                    status = "Missed"
+                    color = "style='background:#fee2e2'"
 
             row += f"""
             <td {color}>
                 <a href="/admin/tutor-tracker/edit?tutor_id={t['id']}&date={date_str}">
-                Update
+                {status}
                 </a>
             </td>
             """
@@ -11865,7 +11878,6 @@ def tracker_save():
     cur=conn.cursor()
 
     cur.execute("""
-
     INSERT INTO tutor_weekly_tracker(
         tutor_id,
         session_date,
@@ -11879,23 +11891,30 @@ def tracker_save():
         manager_id,
         created_at
     )
-
     VALUES(?,?,?,?,?,?,?,?,?,?,?)
-
-    """,(
-
-    request.form.get("tutor_id"),
-    request.form.get("date"),
-    request.form.get("session_held"),
-    request.form.get("start_time"),
-    request.form.get("end_time"),
-    request.form.get("recording_link"),
-    request.form.get("students_attended"),
-    request.form.get("topic_covered"),
-    request.form.get("manager_comments"),
-    None,
-    now_utc_iso()
-
+    ON CONFLICT(tutor_id, session_date)
+    DO UPDATE SET
+        session_held=excluded.session_held,
+        start_time=excluded.start_time,
+        end_time=excluded.end_time,
+        recording_link=excluded.recording_link,
+        students_attended=excluded.students_attended,
+        topic_covered=excluded.topic_covered,
+        manager_comments=excluded.manager_comments,
+        manager_id=excluded.manager_id,
+        created_at=excluded.created_at
+    """, (
+        request.form.get("tutor_id"),
+        request.form.get("date"),
+        request.form.get("session_held"),
+        request.form.get("start_time"),
+        request.form.get("end_time"),
+        request.form.get("recording_link"),
+        request.form.get("students_attended"),
+        request.form.get("topic_covered"),
+        request.form.get("manager_comments"),
+        session.get("manager_id"),   # IMPORTANT FIX
+        now_utc_iso()
     ))
 
     conn.commit()
@@ -12114,8 +12133,6 @@ def manager_dashboard():
 
     return page("Manager Dashboard", body)
     
-    
-    
 
 @app.get('/manager/tracker/edit')
 def manager_tracker_edit():
@@ -12266,21 +12283,31 @@ def manager_tracker_save():
         created_at
     )
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-    """,(
-
-    request.form.get("tutor_id"),
-    request.form.get("date"),
-    request.form.get("session_held"),
-    request.form.get("start_time"),
-    request.form.get("end_time"),
-    request.form.get("recording_link"),
-    request.form.get("students_attended"),
-    request.form.get("topic_covered"),
-    request.form.get("manager_comments"),
-    session.get("manager_id"),
-    request.form.get("manager_rating"),
-    now_utc_iso()
-
+    ON CONFLICT(tutor_id, session_date)
+    DO UPDATE SET
+        session_held=excluded.session_held,
+        start_time=excluded.start_time,
+        end_time=excluded.end_time,
+        recording_link=excluded.recording_link,
+        students_attended=excluded.students_attended,
+        topic_covered=excluded.topic_covered,
+        manager_comments=excluded.manager_comments,
+        manager_id=excluded.manager_id,
+        manager_rating=excluded.manager_rating,
+        created_at=excluded.created_at
+    """, (
+        request.form.get("tutor_id"),
+        request.form.get("date"),
+        request.form.get("session_held"),
+        request.form.get("start_time"),
+        request.form.get("end_time"),
+        request.form.get("recording_link"),
+        request.form.get("students_attended"),
+        request.form.get("topic_covered"),
+        request.form.get("manager_comments"),
+        session.get("manager_id"),
+        request.form.get("manager_rating"),
+        now_utc_iso()
     ))
 
     conn.commit()
