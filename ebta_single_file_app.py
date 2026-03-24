@@ -12266,10 +12266,27 @@ def manager_tracker_save():
 
     conn = get_db()
     cur = conn.cursor()
+    
+    tutor_id = request.form.get("tutor_id")
 
     cur.execute("""
-    INSERT INTO tutor_weekly_tracker(
+    SELECT s.name, s.grade
+    FROM tutor_subjects ts
+    JOIN subjects s ON ts.subject_id = s.id
+    WHERE ts.tutor_id = ?
+    LIMIT 1
+    """, (tutor_id,))
+
+    row = cur.fetchone()
+
+    subject = row["name"] if row else ""
+    grade = row["grade"] if row else ""
+
+    cur.execute("""
+        INSERT INTO tutor_weekly_tracker(
         tutor_id,
+        subject,
+        grade,
         session_date,
         session_held,
         start_time,
@@ -12285,6 +12302,8 @@ def manager_tracker_save():
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(tutor_id, session_date)
     DO UPDATE SET
+        subject=excluded.subject,
+        grade=excluded.grade,
         session_held=excluded.session_held,
         start_time=excluded.start_time,
         end_time=excluded.end_time,
@@ -12296,7 +12315,9 @@ def manager_tracker_save():
         manager_rating=excluded.manager_rating,
         created_at=excluded.created_at
     """, (
-        request.form.get("tutor_id"),
+        tutor_id,
+        subject,
+        grade,
         request.form.get("date"),
         request.form.get("session_held"),
         request.form.get("start_time"),
