@@ -12846,8 +12846,6 @@ def manager_tracker_history():
 
     page_num = int(request.args.get("page", 1))
     f_tutor = request.args.get("tutor", "")
-    f_grade = request.args.get("grade", "")
-    f_subject = request.args.get("subject", "")
     f_date = request.args.get("date", "")
 
     limit = 25
@@ -12886,14 +12884,6 @@ def manager_tracker_history():
     if f_tutor:
         where.append("t.full_name=?")
         params.append(f_tutor)
-
-    if f_grade:
-        where.append("tw.grade=?")
-        params.append(f_grade)
-
-    if f_subject:
-        where.append("tw.subject=?")
-        params.append(f_subject)
 
     if f_date:
         where.append("tw.session_date=?")
@@ -12959,8 +12949,6 @@ def manager_tracker_history():
         <tr>
         <td>{r['session_date']}</td>
         <td>{r['tutor']}</td>
-        <td>{r['grade'] or '-'}</td>
-        <td>{r['subject'] or '-'}</td>
         <td>{r['start_time'] or '-'}</td>
         <td>{r['end_time'] or '-'}</td>
         <td>{r['students_attended'] or '-'}</td>
@@ -12992,12 +12980,6 @@ def manager_tracker_history():
 
     if f_tutor:
         query_string+=f"&tutor={f_tutor}"
-
-    if f_grade:
-        query_string+=f"&grade={f_grade}"
-
-    if f_subject:
-        query_string+=f"&subject={f_subject}"
 
     if f_date:
         query_string+=f"&date={f_date}"
@@ -13053,16 +13035,6 @@ def manager_tracker_history():
             <select name="tutor">
                 <option value="">All Tutors</option>
                 {''.join(f"<option value='{t}' {'selected' if t==f_tutor else ''}>{t}</option>" for t in tutors)}
-            </select>
-
-            <select name="grade">
-                <option value="">All Grades</option>
-                {''.join(f"<option value='{g}' {'selected' if g==f_grade else ''}>{g}</option>" for g in grades)}
-            </select>
-
-            <select name="subject">
-                <option value="">All Subjects</option>
-                {''.join(f"<option value='{s}' {'selected' if s==f_subject else ''}>{s}</option>" for s in subjects)}
             </select>
 
             <input type="date" name="date" value="{f_date}">
