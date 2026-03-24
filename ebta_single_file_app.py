@@ -13087,7 +13087,7 @@ def manager_tracker_history():
     <th>End</th>
     <th>Students</th>
     <th>Recording</th>
-    <th>Edit</th>
+    <th>Edit/Delete</th>
     </tr>
     </thead>
 
