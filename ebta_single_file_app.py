@@ -12925,6 +12925,7 @@ def manager_tracker_history():
     cur.execute(f"""
     SELECT
         tw.id,
+        tw.tutor_id,   -- ADD THIS
         tw.session_date,
         tw.start_time,
         tw.end_time,
@@ -12951,7 +12952,10 @@ def manager_tracker_history():
 
     for r in rows:
 
-        table_rows+=f"""
+        edit_url = url_for('manager_tracker_edit', tutor_id=r['tutor_id'], date=r['session_date'])
+        delete_url = url_for('manager_tracker_delete', tracker_id=r['id'])
+
+        table_rows += f"""
         <tr>
         <td>{r['session_date']}</td>
         <td>{r['tutor']}</td>
@@ -12964,13 +12968,10 @@ def manager_tracker_history():
 
         <td>
 
-            <!-- EDIT BUTTON -->
-            <a href="{{ url_for('manager_tracker_edit', tutor_id=row['tutor_id'], date=row['session_date']) }}" 
-               class="btn mini">Edit</a>
+            <a href="{edit_url}" class="btn mini">Edit</a>
 
-            <!-- DELETE BUTTON -->
-            <form method="POST" 
-                  action="{{ url_for('manager_tracker_delete', tracker_id=row['id']) }}" 
+            <form method="POST"
+                  action="{delete_url}"
                   onsubmit="return confirm('Are you sure you want to delete this session?');"
                   style="display:inline;">
 
