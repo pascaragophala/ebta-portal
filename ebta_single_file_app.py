@@ -12963,10 +12963,21 @@ def manager_tracker_history():
         <td>{'✓' if r['recording_link'] else '-'}</td>
 
         <td>
-        <a class="btn mini"
-        href="/manager/tracker/edit-session?id={r['id']}">
-        Edit
-        </a>
+
+            <!-- EDIT BUTTON -->
+            <a href="{{ url_for('manager_tracker_edit', tutor_id=row['tutor_id'], date=row['session_date']) }}" 
+               class="btn mini">Edit</a>
+
+            <!-- DELETE BUTTON -->
+            <form method="POST" 
+                  action="{{ url_for('manager_tracker_delete', tracker_id=row['id']) }}" 
+                  onsubmit="return confirm('Are you sure you want to delete this session?');"
+                  style="display:inline;">
+
+                <button type="submit" class="btn danger mini">Delete</button>
+
+            </form>
+
         </td>
 
         </tr>
@@ -13210,6 +13221,41 @@ def manager_update_session():
     conn.close()
 
     return redirect("/manager/tracker/history")
+
+@app.post("/manager/tracker/delete/<int:tracker_id>")
+def manager_tracker_delete(tracker_id):
+
+    r = require_manager()
+    if r:
+        return r
+
+    manager_id = session.get("manager_id")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # SECURITY: ensure this tracker belongs to this manager
+    cur.execute("""
+        SELECT t.id
+        FROM tutor_weekly_tracker t
+        JOIN manager_tutors mt ON mt.tutor_id = t.tutor_id
+        WHERE t.id = ? AND mt.manager_id = ?
+    """, (tracker_id, manager_id))
+
+    row = cur.fetchone()
+
+    if not row:
+        conn.close()
+        flash("You are not allowed to delete this session.", "danger")
+        return redirect(url_for("manager_dashboard"))
+
+    # DELETE
+    cur.execute("DELETE FROM tutor_weekly_tracker WHERE id = ?", (tracker_id,))
+    conn.commit()
+    conn.close()
+
+    flash("Session deleted successfully.", "success")
+    return redirect(url_for("manager_dashboard"))
 
 
 # --- Admin: Analytics dashboard ---
