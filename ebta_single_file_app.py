@@ -86,15 +86,6 @@ def ensure_column(conn, table, column, ddl_tail):
 def init_db():
     conn = get_db()
     cur = conn.cursor()
-  
-    cur.execute("""
-    DELETE FROM tutor_weekly_tracker
-    WHERE id NOT IN (
-        SELECT MAX(id)
-        FROM tutor_weekly_tracker
-        GROUP BY tutor_id, session_date
-    );
-    """)
     
     cur.execute("""
     CREATE TABLE IF NOT EXISTS settings(
