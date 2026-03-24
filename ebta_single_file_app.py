@@ -12887,6 +12887,14 @@ def manager_tracker_history():
         where.append("t.full_name=?")
         params.append(f_tutor)
 
+    if f_grade:
+        where.append("tw.grade=?")
+        params.append(f_grade)
+
+    if f_subject:
+        where.append("tw.subject=?")
+        params.append(f_subject)
+
     if f_date:
         where.append("tw.session_date=?")
         params.append(f_date)
@@ -12923,6 +12931,8 @@ def manager_tracker_history():
         tw.end_time,
         tw.students_attended,
         tw.recording_link,
+        tw.grade,
+        tw.subject,
         t.full_name AS tutor
 
     FROM tutor_weekly_tracker tw
@@ -12948,6 +12958,8 @@ def manager_tracker_history():
         table_rows += f"""
         <tr>
         <td>{r['session_date']}</td>
+        <td>{r['tutor']}</td>
+        <td>{r['grade'] or '-'}</td>
         <td>{r['subject'] or '-'}</td>
         <td>{r['start_time'] or '-'}</td>
         <td>{r['end_time'] or '-'}</td>
@@ -12980,6 +12992,12 @@ def manager_tracker_history():
 
     if f_tutor:
         query_string+=f"&tutor={f_tutor}"
+
+    if f_grade:
+        query_string+=f"&grade={f_grade}"
+
+    if f_subject:
+        query_string+=f"&subject={f_subject}"
 
     if f_date:
         query_string+=f"&date={f_date}"
@@ -13035,6 +13053,16 @@ def manager_tracker_history():
             <select name="tutor">
                 <option value="">All Tutors</option>
                 {''.join(f"<option value='{t}' {'selected' if t==f_tutor else ''}>{t}</option>" for t in tutors)}
+            </select>
+
+            <select name="grade">
+                <option value="">All Grades</option>
+                {''.join(f"<option value='{g}' {'selected' if g==f_grade else ''}>{g}</option>" for g in grades)}
+            </select>
+
+            <select name="subject">
+                <option value="">All Subjects</option>
+                {''.join(f"<option value='{s}' {'selected' if s==f_subject else ''}>{s}</option>" for s in subjects)}
             </select>
 
             <input type="date" name="date" value="{f_date}">
