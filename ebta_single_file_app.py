@@ -1811,14 +1811,36 @@ background:#fff;
 }
 
 .followups-table {
-    table-layout: fixed;
-    width: 100%;
+    table-layout: auto;
+    width: max-content;   /* KEY: allows table to grow */
+    min-width: 100%;
 }
 
 .followups-table th,
 .followups-table td {
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: nowrap;     /* prevents breaking */
+    overflow: visible;       /* no cutting */
+    text-overflow: unset;    /* no ellipsis */
+}
+
+/* Inputs expand properly */
+.followups-table input,
+.followups-table select,
+.followups-table textarea {
+    width: 100%;
+    min-width: 140px;
+}
+
+/* Give name extra space */
+.followups-table th:nth-child(1),
+.followups-table td:nth-child(1) {
+    min-width: 260px;
+}
+
+/* Notes column wider */
+.followups-table th:nth-child(11),
+.followups-table td:nth-child(11) {
+    min-width: 300px;
 }
 
 /* Make NAME column wider */
