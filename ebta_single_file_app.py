@@ -1809,6 +1809,37 @@ background:#fff;
     padding: 2px 6px;
     border-radius: 6px;
 }
+
+.followups-table {
+    table-layout: fixed;
+    width: 100%;
+}
+
+.followups-table th,
+.followups-table td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Make NAME column wider */
+.followups-table th:nth-child(1),
+.followups-table td:nth-child(1) {
+    width: 220px;   /* increase this if needed */
+    min-width: 200px;
+}
+
+/* Optional: give notes more space too */
+.followups-table th:nth-child(1),
+.followups-table td:nth-child(1) {
+    width: 260px;
+    white-space: normal;
+}
+
+/* Prevent inputs from shrinking too much */
+.followups-table input {
+    width: 100%;
+}
+
 </style>
 """
 
