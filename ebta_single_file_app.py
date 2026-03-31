@@ -11278,8 +11278,18 @@ def admin_followups():
         <textarea name="notes" rows="2">{escape(row['notes'] or '')}</textarea>
         </td>
 
-        <td>
-        <button class="btn mini success">Save</button>
+        <td style="display:flex;gap:6px">
+            <button class="btn mini success">Save</button>
+
+            {""
+            if not is_high_admin()
+            else f'''
+            <form method="post" action="{url_for('admin_followup_delete', fid=row['id'])}"
+                  onsubmit="return confirm('Delete this follow-up?');">
+                <button class="btn mini danger">Delete</button>
+            </form>
+            '''
+            }
         </td>
 
         </form>
@@ -11606,6 +11616,26 @@ def export_followups():
     output.headers["Content-type"] = "text/csv"
     return output
 
+@app.post('/admin/followups/delete/<int:fid>')
+def admin_followup_delete(fid):
+
+    r = require_admin()
+    if r:
+        return r
+
+    # 🔒 Only HIGH ADMIN allowed
+    if not is_high_admin():
+        return redirect(url_for('admin_followups'))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("DELETE FROM followups WHERE id=?", (fid,))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('admin_followups'))
 
 @app.get('/admin/tutor-tracker')
 @require_high_admin
