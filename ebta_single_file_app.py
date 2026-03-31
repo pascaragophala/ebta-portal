@@ -11279,17 +11279,22 @@ def admin_followups():
         </td>
 
         <td style="display:flex;gap:6px">
+
+            <!-- SAVE FORM BUTTON -->
             <button class="btn mini success">Save</button>
 
-            {""
-            if not is_high_admin()
-            else f'''
-            <form method="post" action="{url_for('admin_followup_delete', fid=row['id'])}"
-                  onsubmit="return confirm('Delete this follow-up?');">
-                <button class="btn mini danger">Delete</button>
-            </form>
-            '''
-            }
+        </form>
+
+        <!-- DELETE FORM (separate form) -->
+        {"" if not is_high_admin() else f'''
+        <form method="post"
+              action="{url_for('admin_followup_delete', fid=row['id'])}"
+              onsubmit="return confirm('Delete this follow-up?');"
+              style="display:inline;">
+            <button type="submit" class="btn mini danger">Delete</button>
+        </form>
+        '''}
+
         </td>
 
         </form>
@@ -11636,6 +11641,7 @@ def admin_followup_delete(fid):
     conn.close()
 
     return redirect(url_for('admin_followups'))
+
 
 @app.get('/admin/tutor-tracker')
 @require_high_admin
