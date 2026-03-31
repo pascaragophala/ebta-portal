@@ -1829,10 +1829,9 @@ background:#fff;
 }
 
 /* Optional: give notes more space too */
-.followups-table th:nth-child(1),
-.followups-table td:nth-child(1) {
+.followups-table th:nth-child(11),
+.followups-table td:nth-child(11) {
     width: 260px;
-    white-space: normal;
 }
 
 /* Prevent inputs from shrinking too much */
