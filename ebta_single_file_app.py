@@ -337,6 +337,7 @@ def init_db():
     ensure_column(conn, "followups", "updated_at", "TEXT")
     ensure_column(conn, "tutor_weekly_tracker", "manager_id", "INTEGER")
     ensure_column(conn, "tutor_weekly_tracker", "manager_rating", "INTEGER")
+    ensure_column(conn, "submissions", "is_published", "INTEGER NOT NULL DEFAULT 0")
     
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_tracker
@@ -4728,7 +4729,7 @@ def student_home():
                 FROM submissions sub
                 JOIN materials m ON m.id=sub.material_id
                 JOIN subjects s2 ON s2.id=m.subject_id
-                WHERE sub.student_id=? AND sub.mark IS NOT NULL
+                WHERE sub.student_id=? AND sub.mark IS NOT NULL AND sub.is_published = 1
                 ORDER BY sub.evaluated_at DESC LIMIT 50""", (sid,))
     graded = cur.fetchall()
     if graded:
@@ -5994,7 +5995,7 @@ def tutor_home():
             rate = f"{int(round((c/total_days)*100))}%" if total_days>0 else "—"
             cur.execute("""SELECT AVG(mark) AS avgm FROM submissions sub
                         JOIN materials m ON m.id=sub.material_id
-                        WHERE sub.student_id=? AND m.subject_id=? AND m.month=? AND sub.mark IS NOT NULL""",(st['id'], s['subject_id'], month))
+                        WHERE sub.student_id=? AND m.subject_id=? AND m.month=? AND sub.mark IS NOT NULL AND sub.is_published = 1""",(st['id'], s['subject_id'], month))
             avgm = cur.fetchone()['avgm']
             rows.append(f"""
             <tr>
@@ -6453,6 +6454,27 @@ def tutor_home():
     </section>
     """
     return page("Tutor Portal", body)
+    
+@app.post('/tutor/publish_all_marks/<int:mid>')
+def publish_all_marks(mid):
+
+    r = require_tutor()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE submissions
+        SET is_published = 1
+        WHERE material_id = ?
+        AND mark IS NOT NULL
+    """, (mid,))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(request.referrer or url_for('tutor_home'))
 
 
 
@@ -6616,6 +6638,14 @@ def tutor_assignment_manage(mid:int):
 
             </form>
 
+        </div>
+
+        <div style="margin:10px 0;">
+            <form method="post" action="{url_for('publish_all_marks', mid=mid)}">
+                <button class="btn success">
+                    Publish All Marks
+                </button>
+            </form>
         </div>
 
         {table}
