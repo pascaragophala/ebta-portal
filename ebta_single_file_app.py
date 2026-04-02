@@ -5171,19 +5171,31 @@ def student_upload_report():
 
         <form method="POST" enctype="multipart/form-data">
 
-            <div class='card soft'>
-                <b>Terms & Conditions</b>
+            <div class='card soft' style="border-left:5px solid #1b5e20">
+
+                <h3>Terms & Conditions</h3>
+
+                <p class='mini'>
+                    By uploading your academic report, you agree that EBTA may use this information strictly for educational and performance-related purposes.
+                </p>
+
                 <ul class='mini'>
-                    <li>Academic performance tracking</li>
-                    <li>Marking and evaluation</li>
-                    <li>Improvement monitoring</li>
-                    <li>Awards & recognition</li>
+                    <li>To track your academic progress over time</li>
+                    <li>To identify areas where you may need additional support</li>
+                    <li>To monitor improvement and growth in your performance</li>
+                    <li>To recognise top-performing and most improved students</li>
+                    <li>To select students for academic awards and recognition events</li>
                 </ul>
 
-                <label>
-                    <input type="checkbox" name="accept_terms">
-                    I accept the terms
+                <p class='mini'>
+                    Your report will be handled with care and used only within EBTA for academic support and recognition purposes.
+                </p>
+
+                <label style="margin-top:10px; display:block;">
+                    <input type="checkbox" name="accept_terms" required>
+                    I have read and agree to the Terms and Conditions
                 </label>
+
             </div>
 
             <br>
