@@ -2315,6 +2315,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("Materials", "#materials"),
                 ("Messages", "#messages"),
                 ("Upload Report", url_for('student_upload_report')),
+                ("My Reports", url_for('student_my_reports')),
                 ("Logout", url_for('student_logout'))
             ]
             stats_grid = f"""
@@ -5210,6 +5211,91 @@ def student_upload_report():
     """
 
     return page("Upload Report", body)
+    
+@app.get('/student/my_reports')
+def student_my_reports():
+
+    r = require_student()
+    if r: return r
+
+    sid = is_student()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT * FROM student_reports
+        WHERE student_id=?
+        ORDER BY upload_date DESC
+    """, (sid,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    html = ""
+
+    for r in rows:
+        html += f"""
+        <tr>
+            <td>{r['file_name']}</td>
+            <td>{r['upload_date']}</td>
+            <td>
+                <a class='btn mini'
+                   target='_blank'
+                   href='/student/view_report/{r["id"]}'>
+                   View
+                </a>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    <div class='card'>
+        <h2>My Uploaded Reports</h2>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th>Date</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {html or "<tr><td colspan='3'>No reports uploaded</td></tr>"}
+            </tbody>
+        </table>
+    </div>
+    """
+
+    return page("My Reports", body)
+    
+@app.get('/student/view_report/<int:rid>')
+def student_view_report(rid):
+
+    r = require_student()
+    if r: return r
+
+    sid = is_student()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT file_path FROM student_reports
+        WHERE id=? AND student_id=?
+    """, (rid, sid))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return page("Error", "<div class='card'>Not allowed.</div>")
+
+    return send_from_directory(
+        os.path.dirname(row["file_path"]),
+        os.path.basename(row["file_path"])
+    )
 
 @app.post('/student/set-month')
 def student_set_month():
@@ -7634,6 +7720,9 @@ def admin_reports():
 
     r = require_admin()
     if r: return r
+    
+    if not is_high_admin():
+        return page("Access Denied", "<div class='card'>Only high admin can access reports.</div>")
 
     conn = get_db()
     cur = conn.cursor()
@@ -7657,8 +7746,19 @@ def admin_reports():
             <td>{r['grade']}</td>
             <td>{r['file_name']}</td>
             <td>{r['upload_date']}</td>
-            <td>
-                <a class='btn mini' target='_blank' href='/admin/view_report/{r["id"]}'>View</a>
+            <td style="display:flex; gap:6px">
+
+                <a class='btn mini' target='_blank'
+                   href='/admin/view_report/{r["id"]}'>View</a>
+
+                {"" if not is_high_admin() else f"""
+                <form method='post'
+                      action='/admin/delete_report/{r["id"]}'
+                      onsubmit="return confirm('Delete this report?');">
+                    <button class='btn mini danger'>Delete</button>
+                </form>
+                """}
+
             </td>
         </tr>
         """
@@ -7691,6 +7791,9 @@ def view_report(rid):
 
     r = require_admin()
     if r: return r
+    
+    if not is_high_admin():
+        return page("Access Denied", "<div class='card'>Not allowed.</div>")
 
     conn = get_db()
     cur = conn.cursor()
@@ -7703,6 +7806,34 @@ def view_report(rid):
         os.path.dirname(row["file_path"]),
         os.path.basename(row["file_path"])
     )
+
+@app.post('/admin/delete_report/<int:rid>')
+def delete_report(rid):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return redirect(url_for('admin_reports'))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT file_path FROM student_reports WHERE id=?", (rid,))
+    row = cur.fetchone()
+
+    if row:
+        try:
+            os.remove(row["file_path"])
+        except:
+            pass
+
+        cur.execute("DELETE FROM student_reports WHERE id=?", (rid,))
+        conn.commit()
+
+    conn.close()
+
+    return redirect(url_for('admin_reports'))
 
 @app.post('/admin/enrollments/<int:id>/<action>')
 def enrollment_action(id: int, action: str):
