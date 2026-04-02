@@ -31,6 +31,8 @@ os.makedirs(BASE_DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
 
 UPLOADS_DIR = Path(BASE_DATA_DIR) / "uploads"
+REPORTS_DIR = UPLOADS_DIR / "reports"
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR = UPLOADS_DIR
 MATERIALS_DIR = Path(BASE_DATA_DIR) / "materials"
 SUBMISSIONS_DIR = Path(BASE_DATA_DIR) / "submissions"
@@ -381,6 +383,24 @@ def init_db():
         FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
     );
     """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS student_reports(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id INTEGER NOT NULL,
+        file_name TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        file_type TEXT NOT NULL,
+        grade TEXT,
+        terms_accepted INTEGER NOT NULL DEFAULT 0,
+        terms_accepted_at TEXT,
+        upload_date TEXT NOT NULL,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
+    
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_reports_student ON student_reports(student_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_reports_grade ON student_reports(grade)")
 
     # Simple direct messages between roles
     cur.execute("""
@@ -748,6 +768,12 @@ def secure_name(name):
     keep="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
     return ''.join(ch if ch in keep else '_' for ch in name)
 
+
+ALLOWED_REPORT_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx'}
+
+def is_valid_report(filename):
+    ext = os.path.splitext(filename.lower())[1]
+    return ext in ALLOWED_REPORT_EXTENSIONS
 
 def normalize_phone(phone: str, phone_type: str = "SA", strict: bool = False) -> str:
 
@@ -2288,6 +2314,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("Assignments", "#assignments"),
                 ("Materials", "#materials"),
                 ("Messages", "#messages"),
+                ("Upload Report", url_for('student_upload_report')),
                 ("Logout", url_for('student_logout'))
             ]
             stats_grid = f"""
@@ -2354,6 +2381,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("Sessions & QR", "#sessions"),
                 ("Inbox", "#inbox"),
                 ("Direct messages", "#messages"),
+                ("Student Reports", url_for('admin_reports')),
                 ("Analytics", "#analytics"),
                 ("Settings", "#settings"),
                 ("Logout", url_for('admin_logout'))
@@ -5081,6 +5109,96 @@ def student_home():
     return page("Student Portal", body)
 
 
+@app.route('/student/upload_report', methods=['GET', 'POST'])
+def student_upload_report():
+
+    r = require_student()
+    if r: return r
+
+    sid = is_student()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    if request.method == 'POST':
+
+        if not request.form.get("accept_terms"):
+            return page("Error", "<div class='card'>You must accept terms first.</div>")
+
+        file = request.files.get("report_file")
+
+        if not file or file.filename == "":
+            return page("Error", "<div class='card'>No file selected.</div>")
+
+        if not is_valid_report(file.filename):
+            return page("Error", "<div class='card'>Invalid file type.</div>")
+
+        filename = secure_name(file.filename)
+        ext = os.path.splitext(filename)[1]
+
+        new_name = f"{sid}_{int(time.time())}{ext}"
+        path = REPORTS_DIR / new_name
+
+        file.save(path)
+
+        cur.execute("SELECT grade FROM students WHERE id=?", (sid,))
+        student = cur.fetchone()
+
+        cur.execute("""
+            INSERT INTO student_reports
+            (student_id, file_name, file_path, file_type, grade, terms_accepted, terms_accepted_at, upload_date)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+        """, (
+            sid,
+            filename,
+            str(path),
+            ext,
+            student['grade'],
+            now_utc_iso(),
+            now_utc_iso()
+        ))
+
+        conn.commit()
+        conn.close()
+
+        return redirect(url_for('student_home'))
+
+    conn.close()
+
+    body = f"""
+    <div class='card small'>
+        <h2>Upload Academic Report</h2>
+
+        <form method="POST" enctype="multipart/form-data">
+
+            <div class='card soft'>
+                <b>Terms & Conditions</b>
+                <ul class='mini'>
+                    <li>Academic performance tracking</li>
+                    <li>Marking and evaluation</li>
+                    <li>Improvement monitoring</li>
+                    <li>Awards & recognition</li>
+                </ul>
+
+                <label>
+                    <input type="checkbox" name="accept_terms">
+                    I accept the terms
+                </label>
+            </div>
+
+            <br>
+
+            <input type="file" name="report_file" required>
+
+            <br><br>
+
+            <button class="btn">Upload Report</button>
+        </form>
+    </div>
+    """
+
+    return page("Upload Report", body)
+
 @app.post('/student/set-month')
 def student_set_month():
     r = require_student()
@@ -7161,6 +7279,7 @@ def admin_home():
     <a class="btn secondary" href="{url_for('admin_materials')}">Unlock Uploads</a>
     <a class="btn secondary" href="{url_for('admin_tutor_tracker')}">Tutor Tracker</a>
     <a class="btn secondary" href="{url_for('admin_tutor_operations')}">Tutor-operations</a>
+    <a class='btn secondary' href='{url_for('admin_reports')}'>Student Reports</a>
 
     </div></section>"""
     return page("Admin", body)
@@ -7497,8 +7616,81 @@ def admin_enrollments():
     """
 
     return page("Enrollments", body)
-
     
+@app.get('/admin/reports')
+def admin_reports():
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT sr.*, s.full_name
+        FROM student_reports sr
+        JOIN students s ON s.id = sr.student_id
+        ORDER BY sr.upload_date DESC
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    html = ""
+
+    for r in rows:
+        html += f"""
+        <tr>
+            <td>{r['full_name']}</td>
+            <td>{r['grade']}</td>
+            <td>{r['file_name']}</td>
+            <td>{r['upload_date']}</td>
+            <td>
+                <a class='btn mini' target='_blank' href='/admin/view_report/{r["id"]}'>View</a>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    <div class='card'>
+        <h2>Student Reports</h2>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Student</th>
+                    <th>Grade</th>
+                    <th>File</th>
+                    <th>Date</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {html or "<tr><td colspan='5'>No reports yet</td></tr>"}
+            </tbody>
+        </table>
+    </div>
+    """
+
+    return page("Student Reports", body)
+
+@app.get('/admin/view_report/<int:rid>')
+def view_report(rid):
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT file_path FROM student_reports WHERE id=?", (rid,))
+    row = cur.fetchone()
+    conn.close()
+
+    return send_from_directory(
+        os.path.dirname(row["file_path"]),
+        os.path.basename(row["file_path"])
+    )
 
 @app.post('/admin/enrollments/<int:id>/<action>')
 def enrollment_action(id: int, action: str):
