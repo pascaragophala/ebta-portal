@@ -11486,8 +11486,8 @@ def admin_followups():
         params.append(f_grade)
 
     if f_subject:
-        where.append("subjects=?")
-        params.append(f_subject)
+        where.append("subjects LIKE ?")
+        params.append(f"%{f_subject}%")
 
     if f_status:
         where.append("followup_status=?")
@@ -11589,13 +11589,17 @@ def admin_followups():
         </td>
 
         <td>
-        <select name="subjects">
-        <option value="">Select</option>
-        {''.join(
-        f"<option value='{escape(s)}' {'selected' if row['subjects']==s else ''}>{escape(s)}</option>"
-        for s in subjects
-        )}
-        </select>
+        <div class="subject-grid">
+        {
+        ''.join(f"""
+        <label class="subject-item">
+        <input type="checkbox" name="subjects" value="{escape(s)}"
+        {'checked' if s in (row['subjects'] or '') else ''}>
+        <span>{escape(s)}</span>
+        </label>
+        """ for s in subjects)
+        }
+        </div>
         </td>
 
         <td>
@@ -11821,10 +11825,16 @@ def admin_followup_add():
                 <option value="G13">Grade 13</option>
             </select>
 
-            <select name="subjects">
-                <option value="">Select</option>
-                {subject_options}
-            </select>
+            <div class="subject-grid">
+            {
+            ''.join(f"""
+            <label class="subject-item">
+                <input type="checkbox" name="subjects" value="{escape(s)}">
+                <span>{escape(s)}</span>
+            </label>
+            """ for s in subjects)
+            }
+            </div>
             
             <select name="issue_type" required>
                 <option value="">Select Issue Type</option>
@@ -11875,7 +11885,7 @@ def admin_followup_create():
         request.form.get("full_name"),
         request.form.get("phone"),
         request.form.get("grade"),
-        request.form.get("subjects"),
+        ", ".join(request.form.getlist("subjects")),
         request.form.get("issue_type"),
         "OPEN",
         request.form.get("payment_date"),
@@ -11923,7 +11933,7 @@ def admin_followup_update(fid):
         request.form.get("full_name"),
         request.form.get("phone"),
         request.form.get("grade"),
-        request.form.get("subjects"),
+        ", ".join(request.form.getlist("subjects")),
         request.form.get("issue_type"),
         request.form.get("followup_status"),
         request.form.get("payment_date"),
