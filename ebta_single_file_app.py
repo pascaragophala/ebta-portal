@@ -1888,6 +1888,23 @@ background:#fff;
     width: 100%;
 }
 
+.subject-chip {
+    display: inline-block;
+    background: #e8f5e9;
+    color: #1b5e20;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    margin: 2px;
+    border: 1px solid #c8e6c9;
+    font-weight: 500;
+}
+
+.subject-chip:hover {
+    background: #c8e6c9;
+    cursor: pointer;
+}
+
 </style>
 """
 
@@ -11566,7 +11583,16 @@ def admin_followups():
                    WA
                 </a>
                 """
+        
+        subjects_list = [s.strip() for s in (row["subjects"] or "").split(",") if s.strip()]
 
+        subjects_html = "".join(
+            f"<span class='chip subject-chip' onclick=\"window.location='?subject={escape(s)}'\">{escape(s)}</span>"
+            for s in subjects_list
+        )
+        
+        subjects_html = f"<div style='display:flex;flex-wrap:wrap;gap:4px'>{subjects_html}</div>"
+        
         trs.append(f"""
         <tr class="{row_class} {overdue_class}">
         <form method="post" action="{url_for('admin_followup_update', fid=row['id'])}">
@@ -11588,18 +11614,8 @@ def admin_followups():
         </select>
         </td>
 
-        <td>
-        <div class="subject-grid">
-        {
-        ''.join(f"""
-        <label class="subject-item">
-        <input type="checkbox" name="subjects" value="{escape(s)}"
-        {'checked' if s in (row['subjects'] or '') else ''}>
-        <span>{escape(s)}</span>
-        </label>
-        """ for s in subjects)
-        }
-        </div>
+        <td style="max-width:250px; flex-wrap:wrap;">
+            {subjects_html}
         </td>
 
         <td>
