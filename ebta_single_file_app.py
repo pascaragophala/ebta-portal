@@ -2280,34 +2280,6 @@ body:`manager_id=${manager}&tutor_id=${tutor}&state=${state?1:0}`
 
 }
 
-function toggleStudentType() {
-    const type = document.getElementById("student_type").value;
-
-    const newFields = document.getElementById("new_student_fields");
-    const returningFields = document.getElementById("returning_student_fields");
-
-    if (type === "returning") {
-        newFields.style.display = "none";
-        returningFields.style.display = "block";
-
-        // remove required from new fields
-        document.querySelectorAll("#new_student_fields input").forEach(el => {
-            el.removeAttribute("required");
-        });
-
-    } else {
-        newFields.style.display = "block";
-        returningFields.style.display = "none";
-
-        // restore required if needed
-        document.querySelectorAll("#new_student_fields input").forEach(el => {
-            if (el.name === "full_name" || el.name === "phone") {
-                el.setAttribute("required", "required");
-            }
-        });
-    }
-}
-
 </script>
 """
 
@@ -2805,100 +2777,71 @@ def home():
         <p class='muted'>All required fields are marked. Upload 1–2 Proof of Payment files.</p>
 
         <form id='reg_form' method='post' action='{url_for('register')}' enctype='multipart/form-data' class='grid'>
-        
-        <div class="card soft" style="margin-bottom:12px">
-            <label>Are you a new or returning student?</label>
-            <select id="student_type" name="student_type" onchange="toggleStudentType()">
-                <option value="new">New Student</option>
-                <option value="returning">Returning Student</option>
+
+        <!-- Student & guardian details -->
+        <div class="grid two-col">
+            <div>
+            <label>Student Name & Surname</label>
+            <input name='full_name' required/>
+            </div>
+            <div>
+            <label>Student WhatsApp Number</label>
+
+            <select name="phone_type" id="phone_type">
+                <option value="SA">South African</option>
+                <option value="INT">International</option>
             </select>
-        </div>
-        
-        <div id="returning_student_fields" style="display:none">
 
-            <div class="grid two-col">
+            <input name="phone"
+                   id="phone_input"
+                   required
+                   placeholder="Enter your number here">
+            </div>
+            
+            <div>
+            <label>Guardian Name & Surname</label>
+            <input name="guardian_name" required />
+            </div>
+            
+            <div>
+            <label>Guardian WhatsApp Number</label>
 
-                <div>
-                    <label>Phone Number</label>
-                    <input name="return_phone" id="return_phone" placeholder="Enter your phone">
-                </div>
+            <select name="guardian_phone_type" id="guardian_phone_type">
+                <option value="SA">South African</option>
+                <option value="INT">International</option>
+            </select>
 
-                <div>
-                    <label>PIN</label>
-                    <input name="return_pin" id="return_pin" placeholder="Enter your PIN">
-                </div>
-
+            <input name="guardian"
+                   id="guardian_input"
+                   required
+                   placeholder="Enter your guardian number here">
+            </div>
+ 
+            <div>
+            <label>Student Email (optional)</label>
+            <input name='email'/>
+            </div>
+            <div>
+              <label>Province</label>
+              <select name="province" required>
+                <option value="">Select province…</option>
+                <option>Eastern Cape</option>
+                <option>Free State</option>
+                <option>Gauteng</option>
+                <option>KwaZulu-Natal</option>
+                <option>Limpopo</option>
+                <option>Mpumalanga</option>
+                <option>North West</option>
+                <option>Northern Cape</option>
+                <option>Western Cape</option>
+              </select>
             </div>
 
-        </div>
-        
-        <div id="new_student_fields">
-            <!-- Student & guardian details -->
-            <div class="grid two-col">
-                <div>
-                <label>Student Name & Surname</label>
-                <input name='full_name' required/>
-                </div>
-                <div>
-                <label>Student WhatsApp Number</label>
-
-                <select name="phone_type" id="phone_type">
-                    <option value="SA">South African</option>
-                    <option value="INT">International</option>
-                </select>
-
-                <input name="phone"
-                       id="phone_input"
-                       required
-                       placeholder="Enter your number here">
-                </div>
-                
-                <div>
-                <label>Guardian Name & Surname</label>
-                <input name="guardian_name" required />
-                </div>
-                
-                <div>
-                <label>Guardian WhatsApp Number</label>
-
-                <select name="guardian_phone_type" id="guardian_phone_type">
-                    <option value="SA">South African</option>
-                    <option value="INT">International</option>
-                </select>
-
-                <input name="guardian"
-                       id="guardian_input"
-                       required
-                       placeholder="Enter your guardian number here">
-                </div>
-     
-                <div>
-                <label>Student Email (optional)</label>
-                <input name='email'/>
-                </div>
-                <div>
-                  <label>Province</label>
-                  <select name="province" required>
-                    <option value="">Select province…</option>
-                    <option>Eastern Cape</option>
-                    <option>Free State</option>
-                    <option>Gauteng</option>
-                    <option>KwaZulu-Natal</option>
-                    <option>Limpopo</option>
-                    <option>Mpumalanga</option>
-                    <option>North West</option>
-                    <option>Northern Cape</option>
-                    <option>Western Cape</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label>School</label>
-                  <input name="school" placeholder="School name" required />
-                </div>
-
+            <div>
+              <label>School</label>
+              <input name="school" placeholder="School name" required />
             </div>
-        
+
         </div>
 
         <!-- Grade & subjects -->
@@ -3553,31 +3496,6 @@ function showPopup(message, type='info', timeout=4000){
 
 @app.post('/register')
 def register():
-    student_type = request.form.get("student_type", "new")
-    conn = get_db()
-    cur = conn.cursor()
-    if student_type == "returning":
-
-        phone = normalize_phone(request.form.get("return_phone"))
-        pin = request.form.get("return_pin")
-
-        if not phone or not pin:
-            return page("Error", card_msg("Please enter phone and PIN"))
-
-        cur.execute("""
-            SELECT * FROM students
-            WHERE phone_whatsapp=? AND pin=?
-        """, (phone, pin))
-
-        student = cur.fetchone()
-
-        if not student:
-            return page("Error", card_msg("Invalid phone or PIN"))
-
-        # ✅ USE EXISTING STUDENT
-        sid = student["id"]
-        grade = student["grade"]
-    
     if get_setting('enrollment_open', '1') != '1':
         return page(
             "Enrollments Closed",
@@ -3593,8 +3511,7 @@ def register():
     guardian_phone_type = request.form.get("guardian_phone_type", "SA")
 
     try:
-        if student_type == "new":
-            phone = normalize_phone(request.form.get("phone",""), phone_type, strict=True)
+        phone = normalize_phone(request.form.get("phone",""), phone_type, strict=True)
 
         guardian = normalize_phone(request.form.get("guardian",""),guardian_phone_type, strict=True)
         
@@ -3616,42 +3533,37 @@ def register():
     except ValueError:
         return page("Error", card_msg("Invalid amount paid."))
 
+
+    amount_paid = int(amount_paid)
+
     
     # Validation
-    if student_type == "new":
-        if not (full_name and phone and guardian and guardian_name and subject_ids and pin):
-            return page("Error", card_msg("All fields are required."))
-    else:
-        if not (subject_ids and amount_paid):
-            return page("Error", card_msg("Please complete required fields."))
+    if not (full_name and phone and guardian and guardian_name and subject_ids and pin):
+        return page("Error", card_msg("All fields are required."))
 
-    if student_type == "new" and not is_valid_pin(pin):
+    if not is_valid_pin(pin):
         return page("Error", card_msg("PIN must be exactly 5 digits."))
 
     pops = [f for f in pops if f and f.filename]
     if len(pops) < 1 or len(pops) > 2:
         return page("Error", card_msg("Upload 1 or 2 Proof of Payment files."))
 
+    conn = get_db()
     ensure_registration_table(conn)
+    cur = conn.cursor()
 
     # Check existing student
     variants = phone_variants(phone)
 
     placeholders = ",".join("?" * len(variants))
-    
-    srow = None
-    if student_type == "new":
 
-        variants = phone_variants(phone)
-
-        cur.execute(f"""
-            SELECT id, pin
-            FROM students
-            WHERE phone_whatsapp IN ({placeholders})
-            LIMIT 1
-        """, variants)
-
-        srow = cur.fetchone()
+    cur.execute(f"""
+        SELECT id, pin
+        FROM students
+        WHERE phone_whatsapp IN ({placeholders})
+        LIMIT 1
+    """, variants)
+    srow = cur.fetchone()
 
     if srow:
         if srow['pin'] != pin:
@@ -3667,39 +3579,38 @@ def register():
             return page("Error", card_msg("Invalid subject selection."))
 
         derived_grade = r0['grade']
-        
-        if student_type == "new":
-            cur.execute("""
-            INSERT INTO students (
-                full_name,
-                phone_whatsapp,
-                guardian_phone,
-                guardian_name,
-                email,
-                grade,
-                pin,
-                province,
-                school,
-                phone_type,
-                guardian_phone_type,
-                created_at
-            )VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (
-                full_name,
-                phone,
-                guardian,
-                guardian_name,
-                email,
-                derived_grade,
-                pin,
-                province,
-                school,
-                phone_type,
-                guardian_phone_type,
-                now_utc_iso()
-            ))
 
-            sid = cur.lastrowid
+        cur.execute("""
+        INSERT INTO students (
+            full_name,
+            phone_whatsapp,
+            guardian_phone,
+            guardian_name,
+            email,
+            grade,
+            pin,
+            province,
+            school,
+            phone_type,
+            guardian_phone_type,
+            created_at
+        )VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            full_name,
+            phone,
+            guardian,
+            guardian_name,
+            email,
+            derived_grade,
+            pin,
+            province,
+            school,
+            phone_type,
+            guardian_phone_type,
+            now_utc_iso()
+        ))
+
+        sid = cur.lastrowid
 
     # Save PoP files
     saved_paths = []
