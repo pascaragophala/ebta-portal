@@ -5262,6 +5262,14 @@ def student_my_reports():
                    href='/student/view_report/{r["id"]}'>
                    View
                 </a>
+
+                <form method="POST"
+                      action="/student/delete_report/{r['id']}"
+                      style="display:inline;"
+                      onsubmit="return confirm('Delete this report?');">
+
+                    <button class="btn mini danger">Delete</button>
+                </form>
             </td>
         </tr>
         """
@@ -5313,6 +5321,47 @@ def student_view_report(rid):
         os.path.dirname(row["file_path"]),
         os.path.basename(row["file_path"])
     )
+    
+    
+@app.post('/student/delete_report/<int:rid>')
+def student_delete_report(rid):
+
+    r = require_student()
+    if r: return r
+
+    sid = is_student()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Get file info
+    cur.execute("""
+        SELECT file_path FROM student_reports
+        WHERE id=? AND student_id=?
+    """, (rid, sid))
+
+    row = cur.fetchone()
+
+    if not row:
+        conn.close()
+        return page("Error", "<div class='card'>Not allowed.</div>")
+
+    file_path = row["file_path"]
+
+    # Delete file from disk
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception as e:
+        print("File delete error:", e)
+
+    # Delete from DB
+    cur.execute("DELETE FROM student_reports WHERE id=?", (rid,))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('student_my_reports'))
 
 @app.post('/student/set-month')
 def student_set_month():
