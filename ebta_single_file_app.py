@@ -4957,6 +4957,7 @@ def student_materials():
 
     body = f"""
     <div class='card'>
+        <a class='btn mini secondary' href='/student'>← Back</a>
         <h2>Learning Materials</h2>
         {materials_html}
     </div>
@@ -4977,7 +4978,7 @@ def student_assignments():
     conn = get_db()
     cur = conn.cursor()
 
-    # ✅ Get student's ACTIVE subjects
+    # Get student's ACTIVE subjects
     cur.execute("""
         SELECT subject_id
         FROM enrollments
@@ -4986,17 +4987,16 @@ def student_assignments():
 
     active_sub_ids = [str(r['subject_id']) for r in cur.fetchall()]
 
-    # ✅ If no subjects, stop early (prevents SQL error)
     if not active_sub_ids:
         conn.close()
         return page("Assignments", """
         <div class='card'>
+            <a class='btn mini secondary' href='/student'>← Back</a>
             <h2>Assignments</h2>
             <div class='empty'>No active subjects</div>
         </div>
         """)
 
-    # ✅ Updated query with subject filter (SAFE)
     cur.execute(f"""
     SELECT m.*, sub.name AS subject_name, sub.grade
     FROM materials m
@@ -5033,6 +5033,7 @@ def student_assignments():
 
     return page("Assignments", f"""
     <div class='card'>
+        <a class='btn mini secondary' href='/student'>← Back</a>
         <h2>Assignments</h2>
         {html or "<div class='empty'>No assignments</div>"}
     </div>
