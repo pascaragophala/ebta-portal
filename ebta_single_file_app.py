@@ -4512,260 +4512,7 @@ def student_home():
 
 
 
-    # Materials & Assignments grouped by subject
-    materials_html = "<div class='empty'>No materials yet.</div>"
-
-    assignments = []
-    
-    if active_sub_ids:
-
-        cur.execute(f"""
-        SELECT m.*, sub.name AS subject_name, sub.grade, t.full_name AS tutor_name
-        FROM materials m
-        JOIN subjects sub ON sub.id=m.subject_id
-        JOIN tutors t ON t.id=m.tutor_id
-        WHERE m.subject_id IN ({','.join('?'*len(active_sub_ids))})
-          AND substr(m.month,1,7) = ?
-        ORDER BY sub.grade, sub.name, m.created_at DESC
-        """, (*active_sub_ids, month))
-
-        mats = cur.fetchall()
-        
-        if mats:
-            grouped = {}
-
-            for m in mats:
-
-                subject_key = f"{grade_label(m['grade'])} — {m['subject_name']}"
-
-                if subject_key not in grouped:
-                    grouped[subject_key] = {
-                        "assignments": [],
-                        "recordings": [],
-                        "documents": []
-                    }
-
-                is_assignment = (m['is_assignment']==1 or m['kind']=='assignment')
-
-                # DEFINE FIRST
-                is_recording = bool(m['youtube_url'])
-
-                when = m['created_at'][:16].replace('T',' ')
-
-                link = (
-                    f"<a class='links' target='_blank' href='{m['file_path']}'>Download</a>"
-                    if m['kind'] in ('file','assignment') and m['file_path']
-                    else
-                    f"<a class='links' target='_blank' href='{m['youtube_url']}'>Open</a>"
-                )
-
-                # USE AFTER DEFINITION
-                icon = "🎥 " if is_recording else "📄 "
-
-                row_html = f"""
-                <tr>
-                    <td>{icon}{m['title']} {"<span class='badge'>assignment</span>" if is_assignment else ""}</td>
-                    <td>{m['tutor_name']}</td>
-                    <td>{when}</td>
-                    <td>{link}</td>
-                </tr>
-                """
-
-                # classification
-                if is_assignment:
-
-                    grouped[subject_key]["assignments"].append(row_html)
-                    assignments.append(m)
-
-                elif is_recording:
-
-                    grouped[subject_key]["recordings"].append(row_html)
-
-                else:
-
-                    grouped[subject_key]["documents"].append(row_html)
-
-
-            blocks = []
-
-            for subject, content in grouped.items():
-
-                subject_block = f"""
-                <div class='card soft' style="margin-bottom:16px">
-
-                    <h3 style="margin-bottom:10px">{subject}</h3>
-                """
-
-                if content["assignments"]:
-
-                    subject_block += f"""
-                    <h4 class="mini muted">Assignments</h4>
-
-                    <div class="scroll-x">
-                    <table>
-                    <thead>
-                        <tr>
-                            <th>Title</th>
-                            <th>Tutor</th>
-                            <th>Uploaded</th>
-                            <th>Link</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {''.join(content["assignments"])}
-                    </tbody>
-                    </table>
-                    </div>
-                    """
-
-                if content["recordings"]:
-
-                    subject_block += f"""
-                    <h4 class="mini muted" style="margin-top:12px;color:#2563eb">
-                        Session Recordings
-                    </h4>
-
-                    <div class="scroll-x">
-                    <table>
-                    <thead>
-                        <tr>
-                            <th>Recording</th>
-                            <th>Tutor</th>
-                            <th>Uploaded</th>
-                            <th>Watch</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {''.join(content["recordings"])}
-                    </tbody>
-                    </table>
-                    </div>
-                    """
-
-                if content["documents"]:
-
-                    subject_block += f"""
-                    <h4 class="mini muted" style="margin-top:12px;color:#16a34a">
-                        Documents & Notes
-                    </h4>
-
-                    <div class="scroll-x">
-                    <table>
-                    <thead>
-                        <tr>
-                            <th>Document</th>
-                            <th>Tutor</th>
-                            <th>Uploaded</th>
-                            <th>Open</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {''.join(content["documents"])}
-                    </tbody>
-                    </table>
-                    </div>
-                    """
-
-                subject_block += "</div>"
-
-                blocks.append(subject_block)
-
-            materials_html = "".join(blocks)
-
-    # Assignment submission blocks (top priority)
-    submit_blocks = []
-
-    if assignments:
-
-        for m in assignments:
-
-            due = m['due_date'] or ''
-
-            cur.execute(
-                "SELECT id,file_path,mark,feedback,submitted_at "
-                "FROM submissions WHERE material_id=? AND student_id=?",
-                (m['id'], sid)
-            )
-
-            sub = cur.fetchone()
-
-            maxp = m['max_points'] if m['max_points'] else 100
-
-            if sub:
-
-                mark = f" • Mark: {sub['mark']} / {maxp}" if sub['mark'] is not None else ""
-
-                fb = (
-                    f"<div class='muted mini'>Feedback: {sub['feedback']}</div>"
-                    if sub['feedback'] else ""
-                )
-
-                submit_blocks.append(f"""
-                    <div class='card'>
-                        <b>{m['title']}</b> —
-                        {grade_label(m['grade'])} {m['subject_name']}
-                        • Due: {due or '—'}
-                        <br>
-                        Submitted:
-                        {sub['submitted_at'][:16].replace('T',' ')}
-                        {mark}
-                        {fb}
-                        <a class='links' href='{sub['file_path']}' target='_blank'>
-                            Download your file
-                        </a>
-                    </div>
-                """)
-
-            else:
-
-                allow = True
-
-                if due:
-                    try:
-                        end = datetime.datetime.fromisoformat(
-                            due+"T23:59:59+00:00"
-                        )
-                        allow = datetime.datetime.now(
-                            datetime.timezone.utc
-                        ) <= end
-                    except Exception:
-                        pass
-
-                if allow:
-
-                    submit_blocks.append(f"""
-                        <div class='card'>
-                            <b>{m['title']}</b> —
-                            {grade_label(m['grade'])} {m['subject_name']}
-                            • Due: {due or '—'}
-                            • Total: {maxp}
-
-                            <form method='post'
-                                  action='{url_for('student_submit_assignment', mid=m['id'])}'
-                                  enctype='multipart/form-data'
-                                  class='grid'
-                                  style='grid-template-columns:1fr auto;gap:10px;margin-top:8px'>
-
-                                <input type='file'
-                                       name='file'
-                                       required
-                                       accept='.pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.txt'/>
-
-                                <button class='btn'>Submit</button>
-
-                            </form>
-                        </div>
-                    """)
-
-                else:
-
-                    submit_blocks.append(f"""
-                        <div class='card'>
-                            <b>{m['title']}</b>
-                            — Due: {due}
-                            <span class='chip'>Closed</span>
-                        </div>
-                    """)
+    # deleted section
 
 
     # Feedback & Results (graded items)
@@ -5117,14 +4864,179 @@ def student_home():
     {groups_section}
     {sessions_section}
 
-    <div class='card'><h2>Materials & Assignments</h2><div class='scroll-x'>{materials_html}</div></div>
-{(''.join(submit_blocks)) if submit_blocks else ''}
+    <div class="toolbar" style="margin:16px 0;">
+        <a class="btn" href="/student/materials">View Materials</a>
+        <a class="btn success" href="/student/assignments">View Assignments</a>
+    </div>
 
     {feedback_card}
     {rate_card}
     {compose_block}
     </section>"""
     return page("Student Portal", body)
+
+
+@app.get('/student/materials')
+def student_materials():
+
+    r = require_student()
+    if r: return r
+
+    sid = is_student()
+    month = get_active_month('student')
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Get active subjects
+    cur.execute("""
+        SELECT e.subject_id, e.status
+        FROM enrollments e
+        WHERE e.student_id=? AND e.month LIKE ?
+    """, (sid, month + "%"))
+
+    enrolls = cur.fetchall()
+    active_sub_ids = [str(x['subject_id']) for x in enrolls if x['status'].upper()=='ACTIVE']
+
+    materials_html = "<div class='empty'>No materials yet.</div>"
+
+    if active_sub_ids:
+
+        cur.execute(f"""
+        SELECT m.*, sub.name AS subject_name, sub.grade, t.full_name AS tutor_name
+        FROM materials m
+        JOIN subjects sub ON sub.id=m.subject_id
+        JOIN tutors t ON t.id=m.tutor_id
+        WHERE m.subject_id IN ({','.join('?'*len(active_sub_ids))})
+          AND substr(m.month,1,7) = ?
+        ORDER BY sub.grade, sub.name, m.created_at DESC
+        """, (*active_sub_ids, month))
+
+        mats = cur.fetchall()
+
+        if mats:
+
+            grouped = {}
+
+            for m in mats:
+
+                subject_key = f"{grade_label(m['grade'])} — {m['subject_name']}"
+
+                if subject_key not in grouped:
+                    grouped[subject_key] = []
+
+                link = (
+                    f"<a class='btn mini' target='_blank' href='{m['file_path']}'>Open</a>"
+                    if m['file_path']
+                    else f"<a class='btn mini' target='_blank' href='{m['youtube_url']}'>Watch</a>"
+                )
+
+                grouped[subject_key].append(f"""
+                <div class='card soft'>
+                    <b>{m['title']}</b><br>
+                    <span class='mini muted'>By {m['tutor_name']}</span><br><br>
+                    {link}
+                </div>
+                """)
+
+            blocks = []
+
+            for subject, items in grouped.items():
+                blocks.append(f"""
+                <div class='card'>
+                    <h3>{subject}</h3>
+                    <div class='grid'>
+                        {''.join(items)}
+                    </div>
+                </div>
+                """)
+
+            materials_html = "".join(blocks)
+
+    conn.close()
+
+    body = f"""
+    <div class='card'>
+        <h2>Learning Materials</h2>
+        {materials_html}
+    </div>
+    """
+
+    return page("Materials", body)
+    
+    
+@app.get('/student/assignments')
+def student_assignments():
+
+    r = require_student()
+    if r: return r
+
+    sid = is_student()
+    month = get_active_month('student')
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # ✅ Get student's ACTIVE subjects
+    cur.execute("""
+        SELECT subject_id
+        FROM enrollments
+        WHERE student_id=? AND status='ACTIVE'
+    """, (sid,))
+
+    active_sub_ids = [str(r['subject_id']) for r in cur.fetchall()]
+
+    # ✅ If no subjects, stop early (prevents SQL error)
+    if not active_sub_ids:
+        conn.close()
+        return page("Assignments", """
+        <div class='card'>
+            <h2>Assignments</h2>
+            <div class='empty'>No active subjects</div>
+        </div>
+        """)
+
+    # ✅ Updated query with subject filter (SAFE)
+    cur.execute(f"""
+    SELECT m.*, sub.name AS subject_name, sub.grade
+    FROM materials m
+    JOIN subjects sub ON sub.id=m.subject_id
+    WHERE (m.is_assignment=1 OR m.kind='assignment')
+      AND substr(m.month,1,7)=?
+      AND m.subject_id IN ({','.join('?'*len(active_sub_ids))})
+    ORDER BY m.created_at DESC
+    """, (month, *active_sub_ids))
+
+    rows = cur.fetchall()
+
+    html = ""
+
+    for m in rows:
+
+        html += f"""
+        <div class='card'>
+            <b>{m['title']}</b><br>
+            {grade_label(m['grade'])} — {m['subject_name']}<br><br>
+
+            <form method='post'
+                  action='{url_for('student_submit_assignment', mid=m['id'])}'
+                  enctype='multipart/form-data'>
+
+                <input type='file' name='file' required>
+                <br><br>
+                <button class='btn'>Submit</button>
+            </form>
+        </div>
+        """
+
+    conn.close()
+
+    return page("Assignments", f"""
+    <div class='card'>
+        <h2>Assignments</h2>
+        {html or "<div class='empty'>No assignments</div>"}
+    </div>
+    """)
 
 
 @app.route('/student/upload_report', methods=['GET', 'POST'])
