@@ -11482,7 +11482,7 @@ def admin_followups():
 
     # ================= PAGINATION =================
     current_page = int(request.args.get("page", 1))
-    per_page = 20
+    per_page = 15
     offset = (current_page - 1) * per_page
 
     where = []
