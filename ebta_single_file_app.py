@@ -2328,8 +2328,8 @@ def page(title, body_html, extra_head="", extra_js=""):
             links = [
                 ("Dashboard", "#dashboard"),
                 ("Status", "#status"),
-                ("Assignments", "#assignments"),
-                ("Materials", "#materials"),
+                ("Assignments", url_for('student_assignments')),
+                ("Materials", url_for('student_materials')),
                 ("Messages", "#messages"),
                 ("Upload Report", url_for('student_upload_report')),
                 ("My Reports", url_for('student_my_reports')),
