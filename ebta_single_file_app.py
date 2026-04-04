@@ -1905,6 +1905,47 @@ background:#fff;
     cursor: pointer;
 }
 
+/* ===== MATERIALS CLEAN UI ===== */
+
+.materials-grid{
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap:12px;
+}
+
+.material-card{
+    background:#fff;
+    border:1px solid var(--border);
+    border-radius:12px;
+    padding:12px;
+    box-shadow:var(--shadow-sm);
+    transition:0.2s;
+}
+
+.material-card:hover{
+    transform:translateY(-2px);
+    box-shadow:var(--shadow-md);
+}
+
+.material-card b{
+    font-size:14px;
+    display:block;
+    margin-bottom:4px;
+}
+
+.material-card .mini{
+    margin-bottom:8px;
+}
+
+.material-card .btn{
+    padding:6px 10px;
+    font-size:12px;
+}
+
+.material-card{
+    border-left:4px solid #1b5e20;
+}
+
 </style>
 """
 
@@ -4932,10 +4973,12 @@ def student_materials():
                 )
 
                 grouped[subject_key].append(f"""
-                <div class='card soft'>
-                    <b>{m['title']}</b><br>
-                    <span class='mini muted'>By {m['tutor_name']}</span><br><br>
-                    {link}
+                <div class='material-card'>
+                    <b>{m['title']}</b>
+                    <div class='mini muted'>By {m['tutor_name']}</div>
+                    <div style="margin-top:6px">
+                        {link}
+                    </div>
                 </div>
                 """)
 
@@ -4944,8 +4987,10 @@ def student_materials():
             for subject, items in grouped.items():
                 blocks.append(f"""
                 <div class='card'>
-                    <h3>{subject}</h3>
-                    <div class='grid'>
+                    <h3 style="margin-bottom:8px; font-size:15px;">
+                        {subject}
+                    </h3>
+                    <div class='materials-grid'>
                         {''.join(items)}
                     </div>
                 </div>
@@ -5014,16 +5059,16 @@ def student_assignments():
     for m in rows:
 
         html += f"""
-        <div class='card'>
+        <div class='material-card'>
             <b>{m['title']}</b><br>
-            {grade_label(m['grade'])} — {m['subject_name']}<br><br>
+            {grade_label(m['grade'])} — {m['subject_name']}<br>
 
             <form method='post'
                   action='{url_for('student_submit_assignment', mid=m['id'])}'
                   enctype='multipart/form-data'>
 
                 <input type='file' name='file' required>
-                <br><br>
+                <br>
                 <button class='btn'>Submit</button>
             </form>
         </div>
@@ -5035,7 +5080,10 @@ def student_assignments():
     <div class='card'>
         <a class='btn mini secondary' href='/student'>← Back</a>
         <h2>Assignments</h2>
-        {html or "<div class='empty'>No assignments</div>"}
+
+        <div class='materials-grid'>
+            {html or "<div class='empty'>No assignments</div>"}
+        </div>
     </div>
     """)
 
@@ -5133,7 +5181,7 @@ def student_upload_report():
 
             <input type="file" name="report_file" required>
 
-            <br><br>
+            <br>
 
             <button class="btn">Upload Report</button>
         </form>
