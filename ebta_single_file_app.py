@@ -13825,7 +13825,42 @@ def manager_view_tutor(tid):
 
     # ===================== Uploads (Improved) =====================
 
-    month = get_active_month('manager')
+    # Get selected month (from URL) or fallback to current
+    month = request.args.get("month")
+
+    if not month:
+        month = get_active_month('manager')
+        
+    # ===================== MONTH SELECTOR =====================
+
+    system_month = get_setting('current_month')
+    year = int(system_month.split('-')[0])
+
+    all_months = all_months_for_year(year)
+
+    month_selector = f"""
+    <form method="get" action="/manager/tutor/{tid}" style="margin-top:10px">
+
+        <select name="month"
+                onchange="this.form.submit()"
+                style="
+                    padding:10px;
+                    border-radius:8px;
+                    border:1px solid #ccc;
+                    cursor:pointer;
+                ">
+
+            {''.join(
+                f"<option value='{m}' {'selected' if m == month else ''}>"
+                f"{pretty_month_label(m)}"
+                f"</option>"
+                for m in all_months
+            )}
+
+        </select>
+
+    </form>
+    """
 
     cur.execute("""
         SELECT m.*, s.name AS subject_name, s.grade
@@ -13963,6 +13998,7 @@ def manager_view_tutor(tid):
             <a href="/manager/tutors" class="btn mini secondary">← Back</a>
 
             <h1 style="margin-top:10px">{tutor['full_name']}</h1>
+            {month_selector}
             <div class="mini muted">Tutor overview</div>
         </div>
 
