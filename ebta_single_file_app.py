@@ -13823,20 +13823,122 @@ def manager_view_tutor(tid):
         for s in subjects
     ]) or "No subjects"
 
-    # Uploads
+    # ===================== Uploads (Improved) =====================
+
+    month = get_active_month('manager')
+
     cur.execute("""
-        SELECT m.title, m.created_at
+        SELECT m.*, s.name AS subject_name, s.grade
         FROM materials m
+        JOIN subjects s ON s.id = m.subject_id
         WHERE m.tutor_id=?
+          AND substr(m.month,1,7)=?
         ORDER BY m.created_at DESC
-        LIMIT 10
-    """, (tid,))
+        LIMIT 50
+    """, (tid, month))
+
     uploads = cur.fetchall()
 
-    uploads_html = "".join([
-        f"<li>{u['title']} ({u['created_at'][:16]})</li>"
-        for u in uploads
-    ]) or "<li>No uploads</li>"
+    recordings = []
+    documents = []
+    assignments = []
+
+    for m in uploads:
+
+        when = m['created_at'][:16].replace('T', ' ')
+
+        is_assignment = (m['is_assignment'] == 1 or m['kind'] == 'assignment')
+        is_recording = bool(m['youtube_url'])
+
+        # action button
+        if m['file_path']:
+            action = f"<a class='btn mini' target='_blank' href='{m['file_path']}'>Download</a>"
+        elif m['youtube_url']:
+            action = f"<a class='btn success mini' target='_blank' href='{m['youtube_url']}'>Watch</a>"
+        else:
+            action = "<span class='muted'>No file</span>"
+
+        row = f"""
+        <tr>
+            <td>{grade_label(m['grade'])} — {m['subject_name']}</td>
+            <td>{m['title']}</td>
+            <td>{action}</td>
+            <td>{when}</td>
+        </tr>
+        """
+
+        if is_assignment:
+            assignments.append(row)
+        elif is_recording:
+            recordings.append(row)
+        else:
+            documents.append(row)
+
+
+    uploads_html = ""
+
+    if assignments:
+        uploads_html += f"""
+        <h3 style="margin-top:10px">📝 Assignments</h3>
+        <div class="scroll-x">
+        <table>
+            <thead>
+                <tr>
+                    <th>Subject</th>
+                    <th>Title</th>
+                    <th>File</th>
+                    <th>Uploaded</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(assignments)}
+            </tbody>
+        </table>
+        </div>
+        """
+
+    if recordings:
+        uploads_html += f"""
+        <h3 style="margin-top:20px;color:#2563eb">🎥 Recordings</h3>
+        <div class="scroll-x">
+        <table>
+            <thead>
+                <tr>
+                    <th>Subject</th>
+                    <th>Recording</th>
+                    <th>Watch</th>
+                    <th>Uploaded</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(recordings)}
+            </tbody>
+        </table>
+        </div>
+        """
+
+    if documents:
+        uploads_html += f"""
+        <h3 style="margin-top:20px;color:#16a34a">📄 Documents</h3>
+        <div class="scroll-x">
+        <table>
+            <thead>
+                <tr>
+                    <th>Subject</th>
+                    <th>Document</th>
+                    <th>File</th>
+                    <th>Uploaded</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(documents)}
+            </tbody>
+        </table>
+        </div>
+        """
+
+    if not uploads_html:
+        uploads_html = "<div class='empty'>No uploads for this month</div>"
 
     # Sessions
     cur.execute("""
@@ -13870,8 +13972,8 @@ def manager_view_tutor(tid):
         </div>
 
         <div class="card soft" style="border-left:5px solid #22c55e">
-            <h3>Recent Uploads</h3>
-            <ul>{uploads_html}</ul>
+            <h3>Uploads — {pretty_month_label(month)}</h3>
+            {uploads_html}
         </div>
 
         <div class="card soft" style="border-left:5px solid #f59e0b">
