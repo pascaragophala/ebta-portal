@@ -12608,6 +12608,10 @@ def manager_dashboard():
             Open Weekly Tutor Tracker
 
             </a>
+            
+            <a class='btn' href="/manager/tutors">
+                View Tutors Portal Updates
+            </a>
 
         </div>
 
@@ -13716,6 +13720,169 @@ def manager_tracker_delete(tracker_id):
 
     flash("Session deleted successfully.", "success")
     return redirect(url_for("manager_dashboard"))
+
+
+def is_manager():
+    return session.get("manager_id")
+
+def require_manager():
+    if not is_manager():
+        return redirect(url_for("manager_login"))
+        
+@app.get('/manager/tutors')
+def manager_tutors():
+
+    r = require_manager()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT t.id, t.full_name
+        FROM tutors t
+        JOIN manager_tutors mt ON mt.tutor_id = t.id
+        WHERE mt.manager_id=?
+        ORDER BY t.full_name
+    """, (session["manager_id"],))
+
+    tutors = cur.fetchall()
+    conn.close()
+
+    cards = ""
+
+    for t in tutors:
+        cards += f"""
+        <div class="card soft" style="
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:10px;
+        ">
+
+            <div>
+                <div style="font-weight:600;font-size:16px">
+                    {t['full_name']}
+                </div>
+                <div class="mini muted">
+                    Tutor profile
+                </div>
+            </div>
+
+            <a href="/manager/tutor/{t['id']}" class="btn mini">
+                View
+            </a>
+
+        </div>
+        """
+
+    body = f"""
+    {manager_nav()}
+    <section class="grid">
+        <div class="card">
+            <h1>Your Tutors</h1>
+            <div class="mini muted">Click a tutor to view activity and reports</div>
+
+            <div class="grid" style="gap:10px">
+                {cards if cards else "<div class='empty'>No tutors found</div>"}
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("Tutor Manager", body)
+    
+@app.get('/manager/tutor/<int:tid>')
+def manager_view_tutor(tid):
+
+    r = require_manager()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Tutor info
+    cur.execute("SELECT full_name FROM tutors WHERE id=?", (tid,))
+    tutor = cur.fetchone()
+
+    if not tutor:
+        conn.close()
+        return page("Error", card_msg("Tutor not found"))
+
+    # Subjects
+    cur.execute("""
+        SELECT s.name, s.grade
+        FROM tutor_subjects ts
+        JOIN subjects s ON s.id = ts.subject_id
+        WHERE ts.tutor_id=?
+    """, (tid,))
+    subjects = cur.fetchall()
+
+    subjects_html = ", ".join([
+        f"{grade_label(s['grade'])} — {s['name']}"
+        for s in subjects
+    ]) or "No subjects"
+
+    # Uploads
+    cur.execute("""
+        SELECT m.title, m.created_at
+        FROM materials m
+        WHERE m.tutor_id=?
+        ORDER BY m.created_at DESC
+        LIMIT 10
+    """, (tid,))
+    uploads = cur.fetchall()
+
+    uploads_html = "".join([
+        f"<li>{u['title']} ({u['created_at'][:16]})</li>"
+        for u in uploads
+    ]) or "<li>No uploads</li>"
+
+    # Sessions
+    cur.execute("""
+        SELECT day_of_week, start_time
+        FROM sessions
+        WHERE tutor_id=? AND active=1
+    """, (tid,))
+    sessions = cur.fetchall()
+
+    sessions_html = "".join([
+        f"<li>{DOW[s['day_of_week']]} at {s['start_time']}</li>"
+        for s in sessions
+    ]) or "<li>No sessions</li>"
+
+    conn.close()
+
+    body = f"""
+    {manager_nav()}
+    <section class="grid">
+
+        <div class="card">
+            <a href="/manager/tutors" class="btn mini secondary">← Back</a>
+
+            <h1 style="margin-top:10px">{tutor['full_name']}</h1>
+            <div class="mini muted">Tutor overview</div>
+        </div>
+
+        <div class="card soft" style="border-left:5px solid #3b82f6">
+            <h3>Subjects</h3>
+            <div>{subjects_html}</div>
+        </div>
+
+        <div class="card soft" style="border-left:5px solid #22c55e">
+            <h3>Recent Uploads</h3>
+            <ul>{uploads_html}</ul>
+        </div>
+
+        <div class="card soft" style="border-left:5px solid #f59e0b">
+            <h3>Sessions</h3>
+            <ul>{sessions_html}</ul>
+        </div>
+
+    </section>
+    """
+
+    return page("Tutor View", body)  
 
 
 # --- Admin: Analytics dashboard ---
