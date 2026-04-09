@@ -7755,7 +7755,17 @@ def admin_reports():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT sr.*, s.full_name
+        SELECT 
+            sr.*, 
+            s.full_name,
+
+            (
+                SELECT COUNT(DISTINCT e.month)
+                FROM enrollments e
+                WHERE e.student_id = sr.student_id
+                AND e.status = 'ACTIVE'
+            ) AS months_active
+
         FROM student_reports sr
         JOIN students s ON s.id = sr.student_id
         ORDER BY sr.upload_date DESC
@@ -7771,6 +7781,11 @@ def admin_reports():
         <tr>
             <td>{r['full_name']}</td>
             <td>{r['grade']}</td>
+            <td>
+                <span class='chip'>
+                    {r['months_active'] or 0} months
+                </span>
+            </td>
             <td>{r['file_name']}</td>
             <td>{r['upload_date']}</td>
             <td style="display:flex; gap:6px">
@@ -7799,6 +7814,7 @@ def admin_reports():
                 <tr>
                     <th>Student</th>
                     <th>Grade</th>
+                    <th>Months Active</th>
                     <th>File</th>
                     <th>Date</th>
                     <th>Action</th>
