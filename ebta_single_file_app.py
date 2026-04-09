@@ -5216,7 +5216,7 @@ def student_my_reports():
         html += f"""
         <tr>
             <td>{r['file_name']}</td>
-            <td>{r['upload_date']}</td>
+            <td>{format_datetime(r['upload_date'])}</td>
             <td>
                 <a class='btn mini'
                    target='_blank'
@@ -7787,7 +7787,7 @@ def admin_reports():
                 </span>
             </td>
             <td>{r['file_name']}</td>
-            <td>{r['upload_date']}</td>
+            <td>{format_datetime(r['upload_date'])}</td>
             <td style="display:flex; gap:6px">
 
                 <a class='btn mini' target='_blank'
