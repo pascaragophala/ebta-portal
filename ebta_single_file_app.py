@@ -14051,6 +14051,14 @@ def admin_analytics():
     import json
 
     month = get_admin_active_month()
+    # ===== Month Calculations =====
+    from datetime import datetime
+
+    current = datetime.strptime(month, "%Y-%m")
+
+    m1 = (current.replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")
+    m2 = (datetime.strptime(m1, "%Y-%m").replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")
+    
     conn = get_db()
     cur = conn.cursor()
 
@@ -14065,6 +14073,70 @@ def admin_analytics():
     pending = count_status('PENDING')
     active = count_status('ACTIVE')
     lapsed = count_status('LAPSED')
+    
+    # ===== Month-to-Month Comparison =====
+    cur.execute("""
+    SELECT 
+        s.name || ' (' || s.grade || ')' AS subject,
+
+        SUM(CASE WHEN e.month=? THEN 1 ELSE 0 END) AS current_count,
+        SUM(CASE WHEN e.month=? THEN 1 ELSE 0 END) AS prev_count
+
+    FROM enrollments e
+    JOIN subjects s ON s.id = e.subject_id
+    WHERE e.status='ACTIVE'
+    GROUP BY s.id
+    """, (month, m1))
+
+    comparison = cur.fetchall()
+
+    improving = []
+    declining = []
+
+    for r in comparison:
+        diff = (r["current_count"] or 0) - (r["prev_count"] or 0)
+
+        if diff > 0:
+            improving.append((r["subject"], diff))
+        elif diff < 0:
+            declining.append((r["subject"], diff))
+            
+    # ===== 3-Month Decline =====
+    cur.execute("""
+    SELECT 
+        s.name || ' (' || s.grade || ')' AS subject,
+
+        SUM(CASE WHEN e.month=? THEN 1 ELSE 0 END) AS m2_count,
+        SUM(CASE WHEN e.month=? THEN 1 ELSE 0 END) AS m1_count,
+        SUM(CASE WHEN e.month=? THEN 1 ELSE 0 END) AS m0_count
+
+    FROM enrollments e
+    JOIN subjects s ON s.id = e.subject_id
+    WHERE e.status='ACTIVE'
+    GROUP BY s.id
+    """, (m2, m1, month))
+
+    trend_rows = cur.fetchall()
+
+    decline_3_months = []
+
+    for r in trend_rows:
+        if (r["m2_count"] or 0) > (r["m1_count"] or 0) > (r["m0_count"] or 0):
+            decline_3_months.append(r["subject"])
+            
+    # ===== Low Enrolment (<=4) =====
+    cur.execute("""
+    SELECT 
+        s.name || ' (' || s.grade || ')' AS subject,
+        COUNT(*) AS total
+    FROM enrollments e
+    JOIN subjects s ON s.id = e.subject_id
+    WHERE e.month=? AND e.status='ACTIVE'
+    GROUP BY s.id
+    HAVING total <= 4
+    """, (month,))
+
+    low_subjects = cur.fetchall()
 
     # ===== TRUE REVENUE (distributed) =====
     cur.execute("""
@@ -14247,6 +14319,38 @@ def admin_analytics():
             <canvas id="tutorChart"></canvas>
         </div>
     </section>
+    
+    <div class='grid'>
+
+        <div class='card'>
+            <h2>Subjects Improving</h2>
+            <ul>
+            {''.join([f"<li>{s} (+{d})</li>" for s,d in improving]) or "<li>No improvements</li>"}
+            </ul>
+        </div>
+
+        <div class='card'>
+            <h2>Subjects Declining</h2>
+            <ul>
+            {''.join([f"<li>{s} ({d})</li>" for s,d in declining]) or "<li>No decline</li>"}
+            </ul>
+        </div>
+
+        <div class='card'>
+            <h2>3-Month Decline (Critical)</h2>
+            <ul>
+            {''.join([f"<li>{s}</li>" for s in decline_3_months]) or "<li>No critical decline</li>"}
+            </ul>
+        </div>
+
+        <div class='card'>
+            <h2>Low Enrolment (≤ 4 students)</h2>
+            <ul>
+            {''.join([f"<li>{r['subject']} ({r['total']})</li>" for r in low_subjects]) or "<li>All subjects healthy</li>"}
+            </ul>
+        </div>
+
+    </div>
 
     <div class='card'>
         <h2>Subject Performance</h2>
