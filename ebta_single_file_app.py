@@ -14057,7 +14057,7 @@ def admin_analytics():
     current = datetime.datetime.strptime(month, "%Y-%m")
 
     m1 = (current.replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")
-    m2 = (datetime.strptime(m1, "%Y-%m").replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")
+    m2 = (datetime.datetime.strptime(m1, "%Y-%m").replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")
     
     conn = get_db()
     cur = conn.cursor()
