@@ -2371,6 +2371,41 @@ new Chart(document.getElementById("decliningChart"), {
     }
 });
 
+
+// ===== NEW: Improving vs Declining Charts =====
+
+const improvingLabels = {json.dumps([s for s,d in improving])};
+const improvingData = {json.dumps([d for s,d in improving])};
+
+const decliningLabels = {json.dumps([s for s,d in declining])};
+const decliningData = {json.dumps([abs(d) for s,d in declining])};
+
+// Improving Chart (Green)
+new Chart(document.getElementById("improvingChart"), {
+    type: 'bar',
+    data: {
+        labels: improvingLabels,
+        datasets: [{
+            label: 'Increase in Students',
+            data: improvingData,
+            backgroundColor: 'rgba(34,197,94,0.7)'
+        }]
+    }
+});
+
+// Declining Chart (Red)
+new Chart(document.getElementById("decliningChart"), {
+    type: 'bar',
+    data: {
+        labels: decliningLabels,
+        datasets: [{
+            label: 'Decrease in Students',
+            data: decliningData,
+            backgroundColor: 'rgba(239,68,68,0.7)'
+        }]
+    }
+});
+
 </script>
 """
 
