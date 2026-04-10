@@ -1946,26 +1946,6 @@ background:#fff;
     border-left:4px solid #1b5e20;
 }
 
-.clean-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-}
-
-.clean-list li {
-    padding: 10px 12px;
-    border-bottom: 1px solid #eee;
-    border-left: 4px solid #ddd;
-    margin-bottom: 6px;
-    border-radius: 8px;
-    background: #fafafa;
-}
-
-.card.warn {
-    border-left: 5px solid #f59e0b;
-    background: #fffaf0;
-}
-
 </style>
 """
 
@@ -2341,70 +2321,7 @@ body:`manager_id=${manager}&tutor_id=${tutor}&state=${state?1:0}`
 
 }
 
-const improvingLabels = {json.dumps([s for s,d in improving])};
-const improvingData = {json.dumps([d for s,d in improving])};
 
-const decliningLabels = {json.dumps([s for s,d in declining])};
-const decliningData = {json.dumps([abs(d) for s,d in declining])};
-
-new Chart(document.getElementById("improvingChart"), {
-    type: 'bar',
-    data: {
-        labels: improvingLabels,
-        datasets: [{
-            label: 'Growth',
-            data: improvingData,
-            backgroundColor: 'rgba(34,197,94,0.7)'
-        }]
-    }
-});
-
-new Chart(document.getElementById("decliningChart"), {
-    type: 'bar',
-    data: {
-        labels: decliningLabels,
-        datasets: [{
-            label: 'Decline',
-            data: decliningData,
-            backgroundColor: 'rgba(239,68,68,0.7)'
-        }]
-    }
-});
-
-
-// ===== NEW: Improving vs Declining Charts =====
-
-const improvingLabels = {json.dumps([s for s,d in improving])};
-const improvingData = {json.dumps([d for s,d in improving])};
-
-const decliningLabels = {json.dumps([s for s,d in declining])};
-const decliningData = {json.dumps([abs(d) for s,d in declining])};
-
-// Improving Chart (Green)
-new Chart(document.getElementById("improvingChart"), {
-    type: 'bar',
-    data: {
-        labels: improvingLabels,
-        datasets: [{
-            label: 'Increase in Students',
-            data: improvingData,
-            backgroundColor: 'rgba(34,197,94,0.7)'
-        }]
-    }
-});
-
-// Declining Chart (Red)
-new Chart(document.getElementById("decliningChart"), {
-    type: 'bar',
-    data: {
-        labels: decliningLabels,
-        datasets: [{
-            label: 'Decrease in Students',
-            data: decliningData,
-            backgroundColor: 'rgba(239,68,68,0.7)'
-        }]
-    }
-});
 
 </script>
 """
@@ -14408,26 +14325,30 @@ def admin_analytics():
     <div class='grid'>
 
         <div class='card'>
-            <h2>📈 Subjects Improving</h2>
-            <canvas id="improvingChart"></canvas>
+            <h2>Subjects Improving</h2>
+            <ul>
+            {''.join([f"<li>{s} (+{d})</li>" for s,d in improving]) or "<li>No improvements</li>"}
+            </ul>
         </div>
 
         <div class='card'>
-            <h2>📉 Subjects Declining</h2>
-            <canvas id="decliningChart"></canvas>
+            <h2>Subjects Declining</h2>
+            <ul>
+            {''.join([f"<li>{s} ({d})</li>" for s,d in declining]) or "<li>No decline</li>"}
+            </ul>
         </div>
 
-        <div class='card warn'>
-            <h2>⚠️ 3-Month Decline</h2>
-            <ul class="clean-list">
+        <div class='card'>
+            <h2>3-Month Decline (Critical)</h2>
+            <ul>
             {''.join([f"<li>{s}</li>" for s in decline_3_months]) or "<li>No critical decline</li>"}
             </ul>
         </div>
 
         <div class='card'>
-            <h2>📊 Low Enrolment (≤4)</h2>
-            <ul class="clean-list">
-            {''.join([f"<li>{r['subject']} — {r['total']} students</li>" for r in low_subjects]) or "<li>All subjects healthy</li>"}
+            <h2>Low Enrolment (≤ 4 students)</h2>
+            <ul>
+            {''.join([f"<li>{r['subject']} ({r['total']})</li>" for r in low_subjects]) or "<li>All subjects healthy</li>"}
             </ul>
         </div>
 
