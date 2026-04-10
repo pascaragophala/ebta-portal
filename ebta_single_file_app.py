@@ -7806,6 +7806,7 @@ def admin_reports():
         """
 
     body = f"""
+    {admin_nav()}
     <div class='card'>
         <h2>Student Reports</h2>
 
