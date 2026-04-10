@@ -14052,9 +14052,9 @@ def admin_analytics():
 
     month = get_admin_active_month()
     # ===== Month Calculations =====
-    from datetime import datetime
+    import datetime
 
-    current = datetime.strptime(month, "%Y-%m")
+    current = datetime.datetime.strptime(month, "%Y-%m")
 
     m1 = (current.replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")
     m2 = (datetime.strptime(m1, "%Y-%m").replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")
