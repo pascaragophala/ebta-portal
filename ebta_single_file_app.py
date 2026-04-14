@@ -4396,6 +4396,39 @@ def student_home():
     active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status'].upper()=='ACTIVE']
     has_active_enrollment = any(x['status'].upper() == 'ACTIVE' for x in enrolls)
     
+    # ===== ASSIGNMENTS PREVIEW (DASHBOARD SUMMARY) =====
+
+    assignments_preview = ""
+
+    if has_active_enrollment and active_sub_ids:
+
+        cur.execute(f"""
+            SELECT COUNT(*) as total
+            FROM materials
+            WHERE is_assignment = 1
+            AND subject_id IN ({','.join('?'*len(active_sub_ids))})
+            AND month = ?
+        """, (*active_sub_ids, month))
+
+        row = cur.fetchone()
+        total_assignments = row["total"] if row else 0
+
+        assignments_preview = f"""
+        <div class="card soft" style="border-left:5px solid #f59e0b">
+
+            <h3 style="margin-bottom:6px">Assignments</h3>
+
+            <div class="mini muted" style="margin-bottom:10px">
+                You have <b>{total_assignments}</b> assignment(s) for {pretty_month_label(month)}
+            </div>
+
+            <a class="btn mini" href="/student/assignments">
+                View & Submit Assignments
+            </a>
+
+        </div>
+        """
+    
     enroll_cta = ""
 
     if not enrolls:
@@ -4555,7 +4588,99 @@ def student_home():
 
 
 
-    # deleted section
+    # ===== ASSIGNMENTS FOR STUDENT =====
+
+    assignments_html = "<div class='empty'>No assignments yet.</div>"
+
+    if has_active_enrollment and active_sub_ids:
+
+        cur.execute(f"""
+            SELECT m.*, s.name AS subject_name, s.grade
+            FROM materials m
+            JOIN subjects s ON s.id = m.subject_id
+            WHERE m.is_assignment = 1
+            AND m.subject_id IN ({','.join('?'*len(active_sub_ids))})
+            AND m.month = ?
+            ORDER BY m.created_at DESC
+        """, (*active_sub_ids, month))
+
+        assignments = cur.fetchall()
+
+        rows = []
+
+        for a in assignments:
+
+            # check if student already submitted
+            cur.execute("""
+                SELECT id, file_path, mark, feedback
+                FROM submissions
+                WHERE material_id=? AND student_id=?
+            """, (a['id'], sid))
+
+            sub = cur.fetchone()
+
+            # assignment file
+            file_link = "—"
+            if a['file_path']:
+                file_link = f"<a class='btn mini' target='_blank' href='{a['file_path']}'>Download</a>"
+
+            # submission section
+            if sub:
+                status = f"<span class='chip active'>Submitted</span>"
+
+                if sub['mark'] is not None:
+                    status += f"<div class='mini'>Mark: {sub['mark']}</div>"
+
+                if sub['feedback']:
+                    status += f"<div class='mini muted'>{sub['feedback']}</div>"
+
+                action = status
+
+            else:
+                action = f"""
+                <form method='post'
+                      action='/student/submit/{a["id"]}'
+                      enctype='multipart/form-data'>
+
+                    <input type='file' name='file' required>
+
+                    <button class='btn success mini'>
+                        Submit
+                    </button>
+                </form>
+                """
+
+            rows.append(f"""
+            <tr>
+                <td>{grade_label(a['grade'])} — {a['subject_name']}</td>
+                <td>{a['title']}</td>
+                <td>{file_link}</td>
+                <td>{a['due_date'] or '—'}</td>
+                <td>{action}</td>
+            </tr>
+            """)
+
+        if rows:
+            assignments_html = f"""
+            <div class='card'>
+                <h2>📝 Assignments</h2>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Subject</th>
+                            <th>Title</th>
+                            <th>File</th>
+                            <th>Due Date</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {''.join(rows)}
+                    </tbody>
+                </table>
+            </div>
+            """
 
 
     # Feedback & Results (graded items)
@@ -4906,7 +5031,8 @@ def student_home():
     
     {groups_section}
     {sessions_section}
-
+    {assignments_preview}
+    
     <div class="toolbar" style="margin:16px 0;">
         <a class="btn" href="/student/materials">View Materials</a>
         <a class="btn success" href="/student/assignments">View Assignments</a>
@@ -4917,6 +5043,39 @@ def student_home():
     {compose_block}
     </section>"""
     return page("Student Portal", body)
+
+
+@app.post('/student/submit/<int:mid>')
+def student_submit(mid):
+
+    r = require_student()
+    if r: return r
+
+    sid = is_student()
+
+    f = request.files.get("file")
+
+    if not f:
+        return redirect(url_for("student_home"))
+
+    filename = secure_name(f.filename)
+
+    path = SUBMISSIONS_DIR / f"{sid}_{mid}_{filename}"
+    f.save(path)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT OR REPLACE INTO submissions
+        (material_id, student_id, file_path, submitted_at)
+        VALUES (?, ?, ?, ?)
+    """, (mid, sid, str(path), now_utc_iso()))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("student_home"))
 
 
 @app.get('/student/materials')
@@ -5025,69 +5184,116 @@ def student_assignments():
     conn = get_db()
     cur = conn.cursor()
 
-    # Get student's ACTIVE subjects
+    # get active subjects
     cur.execute("""
         SELECT subject_id
         FROM enrollments
-        WHERE student_id=? AND status='ACTIVE'
-    """, (sid,))
+        WHERE student_id=? AND status='ACTIVE' AND month LIKE ?
+    """, (sid, month + "%"))
 
     active_sub_ids = [str(r['subject_id']) for r in cur.fetchall()]
 
-    if not active_sub_ids:
-        conn.close()
-        return page("Assignments", """
-        <div class='card'>
-            <a class='btn mini secondary' href='/student'>← Back</a>
-            <h2>Assignments</h2>
-            <div class='empty'>No active subjects</div>
-        </div>
-        """)
+    assignments_html = "<div class='empty'>No assignments yet.</div>"
 
-    cur.execute(f"""
-    SELECT m.*, sub.name AS subject_name, sub.grade
-    FROM materials m
-    JOIN subjects sub ON sub.id=m.subject_id
-    WHERE (m.is_assignment=1 OR m.kind='assignment')
-      AND substr(m.month,1,7)=?
-      AND m.subject_id IN ({','.join('?'*len(active_sub_ids))})
-    ORDER BY m.created_at DESC
-    """, (month, *active_sub_ids))
+    if active_sub_ids:
 
-    rows = cur.fetchall()
+        cur.execute(f"""
+            SELECT m.*, s.name AS subject_name, s.grade
+            FROM materials m
+            JOIN subjects s ON s.id = m.subject_id
+            WHERE m.is_assignment = 1
+            AND m.subject_id IN ({','.join('?'*len(active_sub_ids))})
+            AND m.month = ?
+            ORDER BY m.created_at DESC
+        """, (*active_sub_ids, month))
 
-    html = ""
+        assignments = cur.fetchall()
 
-    for m in rows:
+        rows = []
 
-        html += f"""
-        <div class='material-card'>
-            <b>{m['title']}</b><br>
-            {grade_label(m['grade'])} — {m['subject_name']}<br>
+        for a in assignments:
 
-            <form method='post'
-                  action='{url_for('student_submit_assignment', mid=m['id'])}'
-                  enctype='multipart/form-data'>
+            # check submission
+            cur.execute("""
+                SELECT file_path, mark, feedback
+                FROM submissions
+                WHERE material_id=? AND student_id=?
+            """, (a['id'], sid))
 
-                <input type='file' name='file' required>
-                <br>
-                <button class='btn'>Submit</button>
-            </form>
-        </div>
-        """
+            sub = cur.fetchone()
+
+            # download button
+            file_link = "—"
+            if a['file_path']:
+                file_link = f"<a class='btn mini' target='_blank' href='{a['file_path']}'>Download</a>"
+
+            # submission / feedback
+            if sub:
+                action = f"<span class='chip active'>Submitted</span>"
+
+                if sub['mark'] is not None:
+                    action += f"<div class='mini'>Mark: {sub['mark']}</div>"
+
+                if sub['feedback']:
+                    action += f"<div class='mini muted'>{sub['feedback']}</div>"
+
+            else:
+                action = f"""
+                <form method='post'
+                      action='/student/submit/{a["id"]}'
+                      enctype='multipart/form-data'>
+
+                    <input type='file' name='file' required>
+
+                    <button class='btn success mini'>Submit</button>
+                </form>
+                """
+
+            rows.append(f"""
+            <tr>
+                <td>{grade_label(a['grade'])} — {a['subject_name']}</td>
+                <td>{a['title']}</td>
+                <td>{file_link}</td>
+                <td>{a['due_date'] or '—'}</td>
+                <td>{action}</td>
+            </tr>
+            """)
+
+        if rows:
+            assignments_html = f"""
+            <div class='card'>
+                <h2>📝 Assignments for {pretty_month_label(month)}</h2>
+
+                <div class="mini muted" style="margin-bottom:10px">
+                Download the assignment, complete it, then submit your answer below.
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Subject</th>
+                            <th>Title</th>
+                            <th>File</th>
+                            <th>Due Date</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {''.join(rows)}
+                    </tbody>
+                </table>
+            </div>
+            """
 
     conn.close()
 
     return page("Assignments", f"""
-    <div class='card'>
-        <a class='btn mini secondary' href='/student'>← Back</a>
-        <h2>Assignments</h2>
+    {student_nav()}
 
-        <div class='materials-grid'>
-            {html or "<div class='empty'>No assignments</div>"}
-        </div>
-    </div>
+    <section class="grid">
+        {assignments_html}
+    </section>
     """)
+
 
 
 @app.route('/student/upload_report', methods=['GET', 'POST'])
