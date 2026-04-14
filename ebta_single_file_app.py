@@ -340,6 +340,7 @@ def init_db():
     ensure_column(conn, "tutor_weekly_tracker", "manager_id", "INTEGER")
     ensure_column(conn, "tutor_weekly_tracker", "manager_rating", "INTEGER")
     ensure_column(conn, "submissions", "is_published", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "submissions", "marked_file_path", "TEXT")
     
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_tracker
@@ -5277,7 +5278,7 @@ def student_assignments():
 
             # check submission
             cur.execute("""
-                SELECT file_path, mark, feedback
+                SELECT file_path, mark, feedback, marked_file_path, is_published
                 FROM submissions
                 WHERE material_id=? AND student_id=?
             """, (a['id'], sid))
@@ -5291,13 +5292,28 @@ def student_assignments():
 
             # submission / feedback
             if sub:
-                action = f"<span class='chip active'>Submitted</span>"
 
-                if sub['mark'] is not None:
-                    action += f"<div class='mini'>Mark: {sub['mark']}</div>"
+                action = "<span class='chip active'>Submitted</span>"
 
-                if sub['feedback']:
-                    action += f"<div class='mini muted'>{sub['feedback']}</div>"
+                # ONLY show results if published
+                if sub['is_published'] == 1:
+
+                    if sub['mark'] is not None:
+                        action += f"<div class='mini'>Mark: {sub['mark']}</div>"
+
+                    if sub['feedback']:
+                        action += f"<div class='mini muted'>{sub['feedback']}</div>"
+
+                    if sub.get('marked_file_path'):
+                        action += f"""
+                        <div style="margin-top:6px">
+                            <a class='btn success mini'
+                               target='_blank'
+                               href='{sub['marked_file_path']}'>
+                               📄 View Marked Script
+                            </a>
+                        </div>
+                        """
 
             else:
                 action = f"""
@@ -7046,6 +7062,38 @@ def tutor_upload():
                 (subject_id, tid, month, title, kind, file_path, youtube if youtube else None, now, is_assignment, due, max_points))
     conn.commit(); conn.close()
     return redirect(url_for('tutor_home'))
+    
+    
+@app.post('/tutor/upload_marked/<int:sid>')
+def tutor_upload_marked(sid):
+
+    r = require_tutor()
+    if r: return r
+
+    f = request.files.get("file")
+
+    if not f:
+        return redirect(request.referrer)
+
+    filename = secure_name(f.filename)
+
+    path = SUBMISSIONS_DIR / f"marked_{sid}_{filename}"
+    f.save(path)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE submissions
+        SET marked_file_path = ?
+        WHERE id = ?
+    """, (str(path), sid))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(request.referrer)
+    
 
 @app.post('/tutor/materials/<int:mid>/delete')
 def tutor_delete_material(mid:int):
@@ -7096,7 +7144,26 @@ def tutor_assignment_manage(mid:int):
         cur.execute("SELECT id,file_path,submitted_at,mark,feedback FROM submissions WHERE material_id=? AND student_id=?", (mid, st['id']))
         sub=cur.fetchone()
         if sub:
-            filelink=f"<a class='links' target='_blank' href='{sub['file_path']}'>download</a>"
+            filelink=f"""
+            <a class='links' target='_blank' href='{sub['file_path']}'>download</a>
+
+            <div style='margin-top:6px'>
+
+                <form method="post"
+                      action="/tutor/upload_marked/{sub['id']}"
+                      enctype="multipart/form-data"
+                      style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+
+                    <input type="file" name="file" required>
+
+                    <button class="btn success mini">
+                        Upload Marked
+                    </button>
+
+                </form>
+
+            </div>
+            """
             mark = '' if sub['mark'] is None else str(sub['mark'])
             rows.append(f"""
             <tr><td>{st['full_name']}</td><td>{filelink} <span class='muted mini'>({sub['submitted_at'][:16].replace('T',' ')})</span></td>
