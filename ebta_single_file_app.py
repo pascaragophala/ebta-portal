@@ -12772,6 +12772,11 @@ def manager_tracker():
     r = require_manager()
     if r:
         return r
+        
+    selected_date = request.args.get("date")
+
+    if not selected_date:
+        selected_date = datetime.date.today().strftime("%Y-%m-%d")
 
     conn = get_db()
     cur = conn.cursor()
@@ -12798,7 +12803,7 @@ def manager_tracker():
         <td>{t['full_name']}</td>
         <td>
         <a class="btn mini success"
-        href="/manager/tracker/edit?tutor_id={t['id']}">
+        href="/manager/tracker/edit?tutor_id={t['id']}&date={selected_date}"
         Log Session
         </a>
         </td>
@@ -12810,6 +12815,22 @@ def manager_tracker():
     {manager_nav()}
 
     <section class='card'>
+    
+    <div class="toolbar" style="margin-bottom:15px">
+
+        <form method="get" style="display:flex;align-items:center;gap:10px">
+
+            <label class="mini muted">Select Date:</label>
+
+            <input type="date"
+                   name="date"
+                   value="{selected_date}"
+                   onchange="this.form.submit()"
+                   style="padding:6px;border-radius:6px;border:1px solid #ccc">
+
+        </form>
+
+    </div>
 
     <h1>Tutor Session Tracker</h1>
 
@@ -12989,10 +13010,18 @@ def manager_tracker_edit():
         return r
 
     tutor_id = request.args.get("tutor_id")
-    date = datetime.date.today().strftime("%Y-%m-%d")
+    date = request.args.get("date") or datetime.date.today().strftime("%Y-%m-%d")
 
     conn = get_db()
     cur = conn.cursor()
+    
+    cur.execute("""
+    SELECT *
+    FROM tutor_weekly_tracker
+    WHERE tutor_id=? AND session_date=?
+    """, (tutor_id, date))
+
+    s = cur.fetchone()
 
     cur.execute("""
     SELECT t.full_name
@@ -13036,37 +13065,37 @@ def manager_tracker_edit():
 
         <div>
         <label>Session Date</label>
-        <input type="date" name="date" value="{date}" required>
+        <input type="date" name="date" value="{s['session_date'] if s else date}" required>
         </div>
 
         <div>
         <label>Session Held</label>
         <select name="session_held">
-        <option value="1">Yes</option>
-        <option value="0">No</option>
+        <option value="1" {"selected" if s and s["session_held"] == 1 else ""}>Yes</option>
+        <option value="0" {"selected" if s and s["session_held"] == 0 else ""}>No</option>
         </select>
         </div>
 
         <div>
         <label>Start Time</label>
-        <input type="time" name="start_time">
+        <input type="time" name="start_time" value="{s['start_time'] if s else ''}">
         </div>
 
         <div>
         <label>End Time</label>
-        <input type="time" name="end_time">
+        <input type="time" name="end_time" value="{s['end_time'] if s else ''}">
         </div>
 
         <div>
         <label>Students Attended</label>
-        <input type="number" name="students_attended" min="0">
+        <input type="number" name="students_attended" value="{s['students_attended'] if s else ''}" min="0">
         </div>
 
         <div>
         <label>Recording Uploaded</label>
         <select name="recording_link">
-        <option value="">No</option>
-        <option value="YES">Yes</option>
+        <option value="" {"selected" if not s or not s["recording_link"] else ""}>No</option>
+        <option value="YES" {"selected" if s and s["recording_link"] else ""}>Yes</option>
         </select>
         </div>
 
@@ -13075,21 +13104,21 @@ def manager_tracker_edit():
     <br>
 
     <label>Topic Covered</label>
-    <input name="topic_covered">
+    <input name="topic_covered" value="{s['topic_covered'] if s else ''}">
 
     <label>Manager Comments</label>
-    <textarea name="manager_comments"></textarea>
+    <textarea name="manager_comments">{s['manager_comments'] if s else ''}</textarea>
 
     <br>
     
     <label>Manager Rating (1–5)</label>
     <select name="manager_rating">
     <option value="">Not rated</option>
-    <option value="1">1</option>
-    <option value="2">2</option>
-    <option value="3">3</option>
-    <option value="4">4</option>
-    <option value="5">5</option>
+    <option value="1" {"selected" if s and s["manager_rating"] == 1 else ""}>1</option>
+    <option value="2" {"selected" if s and s["manager_rating"] == 2 else ""}>2</option>
+    <option value="3" {"selected" if s and s["manager_rating"] == 3 else ""}>3</option>
+    <option value="4" {"selected" if s and s["manager_rating"] == 4 else ""}>4</option>
+    <option value="5" {"selected" if s and s["manager_rating"] == 5 else ""}>5</option>
     </select>
     
     <button class="btn success">
