@@ -2322,83 +2322,6 @@ body:`manager_id=${manager}&tutor_id=${tutor}&state=${state?1:0}`
 
 }
 
-// ================= VOICE GUIDE (FIXED) =================
-
-let voiceEnabled = false;
-let currentStep = 0;
-let voicesLoaded = false;
-
-const steps = [
-    "Welcome to EBTA enrollment portal.",
-    "Step 1. Enter student details like name, grade and contact information.",
-    "Step 2. Select your subjects based on your grade.",
-    "Step 3. Review your subjects and payment details.",
-    "Step 4. Upload your proof of payment.",
-    "Step 5. Submit your enrollment."
-];
-
-// Ensure voices are loaded
-speechSynthesis.onvoiceschanged = function () {
-    voicesLoaded = true;
-};
-
-function speak(text){
-    if(!voiceEnabled) return;
-
-    if (!voicesLoaded) {
-        console.log("Voices not ready yet...");
-        return;
-    }
-
-    const msg = new SpeechSynthesisUtterance(text);
-    msg.rate = 0.9;
-
-    speechSynthesis.cancel();
-    speechSynthesis.speak(msg);
-}
-
-function speakStep(){
-    if(currentStep < steps.length){
-        speak(steps[currentStep]);
-    }
-}
-
-function toggleVoice(){
-    voiceEnabled = !voiceEnabled;
-
-    if(voiceEnabled){
-        speak("Voice guide activated. Click anywhere to begin.");
-    } else {
-        speechSynthesis.cancel();
-    }
-}
-
-// Trigger speech AFTER user clicks (VERY IMPORTANT)
-document.addEventListener("click", function(e){
-
-    if(!voiceEnabled) return;
-
-    const t = (e.target.innerText || "").toLowerCase();
-
-    if(t.includes("student") || t.includes("name")){
-        currentStep = 1;
-    }
-    else if(t.includes("grade") || t.includes("subject")){
-        currentStep = 2;
-    }
-    else if(t.includes("payment")){
-        currentStep = 3;
-    }
-    else if(t.includes("proof")){
-        currentStep = 4;
-    }
-    else if(t.includes("submit")){
-        currentStep = 5;
-    }
-
-    speakStep();
-});
-
 </script>
 """
 
@@ -3549,6 +3472,78 @@ function showPopup(message, type='info', timeout=4000){
       document.body.appendChild(overlay);
     });
     </script>'''
+    
+    extra_js += """
+    <script>
+
+    // ================= VOICE GUIDE (FINAL FIX) =================
+
+    window.voiceEnabled = false;
+    window.currentStep = 0;
+
+    window.steps = [
+        "Welcome to EBTA enrollment portal.",
+        "Step 1. Enter student details like name, grade and contact information.",
+        "Step 2. Select your subjects based on your grade.",
+        "Step 3. Review your subjects and payment details.",
+        "Step 4. Upload your proof of payment.",
+        "Step 5. Submit your enrollment."
+    ];
+
+    window.speak = function(text){
+        if(!window.voiceEnabled) return;
+
+        const msg = new SpeechSynthesisUtterance(text);
+        msg.rate = 0.9;
+
+        speechSynthesis.cancel();
+        speechSynthesis.speak(msg);
+    };
+
+    window.speakStep = function(){
+        if(window.currentStep < window.steps.length){
+            window.speak(window.steps[window.currentStep]);
+        }
+    };
+
+    window.toggleVoice = function(){
+        window.voiceEnabled = !window.voiceEnabled;
+
+        if(window.voiceEnabled){
+            window.speak("Voice guide activated. Click anywhere to begin.");
+        } else {
+            speechSynthesis.cancel();
+        }
+    };
+
+    // FORCE browser to allow speech after click
+    document.addEventListener("click", function(e){
+
+        if(!window.voiceEnabled) return;
+
+        const t = (e.target.innerText || "").toLowerCase();
+
+        if(t.includes("student") || t.includes("name")){
+            window.currentStep = 1;
+        }
+        else if(t.includes("grade") || t.includes("subject")){
+            window.currentStep = 2;
+        }
+        else if(t.includes("payment")){
+            window.currentStep = 3;
+        }
+        else if(t.includes("proof")){
+            window.currentStep = 4;
+        }
+        else if(t.includes("submit")){
+            window.currentStep = 5;
+        }
+
+        window.speakStep();
+    });
+
+    </script>
+    """
     
     extra_js += """
     <script>
