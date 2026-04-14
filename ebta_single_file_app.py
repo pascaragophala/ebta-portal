@@ -13051,7 +13051,7 @@ def manager_tracker_edit():
 
     <div class='toolbar'>
 
-        <a class="btn mini" href="/manager/tracker">
+        <a class="btn mini" href="/manager/tracker?date={date}">
         ← Back to Tracker
         </a>
 
@@ -13189,7 +13189,7 @@ def manager_tracker_save():
     conn.commit()
     conn.close()
 
-    return redirect("/manager/tracker")
+    return redirect(f"/manager/tracker?date={request.form.get('date')}")
 
 @app.post('/admin/managers/add')
 @require_high_admin
