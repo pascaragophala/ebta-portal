@@ -5287,9 +5287,15 @@ def student_assignments():
     conn.close()
 
     return page("Assignments", f"""
-        <section class="grid">
+        <div class='card'>
+            <a class='btn mini secondary' href='/student'>← Back</a>
+
+            <h2 style="margin-top:10px">
+                📝 Assignments for {pretty_month_label(month)}
+            </h2>
+
             {assignments_html}
-        </section>
+        </div>
     """)
 
 
