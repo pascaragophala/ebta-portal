@@ -5287,11 +5287,9 @@ def student_assignments():
     conn.close()
 
     return page("Assignments", f"""
-    {student_nav()}
-
-    <section class="grid">
-        {assignments_html}
-    </section>
+        <section class="grid">
+            {assignments_html}
+        </section>
     """)
 
 
