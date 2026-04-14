@@ -5127,19 +5127,53 @@ def student_materials():
                 if subject_key not in grouped:
                     grouped[subject_key] = []
 
-                link = (
-                    f"<a class='btn mini' target='_blank' href='{m['file_path']}'>Open</a>"
-                    if m['file_path']
-                    else f"<a class='btn mini' target='_blank' href='{m['youtube_url']}'>Watch</a>"
-                )
+                if m['file_path']:
+                    link = f"""
+                    <a class='btn success mini'
+                       target='_blank'
+                       href='{m['file_path']}'>
+                       ⬇ Download
+                    </a>
+                    """
+                else:
+                    link = f"""
+                    <a class='btn mini'
+                       target='_blank'
+                       href='{m['youtube_url']}'>
+                       ▶ Watch
+                    </a>
+                    """
 
                 grouped[subject_key].append(f"""
-                <div class='material-card'>
-                    <b>{m['title']}</b>
-                    <div class='mini muted'>By {m['tutor_name']}</div>
-                    <div style="margin-top:6px">
-                        {link}
+                <div class='card soft' style="
+                    border-left:5px solid #25D366;
+                    padding:14px;
+                ">
+
+                    <div style="
+                        display:flex;
+                        justify-content:space-between;
+                        align-items:center;
+                        gap:10px;
+                        flex-wrap:wrap;
+                    ">
+
+                        <div>
+                            <div style="font-weight:700;font-size:15px">
+                                📘 {m['title']}
+                            </div>
+
+                            <div class="mini muted" style="margin-top:4px">
+                                👨‍🏫 {m['tutor_name']}
+                            </div>
+                        </div>
+
+                        <div>
+                            {link}
+                        </div>
+
                     </div>
+
                 </div>
                 """)
 
@@ -5147,13 +5181,31 @@ def student_materials():
 
             for subject, items in grouped.items():
                 blocks.append(f"""
-                <div class='card'>
-                    <h3 style="margin-bottom:8px; font-size:15px;">
-                        {subject}
-                    </h3>
-                    <div class='materials-grid'>
+                <div class='card' style="border-left:6px solid #1b5e20">
+
+                    <div style="
+                        display:flex;
+                        justify-content:space-between;
+                        align-items:center;
+                        margin-bottom:10px;
+                        flex-wrap:wrap;
+                        gap:6px;
+                    ">
+
+                        <h3 style="margin:0;font-size:16px">
+                            🎓 {subject}
+                        </h3>
+
+                        <span class="chip">
+                            {len(items)} resources
+                        </span>
+
+                    </div>
+
+                    <div class='grid' style="gap:10px">
                         {''.join(items)}
                     </div>
+
                 </div>
                 """)
 
@@ -5162,10 +5214,20 @@ def student_materials():
     conn.close()
 
     body = f"""
-    <div class='card'>
+    <div class='card' style="border-left:6px solid #25D366">
+
         <a class='btn mini secondary' href='/student'>← Back</a>
-        <h2>Learning Materials</h2>
+
+        <h2 style="margin-top:10px">
+            📚 Learning Materials for {pretty_month_label(month)}
+        </h2>
+
+        <div class="mini muted" style="margin-bottom:12px">
+            Access your study resources, recordings, and notes uploaded by your tutors.
+        </div>
+
         {materials_html}
+
     </div>
     """
 
