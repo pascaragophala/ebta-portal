@@ -2322,7 +2322,75 @@ body:`manager_id=${manager}&tutor_id=${tutor}&state=${state?1:0}`
 
 }
 
+// ================= VOICE GUIDE =================
 
+let voiceEnabled = true;
+let currentStep = 0;
+
+const steps = [
+    "Welcome to EBTA enrollment portal.",
+    "Step 1. Enter student details like name, grade and contact information.",
+    "Step 2. Select your subjects based on your grade.",
+    "Step 3. Review your subjects and payment details.",
+    "Step 4. Upload your proof of payment.",
+    "Step 5. Submit your enrollment."
+];
+
+function speak(text){
+    if(!voiceEnabled) return;
+
+    const msg = new SpeechSynthesisUtterance(text);
+    msg.rate = 0.9;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(msg);
+}
+
+function speakStep(){
+    if(currentStep < steps.length){
+        speak(steps[currentStep]);
+    }
+}
+
+function toggleVoice(){
+    voiceEnabled = !voiceEnabled;
+
+    if(voiceEnabled){
+        speak("Voice guide activated");
+        speakStep();
+    } else {
+        speechSynthesis.cancel();
+    }
+}
+
+document.addEventListener("DOMContentLoaded", function(){
+    setTimeout(() => speakStep(), 1500);
+});
+
+// Detect clicks
+document.addEventListener("click", function(e){
+    const t = (e.target.innerText || "").toLowerCase();
+
+    if(t.includes("grade") || t.includes("student")){
+        currentStep = 1;
+        speakStep();
+    }
+    else if(t.includes("subject")){
+        currentStep = 2;
+        speakStep();
+    }
+    else if(t.includes("payment")){
+        currentStep = 3;
+        speakStep();
+    }
+    else if(t.includes("proof")){
+        currentStep = 4;
+        speakStep();
+    }
+    else if(t.includes("submit")){
+        currentStep = 5;
+        speakStep();
+    }
+});
 
 </script>
 """
@@ -2818,10 +2886,20 @@ def home():
     
     <div class='card soft'>
         <h1>Enroll for {month_label}</h1>
+        <div style="margin-bottom:10px;display:flex;gap:8px">
+            <button type="button" class="btn mini" onclick="toggleVoice()">
+                🔊 Voice Guide
+            </button>
+
+            <button type="button" class="btn mini secondary" onclick="speakStep()">
+                ▶ Repeat
+            </button>
+        </div>
         <p class='muted'>All required fields are marked. Upload 1–2 Proof of Payment files.</p>
 
         <form id='reg_form' method='post' action='{url_for('register')}' enctype='multipart/form-data' class='grid'>
-
+        
+        <h2 onclick="currentStep=1; speakStep()">Student Information</h2>
         <!-- Student & guardian details -->
         <div class="grid two-col">
             <div>
@@ -2891,7 +2969,7 @@ def home():
         <!-- Grade & subjects -->
         <div class="grid two-col">
             <div>
-            <label>Choose grade</label>
+            <label onclick="currentStep=2; speakStep()">Choose grade</label>
             <select id='grade_select' name='grade'>
                 {grade_options}
             </select>
@@ -2902,7 +2980,9 @@ def home():
         </div>
 
         <div class='grid'>
-            <label>Choose subject(s) for selected grade</label>
+            <label onclick="currentStep=2; speakStep()">
+                Choose subject(s) for selected grade
+            </label>
             <div id="subject_list" class="subject-grid">
             {subject_items}
             </div>
@@ -2925,7 +3005,7 @@ def home():
 
         <div class="card soft" id="payment-anchor">
 
-            <label>Payment details</label>
+            <label onclick="currentStep=3; speakStep()">Payment details</label>
 
             <div class="mini">
                 Please pay your monthly EBTA fees via EFT using the details below, then tick the box to confirm payment and upload your Proof of Payment.
@@ -2948,7 +3028,9 @@ def home():
 
 
             <div id="pop_section" style="margin-top:8px;display:none;">
-                <label>Proof of Payment (1–2 files)</label>
+                <label onclick="currentStep=4; speakStep()">
+                    Proof of Payment (1–2 files)
+                </label>
                 <input type="file"
                        name="pop"
                        accept=".pdf,.png,.jpg,.jpeg,.gif,.webp"
@@ -2985,7 +3067,10 @@ def home():
                 <span class="mini">I agree to the Terms & Conditions</span>
             </label>
 
-            <button class='btn'>Submit Enrollment</button>
+            <button class='btn'
+                    onclick="currentStep=5; speakStep()">
+                Submit Enrollment
+            </button>
 
             <a class='btn secondary' href='{url_for('student_login')}'>Student login</a>
             <a class='btn secondary' href='{url_for('tutor_login')}'>Tutor login</a>
