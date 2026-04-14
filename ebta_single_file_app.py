@@ -5290,10 +5290,6 @@ def student_assignments():
         <div class='card'>
             <a class='btn mini secondary' href='/student'>← Back</a>
 
-            <h2 style="margin-top:10px">
-                📝 Assignments for {pretty_month_label(month)}
-            </h2>
-
             {assignments_html}
         </div>
     """)
