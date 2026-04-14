@@ -2322,10 +2322,11 @@ body:`manager_id=${manager}&tutor_id=${tutor}&state=${state?1:0}`
 
 }
 
-// ================= VOICE GUIDE =================
+// ================= VOICE GUIDE (FIXED) =================
 
-let voiceEnabled = true;
+let voiceEnabled = false;
 let currentStep = 0;
+let voicesLoaded = false;
 
 const steps = [
     "Welcome to EBTA enrollment portal.",
@@ -2336,11 +2337,22 @@ const steps = [
     "Step 5. Submit your enrollment."
 ];
 
+// Ensure voices are loaded
+speechSynthesis.onvoiceschanged = function () {
+    voicesLoaded = true;
+};
+
 function speak(text){
     if(!voiceEnabled) return;
 
+    if (!voicesLoaded) {
+        console.log("Voices not ready yet...");
+        return;
+    }
+
     const msg = new SpeechSynthesisUtterance(text);
     msg.rate = 0.9;
+
     speechSynthesis.cancel();
     speechSynthesis.speak(msg);
 }
@@ -2355,41 +2367,36 @@ function toggleVoice(){
     voiceEnabled = !voiceEnabled;
 
     if(voiceEnabled){
-        speak("Voice guide activated");
-        speakStep();
+        speak("Voice guide activated. Click anywhere to begin.");
     } else {
         speechSynthesis.cancel();
     }
 }
 
-document.addEventListener("DOMContentLoaded", function(){
-    setTimeout(() => speakStep(), 1500);
-});
-
-// Detect clicks
+// Trigger speech AFTER user clicks (VERY IMPORTANT)
 document.addEventListener("click", function(e){
+
+    if(!voiceEnabled) return;
+
     const t = (e.target.innerText || "").toLowerCase();
 
-    if(t.includes("grade") || t.includes("student")){
+    if(t.includes("student") || t.includes("name")){
         currentStep = 1;
-        speakStep();
     }
-    else if(t.includes("subject")){
+    else if(t.includes("grade") || t.includes("subject")){
         currentStep = 2;
-        speakStep();
     }
     else if(t.includes("payment")){
         currentStep = 3;
-        speakStep();
     }
     else if(t.includes("proof")){
         currentStep = 4;
-        speakStep();
     }
     else if(t.includes("submit")){
         currentStep = 5;
-        speakStep();
     }
+
+    speakStep();
 });
 
 </script>
