@@ -8110,6 +8110,7 @@ def admin_reports():
     """)
 
     rows = cur.fetchall()
+    total_reports = len(rows)
     conn.close()
 
     html = ""
@@ -8147,6 +8148,15 @@ def admin_reports():
     {admin_nav()}
     <div class='card'>
         <h2>Student Reports</h2>
+
+        <div class="stats" style="margin-bottom:12px">
+
+            <div class="stat">
+                <div class="k">{total_reports}</div>
+                <div class="t">Total Reports</div>
+            </div>
+
+        </div>
 
         <table>
             <thead>
@@ -8216,6 +8226,7 @@ def delete_report(rid):
     conn.close()
 
     return redirect(url_for('admin_reports'))
+
 
 @app.post('/admin/enrollments/<int:id>/<action>')
 def enrollment_action(id: int, action: str):
