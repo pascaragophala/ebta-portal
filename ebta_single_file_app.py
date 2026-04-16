@@ -2936,6 +2936,7 @@ def home():
                 <li>Capitec number: 0649619653</li>
                 <li>Account number: 2062604285</li>
                 <li>Bank name: Capitec</li>
+                <li>Reference: Learner’s Name & Surname</li>
             </ul>
 
             <label class="payment-confirm">
@@ -8085,8 +8086,8 @@ def admin_reports():
     r = require_admin()
     if r: return r
     
-    if not is_high_admin():
-        return page("Access Denied", "<div class='card'>Only high admin can access reports.</div>")
+    #if not is_high_admin():
+    #    return page("Access Denied", "<div class='card'>Only high admin can access reports.</div>")
 
     conn = get_db()
     cur = conn.cursor()
@@ -8173,8 +8174,8 @@ def view_report(rid):
     r = require_admin()
     if r: return r
     
-    if not is_high_admin():
-        return page("Access Denied", "<div class='card'>Not allowed.</div>")
+    #if not is_high_admin():
+    #    return page("Access Denied", "<div class='card'>Not allowed.</div>")
 
     conn = get_db()
     cur = conn.cursor()
