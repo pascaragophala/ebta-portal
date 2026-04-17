@@ -1947,6 +1947,11 @@ background:#fff;
     border-left:4px solid #1b5e20;
 }
 
+.btn:hover {
+    transform: scale(1.05);
+    transition: 0.2s ease;
+}
+
 </style>
 """
 
@@ -7146,28 +7151,54 @@ def tutor_assignment_manage(mid:int):
         sub=cur.fetchone()
         if sub:
             filelink=f"""
-            <a class='links' target='_blank' href='{sub['file_path']}'>download</a>
+            <div style="
+                display:flex;
+                flex-direction:column;
+                gap:8px;
+            ">
 
-            <div style='margin-top:6px'>
+                <!-- VIEW BUTTON -->
+                <div>
+                    <a class='btn mini'
+                       style="background:#2563eb;color:white"
+                       target='_blank'
+                       href='/tutor/view_submission/{sub['id']}'>
+                        📄 View Submission
+                    </a>
+                </div>
 
-                <form method="post"
-                      action="/tutor/upload_marked/{sub['id']}"
-                      enctype="multipart/form-data"
-                      style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <!-- UPLOAD MARKED -->
+                <div style="
+                    background:#f8fafc;
+                    padding:8px;
+                    border-radius:8px;
+                    border:1px solid #e2e8f0;
+                ">
+                    <form method="post"
+                          action="/tutor/upload_marked/{sub['id']}"
+                          enctype="multipart/form-data"
+                          style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
 
-                    <input type="file" name="file" required>
+                        <input type="file" name="file" required class="mini">
 
-                    <button class="btn success mini">
-                        Upload Marked
-                    </button>
+                        <button class="btn success mini">
+                            ⬆ Upload Marked
+                        </button>
 
-                </form>
+                    </form>
+                </div>
 
             </div>
             """
             mark = '' if sub['mark'] is None else str(sub['mark'])
             rows.append(f"""
-            <tr><td>{st['full_name']}</td><td>{filelink} <span class='muted mini'>({sub['submitted_at'][:16].replace('T',' ')})</span></td>
+            <tr><td>{st['full_name']}</td>
+                <td style="min-width:260px">
+                    {filelink}
+                    <div class='mini muted' style="margin-top:4px">
+                        Submitted: {sub['submitted_at'][:16].replace('T',' ')}
+                    </div>
+                </td>
                 <td>
                 <form method='post' action='{url_for('tutor_assignment_grade', mid=mid, sid=st['id'])}' class='inlineform'>
                     <input type='number' name='mark' min='0' max='{total}' placeholder='0..{total}' value='{mark if mark else ""}' style='width:100px'/>
@@ -7308,6 +7339,34 @@ def tutor_assignment_grade(mid:int, sid:int):
     conn.commit(); conn.close()
     # redirect with saved alert
     return redirect(url_for('tutor_assignment_manage', mid=mid, saved=1))
+
+@app.get('/tutor/view_submission/<int:sid>')
+def tutor_view_submission(sid):
+
+    r = require_tutor()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT file_path
+        FROM submissions
+        WHERE id=?
+    """, (sid,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row["file_path"]:
+        return "File not found", 404
+
+    return send_from_directory(
+        os.path.dirname(row["file_path"]),
+        os.path.basename(row["file_path"])
+    )
+    
+    
 
 # Tutor → Student message (individual OR broadcast)
 @app.post('/tutor/message-student')
