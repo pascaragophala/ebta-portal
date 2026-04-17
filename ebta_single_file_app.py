@@ -7160,7 +7160,7 @@ def tutor_assignment_manage(mid:int):
                 <!-- VIEW BUTTON -->
                 <div>
                     <a class='btn mini'
-                       style="background:#2563eb;color:white"
+                       style="background:#16a34a;color:white"
                        target='_blank'
                        href='/tutor/view_submission/{sub['id']}'>
                         📄 View Submission
