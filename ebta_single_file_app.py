@@ -4639,17 +4639,6 @@ def student_home():
             
             can_resubmit = True
 
-            if a['due_date']:
-                due = datetime.date.fromisoformat(a['due_date'][:10])
-                if today > due:
-                    can_resubmit = False
-            print("DEBUG ASSIGNMENT:", a['title'])
-            print("MONTH:", month)
-            print("TODAY:", today)
-            print("DUE:", a['due_date'])
-            print("CAN_RESUBMIT:", can_resubmit)
-            print("----------------------")
-
             if sub:
                 status = f"<span class='chip active'>Submitted</span>"
 
