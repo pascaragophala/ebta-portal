@@ -5372,6 +5372,19 @@ def student_assignments():
 
                 action = "<span class='chip active'>Submitted</span>"
 
+                # 📄 VIEW SUBMITTED FILE
+                if sub['file_path']:
+                    action += f"""
+                    <div style="margin-top:6px">
+                        <a class='btn mini'
+                           style="background:#1b5e20;color:white"
+                           target='_blank'
+                           href='{sub['file_path']}'>
+                           📄 View My Submission
+                        </a>
+                    </div>
+                    """
+
                 if can_submit:
                     action += f"""
                     <form method='post'
@@ -5389,7 +5402,7 @@ def student_assignments():
                 else:
                     action += "<div class='mini muted'>⛔ Submission closed</div>"
 
-                # ONLY show results if published
+                # show results if published
                 if sub['is_published'] == 1:
 
                     if sub['mark'] is not None:
