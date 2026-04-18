@@ -5351,6 +5351,16 @@ def student_assignments():
             """, (a['id'], sid))
 
             sub = cur.fetchone()
+            
+            # 🔥 CHECK IF SUBMISSION IS STILL OPEN
+            can_submit = True
+
+            if a['due_date']:
+                today = datetime.date.today()
+                due = datetime.datetime.strptime(a['due_date'], "%Y-%m-%d").date()
+
+                if today > due:
+                    can_submit = False
 
             # download button
             file_link = "—"
@@ -5361,6 +5371,23 @@ def student_assignments():
             if sub:
 
                 action = "<span class='chip active'>Submitted</span>"
+
+                if can_submit:
+                    action += f"""
+                    <form method='post'
+                          action='/student/submit/{a["id"]}'
+                          enctype='multipart/form-data'
+                          style="margin-top:6px">
+
+                        <input type='file' name='file' required>
+
+                        <button class='btn warn mini'>
+                            🔁 Resubmit
+                        </button>
+                    </form>
+                    """
+                else:
+                    action += "<div class='mini muted'>⛔ Submission closed</div>"
 
                 # ONLY show results if published
                 if sub['is_published'] == 1:
@@ -5383,16 +5410,19 @@ def student_assignments():
                         """
 
             else:
-                action = f"""
-                <form method='post'
-                      action='/student/submit/{a["id"]}'
-                      enctype='multipart/form-data'>
+                if can_submit:
+                    action = f"""
+                    <form method='post'
+                          action='/student/submit/{a["id"]}'
+                          enctype='multipart/form-data'>
 
-                    <input type='file' name='file' required>
+                        <input type='file' name='file' required>
 
-                    <button class='btn success mini'>Submit</button>
-                </form>
-                """
+                        <button class='btn success mini'>Submit</button>
+                    </form>
+                    """
+                else:
+                    action = "<span class='mini muted'>⛔ Submission closed</span>"
 
             rows.append(f"""
             <tr>
