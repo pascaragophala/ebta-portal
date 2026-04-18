@@ -2378,7 +2378,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("Dashboard", "#dashboard"),
                 ("Status", "#status"),
                 ("Assignments", url_for('student_assignments')),
-                ("Materials", url_for('student_materials')),
+                ("Learning Materials", url_for('student_materials')),
                 ("Messages", "#messages"),
                 ("Upload Report", url_for('student_upload_report')),
                 ("My Reports", url_for('student_my_reports')),
@@ -5063,7 +5063,7 @@ def student_home():
     {assignments_preview}
     
     <div class="toolbar" style="margin:16px 0;">
-        <a class="btn" href="/student/materials">View Materials</a>
+        <a class="btn" href="/student/materials">View Learning Materials</a>
         <a class="btn success" href="/student/assignments">View Assignments</a>
     </div>
 
