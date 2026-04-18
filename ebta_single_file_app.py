@@ -4633,7 +4633,9 @@ def student_home():
 
             # submission section
             now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))
-            today = now.date()
+            # Use selected month as reference instead of real date
+            year, month_num = map(int, month.split('-'))
+            today = datetime.date(year, month_num, 1)
             
             can_resubmit = True
 
