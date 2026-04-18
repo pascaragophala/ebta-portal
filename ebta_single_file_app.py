@@ -4632,6 +4632,14 @@ def student_home():
                 file_link = f"<a class='btn mini' target='_blank' href='{a['file_path']}'>Download</a>"
 
             # submission section
+            today = datetime.date.today()
+            can_resubmit = True
+
+            if a['due_date']:
+                due = datetime.datetime.strptime(a['due_date'], "%Y-%m-%d").date()
+                if today > due:
+                    can_resubmit = False
+
             if sub:
                 status = f"<span class='chip active'>Submitted</span>"
 
@@ -4641,7 +4649,22 @@ def student_home():
                 if sub['feedback']:
                     status += f"<div class='mini muted'>{sub['feedback']}</div>"
 
-                action = status
+                if can_resubmit:
+                    action = status + f"""
+                    <form method='post'
+                          action='/student/submit/{a["id"]}'
+                          enctype='multipart/form-data'
+                          style="margin-top:6px">
+
+                        <input type='file' name='file' required>
+
+                        <button class='btn warn mini'>
+                            🔁 Resubmit
+                        </button>
+                    </form>
+                    """
+                else:
+                    action = status + "<div class='mini muted'>Submission closed</div>"
 
             else:
                 action = f"""
@@ -5060,9 +5083,37 @@ def student_submit(mid):
 
     sid = is_student()
 
+    conn = get_db()
+    cur = conn.cursor()
+
+    # 🔥 Get assignment due date
+    cur.execute("SELECT due_date FROM materials WHERE id=?", (mid,))
+    mat = cur.fetchone()
+
+    # If assignment not found
+    if not mat:
+        conn.close()
+        return redirect(url_for("student_home"))
+
+    due_date = mat["due_date"]
+
+    # 🔥 Check if due date passed
+    if due_date:
+        today = datetime.date.today()
+        due = datetime.datetime.strptime(due_date, "%Y-%m-%d").date()
+
+        if today > due:
+            conn.close()
+            return page(
+                "Submission Closed",
+                "<div class='card'>⛔ Submission deadline has passed. You can no longer resubmit.</div>"
+            )
+
+    # 🔥 Continue with upload
     f = request.files.get("file")
 
     if not f:
+        conn.close()
         return redirect(url_for("student_home"))
 
     filename = secure_name(f.filename)
@@ -5070,9 +5121,20 @@ def student_submit(mid):
     path = SUBMISSIONS_DIR / f"{sid}_{mid}_{filename}"
     f.save(path)
 
-    conn = get_db()
-    cur = conn.cursor()
+    # 🔥 Optional: delete old file (clean storage)
+    cur.execute("""
+        SELECT file_path FROM submissions
+        WHERE material_id=? AND student_id=?
+    """, (mid, sid))
+    old = cur.fetchone()
 
+    if old and old["file_path"]:
+        try:
+            os.remove(old["file_path"])
+        except:
+            pass
+
+    # 🔥 Save (override)
     cur.execute("""
         INSERT OR REPLACE INTO submissions
         (material_id, student_id, file_path, submitted_at)
