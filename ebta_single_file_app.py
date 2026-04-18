@@ -4643,7 +4643,7 @@ def student_home():
                 due = datetime.date.fromisoformat(a['due_date'][:10])
                 if today > due:
                     can_resubmit = False
-                        print("DEBUG ASSIGNMENT:", a['title'])
+            print("DEBUG ASSIGNMENT:", a['title'])
             print("MONTH:", month)
             print("TODAY:", today)
             print("DUE:", a['due_date'])
