@@ -7150,6 +7150,25 @@ def tutor_assignment_manage(mid:int):
         cur.execute("SELECT id,file_path,submitted_at,mark,feedback FROM submissions WHERE material_id=? AND student_id=?", (mid, st['id']))
         sub=cur.fetchone()
         if sub:
+            
+            file_exists = sub['file_path'] and os.path.exists(sub['file_path'])
+
+            view_section = f"""
+            <div>
+                <a class='btn success mini'
+                   target='_blank'
+                   href='/tutor/view_submission/{sub['id']}'>
+                    📄 View Submission
+                </a>
+            </div>
+            """ if file_exists else f"""
+            <div style="padding:4px 0;">
+                <span class='mini' style="color:#b91c1c; font-weight:600;">
+                    ⚠ File missing
+                </span>
+            </div>
+            """
+            
             filelink=f"""
             <div style="
                 display:flex;
@@ -7158,14 +7177,7 @@ def tutor_assignment_manage(mid:int):
             ">
 
                 <!-- VIEW BUTTON -->
-                <div>
-                    <a class='btn mini'
-                       style="background:#16a34a;color:white"
-                       target='_blank'
-                       href='/tutor/view_submission/{sub['id']}'>
-                        📄 View Submission
-                    </a>
-                </div>
+                {view_section}
 
                 <!-- UPLOAD MARKED -->
                 <div style="
@@ -7340,6 +7352,8 @@ def tutor_assignment_grade(mid:int, sid:int):
     # redirect with saved alert
     return redirect(url_for('tutor_assignment_manage', mid=mid, saved=1))
 
+
+
 @app.get('/tutor/view_submission/<int:sid>')
 def tutor_view_submission(sid):
 
@@ -7349,23 +7363,29 @@ def tutor_view_submission(sid):
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT file_path
-        FROM submissions
-        WHERE id=?
-    """, (sid,))
-
+    cur.execute("SELECT file_path FROM submissions WHERE id=?", (sid,))
     row = cur.fetchone()
     conn.close()
 
-    if not row or not row["file_path"]:
-        return "File not found", 404
+    if not row:
+        return "Submission not found", 404
+
+    file_path = row["file_path"]
+    
+    print("DEBUG FILE PATH:", file_path)   # 👈 ADD THIS
+    
+
+    # 🔴 IMPORTANT FIX
+    if not file_path or not os.path.exists(file_path):
+        return page(
+            "Missing File",
+            f"<div class='card'>File not found or was removed.<br><span class='mini muted'>{file_path}</span></div>"
+        )
 
     return send_from_directory(
-        os.path.dirname(row["file_path"]),
-        os.path.basename(row["file_path"])
+        os.path.dirname(file_path),
+        os.path.basename(file_path)
     )
-    
     
 
 # Tutor → Student message (individual OR broadcast)
