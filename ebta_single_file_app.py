@@ -4632,11 +4632,13 @@ def student_home():
                 file_link = f"<a class='btn mini' target='_blank' href='{a['file_path']}'>Download</a>"
 
             # submission section
-            today = datetime.date.today()
+            now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))
+            today = now.date()
+            
             can_resubmit = True
 
             if a['due_date']:
-                due = datetime.datetime.strptime(a['due_date'], "%Y-%m-%d").date()
+                due = datetime.datetime.fromisoformat(a['due_date']).date()
                 if today > due:
                     can_resubmit = False
 
