@@ -3008,8 +3008,16 @@ def home():
                         color:#1b5e20;
                         letter-spacing:1px;
                     ">
-                        SCAN TO PAY
+                       <!-- SCAN TO PAY -->
                     </div>
+                    
+                    <!-- 🔗 DIRECT PAYMENT LINK -->
+                    <a href="https://pay.capitecbank.co.za/payme/JS3A2F"
+                       target="_blank"
+                       class="btn success mini"
+                       style="text-align:center; margin-top:6px;">
+                        💳 Pay Instantly Online
+                    </a>
 
                     <!-- DOWNLOAD BUTTON -->
                     <a href="/static/icons/scantopayqrcode.jpeg"
