@@ -2989,9 +2989,9 @@ def home():
                 ">
 
                     <img 
+                        id="qrImage"
                         src="/static/icons/scantopayqrcode.jpeg"
                         alt="Scan to Pay QR Code"
-                        onclick="openQRModal(this.src)"
                         style="
                             width:200px;
                             max-width:100%;
@@ -3003,8 +3003,6 @@ def home():
                             cursor:pointer;
                             transition:transform 0.2s ease;
                         "
-                        onmouseover="this.style.transform='scale(1.05)'"
-                        onmouseout="this.style.transform='scale(1)'"
                     >
 
                     <div style="
@@ -3149,28 +3147,39 @@ function copyAccountNumber(){
     });
 }
 
-
-function openQRModal(src){
-    const modal = document.getElementById("qrModal");
-    const img = document.getElementById("qrModalImg");
-
-    img.src = src;
-    modal.style.display = "flex";
-}
-
-function closeQRModal(){
-    document.getElementById("qrModal").style.display = "none";
-}
-
-// Close when clicking outside image
-document.addEventListener("click", function(e){
-    const modal = document.getElementById("qrModal");
-    if(e.target === modal){
-        closeQRModal();
-    }
-});
-
 </script>    
+
+<script>
+document.addEventListener("DOMContentLoaded", function(){
+
+    const qrImage = document.getElementById("qrImage");
+    const modal = document.getElementById("qrModal");
+    const modalImg = document.getElementById("qrModalImg");
+    const closeBtn = document.getElementById("closeQR");
+
+    if(qrImage){
+        qrImage.addEventListener("click", function(){
+            modal.style.display = "flex";
+            modalImg.src = qrImage.src;
+        });
+    }
+
+    if(closeBtn){
+        closeBtn.addEventListener("click", function(){
+            modal.style.display = "none";
+        });
+    }
+
+    if(modal){
+        modal.addEventListener("click", function(e){
+            if(e.target === modal){
+                modal.style.display = "none";
+            }
+        });
+    }
+
+});
+</script>
     
 <script>
 let ebtaAllowExit = false;
