@@ -8361,7 +8361,21 @@ def admin_enrollments():
 
     <section class='card'>
 
-        <h1>Enrollments — {month}</h1>
+        <h1>Enrollments — {pretty_month_label(month)}</h1>
+        
+        <form method="post" action="/admin/set-month" 
+              style="margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+
+            <label class="mini muted">View month:</label>
+
+            <input type="month" 
+                   name="month" 
+                   value="{month}" 
+                   style="padding:6px;border-radius:8px;border:1px solid #ccc">
+
+            <button class="btn mini">Switch</button>
+
+        </form>
 
         <div class='toolbar'>
 
@@ -8439,153 +8453,6 @@ def admin_enrollments():
 
     return page("Enrollments", body)
     
-@app.get('/admin/reports')
-def admin_reports():
-
-    r = require_admin()
-    if r: return r
-    
-    #if not is_high_admin():
-    #    return page("Access Denied", "<div class='card'>Only high admin can access reports.</div>")
-
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT 
-            sr.*, 
-            s.full_name,
-
-            (
-                SELECT COUNT(DISTINCT e.month)
-                FROM enrollments e
-                WHERE e.student_id = sr.student_id
-                AND e.status = 'ACTIVE'
-            ) AS months_active
-
-        FROM student_reports sr
-        JOIN students s ON s.id = sr.student_id
-        ORDER BY sr.upload_date DESC
-    """)
-
-    rows = cur.fetchall()
-    total_reports = len(rows)
-    conn.close()
-
-    html = ""
-
-    for r in rows:
-        html += f"""
-        <tr>
-            <td>{r['full_name']}</td>
-            <td>{r['grade']}</td>
-            <td>
-                <span class='chip'>
-                    {r['months_active'] or 0} months
-                </span>
-            </td>
-            <td>{r['file_name']}</td>
-            <td>{format_datetime(r['upload_date'])}</td>
-            <td style="display:flex; gap:6px">
-
-                <a class='btn mini' target='_blank'
-                   href='/admin/view_report/{r["id"]}'>View</a>
-
-                {"" if not is_high_admin() else f"""
-                <form method='post'
-                      action='/admin/delete_report/{r["id"]}'
-                      onsubmit="return confirm('Delete this report?');">
-                    <button class='btn mini danger'>Delete</button>
-                </form>
-                """}
-
-            </td>
-        </tr>
-        """
-
-    body = f"""
-    {admin_nav()}
-    <div class='card'>
-        <h2>Student Reports</h2>
-
-        <div class="stats" style="margin-bottom:12px">
-
-            <div class="stat">
-                <div class="k">{total_reports}</div>
-                <div class="t">Total Reports</div>
-            </div>
-
-        </div>
-
-        <table>
-            <thead>
-                <tr>
-                    <th>Student</th>
-                    <th>Grade</th>
-                    <th>Months Active</th>
-                    <th>File</th>
-                    <th>Date</th>
-                    <th>Action</th>
-                </tr>
-            </thead>
-            <tbody>
-                {html or "<tr><td colspan='5'>No reports yet</td></tr>"}
-            </tbody>
-        </table>
-    </div>
-    """
-
-    return page("Student Reports", body)
-
-@app.get('/admin/view_report/<int:rid>')
-def view_report(rid):
-
-    r = require_admin()
-    if r: return r
-    
-    #if not is_high_admin():
-    #    return page("Access Denied", "<div class='card'>Not allowed.</div>")
-
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute("SELECT file_path FROM student_reports WHERE id=?", (rid,))
-    row = cur.fetchone()
-    conn.close()
-
-    return send_from_directory(
-        os.path.dirname(row["file_path"]),
-        os.path.basename(row["file_path"])
-    )
-
-@app.post('/admin/delete_report/<int:rid>')
-def delete_report(rid):
-
-    r = require_admin()
-    if r: return r
-
-    if not is_high_admin():
-        return redirect(url_for('admin_reports'))
-
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute("SELECT file_path FROM student_reports WHERE id=?", (rid,))
-    row = cur.fetchone()
-
-    if row:
-        try:
-            os.remove(row["file_path"])
-        except:
-            pass
-
-        cur.execute("DELETE FROM student_reports WHERE id=?", (rid,))
-        conn.commit()
-
-    conn.close()
-
-    return redirect(url_for('admin_reports'))
-
 
 @app.post('/admin/enrollments/<int:id>/<action>')
 def enrollment_action(id: int, action: str):
@@ -8732,6 +8599,20 @@ def enrollment_action(id: int, action: str):
         pass
 
     return redirect(url_for('admin_enrollments', page=page_num))
+
+
+@app.post('/admin/set-month')
+def set_admin_month():
+    r = require_admin()
+    if r:
+        return r
+
+    month = request.form.get("month")
+
+    if month:
+        session['admin_month'] = month
+
+    return redirect(url_for('admin_enrollments'))
 
 # --- Admin: Students (show Guardian & Email) ---
 
@@ -9024,6 +8905,8 @@ def admin_students():
     """
 
     return page("Students", body)
+    
+    
     
 @app.get('/admin/students/export')
 def admin_students_export():
@@ -9555,6 +9438,155 @@ def admin_student_delete(sid: int):
         conn.close()
 
     return redirect(url_for('admin_students'))
+
+
+@app.get('/admin/reports')
+def admin_reports():
+
+    r = require_admin()
+    if r: return r
+    
+    #if not is_high_admin():
+    #    return page("Access Denied", "<div class='card'>Only high admin can access reports.</div>")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            sr.*, 
+            s.full_name,
+
+            (
+                SELECT COUNT(DISTINCT e.month)
+                FROM enrollments e
+                WHERE e.student_id = sr.student_id
+                AND e.status = 'ACTIVE'
+            ) AS months_active
+
+        FROM student_reports sr
+        JOIN students s ON s.id = sr.student_id
+        ORDER BY sr.upload_date DESC
+    """)
+
+    rows = cur.fetchall()
+    total_reports = len(rows)
+    conn.close()
+
+    html = ""
+
+    for r in rows:
+        html += f"""
+        <tr>
+            <td>{r['full_name']}</td>
+            <td>{r['grade']}</td>
+            <td>
+                <span class='chip'>
+                    {r['months_active'] or 0} months
+                </span>
+            </td>
+            <td>{r['file_name']}</td>
+            <td>{format_datetime(r['upload_date'])}</td>
+            <td style="display:flex; gap:6px">
+
+                <a class='btn mini' target='_blank'
+                   href='/admin/view_report/{r["id"]}'>View</a>
+
+                {"" if not is_high_admin() else f"""
+                <form method='post'
+                      action='/admin/delete_report/{r["id"]}'
+                      onsubmit="return confirm('Delete this report?');">
+                    <button class='btn mini danger'>Delete</button>
+                </form>
+                """}
+
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+    <div class='card'>
+        <h2>Student Reports</h2>
+
+        <div class="stats" style="margin-bottom:12px">
+
+            <div class="stat">
+                <div class="k">{total_reports}</div>
+                <div class="t">Total Reports</div>
+            </div>
+
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Student</th>
+                    <th>Grade</th>
+                    <th>Months Active</th>
+                    <th>File</th>
+                    <th>Date</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {html or "<tr><td colspan='5'>No reports yet</td></tr>"}
+            </tbody>
+        </table>
+    </div>
+    """
+
+    return page("Student Reports", body)
+
+@app.get('/admin/view_report/<int:rid>')
+def view_report(rid):
+
+    r = require_admin()
+    if r: return r
+    
+    #if not is_high_admin():
+    #    return page("Access Denied", "<div class='card'>Not allowed.</div>")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT file_path FROM student_reports WHERE id=?", (rid,))
+    row = cur.fetchone()
+    conn.close()
+
+    return send_from_directory(
+        os.path.dirname(row["file_path"]),
+        os.path.basename(row["file_path"])
+    )
+
+@app.post('/admin/delete_report/<int:rid>')
+def delete_report(rid):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return redirect(url_for('admin_reports'))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT file_path FROM student_reports WHERE id=?", (rid,))
+    row = cur.fetchone()
+
+    if row:
+        try:
+            os.remove(row["file_path"])
+        except:
+            pass
+
+        cur.execute("DELETE FROM student_reports WHERE id=?", (rid,))
+        conn.commit()
+
+    conn.close()
+
+    return redirect(url_for('admin_reports'))
+
 
 
 # --- Admin: Tutors ---
