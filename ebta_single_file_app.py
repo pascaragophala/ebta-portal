@@ -3048,7 +3048,7 @@ def home():
                 ">
 
                     <!-- CLOSE BUTTON -->
-                    <span onclick="closeQRModal()" style="
+                    <span id="closeQR" style="
                         position:absolute;
                         top:20px;
                         right:30px;
@@ -3056,6 +3056,7 @@ def home():
                         color:#fff;
                         cursor:pointer;
                         font-weight:bold;
+                        z-index:100000;
                     ">
                         ✕
                     </span>
@@ -3165,7 +3166,8 @@ document.addEventListener("DOMContentLoaded", function(){
     }
 
     if(closeBtn){
-        closeBtn.addEventListener("click", function(){
+        closeBtn.addEventListener("click", function(e){
+            e.stopPropagation();   // 🔥 THIS FIXES THE ISSUE COMPLETELY
             modal.style.display = "none";
         });
     }
