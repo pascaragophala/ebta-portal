@@ -5330,6 +5330,7 @@ def student_materials():
 
     sid = is_student()
     month = get_active_month('student')
+    month_selector = student_month_selector(sid, month)
 
     conn = get_db()
     cur = conn.cursor()
@@ -5458,6 +5459,7 @@ def student_materials():
     conn.close()
 
     body = f"""
+    {month_selector}
     <div class='card' style="border-left:6px solid #25D366">
 
         <a class='btn mini secondary' href='/student'>← Back</a>
@@ -5486,6 +5488,7 @@ def student_assignments():
 
     sid = is_student()
     month = get_active_month('student')
+    month_selector = student_month_selector(sid, month)
 
     conn = get_db()
     cur = conn.cursor()
@@ -5651,6 +5654,9 @@ def student_assignments():
     conn.close()
 
     return page("Assignments", f"""
+
+        {month_selector}
+
         <div class='card'>
             <a class='btn mini secondary' href='/student'>← Back</a>
 
@@ -5658,6 +5664,64 @@ def student_assignments():
         </div>
     """)
 
+
+def student_month_selector(sid, month):
+    conn = get_db()
+    cur = conn.cursor()
+
+    system_month = get_setting('current_month') or month
+    year = int(system_month.split('-')[0])
+
+    all_months = all_months_for_year(year)
+
+    # All enrolled months
+    cur.execute("""
+        SELECT DISTINCT substr(month,1,7) AS month
+        FROM enrollments
+        WHERE student_id=?
+    """, (sid,))
+    enrolled_months = {r['month'] for r in cur.fetchall()}
+
+    # Active months
+    cur.execute("""
+        SELECT DISTINCT substr(month,1,7) AS month
+        FROM enrollments
+        WHERE student_id=? AND status='ACTIVE'
+    """, (sid,))
+    active_months = {r['month'] for r in cur.fetchall()}
+
+    conn.close()
+
+    return f"""
+    <div class="card soft" style="margin-bottom:14px;border-left:5px solid #25D366">
+
+        <div style="font-weight:600;font-size:16px;margin-bottom:6px">
+            Switch Month
+        </div>
+
+        <form method="post" action="{url_for('student_set_month')}">
+
+            <select name="month"
+                    onchange="this.form.submit()"
+                    style="width:100%;padding:12px;font-size:16px;border-radius:10px;border:2px solid #25D366;">
+
+                {''.join(
+                    f"<option value='{m}' "
+                    f"{'selected' if m == month else ''}>"
+                    f"{'✓ ' if m in active_months else ''}"
+                    f"{pretty_month_label(m)}"
+                    f"{' (pending)' if m in enrolled_months and m not in active_months else ''}"
+                    f"{' (not enrolled)' if m not in enrolled_months else ''}"
+                    f"</option>"
+                    for m in all_months
+                )}
+
+            </select>
+
+        </form>
+
+    </div>
+    """
 
 
 @app.route('/student/upload_report', methods=['GET', 'POST'])
