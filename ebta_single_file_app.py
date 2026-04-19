@@ -5967,12 +5967,12 @@ def student_set_month():
         return r
 
     month = request.form.get('month')
-    if not month:
-        return redirect(url_for('student_home'))
 
-    # Always allow switching month
-    session['student_month'] = month
-    return redirect(url_for('student_home'))
+    if month:
+        session['student_month'] = month
+
+    # 🔥 THIS IS THE FIX
+    return redirect(request.referrer or url_for('student_home'))
     
 def all_months_for_year(year: int):
     """
