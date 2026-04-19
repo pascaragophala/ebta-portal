@@ -2991,6 +2991,7 @@ def home():
                     <img 
                         src="/static/icons/scantopayqrcode.jpeg"
                         alt="Scan to Pay QR Code"
+                        onclick="openQRModal(this.src)"
                         style="
                             width:200px;
                             max-width:100%;
@@ -2999,7 +3000,11 @@ def home():
                             padding:8px;
                             background:#fff;
                             box-shadow:0 2px 8px rgba(0,0,0,0.08);
+                            cursor:pointer;
+                            transition:transform 0.2s ease;
                         "
+                        onmouseover="this.style.transform='scale(1.05)'"
+                        onmouseout="this.style.transform='scale(1)'"
                     >
 
                     <div style="
@@ -3027,6 +3032,45 @@ def home():
                         ⬇ Download QR Code
                     </a>
 
+                </div>
+                
+                
+                <!-- QR FULLSCREEN MODAL -->
+                <div id="qrModal" style="
+                    display:none;
+                    position:fixed;
+                    z-index:99999;
+                    top:0;
+                    left:0;
+                    width:100%;
+                    height:100%;
+                    background:rgba(0,0,0,0.85);
+                    justify-content:center;
+                    align-items:center;
+                ">
+
+                    <!-- CLOSE BUTTON -->
+                    <span onclick="closeQRModal()" style="
+                        position:absolute;
+                        top:20px;
+                        right:30px;
+                        font-size:30px;
+                        color:#fff;
+                        cursor:pointer;
+                        font-weight:bold;
+                    ">
+                        ✕
+                    </span>
+
+                    <!-- IMAGE -->
+                    <img id="qrModalImg" style="
+                        max-width:90%;
+                        max-height:90%;
+                        border-radius:12px;
+                        box-shadow:0 10px 30px rgba(0,0,0,0.4);
+                        background:#fff;
+                        padding:10px;
+                    ">
                 </div>
 
             </div>
@@ -3104,6 +3148,28 @@ function copyAccountNumber(){
         showPopup("Failed to copy account number", "error");
     });
 }
+
+
+function openQRModal(src){
+    const modal = document.getElementById("qrModal");
+    const img = document.getElementById("qrModalImg");
+
+    img.src = src;
+    modal.style.display = "flex";
+}
+
+function closeQRModal(){
+    document.getElementById("qrModal").style.display = "none";
+}
+
+// Close when clicking outside image
+document.addEventListener("click", function(e){
+    const modal = document.getElementById("qrModal");
+    if(e.target === modal){
+        closeQRModal();
+    }
+});
+
 </script>    
     
 <script>
