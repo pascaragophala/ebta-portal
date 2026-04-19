@@ -2947,7 +2947,16 @@ def home():
             <ul class="mini" style="margin:6px 0 4px 14px;padding:0;">
                 <li>Account holder: Ms MCB MOHALE</li>
                 <li>Capitec number: 0649619653</li>
-                <li>Account number: 2062604285</li>
+                <li style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span>Account number: <b id="acc_number">2062604285</b></span>
+
+                    <button type="button"
+                            onclick="copyAccountNumber()"
+                            class="btn mini secondary"
+                            style="padding:4px 8px;">
+                        📋 Copy
+                    </button>
+                </li>
                 <li>Bank name: Capitec</li>
                 <li>Reference: Learner’s Name & Surname</li>
             </ul>
@@ -3001,6 +3010,14 @@ def home():
                     ">
                         SCAN TO PAY
                     </div>
+
+                    <!-- DOWNLOAD BUTTON -->
+                    <a href="/static/icons/scantopayqrcode.jpeg"
+                       download="EBTA-Scan-To-Pay.jpeg"
+                       class="btn mini success"
+                       style="margin-top:6px;">
+                        ⬇ Download QR Code
+                    </a>
 
                 </div>
 
@@ -3068,6 +3085,18 @@ def home():
     """
 
     extra_js = '''
+    
+<script>
+function copyAccountNumber(){
+    const acc = document.getElementById("acc_number").innerText;
+
+    navigator.clipboard.writeText(acc).then(() => {
+        showPopup("Account number copied ✔", "success");
+    }).catch(() => {
+        showPopup("Failed to copy account number", "error");
+    });
+}
+</script>    
     
 <script>
 let ebtaAllowExit = false;
