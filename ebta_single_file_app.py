@@ -1952,6 +1952,14 @@ background:#fff;
     transition: 0.2s ease;
 }
 
+#payment-anchor img {
+    transition: transform 0.2s ease;
+}
+
+#payment-anchor img:hover {
+    transform: scale(1.05);
+}
+
 </style>
 """
 
@@ -2943,6 +2951,60 @@ def home():
                 <li>Bank name: Capitec</li>
                 <li>Reference: Learner’s Name & Surname</li>
             </ul>
+            
+            <div style="
+                margin-top:16px;
+                padding:14px;
+                border:1px solid #e2e8f0;
+                border-radius:12px;
+                background:#f8fafc;
+            ">
+
+                <div style="
+                    font-weight:600;
+                    margin-bottom:6px;
+                    color:#0f172a;
+                ">
+                    📱 Scan to Pay (Fast Payment)
+                </div>
+
+                <div class="mini muted" style="margin-bottom:10px;">
+                    You can also pay instantly using your banking app by scanning the QR code below.
+                </div>
+
+                <div style="
+                    display:flex;
+                    flex-direction:column;
+                    align-items:center;
+                    gap:10px;
+                ">
+
+                    <img 
+                        src="/static/icons/scantopayqrcode.jpeg"
+                        alt="Scan to Pay QR Code"
+                        style="
+                            width:200px;
+                            max-width:100%;
+                            border-radius:12px;
+                            border:1px solid #e2e8f0;
+                            padding:8px;
+                            background:#fff;
+                            box-shadow:0 2px 8px rgba(0,0,0,0.08);
+                        "
+                    >
+
+                    <div style="
+                        font-weight:600;
+                        font-size:14px;
+                        color:#1b5e20;
+                        letter-spacing:1px;
+                    ">
+                        SCAN TO PAY
+                    </div>
+
+                </div>
+
+            </div>
 
             <label class="payment-confirm">
                 <input type="checkbox" id="paid_check" name="paid_check" />
