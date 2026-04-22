@@ -10473,6 +10473,32 @@ def admin_groups():
     {admin_nav()}
     <section class='card'>
         <h1>Group links (persistent)</h1>
+        
+        <div style="margin-bottom:12px; display:flex; gap:10px; flex-wrap:wrap;">
+
+            <form method="post"
+                  action="/admin/groups/toggle-all"
+                  onsubmit="return confirm('Are you sure you want to show ALL group links?')">
+
+                <input type="hidden" name="action" value="show">
+
+                <button class="btn success mini">
+                    Show All Groups
+                </button>
+            </form>
+
+            <form method="post"
+                  action="/admin/groups/toggle-all"
+                  onsubmit="return confirm('Are you sure you want to hide ALL group links?')">
+
+                <input type="hidden" name="action" value="hide">
+
+                <button class="btn danger mini">
+                    Hide All Groups
+                </button>
+            </form>
+
+        </div>
 
         <form class='grid' method='post' action='{url_for('admin_groups_post')}'>
             <div style='display:grid;grid-template-columns:1fr 2fr auto;gap:10px'>
@@ -10625,6 +10651,38 @@ def admin_group_delete(gid):
     conn.close()
 
     return redirect(url_for('admin_groups'))
+
+
+@app.post('/admin/groups/toggle-all')
+def admin_groups_toggle_all():
+    r = require_admin()
+    if r:
+        return r
+
+    action = request.form.get("action")  # 'show' or 'hide'
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    if action == "show":
+        cur.execute("""
+            UPDATE groups
+            SET is_visible = 1
+            WHERE month = 'ALL'
+        """)
+    elif action == "hide":
+        cur.execute("""
+            UPDATE groups
+            SET is_visible = 0
+            WHERE month = 'ALL'
+        """)
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('admin_groups'))
+    
+    
 
 # --- Admin: Settings ---
 
