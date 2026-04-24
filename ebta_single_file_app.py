@@ -5590,7 +5590,7 @@ def student_assignments():
                     if sub['feedback']:
                         action += f"<div class='mini muted'>{sub['feedback']}</div>"
 
-                    if sub.get('marked_file_path'):
+                    if sub['marked_file_path']:
                         action += f"""
                         <div style="margin-top:6px">
                             <a class='btn success mini'
