@@ -117,6 +117,13 @@ def init_db():
         UNIQUE(name,grade)
     );
     """)
+    
+    
+    cur.execute("""
+        UPDATE subjects
+        SET name = 'English FAL'
+        WHERE name = 'English'
+    """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS groups(
@@ -496,8 +503,12 @@ def init_db():
             ("EMS","G8"), ("EMS","G9"),
             ("Natural Sciences","G8"), ("Natural Sciences","G9"),
             
-            #English
-            ("English","G8"), ("English","G9"),("English","G10"),("English","G11"),("English","G12"),
+            # English FAL
+            ("English FAL","G8"),
+            ("English FAL","G9"),
+            ("English FAL","G10"),
+            ("English FAL","G11"),
+            ("English FAL","G12"),
         ]
 
         cur.executemany("INSERT OR IGNORE INTO subjects(name,grade) VALUES(?,?)", seed)
@@ -540,8 +551,12 @@ def init_db():
             ("EMS","G8"), ("EMS","G9"),
             ("Natural Sciences","G8"), ("Natural Sciences","G9"),
             
-            #English
-            ("English","G8"), ("English","G9"),("English","G10"),("English","G11"),("English","G12"),
+            # English FAL
+            ("English FAL","G8"),
+            ("English FAL","G9"),
+            ("English FAL","G10"),
+            ("English FAL","G11"),
+            ("English FAL","G12"),
         ]
 
         cur.executemany("INSERT OR IGNORE INTO subjects(name,grade) VALUES(?,?)", required_subjects)
@@ -2669,8 +2684,12 @@ def home():
         ("EMS","G8"), ("EMS","G9"),
         ("Natural Sciences","G8"), ("Natural Sciences","G9"),
         
-        #English
-        ("English","G8"), ("English","G9"),("English","G10"),("English","G11"),("English","G12"),
+        # English FAL
+        ("English FAL","G8"),
+        ("English FAL","G9"),
+        ("English FAL","G10"),
+        ("English FAL","G11"),
+        ("English FAL","G12"),
     ]
 
     try:
