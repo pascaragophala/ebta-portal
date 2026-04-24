@@ -14995,7 +14995,7 @@ def admin_analytics():
 
     import json
 
-    month = get_admin_active_month()
+    month = request.args.get("month") or get_admin_active_month()
     # ===== Month Calculations =====
     import datetime
 
@@ -15220,6 +15220,34 @@ def admin_analytics():
 
     body = f"""
     {admin_nav()}
+    
+    <div class='card soft' style="margin-bottom:14px;border-left:5px solid #25D366">
+        <form method="get" action="/admin/analytics"
+              style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+
+            <div>
+                <label>View analytics for month</label>
+                <input type="month"
+                       name="month"
+                       value="{month}"
+                       required>
+            </div>
+
+            <button class="btn success mini">
+                View Analytics
+            </button>
+
+            <a class="btn secondary mini" href="/admin/analytics">
+                Reset to Admin Month
+            </a>
+
+        </form>
+
+        <div class="mini muted" style="margin-top:8px">
+            Currently viewing analytics for <b>{pretty_month_label(month)}</b>.
+            This does not change the main admin month.
+        </div>
+    </div>
 
     <section class='stats big'>
         {stat('Revenue', f'R{revenue}')}
@@ -15372,6 +15400,7 @@ def admin_analytics():
     """
 
     return page("Analytics Dashboard", body)
+
 
 # --- Export remove list ---
 
