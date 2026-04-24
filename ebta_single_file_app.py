@@ -5558,7 +5558,7 @@ def student_assignments():
                         <a class='btn mini'
                            style="background:#1b5e20;color:white"
                            target='_blank'
-                           href='{sub['file_path']}'>
+                           href='/student/view_submission/{a["id"]}'>
                            📄 View My Submission
                         </a>
                     </div>
@@ -5722,6 +5722,41 @@ def student_month_selector(sid, month):
 
     </div>
     """
+
+
+@app.get('/student/view_submission/<int:mid>')
+def student_view_submission(mid):
+
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT file_path
+        FROM submissions
+        WHERE material_id=? AND student_id=?
+    """, (mid, sid))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row["file_path"]:
+        return page("Not found", "<div class='card'>Submission file not found.</div>")
+
+    file_path = row["file_path"]
+
+    if not os.path.exists(file_path):
+        return page("File missing", "<div class='card'>The submitted file could not be found on the server.</div>")
+
+    return send_from_directory(
+        os.path.dirname(file_path),
+        os.path.basename(file_path)
+    )
 
 
 @app.route('/student/upload_report', methods=['GET', 'POST'])
