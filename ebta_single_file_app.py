@@ -3144,7 +3144,7 @@ def home():
                                name="pop"
                                accept="image/*"
                                capture="environment"
-                               style="position:absolute; left:-9999px;"
+                               style="position:absolute; left:-9999px;">
 
                         <!-- Custom button -->
                         <button type="button"
@@ -3339,7 +3339,9 @@ function showPopup(message, type='info', timeout=4000){
 
     const paidCheck = document.getElementById('paid_check');
     const popSection = document.getElementById('pop_section');
-    const popInput = form.querySelector("input[type='file'][name='pop']");
+    const popInputs = Array.from(
+        form.querySelectorAll("input[type='file'][name='pop']")
+    );
 
     function updateSubjects() {
       const grade = gradeSelect.value;
@@ -3375,9 +3377,7 @@ function showPopup(message, type='info', timeout=4000){
             popSection.style.display = 'block';
         } else {
             popSection.style.display = 'none';
-            if (popInput) {
-            popInput.value = '';
-            }
+            popInputs.forEach(input => input.value = '');
         }
         });
     }
@@ -3521,9 +3521,18 @@ function showPopup(message, type='info', timeout=4000){
         }
 
         
-        if (!popInput || !popInput.files || popInput.files.length < 1 || popInput.files.length > 2) {
-        e.preventDefault();
-        showPopup('Please upload 1 or 2 Proof of Payment files.', 'error');;
+        let totalPopFiles = 0;
+
+        popInputs.forEach(input => {
+            if (input.files) {
+                totalPopFiles += input.files.length;
+            }
+        });
+
+        if (totalPopFiles < 1 || totalPopFiles > 2) {
+            e.preventDefault();
+            showPopup('Please upload or take 1 to 2 Proof of Payment files.', 'error');
+            return;
         }
     });
     });
