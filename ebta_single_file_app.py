@@ -3138,10 +3138,24 @@ def home():
                             Use your phone camera to take a clear photo of the proof of payment.
                         </div>
 
+                        <!-- Hidden real input -->
                         <input type="file"
+                               id="camera_input"
                                name="pop"
                                accept="image/*"
-                               capture="environment">
+                               capture="environment"
+                               style="display:none;">
+
+                        <!-- Custom button -->
+                        <button type="button"
+                                class="btn"
+                                onclick="openCamera()">
+                            📸 Open Camera
+                        </button>
+
+                        <div id="camera_file_name" class="mini muted" style="margin-top:6px;">
+                            No photo taken yet
+                        </div>
                     </div>
 
                 </div>
