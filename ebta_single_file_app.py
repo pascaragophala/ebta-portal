@@ -3103,11 +3103,53 @@ def home():
 
 
             <div id="pop_section" style="margin-top:8px;display:none;">
-                <label>Proof of Payment (1–2 files)</label>
-                <input type="file"
-                       name="pop"
-                       accept=".pdf,.png,.jpg,.jpeg,.gif,.webp"
-                       multiple />
+
+                <label>Proof of Payment</label>
+
+                <div class="mini muted" style="margin-bottom:10px;">
+                    Choose one option below: upload an existing file or take a photo of your proof of payment.
+                </div>
+
+                <div class="grid two-col" style="gap:12px;">
+
+                    <!-- OPTION 1: UPLOAD FILE -->
+                    <div class="card soft" style="border-left:5px solid #25D366;">
+                        <div style="font-weight:600;margin-bottom:6px;">
+                            Upload Proof of Payment
+                        </div>
+
+                        <div class="mini muted" style="margin-bottom:8px;">
+                            Upload a PDF, screenshot, or image from your device.
+                        </div>
+
+                        <input type="file"
+                               name="pop"
+                               accept=".pdf,.png,.jpg,.jpeg,.gif,.webp"
+                               multiple>
+                    </div>
+
+                    <!-- OPTION 2: TAKE PHOTO -->
+                    <div class="card soft" style="border-left:5px solid #f59e0b;">
+                        <div style="font-weight:600;margin-bottom:6px;">
+                            Take Photo
+                        </div>
+
+                        <div class="mini muted" style="margin-bottom:8px;">
+                            Use your phone camera to take a clear photo of the proof of payment.
+                        </div>
+
+                        <input type="file"
+                               name="pop"
+                               accept="image/*"
+                               capture="environment">
+                    </div>
+
+                </div>
+
+                <div class="mini muted" style="margin-top:8px;">
+                    Please upload clear proof with a visible date. Maximum 1–2 files recommended.
+                </div>
+
             </div>
             
             <div style="margin-top:14px;">
