@@ -3144,7 +3144,7 @@ def home():
                                name="pop"
                                accept="image/*"
                                capture="environment"
-                               style="display:none;">
+                               style="position:absolute; left:-9999px;"
 
                         <!-- Custom button -->
                         <button type="button"
@@ -3213,6 +3213,30 @@ def home():
     extra_js = '''
     
 <script>
+
+function openCamera(){
+    const input = document.getElementById('camera_input');
+    if(input){
+        input.click();
+    }
+}
+
+document.addEventListener("DOMContentLoaded", function(){
+    const camInput = document.getElementById('camera_input');
+    const fileLabel = document.getElementById('camera_file_name');
+
+    if(camInput){
+        camInput.addEventListener('change', function(){
+            if(this.files.length > 0){
+                fileLabel.innerText = this.files[0].name;
+            } else {
+                fileLabel.innerText = "No photo taken yet";
+            }
+        });
+    }
+});
+
+
 function copyAccountNumber(){
     const acc = document.getElementById("acc_number").innerText;
 
