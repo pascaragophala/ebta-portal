@@ -15399,6 +15399,42 @@ def aqm_nav():
     </div>
     """
 
+def aqm_pagination(endpoint, page_num, total_records, per_page=20, **params):
+    total_pages = (total_records + per_page - 1) // per_page
+
+    if total_pages <= 1:
+        return ""
+
+    links = ""
+
+    if page_num > 1:
+        params["page"] = page_num - 1
+        links += f"""
+        <a class="btn mini secondary" href="{url_for(endpoint, **params)}">
+            ← Previous
+        </a>
+        """
+
+    links += f"""
+    <span class="chip">
+        Page {page_num} of {total_pages}
+    </span>
+    """
+
+    if page_num < total_pages:
+        params["page"] = page_num + 1
+        links += f"""
+        <a class="btn mini secondary" href="{url_for(endpoint, **params)}">
+            Next →
+        </a>
+        """
+
+    return f"""
+    <div class="toolbar" style="margin-top:12px">
+        {links}
+    </div>
+    """
+
 
 @app.route('/aqm/login', methods=['GET', 'POST'])
 def aqm_login():
@@ -15770,9 +15806,21 @@ def aqm_reports():
     if r: return r
 
     month = request.args.get("month") or get_setting("current_month")
+    
+    page_num = int(request.args.get("page", 1))
+    per_page = 20
+    offset = (page_num - 1) * per_page
 
     conn = get_db()
     cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS total
+        FROM student_reports sr
+        WHERE substr(sr.upload_date,1,7)=?
+    """, (month,))
+
+    total_reports = cur.fetchone()["total"]
 
     cur.execute("""
         SELECT sr.*, st.full_name, st.grade, st.school
@@ -15780,7 +15828,8 @@ def aqm_reports():
         JOIN students st ON st.id = sr.student_id
         WHERE substr(sr.upload_date,1,7)=?
         ORDER BY sr.upload_date DESC
-    """, (month,))
+        LIMIT ? OFFSET ?
+    """, (month, per_page, offset))
 
     reports = cur.fetchall()
 
@@ -15901,7 +15950,9 @@ def aqm_reports():
                 </tbody>
             </table>
         </div>
-
+    
+        {aqm_pagination("aqm_reports", page_num, total_reports, per_page, month=month)}
+    
         <div class="card">
             <h2>Manual Academic Marks</h2>
 
