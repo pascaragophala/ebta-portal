@@ -5687,30 +5687,32 @@ def student_assignments():
                           enctype='multipart/form-data'
                           style="margin-top:6px">
 
-                        <div style="display:grid;gap:8px;margin-top:6px;">
+                        <div style="margin-top:6px">
 
-                            <div>
-                                <label class="mini muted">Upload file</label>
+                            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+
                                 <input type='file'
                                        name='file'
-                                       accept=".pdf,.png,.jpg,.jpeg,.doc,.docx">
-                            </div>
+                                       accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                                       title="Upload file"
+                                       style="max-width:140px;font-size:12px">
 
-                            <div>
-                                <label class="mini muted">Take photo</label>
                                 <input type='file'
                                        name='file'
                                        accept="image/*"
-                                       capture="environment">
+                                       capture="environment"
+                                       title="Take photo"
+                                       style="max-width:140px;font-size:12px">
+
+                                <button class='btn warn mini'>
+                                    🔁 Resubmit
+                                </button>
+
                             </div>
 
-                            <div class="mini muted">
-                                Choose either upload file or take photo.
+                            <div class="mini muted" style="margin-top:4px">
+                                Upload or take photo
                             </div>
-
-                            <button class='btn warn mini'>
-                                🔁 Resubmit
-                            </button>
 
                         </div>
                     </form>
@@ -5745,30 +5747,32 @@ def student_assignments():
                           action='/student/submit/{a["id"]}'
                           enctype='multipart/form-data'>
 
-                        <div style="display:grid;gap:8px;margin-top:6px;">
+                        <div style="margin-top:6px">
 
-                            <div>
-                                <label class="mini muted">Upload file</label>
+                            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+
                                 <input type='file'
                                        name='file'
-                                       accept=".pdf,.png,.jpg,.jpeg,.doc,.docx">
-                            </div>
+                                       accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                                       title="Upload file"
+                                       style="max-width:140px;font-size:12px">
 
-                            <div>
-                                <label class="mini muted">Take photo</label>
                                 <input type='file'
                                        name='file'
                                        accept="image/*"
-                                       capture="environment">
+                                       capture="environment"
+                                       title="Take photo"
+                                       style="max-width:140px;font-size:12px">
+
+                                <button class='btn success mini'>
+                                    Submit
+                                </button>
+
                             </div>
 
-                            <div class="mini muted">
-                                Choose either upload file or take photo.
+                            <div class="mini muted" style="margin-top:4px">
+                                Upload or take photo
                             </div>
-
-                            <button class='btn success mini'>
-                                Submit
-                            </button>
 
                         </div>
                     </form>
