@@ -4267,13 +4267,13 @@ def student_login():
             <a class="btn mini secondary"
                target="_blank"
                href="https://drive.google.com/file/d/1shB3HSinhvBinC7_RUeB0OhxwLyN6ZV8/view">
-                Join WhatsApp Group
+                How to Join WhatsApp Groups
             </a>
 
             <a class="btn mini secondary"
                target="_blank"
                href="https://drive.google.com/file/d/1cPluM63tebmvAuwt157sFhZ7LtOHNkti/view">
-                Upload Assignment
+                How to Upload Assignment
             </a>
         </div>
     </div>
