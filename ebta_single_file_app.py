@@ -333,6 +333,39 @@ def init_db():
         created_at TEXT NOT NULL
     );
     """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS academic_report_marks(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id INTEGER NOT NULL,
+        subject_id INTEGER NOT NULL,
+        month TEXT NOT NULL,
+        mark INTEGER NOT NULL,
+        category TEXT,
+        comment TEXT,
+        created_by INTEGER,
+        created_at TEXT NOT NULL,
+        UNIQUE(student_id, subject_id, month),
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
+    );
+    """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS aqm_student_marks(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id INTEGER NOT NULL,
+        subject_id INTEGER NOT NULL,
+        month TEXT NOT NULL,
+        mark INTEGER NOT NULL,
+        source TEXT NOT NULL DEFAULT 'manual',
+        note TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(student_id, subject_id, month),
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
+    );
+    """)
 
     
     ensure_column(conn, "students", "guardian_name", "TEXT")
@@ -15729,6 +15762,731 @@ def admin_delete_academic_quality_manager(aqm_id):
     conn.close()
 
     return redirect(url_for("admin_academic_quality_managers"))
+    
+    
+@app.get('/aqm/reports')
+def aqm_reports():
+    r = require_aqm()
+    if r: return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT sr.*, st.full_name, st.grade, st.school
+        FROM student_reports sr
+        JOIN students st ON st.id = sr.student_id
+        WHERE substr(sr.upload_date,1,7)=?
+        ORDER BY sr.upload_date DESC
+    """, (month,))
+
+    reports = cur.fetchall()
+
+    cur.execute("""
+        SELECT st.id AS student_id,
+               st.full_name,
+               st.grade,
+               s.id AS subject_id,
+               s.name AS subject_name,
+               am.mark,
+               am.note
+        FROM enrollments e
+        JOIN students st ON st.id = e.student_id
+        JOIN subjects s ON s.id = e.subject_id
+        LEFT JOIN aqm_student_marks am
+            ON am.student_id = st.id
+           AND am.subject_id = s.id
+           AND am.month = ?
+        WHERE e.month LIKE ?
+          AND e.status = 'ACTIVE'
+        ORDER BY st.full_name, s.name
+    """, (month, month + "%"))
+
+    mark_rows = cur.fetchall()
+
+    conn.close()
+
+    rows = ""
+
+    for r0 in reports:
+        rows += f"""
+        <tr>
+            <td data-label="Learner">{r0['full_name']}</td>
+            <td data-label="Grade">{grade_label(r0['grade'])}</td>
+            <td data-label="School">{r0['school'] or '—'}</td>
+            <td data-label="File">{r0['file_name']}</td>
+            <td data-label="Uploaded">{r0['upload_date'][:16].replace('T',' ')}</td>
+            <td data-label="View">
+                <a class="btn mini success"
+                   target="_blank"
+                   href="{r0['file_path']}">
+                   View Report
+                </a>
+            </td>
+        </tr>
+        """
+
+    
+    manual_rows = ""
+
+    for m in mark_rows:
+        current_mark = "" if m["mark"] is None else m["mark"]
+        current_note = m["note"] or ""
+
+        manual_rows += f"""
+        <tr>
+            <td data-label="Learner">{m['full_name']}</td>
+            <td data-label="Grade">{grade_label(m['grade'])}</td>
+            <td data-label="Subject">{m['subject_name']}</td>
+            <td data-label="Capture Mark">
+                <form method="post"
+                      action="/aqm/manual-mark"
+                      style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+
+                    <input type="hidden" name="student_id" value="{m['student_id']}">
+                    <input type="hidden" name="subject_id" value="{m['subject_id']}">
+                    <input type="hidden" name="month" value="{month}">
+
+                    <input type="number"
+                           name="mark"
+                           min="0"
+                           max="100"
+                           value="{current_mark}"
+                           placeholder="0-100"
+                           required
+                           style="width:100px">
+
+                    <input name="note"
+                           value="{current_note}"
+                           placeholder="Optional note"
+                           style="min-width:180px">
+
+                    <button class="btn mini success">Save</button>
+                </form>
+            </td>
+        </tr>
+        """
+    
+    
+    body = f"""
+    {aqm_nav()}
+
+    <div class="card">
+        <h2>Student Academic Reports</h2>
+
+        <form method="get" style="max-width:220px;margin-bottom:12px">
+            <label>Month</label>
+            <input type="month"
+                   name="month"
+                   value="{month}"
+                   onchange="this.form.submit()">
+        </form>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Grade</th>
+                        <th>School</th>
+                        <th>Report File</th>
+                        <th>Uploaded</th>
+                        <th>View</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or '<tr><td colspan="6">No academic reports uploaded for this month.</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <h2>Manual Academic Marks</h2>
+
+            <p class="mini muted">
+                Capture marks from school reports or offline academic checks. These marks will be used for learner performance tracking.
+            </p>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Learner</th>
+                            <th>Grade</th>
+                            <th>Subject</th>
+                            <th>Capture Mark</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {manual_rows or '<tr><td colspan="4">No active learners found for this month.</td></tr>'}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        
+    </div>
+    """
+
+    return page("Student Reports", body)
+
+
+@app.post('/aqm/manual-mark')
+def aqm_manual_mark():
+    r = require_aqm()
+    if r: return r
+
+    student_id = request.form.get("student_id")
+    subject_id = request.form.get("subject_id")
+    month = request.form.get("month")
+    mark = request.form.get("mark")
+    note = request.form.get("note", "").strip()
+
+    if not student_id or not subject_id or not month or mark is None:
+        return page("Invalid", card_msg("Missing mark details."))
+
+    mark = int(mark)
+
+    if mark < 0 or mark > 100:
+        return page("Invalid mark", card_msg("Mark must be between 0 and 100."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO aqm_student_marks(student_id, subject_id, month, mark, note, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(student_id, subject_id, month)
+        DO UPDATE SET
+            mark=excluded.mark,
+            note=excluded.note,
+            created_at=excluded.created_at
+    """, (student_id, subject_id, month, mark, note, now_utc_iso()))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("aqm_reports", month=month))
+    
+    
+    
+@app.get('/aqm/learners')
+def aqm_learners():
+    r = require_aqm()
+    if r: return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            st.id,
+            st.full_name,
+            st.grade,
+            st.school,
+            COUNT(DISTINCT e.subject_id) AS subjects_count,
+            ROUND(AVG(am.mark), 1) AS avg_manual_mark,
+            ROUND(AVG(sub.mark), 1) AS avg_assignment_mark
+        FROM students st
+        JOIN enrollments e 
+            ON e.student_id = st.id
+        LEFT JOIN aqm_student_marks am
+            ON am.student_id = st.id
+           AND am.month = ?
+        LEFT JOIN submissions sub
+            ON sub.student_id = st.id
+        LEFT JOIN materials m
+            ON m.id = sub.material_id
+           AND m.month = ?
+           AND m.is_assignment = 1
+        WHERE e.month LIKE ?
+          AND e.status = 'ACTIVE'
+        GROUP BY st.id
+        ORDER BY st.full_name
+    """, (month, month, month + "%"))
+
+    learners = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for x in learners:
+        manual_avg = x["avg_manual_mark"] or 0
+        assignment_avg = x["avg_assignment_mark"] or 0
+
+        overall = manual_avg if manual_avg else assignment_avg
+
+        if overall >= 80:
+            category = "Top Achiever"
+        elif overall >= 60:
+            category = "At Expected Level"
+        elif overall > 0:
+            category = "Below Expected"
+        else:
+            category = "No marks yet"
+
+        rows += f"""
+        <tr>
+            <td data-label="Learner">{x['full_name']}</td>
+            <td data-label="Grade">{grade_label(x['grade'])}</td>
+            <td data-label="School">{x['school'] or '—'}</td>
+            <td data-label="Subjects">{x['subjects_count']}</td>
+            <td data-label="Manual Avg">{manual_avg}%</td>
+            <td data-label="Assignment Avg">{assignment_avg}%</td>
+            <td data-label="Category"><span class="chip">{category}</span></td>
+        </tr>
+        """
+
+    body = f"""
+    {aqm_nav()}
+
+    <div class="card">
+        <h2>Learner Performance</h2>
+
+        <form method="get" style="max-width:220px;margin-bottom:12px">
+            <label>Month</label>
+            <input type="month"
+                   name="month"
+                   value="{month}"
+                   onchange="this.form.submit()">
+        </form>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Grade</th>
+                        <th>School</th>
+                        <th>Subjects</th>
+                        <th>Manual Avg</th>
+                        <th>Assignment Avg</th>
+                        <th>Category</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or '<tr><td colspan="7">No learners found for this month.</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+
+    return page("Learner Performance", body)
+
+
+@app.get('/aqm/assignments')
+def aqm_assignments():
+    r = require_aqm()
+    if r: return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            st.full_name,
+            st.grade,
+            s.name AS subject_name,
+            m.title,
+            m.due_date,
+            sub.id AS submission_id,
+            sub.mark,
+            sub.submitted_at
+        FROM enrollments e
+        JOIN students st ON st.id = e.student_id
+        JOIN subjects s ON s.id = e.subject_id
+        JOIN materials m 
+            ON m.subject_id = s.id
+           AND m.month = ?
+           AND m.is_assignment = 1
+        LEFT JOIN submissions sub 
+            ON sub.material_id = m.id
+           AND sub.student_id = st.id
+        WHERE e.month LIKE ?
+          AND e.status = 'ACTIVE'
+        ORDER BY st.full_name, s.name, m.title
+    """, (month, month + "%"))
+
+    rows = ""
+
+    for x in cur.fetchall():
+        if x["submission_id"]:
+            status = "<span class='chip active'>Submitted</span>"
+            submitted_at = (x["submitted_at"] or "")[:16].replace("T", " ")
+        else:
+            status = "<span class='chip lapsed'>Not Submitted</span>"
+            submitted_at = "—"
+
+        rows += f"""
+        <tr>
+            <td data-label="Learner">{x['full_name']}</td>
+            <td data-label="Grade">{grade_label(x['grade'])}</td>
+            <td data-label="Subject">{x['subject_name']}</td>
+            <td data-label="Assignment">{x['title']}</td>
+            <td data-label="Due Date">{x['due_date'] or '—'}</td>
+            <td data-label="Status">{status}</td>
+            <td data-label="Submitted At">{submitted_at}</td>
+            <td data-label="Mark">{x['mark'] if x['mark'] is not None else '—'}</td>
+        </tr>
+        """
+
+    conn.close()
+
+    body = f"""
+    {aqm_nav()}
+
+    <div class="card">
+        <h2>Assignment Completion</h2>
+
+        <form method="get" style="max-width:220px;margin-bottom:12px">
+            <label>Month</label>
+            <input type="month"
+                   name="month"
+                   value="{month}"
+                   onchange="this.form.submit()">
+        </form>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Assignment</th>
+                        <th>Due Date</th>
+                        <th>Status</th>
+                        <th>Submitted At</th>
+                        <th>Mark</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or '<tr><td colspan="8">No assignments found for this month.</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+
+    return page("Assignment Completion", body)
+    
+    
+@app.get('/aqm/attendance')
+def aqm_attendance():
+    r = require_aqm()
+    if r: return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            st.full_name,
+            st.grade,
+            sub.name AS subject_name,
+            COUNT(a.id) AS attended
+        FROM enrollments e
+        JOIN students st ON st.id = e.student_id
+        JOIN subjects sub ON sub.id = e.subject_id
+        LEFT JOIN sessions se ON se.subject_id = sub.id
+        LEFT JOIN attendance a
+            ON a.session_id = se.id
+           AND a.student_id = st.id
+           AND substr(a.date,1,7) = ?
+        WHERE e.month LIKE ?
+          AND e.status = 'ACTIVE'
+        GROUP BY st.id, sub.id
+        ORDER BY st.full_name, sub.name
+    """, (month, month + "%"))
+
+    rows = ""
+
+    for x in cur.fetchall():
+        attended = x["attended"] or 0
+
+        if attended >= 4:
+            trend = "<span class='chip active'>Good</span>"
+        elif attended >= 2:
+            trend = "<span class='chip pending'>Needs Monitoring</span>"
+        else:
+            trend = "<span class='chip lapsed'>At Risk</span>"
+
+        rows += f"""
+        <tr>
+            <td data-label="Learner">{x['full_name']}</td>
+            <td data-label="Grade">{grade_label(x['grade'])}</td>
+            <td data-label="Subject">{x['subject_name']}</td>
+            <td data-label="Attendance Records">{attended}</td>
+            <td data-label="Trend">{trend}</td>
+        </tr>
+        """
+
+    conn.close()
+
+    body = f"""
+    {aqm_nav()}
+
+    <div class="card">
+        <h2>Attendance Trends</h2>
+
+        <form method="get" style="max-width:220px;margin-bottom:12px">
+            <label>Month</label>
+            <input type="month"
+                   name="month"
+                   value="{month}"
+                   onchange="this.form.submit()">
+        </form>
+
+        <p class="mini muted">
+            This shows learner attendance per subject for the selected month.
+        </p>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Attendance Records</th>
+                        <th>Trend</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or '<tr><td colspan="5">No attendance data found for this month.</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+
+    return page("Attendance Trends", body)
+
+
+@app.get('/aqm/tutors')
+def aqm_tutors():
+    r = require_aqm()
+    if r: return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            t.id,
+            t.full_name,
+            COUNT(twt.id) AS reports_count,
+            SUM(CASE WHEN twt.session_held = 1 THEN 1 ELSE 0 END) AS sessions_held,
+            SUM(CASE WHEN twt.recording_posted = 1 THEN 1 ELSE 0 END) AS recordings_posted,
+            SUM(CASE WHEN twt.posted_within_24h = 1 THEN 1 ELSE 0 END) AS posted_within_24h,
+            ROUND(AVG(twt.manager_rating), 1) AS avg_manager_rating
+        FROM tutors t
+        LEFT JOIN tutor_weekly_tracker twt
+            ON twt.tutor_id = t.id
+           AND substr(twt.session_date,1,7) = ?
+        GROUP BY t.id
+        ORDER BY t.full_name
+    """, (month,))
+
+    rows = ""
+
+    for x in cur.fetchall():
+        reports_count = x["reports_count"] or 0
+        sessions_held = x["sessions_held"] or 0
+        recordings_posted = x["recordings_posted"] or 0
+        posted_within_24h = x["posted_within_24h"] or 0
+        avg_rating = x["avg_manager_rating"] or "—"
+
+        if reports_count == 0:
+            status = "<span class='chip lapsed'>No reports</span>"
+        elif avg_rating != "—" and float(avg_rating) >= 4:
+            status = "<span class='chip active'>Strong</span>"
+        elif avg_rating != "—" and float(avg_rating) >= 3:
+            status = "<span class='chip pending'>Monitor</span>"
+        else:
+            status = "<span class='chip lapsed'>Needs Review</span>"
+
+        rows += f"""
+        <tr>
+            <td data-label="Tutor">{x['full_name']}</td>
+            <td data-label="Reports">{reports_count}</td>
+            <td data-label="Sessions Held">{sessions_held}</td>
+            <td data-label="Recordings Posted">{recordings_posted}</td>
+            <td data-label="Posted Within 24h">{posted_within_24h}</td>
+            <td data-label="Avg Rating">{avg_rating}</td>
+            <td data-label="Status">{status}</td>
+        </tr>
+        """
+
+    conn.close()
+
+    body = f"""
+    {aqm_nav()}
+
+    <div class="card">
+        <h2>Tutor Quality</h2>
+
+        <form method="get" style="max-width:220px;margin-bottom:12px">
+            <label>Month</label>
+            <input type="month"
+                   name="month"
+                   value="{month}"
+                   onchange="this.form.submit()">
+        </form>
+
+        <p class="mini muted">
+            This uses tutor manager weekly tracker data to monitor tutor activity, punctuality indicators, reports, recordings, and rating trends.
+        </p>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Tutor</th>
+                        <th>Reports</th>
+                        <th>Sessions Held</th>
+                        <th>Recordings Posted</th>
+                        <th>Within 24h</th>
+                        <th>Avg Rating</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or '<tr><td colspan="7">No tutor quality data found for this month.</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+
+    return page("Tutor Quality", body)
+    
+    
+@app.get('/aqm/awards')
+def aqm_awards():
+    r = require_aqm()
+    if r: return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            st.full_name,
+            st.grade,
+            st.school,
+            s.name AS subject_name,
+            ROUND(AVG(COALESCE(am.mark, sub.mark)), 1) AS avg_mark
+        FROM students st
+        JOIN enrollments e ON e.student_id = st.id
+        JOIN subjects s ON s.id = e.subject_id
+
+        LEFT JOIN aqm_student_marks am
+            ON am.student_id = st.id
+           AND am.subject_id = s.id
+           AND am.month = ?
+
+        LEFT JOIN materials m
+            ON m.subject_id = s.id
+           AND m.month = ?
+           AND m.is_assignment = 1
+
+        LEFT JOIN submissions sub
+            ON sub.material_id = m.id
+           AND sub.student_id = st.id
+
+        WHERE e.month LIKE ?
+          AND e.status = 'ACTIVE'
+
+        GROUP BY st.id, s.id
+        HAVING avg_mark IS NOT NULL
+        ORDER BY avg_mark DESC
+    """, (month, month, month + "%"))
+
+    rows = ""
+
+    for x in cur.fetchall():
+        avg_mark = x["avg_mark"] or 0
+
+        if avg_mark >= 90:
+            award = "Top Achiever Candidate"
+        elif avg_mark >= 80:
+            award = "Distinction Candidate"
+        elif avg_mark >= 70:
+            award = "Strong Performer"
+        elif avg_mark >= 60:
+            award = "Consistent Achiever"
+        else:
+            award = "Monitor for Improvement"
+
+        rows += f"""
+        <tr>
+            <td data-label="Learner">{x['full_name']}</td>
+            <td data-label="Grade">{grade_label(x['grade'])}</td>
+            <td data-label="School">{x['school'] or '—'}</td>
+            <td data-label="Subject">{x['subject_name']}</td>
+            <td data-label="Average">{avg_mark}%</td>
+            <td data-label="Award Suggestion">
+                <span class="chip">{award}</span>
+            </td>
+        </tr>
+        """
+
+    conn.close()
+
+    body = f"""
+    {aqm_nav()}
+
+    <div class="card">
+        <h2>Awards & Top Achievers</h2>
+
+        <form method="get" style="max-width:220px;margin-bottom:12px">
+            <label>Month</label>
+            <input type="month"
+                   name="month"
+                   value="{month}"
+                   onchange="this.form.submit()">
+        </form>
+
+        <p class="mini muted">
+            This section suggests award candidates using manual academic marks and assignment marks.
+            Final awards should still be reviewed and approved by CAO/CEO.
+        </p>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Grade</th>
+                        <th>School</th>
+                        <th>Subject</th>
+                        <th>Average</th>
+                        <th>Award Suggestion</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or '<tr><td colspan="6">No award candidates found for this month.</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+
+    return page("Awards", body)
 
 
 # --- Admin: Analytics dashboard ---
