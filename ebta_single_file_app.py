@@ -15399,7 +15399,7 @@ def aqm_nav():
     </div>
     """
 
-def aqm_pagination(endpoint, page_num, total_records, per_page=20, **params):
+def aqm_pagination(endpoint, page_num, total_records, per_page=2, **params):
     total_pages = (total_records + per_page - 1) // per_page
 
     if total_pages <= 1:
