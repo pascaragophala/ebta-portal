@@ -5394,7 +5394,14 @@ def student_submit(mid):
             )
 
     # 🔥 Continue with upload
-    f = request.files.get("file")
+    files = request.files.getlist("file")
+
+    f = None
+
+    for uploaded_file in files:
+        if uploaded_file and uploaded_file.filename != "":
+            f = uploaded_file
+            break
 
     if not f:
         conn.close()
@@ -5680,11 +5687,32 @@ def student_assignments():
                           enctype='multipart/form-data'
                           style="margin-top:6px">
 
-                        <input type='file' name='file' required>
+                        <div style="display:grid;gap:8px;margin-top:6px;">
 
-                        <button class='btn warn mini'>
-                            🔁 Resubmit
-                        </button>
+                            <div>
+                                <label class="mini muted">Upload file</label>
+                                <input type='file'
+                                       name='file'
+                                       accept=".pdf,.png,.jpg,.jpeg,.doc,.docx">
+                            </div>
+
+                            <div>
+                                <label class="mini muted">Take photo</label>
+                                <input type='file'
+                                       name='file'
+                                       accept="image/*"
+                                       capture="environment">
+                            </div>
+
+                            <div class="mini muted">
+                                Choose either upload file or take photo.
+                            </div>
+
+                            <button class='btn warn mini'>
+                                🔁 Resubmit
+                            </button>
+
+                        </div>
                     </form>
                     """
                 else:
@@ -5717,9 +5745,32 @@ def student_assignments():
                           action='/student/submit/{a["id"]}'
                           enctype='multipart/form-data'>
 
-                        <input type='file' name='file' required>
+                        <div style="display:grid;gap:8px;margin-top:6px;">
 
-                        <button class='btn success mini'>Submit</button>
+                            <div>
+                                <label class="mini muted">Upload file</label>
+                                <input type='file'
+                                       name='file'
+                                       accept=".pdf,.png,.jpg,.jpeg,.doc,.docx">
+                            </div>
+
+                            <div>
+                                <label class="mini muted">Take photo</label>
+                                <input type='file'
+                                       name='file'
+                                       accept="image/*"
+                                       capture="environment">
+                            </div>
+
+                            <div class="mini muted">
+                                Choose either upload file or take photo.
+                            </div>
+
+                            <button class='btn success mini'>
+                                Submit
+                            </button>
+
+                        </div>
                     </form>
                     """
                 else:
