@@ -5006,6 +5006,7 @@ def student_home():
                                    name='file'
                                    accept="image/*"
                                    capture="environment"
+                                   title="Take photo"
                                    style="max-width:120px;font-size:12px">
 
                             <button class='btn warn mini'>
@@ -5038,6 +5039,7 @@ def student_home():
                                name='file'
                                accept="image/*"
                                capture="environment"
+                               title="Take photo"
                                style="max-width:120px;font-size:12px">
 
                         <button class='btn success mini'>
