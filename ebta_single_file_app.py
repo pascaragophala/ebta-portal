@@ -5779,18 +5779,30 @@ def student_assignments():
 
                             <div class="assignment-upload-row">
 
-                                <input type='file'
-                                       name='file'
+                                <input type="file"
+                                       id="resubmit_upload_input_{a["id"]}"
+                                       name="file"
                                        accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
-                                       title="Upload file"
-                                       style="max-width:140px;font-size:12px">
+                                       style="display:none;">
 
-                                <input type='file'
-                                       name='file'
+                                <input type="file"
+                                       id="resubmit_camera_input_{a["id"]}"
+                                       name="file"
                                        accept="image/*"
                                        capture="environment"
-                                       title="Take photo"
-                                       style="max-width:140px;font-size:12px">
+                                       style="display:none;">
+
+                                <button type="button"
+                                        class="btn mini secondary"
+                                        onclick="document.getElementById('resubmit_upload_input_{a["id"]}').click()">
+                                    📄 Upload
+                                </button>
+
+                                <button type="button"
+                                        class="btn mini"
+                                        onclick="document.getElementById('resubmit_camera_input_{a["id"]}').click()">
+                                    📸 Take Photo
+                                </button>
 
                                 <button class='btn warn mini'>
                                     🔁 Resubmit
@@ -5843,18 +5855,30 @@ def student_assignments():
 
                             <div class="assignment-upload-row">
 
-                                <input type='file'
-                                       name='file'
+                                <input type="file"
+                                       id="upload_input_{a["id"]}"
+                                       name="file"
                                        accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
-                                       title="Upload file"
-                                       style="max-width:140px;font-size:12px">
+                                       style="display:none;">
 
-                                <input type='file'
-                                       name='file'
+                                <input type="file"
+                                       id="camera_input_{a["id"]}"
+                                       name="file"
                                        accept="image/*"
                                        capture="environment"
-                                       title="Take photo"
-                                       style="max-width:140px;font-size:12px">
+                                       style="display:none;">
+
+                                <button type="button"
+                                        class="btn mini secondary"
+                                        onclick="document.getElementById('upload_input_{a["id"]}').click()">
+                                    📄 Upload
+                                </button>
+
+                                <button type="button"
+                                        class="btn mini"
+                                        onclick="document.getElementById('camera_input_{a["id"]}').click()">
+                                    📸 Take Photo
+                                </button>
 
                                 <button class='btn success mini'>
                                     Submit
