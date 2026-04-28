@@ -4254,53 +4254,33 @@ def student_login():
         return redirect(url_for('student_home'))
         
     help_videos = """
-    <div class="card soft" style="margin-bottom:16px;">
-        <h2>Student Help Videos</h2>
-
-        <div class="mini muted" style="margin-bottom:10px;">
-            Watch these videos if you need help after logging into the EBTA Portal.
+    <div class="card soft" style="max-width:420px;margin:0 auto 14px auto;text-align:center;">
+        <div style="font-weight:700;margin-bottom:6px;">
+            Student Help Videos
         </div>
 
-        <div style="
-            display:grid;
-            grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
-            gap:16px;
-        ">
+        <div class="mini muted" style="margin-bottom:10px;">
+            Quick guides for using the student portal.
+        </div>
 
-            <div>
-                <div class="mini" style="font-weight:600;margin-bottom:6px;">
-                    How to Join WhatsApp Group
-                </div>
-                <iframe
-                    src="https://drive.google.com/file/d/1shB3HSinhvBinC7_RUeB0OhxwLyN6ZV8/preview"
-                    width="100%"
-                    height="180"
-                    allow="autoplay"
-                    loading="lazy"
-                    style="border-radius:10px;border:1px solid #e2e8f0;">
-                </iframe>
-            </div>
+        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+            <a class="btn mini secondary"
+               target="_blank"
+               href="https://drive.google.com/file/d/1shB3HSinhvBinC7_RUeB0OhxwLyN6ZV8/view">
+                Join WhatsApp Group
+            </a>
 
-            <div>
-                <div class="mini" style="font-weight:600;margin-bottom:6px;">
-                    How to Upload Assignment
-                </div>
-                <iframe
-                    src="https://drive.google.com/file/d/1cPluM63tebmvAuwt157sFhZ7LtOHNkti/preview"
-                    width="100%"
-                    height="180"
-                    allow="autoplay"
-                    loading="lazy"
-                    style="border-radius:10px;border:1px solid #e2e8f0;">
-                </iframe>
-            </div>
-
+            <a class="btn mini secondary"
+               target="_blank"
+               href="https://drive.google.com/file/d/1cPluM63tebmvAuwt157sFhZ7LtOHNkti/view">
+                Upload Assignment
+            </a>
         </div>
     </div>
     """
 
     body = f"""
-    <section class='wrap'>
+    <section class='wrap small'>
     
       {help_videos}
       
