@@ -6012,25 +6012,41 @@ def student_upload_report():
             
         </form>
         
-        <script>
-        document.addEventListener("DOMContentLoaded", function(){
-            const cam = document.getElementById("report_camera_input");
-            const label = document.getElementById("report_camera_name");
-
-            if(cam && label){
-                cam.addEventListener("change", function(){
-                    label.innerText = this.files.length > 0
-                        ? this.files[0].name
-                        : "No photo taken yet";
-                });
-            }
-        });
-        </script>
-        
     </div>
     """
+    
+    extra_js = """
+    <script>
+    document.addEventListener("DOMContentLoaded", function(){
+        const cam = document.getElementById("report_camera_input");
+        const label = document.getElementById("report_camera_name");
 
-    return page("Upload Report", body)
+        if(cam && label){
+            cam.addEventListener("change", function(){
+                label.innerText = this.files.length > 0
+                    ? this.files[0].name
+                    : "No photo taken yet";
+            });
+        }
+    });
+    
+    
+    cam.addEventListener("change", function(){
+        label.innerText = this.files.length > 0
+            ? this.files[0].name
+            : "No photo taken yet";
+
+        // OPTIONAL: clear upload file if camera is used
+        const upload = document.querySelector('[name="report_file_upload"]');
+        if(upload) upload.value = "";
+    });
+    
+    </script>
+    """
+
+    return page("Upload Report", body, extra_js=extra_js)
+    
+    
     
 @app.get('/student/my_reports')
 def student_my_reports():
