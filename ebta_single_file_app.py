@@ -5884,10 +5884,18 @@ def student_upload_report():
         if not request.form.get("accept_terms"):
             return page("Error", "<div class='card'>You must accept terms first.</div>")
 
-        file = request.files.get("report_file")
+        file_upload = request.files.get("report_file_upload")
+        file_camera = request.files.get("report_file_camera")
+
+        file = None
+
+        if file_upload and file_upload.filename != "":
+            file = file_upload
+        elif file_camera and file_camera.filename != "":
+            file = file_camera
 
         if not file or file.filename == "":
-            return page("Error", "<div class='card'>No file selected.</div>")
+            return page("Error", "<div class='card'>No file selected. Please upload a report or take a photo.</div>")
 
         if not is_valid_report(file.filename):
             return page("Error", "<div class='card'>Invalid file type.</div>")
@@ -5959,12 +5967,66 @@ def student_upload_report():
 
             <br>
 
-            <input type="file" name="report_file" required>
+            <div class="grid two-col" style="gap:12px;">
+
+                <div class="card soft" style="border-left:5px solid #25D366;">
+                    <h3>Upload Report File</h3>
+                    <p class="mini muted">
+                        Upload a PDF, Word document, or image report from your device.
+                    </p>
+
+                    <input type="file"
+                           name="report_file_upload"
+                           accept=".pdf,.png,.jpg,.jpeg,.doc,.docx">
+                </div>
+
+                <div class="card soft" style="border-left:5px solid #f59e0b;">
+                    <h3>Take Photo</h3>
+                    <p class="mini muted">
+                        Use your phone camera to take a clear photo of the report.
+                    </p>
+
+                    <input type="file"
+                           id="report_camera_input"
+                           name="report_file_camera"
+                           accept="image/*"
+                           capture="environment"
+                           style="position:absolute;left:-9999px;">
+
+                    <button type="button"
+                            class="btn"
+                            onclick="document.getElementById('report_camera_input').click();">
+                        📸 Open Camera
+                    </button>
+
+                    <div id="report_camera_name" class="mini muted" style="margin-top:6px;">
+                        No photo taken yet
+                    </div>
+                </div>
+
+            </div>
 
             <br>
 
             <button class="btn">Upload Report</button>
+            
         </form>
+        
+        <script>
+        document.addEventListener("DOMContentLoaded", function(){
+            const cam = document.getElementById("report_camera_input");
+            const label = document.getElementById("report_camera_name");
+
+            if(cam && label){
+                cam.addEventListener("change", function(){
+                    label.innerText = this.files.length > 0
+                        ? this.files[0].name
+                        : "No photo taken yet";
+                });
+            }
+        });
+        </script>
+        
     </div>
     """
 
