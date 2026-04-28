@@ -6018,29 +6018,24 @@ def student_upload_report():
     extra_js = """
     <script>
     document.addEventListener("DOMContentLoaded", function(){
+
         const cam = document.getElementById("report_camera_input");
         const label = document.getElementById("report_camera_name");
+        const upload = document.querySelector('[name="report_file_upload"]');
 
         if(cam && label){
             cam.addEventListener("change", function(){
+
                 label.innerText = this.files.length > 0
                     ? this.files[0].name
                     : "No photo taken yet";
+
+                // Clear upload file if camera is used
+                if(upload) upload.value = "";
             });
         }
-    });
-    
-    
-    cam.addEventListener("change", function(){
-        label.innerText = this.files.length > 0
-            ? this.files[0].name
-            : "No photo taken yet";
 
-        // OPTIONAL: clear upload file if camera is used
-        const upload = document.querySelector('[name="report_file_upload"]');
-        if(upload) upload.value = "";
     });
-    
     </script>
     """
 
