@@ -5934,6 +5934,11 @@ def student_upload_report():
 
     body = f"""
     <div class='card small'>
+
+        <a class='btn mini secondary' href='/student' style="margin-bottom:10px;display:inline-block;">
+            ← Back
+        </a>
+
         <h2>Upload Academic Report</h2>
 
         <form method="POST" enctype="multipart/form-data">
@@ -6090,6 +6095,11 @@ def student_my_reports():
 
     body = f"""
     <div class='card'>
+
+        <a class='btn mini secondary' href='/student' style="margin-bottom:10px;display:inline-block;">
+            ← Back
+        </a>
+
         <h2>My Uploaded Reports</h2>
 
         <table>
