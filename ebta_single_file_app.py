@@ -323,6 +323,16 @@ def init_db():
         UNIQUE(manager_id, tutor_id)
     );
     """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS academic_quality_managers(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT UNIQUE NOT NULL,
+        pin TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    """)
 
     
     ensure_column(conn, "students", "guardian_name", "TEXT")
@@ -8518,6 +8528,7 @@ def admin_nav():
             f"<a class='btn secondary' href='{url_for('admin_materials')}'>Unlock Uploads</a>",
             f"<a class='btn secondary' href='{url_for('admin_tutor_tracker')}'>Tutor Tracker</a>",
             f"<a class='btn secondary' href='{url_for('admin_tutor_operations')}'>Tutor-operations</a>",
+            f"<a class='btn secondary' href='{url_for('admin_academic_quality_managers')}'>AQ_Manager</a>",
             f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
             f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
 
@@ -8564,6 +8575,7 @@ def admin_home():
     <a class="btn secondary" href="{url_for('admin_materials')}">Unlock Uploads</a>
     <a class="btn secondary" href="{url_for('admin_tutor_tracker')}">Tutor Tracker</a>
     <a class="btn secondary" href="{url_for('admin_tutor_operations')}">Tutor-operations</a>
+    <a class="btn secondary" href="{url_for('admin_academic_quality_managers')}">AQ_Manager</a>
     <a class='btn secondary' href='{url_for('admin_reports')}'>Student Reports</a>
 
     </div></section>"""
@@ -15328,6 +15340,429 @@ def manager_view_tutor(tid):
     """
 
     return page("Tutor View", body)  
+    
+    
+    
+def is_academic_quality_manager():
+    return session.get("aqm_id")
+
+def require_aqm():
+    if not is_academic_quality_manager():
+        return redirect(url_for("aqm_login"))
+        
+        
+
+def aqm_nav():
+    return """
+    <div class="toolbar">
+        <a class="btn mini" href="/aqm/dashboard">Dashboard</a>
+        <a class="btn mini" href="/aqm/learners">Learner Performance</a>
+        <a class="btn mini" href="/aqm/reports">Student Reports</a>
+        <a class="btn mini" href="/aqm/attendance">Attendance Trends</a>
+        <a class="btn mini" href="/aqm/assignments">Assignment Completion</a>
+        <a class="btn mini" href="/aqm/tutors">Tutor Quality</a>
+        <a class="btn mini" href="/aqm/awards">Awards</a>
+        <a class="btn mini danger" href="/aqm/logout">Logout</a>
+    </div>
+    """
+
+
+@app.route('/aqm/login', methods=['GET', 'POST'])
+def aqm_login():
+
+    if request.method == 'POST':
+        phone = request.form.get("phone")
+        pin = request.form.get("pin")
+
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT *
+            FROM academic_quality_managers
+            WHERE phone=? AND pin=?
+        """, (phone, pin))
+
+        aqm = cur.fetchone()
+        conn.close()
+
+        if aqm:
+            session.clear()
+            session["aqm_id"] = aqm["id"]
+            session["aqm_name"] = aqm["full_name"]
+            return redirect(url_for("aqm_dashboard"))
+
+        return page("Login failed", card_msg("Invalid login details."))
+
+    body = """
+    <section class="card auth-card">
+        <h1>Academic Quality Manager Login</h1>
+
+        <form method="post" class="grid">
+            <div>
+                <label>Phone</label>
+                <input name="phone" required>
+            </div>
+
+            <div>
+                <label>PIN</label>
+                <input name="pin" required>
+            </div>
+
+            <button class="btn success">Login</button>
+        </form>
+    </section>
+    """
+
+    return page("AQM Login", body)
+
+    
+@app.get('/aqm/logout')
+def aqm_logout():
+    session.clear()
+    return redirect(url_for("aqm_login"))
+    
+    
+@app.get('/aqm/dashboard')
+def aqm_dashboard():
+
+    r = require_aqm()
+    if r: return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS total
+        FROM enrollments
+        WHERE month LIKE ? AND status='ACTIVE'
+    """, (month + "%",))
+    active_learners = cur.fetchone()["total"]
+
+    cur.execute("""
+        SELECT COUNT(*) AS total
+        FROM student_reports
+        WHERE substr(upload_date,1,7)=?
+    """, (month,))
+    reports_uploaded = cur.fetchone()["total"]
+
+    cur.execute("""
+        SELECT COUNT(*) AS total
+        FROM materials
+        WHERE is_assignment=1 AND month=?
+    """, (month,))
+    total_assignments = cur.fetchone()["total"]
+
+    cur.execute("""
+        SELECT COUNT(*) AS total
+        FROM submissions sub
+        JOIN materials m ON m.id=sub.material_id
+        WHERE m.is_assignment=1 AND m.month=?
+    """, (month,))
+    submitted_assignments = cur.fetchone()["total"]
+
+    cur.execute("""
+        SELECT ROUND(AVG(mark),1) AS avg_mark
+        FROM submissions sub
+        JOIN materials m ON m.id=sub.material_id
+        WHERE m.is_assignment=1
+        AND m.month=?
+        AND sub.mark IS NOT NULL
+    """, (month,))
+    avg_mark = cur.fetchone()["avg_mark"] or 0
+
+    conn.close()
+
+    completion_rate = 0
+    if total_assignments and active_learners:
+        expected = total_assignments * active_learners
+        completion_rate = round((submitted_assignments / expected) * 100, 1)
+
+    body = f"""
+    {aqm_nav()}
+
+    <section class="card">
+        <h1>Academic Quality Manager Dashboard</h1>
+
+        <form method="get" style="margin:10px 0;max-width:220px">
+            <label>Viewing month</label>
+            <input type="month" name="month" value="{month}" onchange="this.form.submit()">
+        </form>
+
+        <div class="stats">
+            <div class="stat">
+                <div class="k">{active_learners}</div>
+                <div class="t">Active Learners</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{reports_uploaded}</div>
+                <div class="t">Reports Uploaded</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{submitted_assignments}</div>
+                <div class="t">Assignments Submitted</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{completion_rate}%</div>
+                <div class="t">Completion Rate</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{avg_mark}%</div>
+                <div class="t">Average Assignment Mark</div>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("AQM Dashboard", body)
+    
+    
+    
+@app.get('/admin/academic-quality-managers')
+def admin_academic_quality_managers():
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM academic_quality_managers
+        ORDER BY full_name
+    """)
+
+    aqms = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for a in aqms:
+        rows += f"""
+        <tr>
+            <td>{a['full_name']}</td>
+            <td>{a['phone']}</td>
+            <td>{a['pin']}</td>
+            <td>
+                <form method="post"
+                      action="/admin/academic-quality-managers/update/{a['id']}"
+                      class="inlineform"
+                      style="display:flex;gap:6px;flex-wrap:wrap">
+
+                    <input name="full_name" value="{a['full_name']}" required style="min-width:180px">
+                    <input name="phone" value="{a['phone']}" required style="min-width:140px">
+                    <input name="pin" value="{a['pin']}" required maxlength="5" minlength="5" style="width:90px">
+
+                    <button class="btn mini success">Update</button>
+                </form>
+
+                <form method="post"
+                      action="/admin/academic-quality-managers/delete/{a['id']}"
+                      onsubmit="return confirm('Are you sure you want to delete this Academic Quality Manager?')"
+                      style="margin-top:6px">
+
+                    <button class="btn mini danger">Delete</button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    if not rows:
+        rows = """
+        <tr>
+            <td colspan="4">
+                <div class="empty">No Academic Quality Managers added yet.</div>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    <div class="card">
+        <a class="btn mini secondary" href="/admin">← Back</a>
+
+        <h2 style="margin-top:10px">Academic Quality Managers</h2>
+
+        <p class="mini muted">
+            Add, update, or remove Academic Quality Manager portal users.
+        </p>
+
+        <div class="card soft" style="margin:12px 0;border-left:5px solid #25D366">
+            <h3>Add Academic Quality Manager</h3>
+
+            <form method="post"
+                  action="/admin/academic-quality-managers/add"
+                  class="grid"
+                  style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+
+                <div>
+                    <label>Full Name</label>
+                    <input name="full_name" required>
+                </div>
+
+                <div>
+                    <label>Phone</label>
+                    <input name="phone" required>
+                </div>
+
+                <div>
+                    <label>5-digit PIN</label>
+                    <input name="pin" required maxlength="5" minlength="5">
+                </div>
+
+                <div style="display:flex;align-items:end">
+                    <button class="btn success">Add Manager</button>
+                </div>
+
+            </form>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Full Name</th>
+                        <th>Phone</th>
+                        <th>PIN</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+
+    return page("Academic Quality Managers", body)
+    
+    
+@app.post('/admin/academic-quality-managers/add')
+def admin_add_academic_quality_manager():
+
+    r = require_admin()
+    if r: return r
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    if not full_name or not phone or not is_valid_pin(pin):
+        return page("Invalid details", card_msg("Please enter a full name, phone number, and valid 5-digit PIN."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            INSERT INTO academic_quality_managers(full_name, phone, pin, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (full_name, phone, pin, now_utc_iso()))
+
+        conn.commit()
+
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Duplicate phone", card_msg("This phone number is already used by another Academic Quality Manager."))
+
+    conn.close()
+
+    return redirect(url_for("admin_academic_quality_managers"))
+    
+    
+@app.post('/admin/academic-quality-managers/update/<int:aqm_id>')
+def admin_update_academic_quality_manager(aqm_id):
+
+    r = require_admin()
+    if r: return r
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    if not full_name or not phone or not is_valid_pin(pin):
+        return page("Invalid details", card_msg("Please enter a full name, phone number, and valid 5-digit PIN."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            UPDATE academic_quality_managers
+            SET full_name=?, phone=?, pin=?
+            WHERE id=?
+        """, (full_name, phone, pin, aqm_id))
+
+        conn.commit()
+
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Duplicate phone", card_msg("This phone number is already used by another Academic Quality Manager."))
+
+    conn.close()
+
+    return redirect(url_for("admin_academic_quality_managers"))
+    
+    
+@app.post('/admin/academic-quality-managers/update/<int:aqm_id>')
+def admin_update_academic_quality_manager(aqm_id):
+
+    r = require_admin()
+    if r: return r
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    if not full_name or not phone or not is_valid_pin(pin):
+        return page("Invalid details", card_msg("Please enter a full name, phone number, and valid 5-digit PIN."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            UPDATE academic_quality_managers
+            SET full_name=?, phone=?, pin=?
+            WHERE id=?
+        """, (full_name, phone, pin, aqm_id))
+
+        conn.commit()
+
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Duplicate phone", card_msg("This phone number is already used by another Academic Quality Manager."))
+
+    conn.close()
+
+    return redirect(url_for("admin_academic_quality_managers"))
+    
+    
+@app.post('/admin/academic-quality-managers/delete/<int:aqm_id>')
+def admin_delete_academic_quality_manager(aqm_id):
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        DELETE FROM academic_quality_managers
+        WHERE id=?
+    """, (aqm_id,))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_academic_quality_managers"))
 
 
 # --- Admin: Analytics dashboard ---
