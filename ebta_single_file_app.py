@@ -1975,6 +1975,61 @@ background:#fff;
     transform: scale(1.05);
 }
 
+@media (max-width: 700px) {
+
+  .assignments-table thead {
+    display: none;
+  }
+
+  .assignments-table tr {
+    display: block;
+    background: #f0fdf4;
+    border: 1px solid #dbe7dd;
+    border-radius: 16px;
+    margin-bottom: 14px;
+    padding: 12px;
+  }
+
+  .assignments-table td {
+    display: block;
+    border: none;
+    padding: 6px 0;
+    text-align: left;
+  }
+
+  .assignments-table td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    color: #64748b;
+    margin-bottom: 3px;
+    text-transform: uppercase;
+  }
+
+  .assignment-actions {
+    display: grid;
+    gap: 8px;
+  }
+
+  .assignment-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .assignment-upload-row {
+    display: grid !important;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .assignment-upload-row input[type="file"] {
+    max-width: 100% !important;
+    width: 100%;
+    font-size: 12px;
+  }
+}
+
 </style>
 """
 
@@ -4940,11 +4995,27 @@ def student_home():
                           enctype='multipart/form-data'
                           style="margin-top:6px">
 
-                        <input type='file' name='file' required>
+                        <div class="assignment-upload-row">
 
-                        <button class='btn warn mini'>
-                            🔁 Resubmit
-                        </button>
+                            <input type='file'
+                                   name='file'
+                                   accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                                   style="max-width:120px;font-size:12px">
+
+                            <input type='file'
+                                   name='file'
+                                   accept="image/*"
+                                   capture="environment"
+                                   style="max-width:120px;font-size:12px">
+
+                            <button class='btn warn mini'>
+                                🔁 Resubmit
+                            </button>
+
+                        </div>
+
+                        <div class="mini muted">Upload or take photo</div>
+
                     </form>
                     """
                 else:
@@ -4956,11 +5027,26 @@ def student_home():
                       action='/student/submit/{a["id"]}'
                       enctype='multipart/form-data'>
 
-                    <input type='file' name='file' required>
+                    <div class="assignment-upload-row">
 
-                    <button class='btn success mini'>
-                        Submit
-                    </button>
+                        <input type='file'
+                               name='file'
+                               accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                               style="max-width:120px;font-size:12px">
+
+                        <input type='file'
+                               name='file'
+                               accept="image/*"
+                               capture="environment"
+                               style="max-width:120px;font-size:12px">
+
+                        <button class='btn success mini'>
+                            Submit
+                        </button>
+
+                    </div>
+
+                    <div class="mini muted">Upload or take photo</div>
                 </form>
                 """
 
@@ -5665,7 +5751,7 @@ def student_assignments():
             # submission / feedback
             if sub:
 
-                action = "<span class='chip active'>Submitted</span>"
+                action = "<div class='assignment-actions'><span class='chip active'>Submitted</span>"
 
                 # 📄 VIEW SUBMITTED FILE
                 if sub['file_path']:
@@ -5689,7 +5775,7 @@ def student_assignments():
 
                         <div style="margin-top:6px">
 
-                            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                            <div class="assignment-upload-row">
 
                                 <input type='file'
                                        name='file'
@@ -5717,6 +5803,7 @@ def student_assignments():
                         </div>
                     </form>
                     """
+                
                 else:
                     action += "<div class='mini muted'>⛔ Submission closed</div>"
 
@@ -5739,17 +5826,20 @@ def student_assignments():
                             </a>
                         </div>
                         """
+                
+                action += "</div>"
 
             else:
                 if can_submit:
                     action = f"""
+                    <div class="assignment-actions">
                     <form method='post'
                           action='/student/submit/{a["id"]}'
                           enctype='multipart/form-data'>
 
                         <div style="margin-top:6px">
 
-                            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                            <div class="assignment-upload-row">
 
                                 <input type='file'
                                        name='file'
@@ -5776,17 +5866,18 @@ def student_assignments():
 
                         </div>
                     </form>
+                    </div>
                     """
                 else:
                     action = "<span class='mini muted'>⛔ Submission closed</span>"
 
             rows.append(f"""
             <tr>
-                <td>{grade_label(a['grade'])} — {a['subject_name']}</td>
-                <td>{a['title']}</td>
-                <td>{file_link}</td>
-                <td>{a['due_date'] or '—'}</td>
-                <td>{action}</td>
+                <td data-label="Subject">{grade_label(a['grade'])} — {a['subject_name']}</td>
+                <td data-label="Title">{a['title']}</td>
+                <td data-label="File">{file_link}</td>
+                <td data-label="Due Date">{a['due_date'] or '—'}</td>
+                <td data-label="Action">{action}</td>
             </tr>
             """)
 
@@ -5798,7 +5889,7 @@ def student_assignments():
                 <div class="mini muted" style="margin-bottom:10px">
                 Download the assignment, complete it, then submit your answer below.
                 </div>
-                <table>
+                <table class="assignments-table">
                     <thead>
                         <tr>
                             <th>Subject</th>
