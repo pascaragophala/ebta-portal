@@ -15711,40 +15711,6 @@ def admin_update_academic_quality_manager(aqm_id):
     return redirect(url_for("admin_academic_quality_managers"))
     
     
-@app.post('/admin/academic-quality-managers/update/<int:aqm_id>')
-def admin_update_academic_quality_manager(aqm_id):
-
-    r = require_admin()
-    if r: return r
-
-    full_name = request.form.get("full_name", "").strip()
-    phone = request.form.get("phone", "").strip()
-    pin = request.form.get("pin", "").strip()
-
-    if not full_name or not phone or not is_valid_pin(pin):
-        return page("Invalid details", card_msg("Please enter a full name, phone number, and valid 5-digit PIN."))
-
-    conn = get_db()
-    cur = conn.cursor()
-
-    try:
-        cur.execute("""
-            UPDATE academic_quality_managers
-            SET full_name=?, phone=?, pin=?
-            WHERE id=?
-        """, (full_name, phone, pin, aqm_id))
-
-        conn.commit()
-
-    except sqlite3.IntegrityError:
-        conn.close()
-        return page("Duplicate phone", card_msg("This phone number is already used by another Academic Quality Manager."))
-
-    conn.close()
-
-    return redirect(url_for("admin_academic_quality_managers"))
-    
-    
 @app.post('/admin/academic-quality-managers/delete/<int:aqm_id>')
 def admin_delete_academic_quality_manager(aqm_id):
 
