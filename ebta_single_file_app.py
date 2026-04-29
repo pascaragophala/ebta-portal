@@ -15772,7 +15772,7 @@ def aqm_reports():
     month = request.args.get("month") or get_setting("current_month")
 
     page_num = int(request.args.get("page", 1))
-    per_page = 10
+    per_page = 3
     offset = (page_num - 1) * per_page
 
     conn = get_db()
