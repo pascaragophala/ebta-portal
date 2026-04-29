@@ -16980,34 +16980,6 @@ def aqm_download_report(rid):
         as_attachment=True,
         download_name=row["file_name"]
     )
-
-
-@app.get('/aqm/download-report/<int:rid>')
-def aqm_download_report(rid):
-    r = require_aqm()
-    if r: return r
-
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT file_path, file_name
-        FROM student_reports
-        WHERE id=?
-    """, (rid,))
-
-    row = cur.fetchone()
-    conn.close()
-
-    if not row or not os.path.exists(row["file_path"]):
-        return page("Report not found", card_msg("The report file could not be found."))
-
-    return send_from_directory(
-        os.path.dirname(row["file_path"]),
-        os.path.basename(row["file_path"]),
-        as_attachment=True,
-        download_name=row["file_name"]
-    )
     
     
 @app.get('/aqm/download-reports-zip')
