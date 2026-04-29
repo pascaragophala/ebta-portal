@@ -15848,7 +15848,7 @@ def aqm_reports():
             <td style="display:flex;gap:6px;flex-wrap:wrap">
                 <a class="btn mini success"
                    target="_blank"
-                   href="{r0['file_path']}">
+                   href="/aqm/view-report/{r0['id']}">
                     View
                 </a>
 
@@ -17045,6 +17045,32 @@ def aqm_download_reports_zip():
 
     return response
 
+
+@app.get('/aqm/view-report/<int:rid>')
+def aqm_view_report(rid):
+    r = require_aqm()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT file_path, file_name
+        FROM student_reports
+        WHERE id=?
+    """, (rid,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not os.path.exists(row["file_path"]):
+        return page("Report not found", card_msg("The report file could not be found."))
+
+    return send_from_directory(
+        os.path.dirname(row["file_path"]),
+        os.path.basename(row["file_path"]),
+        as_attachment=False
+    )
 
 # --- Admin: Analytics dashboard ---
 
