@@ -15779,12 +15779,23 @@ def aqm_reports():
     if page_num < 1:
         page_num = 1
 
+    try:
+        mark_page = int(request.args.get("mark_page", 1))
+    except:
+        mark_page = 1
+
+    if mark_page < 1:
+        mark_page = 1
+
     per_page = 10
+    mark_per_page = 10
 
     conn = get_db()
     cur = conn.cursor()
 
-    # Fetch ALL reports first
+    # =========================
+    # STUDENT REPORTS
+    # =========================
     cur.execute("""
         SELECT sr.*, st.full_name, st.grade, st.school
         FROM student_reports sr
@@ -15809,7 +15820,9 @@ def aqm_reports():
 
     reports = all_reports[start_index:end_index]
 
-    # Manual marks unchanged
+    # =========================
+    # MANUAL ACADEMIC MARKS
+    # =========================
     cur.execute("""
         SELECT st.id AS student_id,
                st.full_name,
@@ -15830,9 +15843,26 @@ def aqm_reports():
         ORDER BY st.full_name, s.name
     """, (month, month + "%"))
 
-    mark_rows = cur.fetchall()
+    all_mark_rows = cur.fetchall()
     conn.close()
 
+    total_marks = len(all_mark_rows)
+    total_mark_pages = (total_marks + mark_per_page - 1) // mark_per_page
+
+    if total_mark_pages == 0:
+        total_mark_pages = 1
+
+    if mark_page > total_mark_pages:
+        mark_page = total_mark_pages
+
+    mark_start = (mark_page - 1) * mark_per_page
+    mark_end = mark_start + mark_per_page
+
+    mark_rows = all_mark_rows[mark_start:mark_end]
+
+    # =========================
+    # REPORT ROWS
+    # =========================
     rows = ""
 
     for r0 in reports:
@@ -15853,6 +15883,9 @@ def aqm_reports():
         </tr>
         """
 
+    # =========================
+    # REPORT PAGINATION
+    # =========================
     pagination_html = ""
 
     if total_reports > per_page:
@@ -15862,27 +15895,30 @@ def aqm_reports():
         if page_num > 1:
             prev_link = f"""
             <a class="btn mini secondary"
-               href="/aqm/reports?month={month}&page={page_num - 1}">
-               ← Previous
+               href="/aqm/reports?month={month}&page={page_num - 1}&mark_page={mark_page}">
+               ← Previous Reports
             </a>
             """
 
         if page_num < total_pages:
             next_link = f"""
             <a class="btn mini secondary"
-               href="/aqm/reports?month={month}&page={page_num + 1}">
-               Next →
+               href="/aqm/reports?month={month}&page={page_num + 1}&mark_page={mark_page}">
+               Next Reports →
             </a>
             """
 
         pagination_html = f"""
         <div class="toolbar" style="margin-top:12px;align-items:center">
             {prev_link}
-            <span class="chip">Page {page_num} of {total_pages}</span>
+            <span class="chip">Reports Page {page_num} of {total_pages}</span>
             {next_link}
         </div>
         """
 
+    # =========================
+    # MANUAL MARK ROWS
+    # =========================
     manual_rows = ""
 
     for m in mark_rows:
@@ -15923,6 +15959,39 @@ def aqm_reports():
         </tr>
         """
 
+    # =========================
+    # MANUAL MARK PAGINATION
+    # =========================
+    manual_pagination_html = ""
+
+    if total_marks > mark_per_page:
+        prev_mark_link = ""
+        next_mark_link = ""
+
+        if mark_page > 1:
+            prev_mark_link = f"""
+            <a class="btn mini secondary"
+               href="/aqm/reports?month={month}&page={page_num}&mark_page={mark_page - 1}">
+               ← Previous Marks
+            </a>
+            """
+
+        if mark_page < total_mark_pages:
+            next_mark_link = f"""
+            <a class="btn mini secondary"
+               href="/aqm/reports?month={month}&page={page_num}&mark_page={mark_page + 1}">
+               Next Marks →
+            </a>
+            """
+
+        manual_pagination_html = f"""
+        <div class="toolbar" style="margin-top:12px;align-items:center">
+            {prev_mark_link}
+            <span class="chip">Marks Page {mark_page} of {total_mark_pages}</span>
+            {next_mark_link}
+        </div>
+        """
+
     body = f"""
     {aqm_nav()}
 
@@ -15938,7 +16007,7 @@ def aqm_reports():
         </form>
 
         <div class="mini muted" style="margin-bottom:10px">
-            Showing {len(reports)} of {total_reports} reports for {month}.
+            Showing {len(reports)} of {total_reports} reports and {len(mark_rows)} of {total_marks} manual mark records for {month}.
         </div>
 
         <div class="scroll-x">
@@ -15961,7 +16030,7 @@ def aqm_reports():
 
         {pagination_html}
 
-        <div class="card">
+        <div class="card" style="margin-top:16px">
             <h2>Manual Academic Marks</h2>
 
             <p class="mini muted">
@@ -15983,6 +16052,8 @@ def aqm_reports():
                     </tbody>
                 </table>
             </div>
+
+            {manual_pagination_html}
         </div>
     </div>
     """
