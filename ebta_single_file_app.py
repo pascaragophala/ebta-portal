@@ -15391,6 +15391,7 @@ def aqm_nav():
         <a class="btn mini" href="/aqm/dashboard">Dashboard</a>
         <a class="btn mini" href="/aqm/learners">Learner Performance</a>
         <a class="btn mini" href="/aqm/reports">Student Reports</a>
+        <a class="btn mini" href="/aqm/manual-marks">Manual Marks</a>
         <a class="btn mini" href="/aqm/attendance">Attendance Trends</a>
         <a class="btn mini" href="/aqm/assignments">Assignment Completion</a>
         <a class="btn mini" href="/aqm/tutors">Tutor Quality</a>
@@ -15779,23 +15780,11 @@ def aqm_reports():
     if page_num < 1:
         page_num = 1
 
-    try:
-        mark_page = int(request.args.get("mark_page", 1))
-    except:
-        mark_page = 1
-
-    if mark_page < 1:
-        mark_page = 1
-
     per_page = 10
-    mark_per_page = 10
 
     conn = get_db()
     cur = conn.cursor()
 
-    # =========================
-    # STUDENT REPORTS
-    # =========================
     cur.execute("""
         SELECT sr.*, st.full_name, st.grade, st.school
         FROM student_reports sr
@@ -15805,6 +15794,7 @@ def aqm_reports():
     """, (month,))
 
     all_reports = cur.fetchall()
+    conn.close()
 
     total_reports = len(all_reports)
     total_pages = (total_reports + per_page - 1) // per_page
@@ -15817,12 +15807,114 @@ def aqm_reports():
 
     start_index = (page_num - 1) * per_page
     end_index = start_index + per_page
-
     reports = all_reports[start_index:end_index]
 
-    # =========================
-    # MANUAL ACADEMIC MARKS
-    # =========================
+    rows = ""
+
+    for r0 in reports:
+        rows += f"""
+        <tr>
+            <td>{r0['full_name']}</td>
+            <td>{grade_label(r0['grade'])}</td>
+            <td>{r0['school'] or '—'}</td>
+            <td>{r0['file_name']}</td>
+            <td>{r0['upload_date'][:16].replace('T',' ')}</td>
+            <td>
+                <a class="btn mini success" target="_blank" href="{r0['file_path']}">
+                    View Report
+                </a>
+            </td>
+        </tr>
+        """
+
+    pagination_html = ""
+
+    if total_reports > per_page:
+        prev_link = ""
+        next_link = ""
+
+        if page_num > 1:
+            prev_link = f"""
+            <a class="btn mini secondary" href="/aqm/reports?month={month}&page={page_num - 1}">
+                ← Previous
+            </a>
+            """
+
+        if page_num < total_pages:
+            next_link = f"""
+            <a class="btn mini secondary" href="/aqm/reports?month={month}&page={page_num + 1}">
+                Next →
+            </a>
+            """
+
+        pagination_html = f"""
+        <div class="toolbar" style="margin-top:12px;align-items:center">
+            {prev_link}
+            <span class="chip">Page {page_num} of {total_pages}</span>
+            {next_link}
+        </div>
+        """
+
+    body = f"""
+    {aqm_nav()}
+
+    <div class="card">
+        <h2>Student Academic Reports</h2>
+
+        <form method="get" style="max-width:220px;margin-bottom:12px">
+            <label>Month</label>
+            <input type="month" name="month" value="{month}" onchange="this.form.submit()">
+        </form>
+
+        <div class="mini muted" style="margin-bottom:10px">
+            Showing {len(reports)} of {total_reports} reports for {month}.
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Grade</th>
+                        <th>School</th>
+                        <th>Report File</th>
+                        <th>Uploaded</th>
+                        <th>View</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or '<tr><td colspan="6">No academic reports uploaded for this month.</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_html}
+    </div>
+    """
+
+    return page("Student Reports", body)
+    
+    
+@app.get('/aqm/manual-marks')
+def aqm_manual_marks():
+    r = require_aqm()
+    if r: return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 10
+
+    conn = get_db()
+    cur = conn.cursor()
+
     cur.execute("""
         SELECT st.id AS student_id,
                st.full_name,
@@ -15847,90 +15939,30 @@ def aqm_reports():
     conn.close()
 
     total_marks = len(all_mark_rows)
-    total_mark_pages = (total_marks + mark_per_page - 1) // mark_per_page
+    total_pages = (total_marks + per_page - 1) // per_page
 
-    if total_mark_pages == 0:
-        total_mark_pages = 1
+    if total_pages == 0:
+        total_pages = 1
 
-    if mark_page > total_mark_pages:
-        mark_page = total_mark_pages
+    if page_num > total_pages:
+        page_num = total_pages
 
-    mark_start = (mark_page - 1) * mark_per_page
-    mark_end = mark_start + mark_per_page
+    start_index = (page_num - 1) * per_page
+    end_index = start_index + per_page
+    mark_rows = all_mark_rows[start_index:end_index]
 
-    mark_rows = all_mark_rows[mark_start:mark_end]
-
-    # =========================
-    # REPORT ROWS
-    # =========================
     rows = ""
-
-    for r0 in reports:
-        rows += f"""
-        <tr>
-            <td data-label="Learner">{r0['full_name']}</td>
-            <td data-label="Grade">{grade_label(r0['grade'])}</td>
-            <td data-label="School">{r0['school'] or '—'}</td>
-            <td data-label="File">{r0['file_name']}</td>
-            <td data-label="Uploaded">{r0['upload_date'][:16].replace('T',' ')}</td>
-            <td data-label="View">
-                <a class="btn mini success"
-                   target="_blank"
-                   href="{r0['file_path']}">
-                   View Report
-                </a>
-            </td>
-        </tr>
-        """
-
-    # =========================
-    # REPORT PAGINATION
-    # =========================
-    pagination_html = ""
-
-    if total_reports > per_page:
-        prev_link = ""
-        next_link = ""
-
-        if page_num > 1:
-            prev_link = f"""
-            <a class="btn mini secondary"
-               href="/aqm/reports?month={month}&page={page_num - 1}&mark_page={mark_page}">
-               ← Previous Reports
-            </a>
-            """
-
-        if page_num < total_pages:
-            next_link = f"""
-            <a class="btn mini secondary"
-               href="/aqm/reports?month={month}&page={page_num + 1}&mark_page={mark_page}">
-               Next Reports →
-            </a>
-            """
-
-        pagination_html = f"""
-        <div class="toolbar" style="margin-top:12px;align-items:center">
-            {prev_link}
-            <span class="chip">Reports Page {page_num} of {total_pages}</span>
-            {next_link}
-        </div>
-        """
-
-    # =========================
-    # MANUAL MARK ROWS
-    # =========================
-    manual_rows = ""
 
     for m in mark_rows:
         current_mark = "" if m["mark"] is None else m["mark"]
         current_note = m["note"] or ""
 
-        manual_rows += f"""
+        rows += f"""
         <tr>
-            <td data-label="Learner">{m['full_name']}</td>
-            <td data-label="Grade">{grade_label(m['grade'])}</td>
-            <td data-label="Subject">{m['subject_name']}</td>
-            <td data-label="Capture Mark">
+            <td>{m['full_name']}</td>
+            <td>{grade_label(m['grade'])}</td>
+            <td>{m['subject_name']}</td>
+            <td>
                 <form method="post"
                       action="/aqm/manual-mark"
                       style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
@@ -15959,36 +15991,31 @@ def aqm_reports():
         </tr>
         """
 
-    # =========================
-    # MANUAL MARK PAGINATION
-    # =========================
-    manual_pagination_html = ""
+    pagination_html = ""
 
-    if total_marks > mark_per_page:
-        prev_mark_link = ""
-        next_mark_link = ""
+    if total_marks > per_page:
+        prev_link = ""
+        next_link = ""
 
-        if mark_page > 1:
-            prev_mark_link = f"""
-            <a class="btn mini secondary"
-               href="/aqm/reports?month={month}&page={page_num}&mark_page={mark_page - 1}">
-               ← Previous Marks
+        if page_num > 1:
+            prev_link = f"""
+            <a class="btn mini secondary" href="/aqm/manual-marks?month={month}&page={page_num - 1}">
+                ← Previous
             </a>
             """
 
-        if mark_page < total_mark_pages:
-            next_mark_link = f"""
-            <a class="btn mini secondary"
-               href="/aqm/reports?month={month}&page={page_num}&mark_page={mark_page + 1}">
-               Next Marks →
+        if page_num < total_pages:
+            next_link = f"""
+            <a class="btn mini secondary" href="/aqm/manual-marks?month={month}&page={page_num + 1}">
+                Next →
             </a>
             """
 
-        manual_pagination_html = f"""
+        pagination_html = f"""
         <div class="toolbar" style="margin-top:12px;align-items:center">
-            {prev_mark_link}
-            <span class="chip">Marks Page {mark_page} of {total_mark_pages}</span>
-            {next_mark_link}
+            {prev_link}
+            <span class="chip">Page {page_num} of {total_pages}</span>
+            {next_link}
         </div>
         """
 
@@ -15996,18 +16023,19 @@ def aqm_reports():
     {aqm_nav()}
 
     <div class="card">
-        <h2>Student Academic Reports</h2>
+        <h2>Manual Academic Marks</h2>
 
         <form method="get" style="max-width:220px;margin-bottom:12px">
             <label>Month</label>
-            <input type="month"
-                   name="month"
-                   value="{month}"
-                   onchange="this.form.submit()">
+            <input type="month" name="month" value="{month}" onchange="this.form.submit()">
         </form>
 
+        <p class="mini muted">
+            Capture marks from school reports or offline academic checks.
+        </p>
+
         <div class="mini muted" style="margin-bottom:10px">
-            Showing {len(reports)} of {total_reports} reports and {len(mark_rows)} of {total_marks} manual mark records for {month}.
+            Showing {len(mark_rows)} of {total_marks} manual mark records for {month}.
         </div>
 
         <div class="scroll-x">
@@ -16016,49 +16044,21 @@ def aqm_reports():
                     <tr>
                         <th>Learner</th>
                         <th>Grade</th>
-                        <th>School</th>
-                        <th>Report File</th>
-                        <th>Uploaded</th>
-                        <th>View</th>
+                        <th>Subject</th>
+                        <th>Capture Mark</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {rows or '<tr><td colspan="6">No academic reports uploaded for this month.</td></tr>'}
+                    {rows or '<tr><td colspan="4">No active learners found for this month.</td></tr>'}
                 </tbody>
             </table>
         </div>
 
         {pagination_html}
-
-        <div class="card" style="margin-top:16px">
-            <h2>Manual Academic Marks</h2>
-
-            <p class="mini muted">
-                Capture marks from school reports or offline academic checks. These marks will be used for learner performance tracking.
-            </p>
-
-            <div class="scroll-x">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Learner</th>
-                            <th>Grade</th>
-                            <th>Subject</th>
-                            <th>Capture Mark</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {manual_rows or '<tr><td colspan="4">No active learners found for this month.</td></tr>'}
-                    </tbody>
-                </table>
-            </div>
-
-            {manual_pagination_html}
-        </div>
     </div>
     """
 
-    return page("Student Reports", body)
+    return page("Manual Academic Marks", body)
 
 
 @app.post('/aqm/manual-mark')
@@ -16096,7 +16096,7 @@ def aqm_manual_mark():
     conn.commit()
     conn.close()
 
-    return redirect(url_for("aqm_reports", month=month))
+    return redirect(url_for("aqm_manual_marks", month=month))
     
     
     
