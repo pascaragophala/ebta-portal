@@ -15399,42 +15399,6 @@ def aqm_nav():
     </div>
     """
 
-def aqm_pagination(endpoint, page_num, total_records, per_page=2, **params):
-    total_pages = (total_records + per_page - 1) // per_page
-
-    if total_pages <= 1:
-        return ""
-
-    links = ""
-
-    if page_num > 1:
-        params["page"] = page_num - 1
-        links += f"""
-        <a class="btn mini secondary" href="{url_for(endpoint, **params)}">
-            ← Previous
-        </a>
-        """
-
-    links += f"""
-    <span class="chip">
-        Page {page_num} of {total_pages}
-    </span>
-    """
-
-    if page_num < total_pages:
-        params["page"] = page_num + 1
-        links += f"""
-        <a class="btn mini secondary" href="{url_for(endpoint, **params)}">
-            Next →
-        </a>
-        """
-
-    return f"""
-    <div class="toolbar" style="margin-top:12px">
-        {links}
-    </div>
-    """
-
 
 @app.route('/aqm/login', methods=['GET', 'POST'])
 def aqm_login():
@@ -15806,22 +15770,25 @@ def aqm_reports():
     if r: return r
 
     month = request.args.get("month") or get_setting("current_month")
-    
+
     page_num = int(request.args.get("page", 1))
-    per_page = 20
+    per_page = 10
     offset = (page_num - 1) * per_page
 
     conn = get_db()
     cur = conn.cursor()
 
+    # Count academic reports for selected month
     cur.execute("""
         SELECT COUNT(*) AS total
-        FROM student_reports sr
-        WHERE substr(sr.upload_date,1,7)=?
+        FROM student_reports
+        WHERE substr(upload_date,1,7)=?
     """, (month,))
 
     total_reports = cur.fetchone()["total"]
+    total_pages = (total_reports + per_page - 1) // per_page
 
+    # Fetch only 10 academic reports
     cur.execute("""
         SELECT sr.*, st.full_name, st.grade, st.school
         FROM student_reports sr
@@ -15833,6 +15800,7 @@ def aqm_reports():
 
     reports = cur.fetchall()
 
+    # Manual marks list stays unchanged for now
     cur.execute("""
         SELECT st.id AS student_id,
                st.full_name,
@@ -15854,7 +15822,6 @@ def aqm_reports():
     """, (month, month + "%"))
 
     mark_rows = cur.fetchall()
-
     conn.close()
 
     rows = ""
@@ -15877,7 +15844,36 @@ def aqm_reports():
         </tr>
         """
 
-    
+    pagination_html = ""
+
+    if total_pages > 1:
+        prev_link = ""
+        next_link = ""
+
+        if page_num > 1:
+            prev_link = f"""
+            <a class="btn mini secondary"
+               href="/aqm/reports?month={month}&page={page_num - 1}">
+               ← Previous
+            </a>
+            """
+
+        if page_num < total_pages:
+            next_link = f"""
+            <a class="btn mini secondary"
+               href="/aqm/reports?month={month}&page={page_num + 1}">
+               Next →
+            </a>
+            """
+
+        pagination_html = f"""
+        <div class="toolbar" style="margin-top:12px;align-items:center">
+            {prev_link}
+            <span class="chip">Page {page_num} of {total_pages}</span>
+            {next_link}
+        </div>
+        """
+
     manual_rows = ""
 
     for m in mark_rows:
@@ -15917,8 +15913,7 @@ def aqm_reports():
             </td>
         </tr>
         """
-    
-    
+
     body = f"""
     {aqm_nav()}
 
@@ -15932,6 +15927,10 @@ def aqm_reports():
                    value="{month}"
                    onchange="this.form.submit()">
         </form>
+
+        <div class="mini muted" style="margin-bottom:10px">
+            Showing up to 10 reports per page.
+        </div>
 
         <div class="scroll-x">
             <table>
@@ -15950,9 +15949,9 @@ def aqm_reports():
                 </tbody>
             </table>
         </div>
-    
-        {aqm_pagination("aqm_reports", page_num, total_reports, per_page, month=month)}
-    
+
+        {pagination_html}
+
         <div class="card">
             <h2>Manual Academic Marks</h2>
 
@@ -15976,8 +15975,6 @@ def aqm_reports():
                 </table>
             </div>
         </div>
-        
-        
     </div>
     """
 
