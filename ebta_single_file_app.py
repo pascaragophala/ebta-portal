@@ -9,6 +9,8 @@ import secrets
 import threading
 import time
 import hmac
+import io
+import zipfile
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -15771,6 +15773,7 @@ def aqm_reports():
     if r: return r
 
     month = request.args.get("month") or get_setting("current_month")
+    grade_filter = request.args.get("grade", "").strip()
 
     try:
         page_num = int(request.args.get("page", 1))
@@ -15786,12 +15789,27 @@ def aqm_reports():
     cur = conn.cursor()
 
     cur.execute("""
+        SELECT DISTINCT grade
+        FROM students
+        ORDER BY grade
+    """)
+    grades = cur.fetchall()
+
+    params = [month]
+    grade_sql = ""
+
+    if grade_filter:
+        grade_sql = "AND st.grade = ?"
+        params.append(grade_filter)
+
+    cur.execute(f"""
         SELECT sr.*, st.full_name, st.grade, st.school
         FROM student_reports sr
         JOIN students st ON st.id = sr.student_id
         WHERE substr(sr.upload_date,1,7)=?
+        {grade_sql}
         ORDER BY sr.upload_date DESC
-    """, (month,))
+    """, params)
 
     all_reports = cur.fetchall()
     conn.close()
@@ -15809,6 +15827,14 @@ def aqm_reports():
     end_index = start_index + per_page
     reports = all_reports[start_index:end_index]
 
+    grade_options = '<option value="">All Grades</option>'
+
+    for g in grades:
+        selected = "selected" if grade_filter == g["grade"] else ""
+        grade_options += f"""
+        <option value="{g['grade']}" {selected}>{grade_label(g['grade'])}</option>
+        """
+
     rows = ""
 
     for r0 in reports:
@@ -15819,9 +15845,16 @@ def aqm_reports():
             <td>{r0['school'] or '—'}</td>
             <td>{r0['file_name']}</td>
             <td>{r0['upload_date'][:16].replace('T',' ')}</td>
-            <td>
-                <a class="btn mini success" target="_blank" href="{r0['file_path']}">
-                    View Report
+            <td style="display:flex;gap:6px;flex-wrap:wrap">
+                <a class="btn mini success"
+                   target="_blank"
+                   href="{r0['file_path']}">
+                    View
+                </a>
+
+                <a class="btn mini secondary"
+                   href="/aqm/download-report/{r0['id']}">
+                    Download
                 </a>
             </td>
         </tr>
@@ -15835,14 +15868,16 @@ def aqm_reports():
 
         if page_num > 1:
             prev_link = f"""
-            <a class="btn mini secondary" href="/aqm/reports?month={month}&page={page_num - 1}">
+            <a class="btn mini secondary"
+               href="/aqm/reports?month={month}&grade={grade_filter}&page={page_num - 1}">
                 ← Previous
             </a>
             """
 
         if page_num < total_pages:
             next_link = f"""
-            <a class="btn mini secondary" href="/aqm/reports?month={month}&page={page_num + 1}">
+            <a class="btn mini secondary"
+               href="/aqm/reports?month={month}&grade={grade_filter}&page={page_num + 1}">
                 Next →
             </a>
             """
@@ -15855,16 +15890,50 @@ def aqm_reports():
         </div>
         """
 
+    download_all_url = f"/aqm/download-reports-zip?month={month}"
+    download_grade_url = f"/aqm/download-reports-zip?month={month}&grade={grade_filter}"
+
+    grade_download_button = ""
+    if grade_filter:
+        grade_download_button = f"""
+        <a class="btn mini secondary" href="{download_grade_url}">
+            Download {grade_label(grade_filter)} Reports
+        </a>
+        """
+
     body = f"""
     {aqm_nav()}
 
     <div class="card">
         <h2>Student Academic Reports</h2>
 
-        <form method="get" style="max-width:220px;margin-bottom:12px">
-            <label>Month</label>
-            <input type="month" name="month" value="{month}" onchange="this.form.submit()">
+        <form method="get"
+              style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:12px">
+
+            <div>
+                <label>Month</label>
+                <input type="month" name="month" value="{month}">
+            </div>
+
+            <div>
+                <label>Grade</label>
+                <select name="grade">
+                    {grade_options}
+                </select>
+            </div>
+
+            <div style="display:flex;align-items:end">
+                <button class="btn success">Apply Filter</button>
+            </div>
         </form>
+
+        <div class="toolbar">
+            <a class="btn mini" href="{download_all_url}">
+                Download All Reports
+            </a>
+
+            {grade_download_button}
+        </div>
 
         <div class="mini muted" style="margin-bottom:10px">
             Showing {len(reports)} of {total_reports} reports for {month}.
@@ -15879,11 +15948,11 @@ def aqm_reports():
                         <th>School</th>
                         <th>Report File</th>
                         <th>Uploaded</th>
-                        <th>View</th>
+                        <th>Action</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {rows or '<tr><td colspan="6">No academic reports uploaded for this month.</td></tr>'}
+                    {rows or '<tr><td colspan="6">No academic reports found for the selected filter.</td></tr>'}
                 </tbody>
             </table>
         </div>
@@ -16107,6 +16176,16 @@ def aqm_learners():
 
     month = request.args.get("month") or get_setting("current_month")
 
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 10
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -16137,15 +16216,27 @@ def aqm_learners():
         ORDER BY st.full_name
     """, (month, month, month + "%"))
 
-    learners = cur.fetchall()
+    all_learners = cur.fetchall()
     conn.close()
+
+    total_records = len(all_learners)
+    total_pages = (total_records + per_page - 1) // per_page
+
+    if total_pages == 0:
+        total_pages = 1
+
+    if page_num > total_pages:
+        page_num = total_pages
+
+    start_index = (page_num - 1) * per_page
+    end_index = start_index + per_page
+    learners = all_learners[start_index:end_index]
 
     rows = ""
 
     for x in learners:
         manual_avg = x["avg_manual_mark"] or 0
         assignment_avg = x["avg_assignment_mark"] or 0
-
         overall = manual_avg if manual_avg else assignment_avg
 
         if overall >= 80:
@@ -16159,14 +16250,44 @@ def aqm_learners():
 
         rows += f"""
         <tr>
-            <td data-label="Learner">{x['full_name']}</td>
-            <td data-label="Grade">{grade_label(x['grade'])}</td>
-            <td data-label="School">{x['school'] or '—'}</td>
-            <td data-label="Subjects">{x['subjects_count']}</td>
-            <td data-label="Manual Avg">{manual_avg}%</td>
-            <td data-label="Assignment Avg">{assignment_avg}%</td>
-            <td data-label="Category"><span class="chip">{category}</span></td>
+            <td>{x['full_name']}</td>
+            <td>{grade_label(x['grade'])}</td>
+            <td>{x['school'] or '—'}</td>
+            <td>{x['subjects_count']}</td>
+            <td>{manual_avg}%</td>
+            <td>{assignment_avg}%</td>
+            <td><span class="chip">{category}</span></td>
         </tr>
+        """
+
+    pagination_html = ""
+
+    if total_records > per_page:
+        prev_link = ""
+        next_link = ""
+
+        if page_num > 1:
+            prev_link = f"""
+            <a class="btn mini secondary"
+               href="/aqm/learners?month={month}&page={page_num - 1}">
+                ← Previous
+            </a>
+            """
+
+        if page_num < total_pages:
+            next_link = f"""
+            <a class="btn mini secondary"
+               href="/aqm/learners?month={month}&page={page_num + 1}">
+                Next →
+            </a>
+            """
+
+        pagination_html = f"""
+        <div class="toolbar" style="margin-top:12px;align-items:center">
+            {prev_link}
+            <span class="chip">Page {page_num} of {total_pages}</span>
+            {next_link}
+        </div>
         """
 
     body = f"""
@@ -16177,11 +16298,12 @@ def aqm_learners():
 
         <form method="get" style="max-width:220px;margin-bottom:12px">
             <label>Month</label>
-            <input type="month"
-                   name="month"
-                   value="{month}"
-                   onchange="this.form.submit()">
+            <input type="month" name="month" value="{month}" onchange="this.form.submit()">
         </form>
+
+        <div class="mini muted" style="margin-bottom:10px">
+            Showing {len(learners)} of {total_records} learner records for {month}.
+        </div>
 
         <div class="scroll-x">
             <table>
@@ -16201,6 +16323,8 @@ def aqm_learners():
                 </tbody>
             </table>
         </div>
+
+        {pagination_html}
     </div>
     """
 
@@ -16213,6 +16337,16 @@ def aqm_assignments():
     if r: return r
 
     month = request.args.get("month") or get_setting("current_month")
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 10
 
     conn = get_db()
     cur = conn.cursor()
@@ -16242,9 +16376,25 @@ def aqm_assignments():
         ORDER BY st.full_name, s.name, m.title
     """, (month, month + "%"))
 
+    all_records = cur.fetchall()
+    conn.close()
+
+    total_records = len(all_records)
+    total_pages = (total_records + per_page - 1) // per_page
+
+    if total_pages == 0:
+        total_pages = 1
+
+    if page_num > total_pages:
+        page_num = total_pages
+
+    start_index = (page_num - 1) * per_page
+    end_index = start_index + per_page
+    records = all_records[start_index:end_index]
+
     rows = ""
 
-    for x in cur.fetchall():
+    for x in records:
         if x["submission_id"]:
             status = "<span class='chip active'>Submitted</span>"
             submitted_at = (x["submitted_at"] or "")[:16].replace("T", " ")
@@ -16254,18 +16404,46 @@ def aqm_assignments():
 
         rows += f"""
         <tr>
-            <td data-label="Learner">{x['full_name']}</td>
-            <td data-label="Grade">{grade_label(x['grade'])}</td>
-            <td data-label="Subject">{x['subject_name']}</td>
-            <td data-label="Assignment">{x['title']}</td>
-            <td data-label="Due Date">{x['due_date'] or '—'}</td>
-            <td data-label="Status">{status}</td>
-            <td data-label="Submitted At">{submitted_at}</td>
-            <td data-label="Mark">{x['mark'] if x['mark'] is not None else '—'}</td>
+            <td>{x['full_name']}</td>
+            <td>{grade_label(x['grade'])}</td>
+            <td>{x['subject_name']}</td>
+            <td>{x['title']}</td>
+            <td>{x['due_date'] or '—'}</td>
+            <td>{status}</td>
+            <td>{submitted_at}</td>
+            <td>{x['mark'] if x['mark'] is not None else '—'}</td>
         </tr>
         """
 
-    conn.close()
+    pagination_html = ""
+
+    if total_records > per_page:
+        prev_link = ""
+        next_link = ""
+
+        if page_num > 1:
+            prev_link = f"""
+            <a class="btn mini secondary"
+               href="/aqm/assignments?month={month}&page={page_num - 1}">
+                ← Previous
+            </a>
+            """
+
+        if page_num < total_pages:
+            next_link = f"""
+            <a class="btn mini secondary"
+               href="/aqm/assignments?month={month}&page={page_num + 1}">
+                Next →
+            </a>
+            """
+
+        pagination_html = f"""
+        <div class="toolbar" style="margin-top:12px;align-items:center">
+            {prev_link}
+            <span class="chip">Page {page_num} of {total_pages}</span>
+            {next_link}
+        </div>
+        """
 
     body = f"""
     {aqm_nav()}
@@ -16275,11 +16453,12 @@ def aqm_assignments():
 
         <form method="get" style="max-width:220px;margin-bottom:12px">
             <label>Month</label>
-            <input type="month"
-                   name="month"
-                   value="{month}"
-                   onchange="this.form.submit()">
+            <input type="month" name="month" value="{month}" onchange="this.form.submit()">
         </form>
+
+        <div class="mini muted" style="margin-bottom:10px">
+            Showing {len(records)} of {total_records} assignment records for {month}.
+        </div>
 
         <div class="scroll-x">
             <table>
@@ -16300,6 +16479,8 @@ def aqm_assignments():
                 </tbody>
             </table>
         </div>
+
+        {pagination_html}
     </div>
     """
 
@@ -16312,6 +16493,16 @@ def aqm_attendance():
     if r: return r
 
     month = request.args.get("month") or get_setting("current_month")
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 10
 
     conn = get_db()
     cur = conn.cursor()
@@ -16336,9 +16527,25 @@ def aqm_attendance():
         ORDER BY st.full_name, sub.name
     """, (month, month + "%"))
 
+    all_records = cur.fetchall()
+    conn.close()
+
+    total_records = len(all_records)
+    total_pages = (total_records + per_page - 1) // per_page
+
+    if total_pages == 0:
+        total_pages = 1
+
+    if page_num > total_pages:
+        page_num = total_pages
+
+    start_index = (page_num - 1) * per_page
+    end_index = start_index + per_page
+    records = all_records[start_index:end_index]
+
     rows = ""
 
-    for x in cur.fetchall():
+    for x in records:
         attended = x["attended"] or 0
 
         if attended >= 4:
@@ -16350,15 +16557,43 @@ def aqm_attendance():
 
         rows += f"""
         <tr>
-            <td data-label="Learner">{x['full_name']}</td>
-            <td data-label="Grade">{grade_label(x['grade'])}</td>
-            <td data-label="Subject">{x['subject_name']}</td>
-            <td data-label="Attendance Records">{attended}</td>
-            <td data-label="Trend">{trend}</td>
+            <td>{x['full_name']}</td>
+            <td>{grade_label(x['grade'])}</td>
+            <td>{x['subject_name']}</td>
+            <td>{attended}</td>
+            <td>{trend}</td>
         </tr>
         """
 
-    conn.close()
+    pagination_html = ""
+
+    if total_records > per_page:
+        prev_link = ""
+        next_link = ""
+
+        if page_num > 1:
+            prev_link = f"""
+            <a class="btn mini secondary"
+               href="/aqm/attendance?month={month}&page={page_num - 1}">
+                ← Previous
+            </a>
+            """
+
+        if page_num < total_pages:
+            next_link = f"""
+            <a class="btn mini secondary"
+               href="/aqm/attendance?month={month}&page={page_num + 1}">
+                Next →
+            </a>
+            """
+
+        pagination_html = f"""
+        <div class="toolbar" style="margin-top:12px;align-items:center">
+            {prev_link}
+            <span class="chip">Page {page_num} of {total_pages}</span>
+            {next_link}
+        </div>
+        """
 
     body = f"""
     {aqm_nav()}
@@ -16368,15 +16603,12 @@ def aqm_attendance():
 
         <form method="get" style="max-width:220px;margin-bottom:12px">
             <label>Month</label>
-            <input type="month"
-                   name="month"
-                   value="{month}"
-                   onchange="this.form.submit()">
+            <input type="month" name="month" value="{month}" onchange="this.form.submit()">
         </form>
 
-        <p class="mini muted">
-            This shows learner attendance per subject for the selected month.
-        </p>
+        <div class="mini muted" style="margin-bottom:10px">
+            Showing {len(records)} of {total_records} attendance records for {month}.
+        </div>
 
         <div class="scroll-x">
             <table>
@@ -16394,6 +16626,8 @@ def aqm_attendance():
                 </tbody>
             </table>
         </div>
+
+        {pagination_html}
     </div>
     """
 
@@ -16406,6 +16640,16 @@ def aqm_tutors():
     if r: return r
 
     month = request.args.get("month") or get_setting("current_month")
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 10
 
     conn = get_db()
     cur = conn.cursor()
@@ -16427,9 +16671,25 @@ def aqm_tutors():
         ORDER BY t.full_name
     """, (month,))
 
+    all_records = cur.fetchall()
+    conn.close()
+
+    total_records = len(all_records)
+    total_pages = (total_records + per_page - 1) // per_page
+
+    if total_pages == 0:
+        total_pages = 1
+
+    if page_num > total_pages:
+        page_num = total_pages
+
+    start_index = (page_num - 1) * per_page
+    end_index = start_index + per_page
+    records = all_records[start_index:end_index]
+
     rows = ""
 
-    for x in cur.fetchall():
+    for x in records:
         reports_count = x["reports_count"] or 0
         sessions_held = x["sessions_held"] or 0
         recordings_posted = x["recordings_posted"] or 0
@@ -16447,17 +16707,45 @@ def aqm_tutors():
 
         rows += f"""
         <tr>
-            <td data-label="Tutor">{x['full_name']}</td>
-            <td data-label="Reports">{reports_count}</td>
-            <td data-label="Sessions Held">{sessions_held}</td>
-            <td data-label="Recordings Posted">{recordings_posted}</td>
-            <td data-label="Posted Within 24h">{posted_within_24h}</td>
-            <td data-label="Avg Rating">{avg_rating}</td>
-            <td data-label="Status">{status}</td>
+            <td>{x['full_name']}</td>
+            <td>{reports_count}</td>
+            <td>{sessions_held}</td>
+            <td>{recordings_posted}</td>
+            <td>{posted_within_24h}</td>
+            <td>{avg_rating}</td>
+            <td>{status}</td>
         </tr>
         """
 
-    conn.close()
+    pagination_html = ""
+
+    if total_records > per_page:
+        prev_link = ""
+        next_link = ""
+
+        if page_num > 1:
+            prev_link = f"""
+            <a class="btn mini secondary"
+               href="/aqm/tutors?month={month}&page={page_num - 1}">
+                ← Previous
+            </a>
+            """
+
+        if page_num < total_pages:
+            next_link = f"""
+            <a class="btn mini secondary"
+               href="/aqm/tutors?month={month}&page={page_num + 1}">
+                Next →
+            </a>
+            """
+
+        pagination_html = f"""
+        <div class="toolbar" style="margin-top:12px;align-items:center">
+            {prev_link}
+            <span class="chip">Page {page_num} of {total_pages}</span>
+            {next_link}
+        </div>
+        """
 
     body = f"""
     {aqm_nav()}
@@ -16467,15 +16755,12 @@ def aqm_tutors():
 
         <form method="get" style="max-width:220px;margin-bottom:12px">
             <label>Month</label>
-            <input type="month"
-                   name="month"
-                   value="{month}"
-                   onchange="this.form.submit()">
+            <input type="month" name="month" value="{month}" onchange="this.form.submit()">
         </form>
 
-        <p class="mini muted">
-            This uses tutor manager weekly tracker data to monitor tutor activity, punctuality indicators, reports, recordings, and rating trends.
-        </p>
+        <div class="mini muted" style="margin-bottom:10px">
+            Showing {len(records)} of {total_records} tutor quality records for {month}.
+        </div>
 
         <div class="scroll-x">
             <table>
@@ -16495,6 +16780,8 @@ def aqm_tutors():
                 </tbody>
             </table>
         </div>
+
+        {pagination_html}
     </div>
     """
 
@@ -16507,6 +16794,16 @@ def aqm_awards():
     if r: return r
 
     month = request.args.get("month") or get_setting("current_month")
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 10
 
     conn = get_db()
     cur = conn.cursor()
@@ -16544,9 +16841,25 @@ def aqm_awards():
         ORDER BY avg_mark DESC
     """, (month, month, month + "%"))
 
+    all_records = cur.fetchall()
+    conn.close()
+
+    total_records = len(all_records)
+    total_pages = (total_records + per_page - 1) // per_page
+
+    if total_pages == 0:
+        total_pages = 1
+
+    if page_num > total_pages:
+        page_num = total_pages
+
+    start_index = (page_num - 1) * per_page
+    end_index = start_index + per_page
+    records = all_records[start_index:end_index]
+
     rows = ""
 
-    for x in cur.fetchall():
+    for x in records:
         avg_mark = x["avg_mark"] or 0
 
         if avg_mark >= 90:
@@ -16562,18 +16875,44 @@ def aqm_awards():
 
         rows += f"""
         <tr>
-            <td data-label="Learner">{x['full_name']}</td>
-            <td data-label="Grade">{grade_label(x['grade'])}</td>
-            <td data-label="School">{x['school'] or '—'}</td>
-            <td data-label="Subject">{x['subject_name']}</td>
-            <td data-label="Average">{avg_mark}%</td>
-            <td data-label="Award Suggestion">
-                <span class="chip">{award}</span>
-            </td>
+            <td>{x['full_name']}</td>
+            <td>{grade_label(x['grade'])}</td>
+            <td>{x['school'] or '—'}</td>
+            <td>{x['subject_name']}</td>
+            <td>{avg_mark}%</td>
+            <td><span class="chip">{award}</span></td>
         </tr>
         """
 
-    conn.close()
+    pagination_html = ""
+
+    if total_records > per_page:
+        prev_link = ""
+        next_link = ""
+
+        if page_num > 1:
+            prev_link = f"""
+            <a class="btn mini secondary"
+               href="/aqm/awards?month={month}&page={page_num - 1}">
+                ← Previous
+            </a>
+            """
+
+        if page_num < total_pages:
+            next_link = f"""
+            <a class="btn mini secondary"
+               href="/aqm/awards?month={month}&page={page_num + 1}">
+                Next →
+            </a>
+            """
+
+        pagination_html = f"""
+        <div class="toolbar" style="margin-top:12px;align-items:center">
+            {prev_link}
+            <span class="chip">Page {page_num} of {total_pages}</span>
+            {next_link}
+        </div>
+        """
 
     body = f"""
     {aqm_nav()}
@@ -16583,16 +16922,12 @@ def aqm_awards():
 
         <form method="get" style="max-width:220px;margin-bottom:12px">
             <label>Month</label>
-            <input type="month"
-                   name="month"
-                   value="{month}"
-                   onchange="this.form.submit()">
+            <input type="month" name="month" value="{month}" onchange="this.form.submit()">
         </form>
 
-        <p class="mini muted">
-            This section suggests award candidates using manual academic marks and assignment marks.
-            Final awards should still be reviewed and approved by CAO/CEO.
-        </p>
+        <div class="mini muted" style="margin-bottom:10px">
+            Showing {len(records)} of {total_records} award records for {month}.
+        </div>
 
         <div class="scroll-x">
             <table>
@@ -16611,10 +16946,132 @@ def aqm_awards():
                 </tbody>
             </table>
         </div>
+
+        {pagination_html}
     </div>
     """
 
     return page("Awards", body)
+
+
+@app.get('/aqm/download-report/<int:rid>')
+def aqm_download_report(rid):
+    r = require_aqm()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT file_path, file_name
+        FROM student_reports
+        WHERE id=?
+    """, (rid,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not os.path.exists(row["file_path"]):
+        return page("Report not found", card_msg("The report file could not be found."))
+
+    return send_from_directory(
+        os.path.dirname(row["file_path"]),
+        os.path.basename(row["file_path"]),
+        as_attachment=True,
+        download_name=row["file_name"]
+    )
+
+
+@app.get('/aqm/download-report/<int:rid>')
+def aqm_download_report(rid):
+    r = require_aqm()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT file_path, file_name
+        FROM student_reports
+        WHERE id=?
+    """, (rid,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not os.path.exists(row["file_path"]):
+        return page("Report not found", card_msg("The report file could not be found."))
+
+    return send_from_directory(
+        os.path.dirname(row["file_path"]),
+        os.path.basename(row["file_path"]),
+        as_attachment=True,
+        download_name=row["file_name"]
+    )
+    
+    
+@app.get('/aqm/download-reports-zip')
+def aqm_download_reports_zip():
+    r = require_aqm()
+    if r: return r
+
+    month = request.args.get("month") or get_setting("current_month")
+    grade_filter = request.args.get("grade", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    params = [month]
+    grade_sql = ""
+
+    if grade_filter:
+        grade_sql = "AND st.grade = ?"
+        params.append(grade_filter)
+
+    cur.execute(f"""
+        SELECT sr.*, st.full_name, st.grade
+        FROM student_reports sr
+        JOIN students st ON st.id = sr.student_id
+        WHERE substr(sr.upload_date,1,7)=?
+        {grade_sql}
+        ORDER BY st.grade, st.full_name, sr.upload_date DESC
+    """, params)
+
+    reports = cur.fetchall()
+    conn.close()
+
+    if not reports:
+        return page("No reports", card_msg("No reports found for the selected month or grade."))
+
+    memory_file = io.BytesIO()
+
+    with zipfile.ZipFile(memory_file, "w", zipfile.ZIP_DEFLATED) as zf:
+        for r0 in reports:
+            file_path = r0["file_path"]
+
+            if not file_path or not os.path.exists(file_path):
+                continue
+
+            learner_name = secure_name(r0["full_name"])
+            grade_name = secure_name(grade_label(r0["grade"]))
+            file_name = secure_name(r0["file_name"])
+
+            zip_name = f"{grade_name}/{learner_name}_{file_name}"
+            zf.write(file_path, zip_name)
+
+    memory_file.seek(0)
+
+    response = make_response(memory_file.read())
+    response.headers["Content-Type"] = "application/zip"
+
+    if grade_filter:
+        filename = f"EBTA_Reports_{month}_{secure_name(grade_label(grade_filter))}.zip"
+    else:
+        filename = f"EBTA_All_Reports_{month}.zip"
+
+    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+
+    return response
 
 
 # --- Admin: Analytics dashboard ---
