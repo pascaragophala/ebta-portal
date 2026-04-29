@@ -15771,36 +15771,45 @@ def aqm_reports():
 
     month = request.args.get("month") or get_setting("current_month")
 
-    page_num = int(request.args.get("page", 1))
-    per_page = 3
-    offset = (page_num - 1) * per_page
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 10
 
     conn = get_db()
     cur = conn.cursor()
 
-    # Count academic reports for selected month
-    cur.execute("""
-        SELECT COUNT(*) AS total
-        FROM student_reports
-        WHERE substr(upload_date,1,7)=?
-    """, (month,))
-
-    total_reports = cur.fetchone()["total"]
-    total_pages = (total_reports + per_page - 1) // per_page
-
-    # Fetch only 10 academic reports
+    # Fetch ALL reports first
     cur.execute("""
         SELECT sr.*, st.full_name, st.grade, st.school
         FROM student_reports sr
         JOIN students st ON st.id = sr.student_id
         WHERE substr(sr.upload_date,1,7)=?
         ORDER BY sr.upload_date DESC
-        LIMIT ? OFFSET ?
-    """, (month, per_page, offset))
+    """, (month,))
 
-    reports = cur.fetchall()
+    all_reports = cur.fetchall()
 
-    # Manual marks list stays unchanged for now
+    total_reports = len(all_reports)
+    total_pages = (total_reports + per_page - 1) // per_page
+
+    if total_pages == 0:
+        total_pages = 1
+
+    if page_num > total_pages:
+        page_num = total_pages
+
+    start_index = (page_num - 1) * per_page
+    end_index = start_index + per_page
+
+    reports = all_reports[start_index:end_index]
+
+    # Manual marks unchanged
     cur.execute("""
         SELECT st.id AS student_id,
                st.full_name,
@@ -15846,7 +15855,7 @@ def aqm_reports():
 
     pagination_html = ""
 
-    if total_pages > 1:
+    if total_reports > per_page:
         prev_link = ""
         next_link = ""
 
@@ -15929,7 +15938,7 @@ def aqm_reports():
         </form>
 
         <div class="mini muted" style="margin-bottom:10px">
-            Showing up to 10 reports per page.
+            Showing {len(reports)} of {total_reports} reports for {month}.
         </div>
 
         <div class="scroll-x">
