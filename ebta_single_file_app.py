@@ -16117,7 +16117,7 @@ def aqm_reports():
     rows = ""
 
     for r0 in reports:
-        student_msg = quote(award_photo_message(r0["full_name"]))
+        student_msg = quote(award_photo_message(r0["full_name"]), safe='')
 
         student_phone = r0["phone_whatsapp"] or ""
         guardian_phone = r0["guardian_phone"] or ""
