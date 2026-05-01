@@ -652,14 +652,6 @@ def init_db():
         FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
     );
     """)
-    
-    
-    cur.execute("SELECT value FROM settings WHERE key='allow_past_active_sessions'")
-    if not cur.fetchone():
-        cur.execute(
-            "INSERT INTO settings(key,value) VALUES(?,?)",
-            ('allow_past_active_sessions', '0')
-        )
 
     # Enrollment control defaults
     cur.execute("SELECT value FROM settings WHERE key='enrollment_open'")
@@ -4915,91 +4907,21 @@ def student_home():
 
 
     # Sessions + Meet link for enrolled subjects
-    sessions_html = "<div class='empty'>No sessions yet.</div>"
-
-    allow_past_active_sessions = get_setting('allow_past_active_sessions', '0') == '1'
-
-    session_month = month
-
-    # First try selected month
-    cur.execute("""
-        SELECT DISTINCT e.subject_id
-        FROM enrollments e
-        WHERE e.student_id = ?
-          AND substr(TRIM(e.month),1,7) = ?
-          AND UPPER(TRIM(e.status)) = 'ACTIVE'
-    """, (sid, session_month))
-
-    session_subject_rows = cur.fetchall()
-    session_sub_ids = [str(r["subject_id"]) for r in session_subject_rows]
-
-    # If selected month has no active subjects, use latest previous ACTIVE month
-    if allow_past_active_sessions and not session_sub_ids:
-        cur.execute("""
-            SELECT substr(TRIM(month),1,7) AS active_month
-            FROM enrollments
-            WHERE student_id = ?
-              AND UPPER(TRIM(status)) = 'ACTIVE'
-              AND substr(TRIM(month),1,7) < ?
-            ORDER BY substr(TRIM(month),1,7) DESC
-            LIMIT 1
-        """, (sid, month))
-
-        previous_active = cur.fetchone()
-
-        if previous_active:
-            session_month = previous_active["active_month"]
-
-            cur.execute("""
-                SELECT DISTINCT e.subject_id
-                FROM enrollments e
-                WHERE e.student_id = ?
-                  AND substr(TRIM(e.month),1,7) = ?
-                  AND UPPER(TRIM(e.status)) = 'ACTIVE'
-            """, (sid, session_month))
-
-            session_subject_rows = cur.fetchall()
-            session_sub_ids = [str(r["subject_id"]) for r in session_subject_rows]
-
-    can_view_sessions = (
-        len(session_sub_ids) > 0
-        and (
-            is_current_month
-            or allow_past_active_sessions
-        )
-    )
-
-    print("DEBUG SELECTED MONTH:", month)
-    print("DEBUG SESSION MONTH USED:", session_month)
-    print("DEBUG ALLOW PAST SESSIONS:", allow_past_active_sessions)
-    print("DEBUG SESSION SUBJECT IDS:", session_sub_ids)
-    print("DEBUG CAN VIEW SESSIONS:", can_view_sessions)
-
-    if can_view_sessions:
-        q = f"""
-            SELECT s.subject_id,
-                   sub.name AS subject_name,
-                   sub.grade,
-                   s.day_of_week,
-                   s.start_time,
-                   s.end_time,
-                   s.meet_link,
-                   s.meeting_id,
-                   s.meeting_passcode
-            FROM sessions s
-            JOIN subjects sub ON sub.id = s.subject_id
-            WHERE s.active = 1
-              AND s.subject_id IN ({','.join('?' * len(session_sub_ids))})
-            ORDER BY s.day_of_week, s.start_time
-        """
-
-        cur.execute(q, (*session_sub_ids,))
-        sess = cur.fetchall()
-
+    sessions_html="<div class='empty'>No sessions yet.</div>"
+    # if is_current_month and has_active_enrollment and active_sub_ids:
+    if has_active_enrollment and active_sub_ids:
+        q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link,s.meeting_id,s.meeting_passcode
+            FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
+            WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(active_sub_ids))})
+            ORDER BY s.day_of_week, s.start_time"""
+        cur.execute(q, (*active_sub_ids,))
+        sess=cur.fetchall()
         if sess:
+
             cards = []
 
             for r in sess:
+
                 meet_btn = ""
 
                 if r['meet_link']:
@@ -5023,24 +4945,23 @@ def student_home():
                     ">
 
                         <div>
+
                             <div style="font-weight:600">
                                 {grade_label(r['grade'])} — {r['subject_name']}
                             </div>
 
                             <div class="mini muted">
                                 {DOW[r['day_of_week']]} • {r['start_time']} - {r['end_time']}
-                            </div>
 
-                            <div class="mini muted">
-                                Showing sessions from {pretty_month_label(session_month)}
                             </div>
-
-                            {f'''
+                            
+                            {f"""
                             <div style="margin-top:6px;font-size:13px">
                                 <div><b>Meeting ID:</b> {r['meeting_id']}</div>
                                 <div><b>Passcode:</b> {r['meeting_passcode']}</div>
                             </div>
-                            ''' if r['meeting_id'] or r['meeting_passcode'] else ""}
+                            """ if r['meeting_id'] or r['meeting_passcode'] else ""}
+
                         </div>
 
                         <div>
@@ -5048,6 +4969,7 @@ def student_home():
                         </div>
 
                     </div>
+
                 </div>
                 """)
 
@@ -11333,47 +11255,12 @@ def admin_set_system_month():
     set_setting('current_month', month)
     return redirect(url_for('admin_home'))
 
-
-@app.post('/admin/toggle-past-active-sessions')
-def admin_toggle_past_active_sessions():
-    r = require_admin()
-    if r:
-        return r
-
-    current = get_setting('allow_past_active_sessions', '0')
-    new_value = '0' if current == '1' else '1'
-
-    set_setting('allow_past_active_sessions', new_value)
-
-    return redirect(url_for('admin_sessions'))
-    
-
 @app.get('/admin/sessions')
 @require_high_admin
 def admin_sessions():
     r = require_admin()
     if r:
         return r
-        
-    allow_past_active_sessions = get_setting('allow_past_active_sessions', '0')
-
-    past_sessions_status = (
-        "<span class='chip active'>Enabled</span>"
-        if allow_past_active_sessions == '1'
-        else "<span class='chip lapsed'>Disabled</span>"
-    )
-
-    past_sessions_button_text = (
-        "Disable Past Active Month Sessions"
-        if allow_past_active_sessions == '1'
-        else "Enable Past Active Month Sessions"
-    )
-
-    past_sessions_button_class = (
-        "btn danger mini"
-        if allow_past_active_sessions == '1'
-        else "btn success mini"
-    )    
 
     conn = get_db()
     cur = conn.cursor()
@@ -11487,28 +11374,6 @@ def admin_sessions():
 
     body = f"""
     {admin_nav()}
-    
-    <section class="card soft" style="border-left:5px solid #3b82f6">
-        <h2>Past Active Month Session Access</h2>
-
-        <p class="mini muted">
-            Allow students who were ACTIVE in a selected previous month to still view their session links for that month.
-            Pending or not enrolled students will still not see session links.
-        </p>
-
-        <div style="margin-bottom:10px">
-            Current status: {past_sessions_status}
-        </div>
-
-        <form method="post"
-              action="/admin/toggle-past-active-sessions"
-              onsubmit="return confirm('Are you sure you want to change past active month session access?')">
-
-            <button class="{past_sessions_button_class}">
-                {past_sessions_button_text}
-            </button>
-        </form>
-    </section>
 
     <section class='card'>
 
