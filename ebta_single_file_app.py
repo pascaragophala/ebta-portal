@@ -4919,17 +4919,47 @@ def student_home():
 
     allow_past_active_sessions = get_setting('allow_past_active_sessions', '0') == '1'
 
-    # Get ACTIVE subjects for the selected month directly and safely
+    session_month = month
+
+    # First try selected month
     cur.execute("""
         SELECT DISTINCT e.subject_id
         FROM enrollments e
         WHERE e.student_id = ?
           AND substr(TRIM(e.month),1,7) = ?
           AND UPPER(TRIM(e.status)) = 'ACTIVE'
-    """, (sid, month))
+    """, (sid, session_month))
 
     session_subject_rows = cur.fetchall()
     session_sub_ids = [str(r["subject_id"]) for r in session_subject_rows]
+
+    # If selected month has no active subjects, use latest previous ACTIVE month
+    if allow_past_active_sessions and not session_sub_ids:
+        cur.execute("""
+            SELECT substr(TRIM(month),1,7) AS active_month
+            FROM enrollments
+            WHERE student_id = ?
+              AND UPPER(TRIM(status)) = 'ACTIVE'
+              AND substr(TRIM(month),1,7) < ?
+            ORDER BY substr(TRIM(month),1,7) DESC
+            LIMIT 1
+        """, (sid, month))
+
+        previous_active = cur.fetchone()
+
+        if previous_active:
+            session_month = previous_active["active_month"]
+
+            cur.execute("""
+                SELECT DISTINCT e.subject_id
+                FROM enrollments e
+                WHERE e.student_id = ?
+                  AND substr(TRIM(e.month),1,7) = ?
+                  AND UPPER(TRIM(e.status)) = 'ACTIVE'
+            """, (sid, session_month))
+
+            session_subject_rows = cur.fetchall()
+            session_sub_ids = [str(r["subject_id"]) for r in session_subject_rows]
 
     can_view_sessions = (
         len(session_sub_ids) > 0
@@ -4939,24 +4969,37 @@ def student_home():
         )
     )
 
-    print("DEBUG SESSION MONTH:", month)
+    print("DEBUG SELECTED MONTH:", month)
+    print("DEBUG SESSION MONTH USED:", session_month)
     print("DEBUG ALLOW PAST SESSIONS:", allow_past_active_sessions)
     print("DEBUG SESSION SUBJECT IDS:", session_sub_ids)
     print("DEBUG CAN VIEW SESSIONS:", can_view_sessions)
 
     if can_view_sessions:
-        q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link,s.meeting_id,s.meeting_passcode
-            FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
-            WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(session_sub_ids))})
-            ORDER BY s.day_of_week, s.start_time"""
-        cur.execute(q, (*session_sub_ids,))
-        sess=cur.fetchall()
-        if sess:
+        q = f"""
+            SELECT s.subject_id,
+                   sub.name AS subject_name,
+                   sub.grade,
+                   s.day_of_week,
+                   s.start_time,
+                   s.end_time,
+                   s.meet_link,
+                   s.meeting_id,
+                   s.meeting_passcode
+            FROM sessions s
+            JOIN subjects sub ON sub.id = s.subject_id
+            WHERE s.active = 1
+              AND s.subject_id IN ({','.join('?' * len(session_sub_ids))})
+            ORDER BY s.day_of_week, s.start_time
+        """
 
+        cur.execute(q, (*session_sub_ids,))
+        sess = cur.fetchall()
+
+        if sess:
             cards = []
 
             for r in sess:
-
                 meet_btn = ""
 
                 if r['meet_link']:
@@ -4980,23 +5023,24 @@ def student_home():
                     ">
 
                         <div>
-
                             <div style="font-weight:600">
                                 {grade_label(r['grade'])} — {r['subject_name']}
                             </div>
 
                             <div class="mini muted">
                                 {DOW[r['day_of_week']]} • {r['start_time']} - {r['end_time']}
-
                             </div>
-                            
-                            {f"""
+
+                            <div class="mini muted">
+                                Showing sessions from {pretty_month_label(session_month)}
+                            </div>
+
+                            {f'''
                             <div style="margin-top:6px;font-size:13px">
                                 <div><b>Meeting ID:</b> {r['meeting_id']}</div>
                                 <div><b>Passcode:</b> {r['meeting_passcode']}</div>
                             </div>
-                            """ if r['meeting_id'] or r['meeting_passcode'] else ""}
-
+                            ''' if r['meeting_id'] or r['meeting_passcode'] else ""}
                         </div>
 
                         <div>
@@ -5004,7 +5048,6 @@ def student_home():
                         </div>
 
                     </div>
-
                 </div>
                 """)
 
