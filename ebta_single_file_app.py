@@ -10060,6 +10060,9 @@ def admin_reports():
 
                 <a class='btn mini' target='_blank'
                    href='/admin/view_report/{r0["id"]}'>View</a>
+                   
+                <a class='btn mini secondary'
+                   href='/admin/download_report/{r0["id"]}'>Download</a>
 
                 {"" if not is_high_admin() else f"""
                 <form method='post'
@@ -10074,6 +10077,7 @@ def admin_reports():
         """
 
     query_base = f"search={search}&grade={grade_filter}"
+    download_zip_url = f"/admin/download_reports_zip?{query_base}"
 
     pagination_html = ""
 
@@ -10138,6 +10142,12 @@ def admin_reports():
 
             <a class="btn secondary" href="/admin/reports">Reset</a>
         </form>
+        
+        <div class="toolbar">
+            <a class="btn mini success" href="{download_zip_url}">
+                Download Reports as ZIP
+            </a>
+        </div>
 
         <div class="mini muted" style="margin-bottom:10px">
             Showing {len(rows)} of {total_reports} reports.
@@ -10216,7 +10226,109 @@ def delete_report(rid):
 
     return redirect(url_for('admin_reports'))
 
+@app.get('/admin/download_report/<int:rid>')
+def admin_download_report(rid):
 
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT file_path, file_name
+        FROM student_reports
+        WHERE id=?
+    """, (rid,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not os.path.exists(row["file_path"]):
+        return page("Report not found", "<div class='card'>Report file could not be found.</div>")
+
+    return send_from_directory(
+        os.path.dirname(row["file_path"]),
+        os.path.basename(row["file_path"]),
+        as_attachment=True,
+        download_name=row["file_name"]
+    )
+    
+    
+@app.get('/admin/download_reports_zip')
+def admin_download_reports_zip():
+
+    r = require_admin()
+    if r: return r
+
+    search = request.args.get("search", "").strip()
+    grade_filter = request.args.get("grade", "").strip()
+
+    where_parts = []
+    params = []
+
+    if search:
+        where_parts.append("s.full_name LIKE ?")
+        params.append(f"%{search}%")
+
+    if grade_filter:
+        where_parts.append("sr.grade = ?")
+        params.append(grade_filter)
+
+    where_sql = ""
+    if where_parts:
+        where_sql = "WHERE " + " AND ".join(where_parts)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT sr.*, s.full_name
+        FROM student_reports sr
+        JOIN students s ON s.id = sr.student_id
+        {where_sql}
+        ORDER BY sr.upload_date DESC
+    """, params)
+
+    reports = cur.fetchall()
+    conn.close()
+
+    if not reports:
+        return page("No reports", "<div class='card'>No reports found for the selected filters.</div>")
+
+    memory_file = io.BytesIO()
+
+    with zipfile.ZipFile(memory_file, "w", zipfile.ZIP_DEFLATED) as zf:
+        for r0 in reports:
+            file_path = r0["file_path"]
+
+            if not file_path or not os.path.exists(file_path):
+                continue
+
+            learner_name = secure_name(r0["full_name"])
+            grade_name = secure_name(r0["grade"] or "Unknown_Grade")
+            file_name = secure_name(r0["file_name"])
+
+            zip_name = f"{grade_name}/{learner_name}_{file_name}"
+            zf.write(file_path, zip_name)
+
+    memory_file.seek(0)
+
+    response = make_response(memory_file.read())
+    response.headers["Content-Type"] = "application/zip"
+
+    if grade_filter:
+        filename = f"EBTA_Reports_{secure_name(grade_filter)}.zip"
+    elif search:
+        filename = f"EBTA_Reports_Search_{secure_name(search)}.zip"
+    else:
+        filename = "EBTA_All_Student_Reports.zip"
+
+    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+
+    return response
+
+    
 
 # --- Admin: Tutors ---
 
