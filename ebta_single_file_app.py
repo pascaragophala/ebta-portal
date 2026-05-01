@@ -11,7 +11,7 @@ import time
 import hmac
 import io
 import zipfile
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from html import escape
@@ -824,10 +824,53 @@ def is_tutor_manager():
 def require_manager():
     if not is_tutor_manager():
         return redirect(url_for("manager_login"))    
+        
+        
+def whatsapp_number(phone):
+    if not phone:
+        return ""
+
+    phone = str(phone).strip()
+    phone = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+
+    digits = ''.join(ch for ch in phone if ch.isdigit())
+
+    if phone.startswith("+"):
+        return digits
+
+    if digits.startswith("27") and len(digits) == 11:
+        return digits
+
+    if digits.startswith("0") and len(digits) == 10:
+        return "27" + digits[1:]
+
+    return digits
+
+
+def award_photo_message(student_name):
+    return f"""Dear {student_name}, 😊✨
+
+Congratulations! 🎉 You have been selected as one of our EBTA Award Recipients for Term 1 — we are incredibly proud of you!
+
+As part of the Awards Ceremony, we would love to feature you, so please send us a clear, high-quality photo of yourself.
+
+Kindly send your picture before the end of today, so we can include you in the final ceremony presentation. LATEST: 02 May 2026.
+
+We are excited to celebrate your hard work and achievements well done once again! 🌟
+
+If you need any assistance, feel free to reach out.
+
+Looking forward to your picture!
+
+Kind regards,
+The EBTA Team 🤝"""
+
 
 def secure_name(name):
     keep="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
     return ''.join(ch if ch in keep else '_' for ch in name)
+    
+
 
 
 ALLOWED_REPORT_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx'}
@@ -16034,7 +16077,12 @@ def aqm_reports():
         params.append(grade_filter)
 
     cur.execute(f"""
-        SELECT sr.*, st.full_name, st.grade, st.school
+        SELECT sr.*, 
+               st.full_name, 
+               st.grade, 
+               st.school,
+               st.phone_whatsapp,
+               st.guardian_phone
         FROM student_reports sr
         JOIN students st ON st.id = sr.student_id
         WHERE substr(sr.upload_date,1,7)=?
@@ -16069,10 +16117,46 @@ def aqm_reports():
     rows = ""
 
     for r0 in reports:
+        student_msg = quote(award_photo_message(r0["full_name"]))
+
+        student_phone = r0["phone_whatsapp"] or ""
+        guardian_phone = r0["guardian_phone"] or ""
+
+        student_wa = whatsapp_number(student_phone)
+        guardian_wa = whatsapp_number(guardian_phone)
+
+        student_phone_html = f"""
+        <a class="btn mini success"
+           target="_blank"
+           href="https://wa.me/{student_wa}?text={student_msg}">
+           {student_phone}
+        </a>
+        <button type="button"
+                class="btn mini secondary"
+                onclick="navigator.clipboard.writeText('{student_phone}')">
+            Copy
+        </button>
+        """ if student_wa else "—"
+
+        guardian_phone_html = f"""
+        <a class="btn mini success"
+           target="_blank"
+           href="https://wa.me/{guardian_wa}?text={student_msg}">
+           {guardian_phone}
+        </a>
+        <button type="button"
+                class="btn mini secondary"
+                onclick="navigator.clipboard.writeText('{guardian_phone}')">
+            Copy
+        </button>
+        """ if guardian_wa else "—"
+
         rows += f"""
         <tr>
             <td>{r0['full_name']}</td>
             <td>{grade_label(r0['grade'])}</td>
+            <td style="display:flex;gap:6px;flex-wrap:wrap">{student_phone_html}</td>
+            <td style="display:flex;gap:6px;flex-wrap:wrap">{guardian_phone_html}</td>
             <td>{r0['school'] or '—'}</td>
             <td>{r0['file_name']}</td>
             <td>{r0['upload_date'][:16].replace('T',' ')}</td>
@@ -16176,6 +16260,8 @@ def aqm_reports():
                     <tr>
                         <th>Learner</th>
                         <th>Grade</th>
+                        <th>Student Phone</th>
+                        <th>Guardian Phone</th>
                         <th>School</th>
                         <th>Report File</th>
                         <th>Uploaded</th>
@@ -16183,7 +16269,7 @@ def aqm_reports():
                     </tr>
                 </thead>
                 <tbody>
-                    {rows or '<tr><td colspan="6">No academic reports found for the selected filter.</td></tr>'}
+                    {rows or '<tr><td colspan="8">No academic reports found for the selected filter.</td></tr>'}
                 </tbody>
             </table>
         </div>
