@@ -4909,27 +4909,12 @@ def student_home():
     # Sessions + Meet link for enrolled subjects
     sessions_html="<div class='empty'>No sessions yet.</div>"
     #if is_current_month and has_active_enrollment and active_sub_ids:
-    
-    # TEMP FIX: allow sessions from latest ACTIVE month if current selected month has none
-    session_sub_ids = active_sub_ids
-
-    if not session_sub_ids:
-        cur.execute("""
-            SELECT DISTINCT subject_id
-            FROM enrollments
-            WHERE student_id=?
-              AND UPPER(TRIM(status))='ACTIVE'
-            ORDER BY substr(TRIM(month),1,7) DESC
-        """, (sid,))
-
-        session_sub_ids = [str(r["subject_id"]) for r in cur.fetchall()]
-
-    if session_sub_ids:
+    if has_active_enrollment and active_sub_ids:
         q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link,s.meeting_id,s.meeting_passcode
             FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
-            WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(session_sub_ids))})
+            WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(active_sub_ids))})
             ORDER BY s.day_of_week, s.start_time"""
-        cur.execute(q, (*session_sub_ids,))
+        cur.execute(q, (*active_sub_ids,))
         sess=cur.fetchall()
         if sess:
 
@@ -5424,7 +5409,8 @@ def student_home():
     groups_section = ""
     sessions_section = ""
 
-    if is_current_month and has_active_enrollment and active_sub_ids:
+    #if is_current_month and has_active_enrollment and active_sub_ids:
+    if has_active_enrollment and active_sub_ids:
 
         groups_section = f"""
         <div class='card' style="border-left:5px solid #25D366">
