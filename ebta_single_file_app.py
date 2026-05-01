@@ -9957,12 +9957,33 @@ def admin_reports():
 
     r = require_admin()
     if r: return r
-    
-    #if not is_high_admin():
-    #    return page("Access Denied", "<div class='card'>Only high admin can access reports.</div>")
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 20
+    offset = (page_num - 1) * per_page
 
     conn = get_db()
     cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS total FROM student_reports")
+    total_reports = cur.fetchone()["total"]
+
+    total_pages = (total_reports + per_page - 1) // per_page
+
+    if total_pages == 0:
+        total_pages = 1
+
+    if page_num > total_pages:
+        page_num = total_pages
+
+    offset = (page_num - 1) * per_page
 
     cur.execute("""
         SELECT 
@@ -9979,34 +10000,34 @@ def admin_reports():
         FROM student_reports sr
         JOIN students s ON s.id = sr.student_id
         ORDER BY sr.upload_date DESC
-    """)
+        LIMIT ? OFFSET ?
+    """, (per_page, offset))
 
     rows = cur.fetchall()
-    total_reports = len(rows)
     conn.close()
 
     html = ""
 
-    for r in rows:
+    for r0 in rows:
         html += f"""
         <tr>
-            <td>{r['full_name']}</td>
-            <td>{r['grade']}</td>
+            <td>{r0['full_name']}</td>
+            <td>{r0['grade']}</td>
             <td>
                 <span class='chip'>
-                    {r['months_active'] or 0} months
+                    {r0['months_active'] or 0} months
                 </span>
             </td>
-            <td>{r['file_name']}</td>
-            <td>{format_datetime(r['upload_date'])}</td>
+            <td>{r0['file_name']}</td>
+            <td>{format_datetime(r0['upload_date'])}</td>
             <td style="display:flex; gap:6px">
 
                 <a class='btn mini' target='_blank'
-                   href='/admin/view_report/{r["id"]}'>View</a>
+                   href='/admin/view_report/{r0["id"]}'>View</a>
 
                 {"" if not is_high_admin() else f"""
                 <form method='post'
-                      action='/admin/delete_report/{r["id"]}'
+                      action='/admin/delete_report/{r0["id"]}'
                       onsubmit="return confirm('Delete this report?');">
                     <button class='btn mini danger'>Delete</button>
                 </form>
@@ -10014,6 +10035,34 @@ def admin_reports():
 
             </td>
         </tr>
+        """
+
+    pagination_html = ""
+
+    if total_reports > per_page:
+        prev_link = ""
+        next_link = ""
+
+        if page_num > 1:
+            prev_link = f"""
+            <a class='btn mini secondary' href='/admin/reports?page={page_num - 1}'>
+                ← Previous
+            </a>
+            """
+
+        if page_num < total_pages:
+            next_link = f"""
+            <a class='btn mini secondary' href='/admin/reports?page={page_num + 1}'>
+                Next →
+            </a>
+            """
+
+        pagination_html = f"""
+        <div class='toolbar' style='margin-top:12px;align-items:center'>
+            {prev_link}
+            <span class='chip'>Page {page_num} of {total_pages}</span>
+            {next_link}
+        </div>
         """
 
     body = f"""
@@ -10030,21 +10079,29 @@ def admin_reports():
 
         </div>
 
-        <table>
-            <thead>
-                <tr>
-                    <th>Student</th>
-                    <th>Grade</th>
-                    <th>Months Active</th>
-                    <th>File</th>
-                    <th>Date</th>
-                    <th>Action</th>
-                </tr>
-            </thead>
-            <tbody>
-                {html or "<tr><td colspan='5'>No reports yet</td></tr>"}
-            </tbody>
-        </table>
+        <div class="mini muted" style="margin-bottom:10px">
+            Showing {len(rows)} of {total_reports} reports.
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Grade</th>
+                        <th>Months Active</th>
+                        <th>File</th>
+                        <th>Date</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {html or "<tr><td colspan='6'>No reports yet</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_html}
     </div>
     """
 
