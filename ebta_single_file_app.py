@@ -4908,8 +4908,8 @@ def student_home():
 
     # Sessions + Meet link for enrolled subjects
     sessions_html="<div class='empty'>No sessions yet.</div>"
-    # if is_current_month and has_active_enrollment and active_sub_ids:
-    if has_active_enrollment and active_sub_ids:
+    #if is_current_month and has_active_enrollment and active_sub_ids:
+    if active_sub_ids:
         q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link,s.meeting_id,s.meeting_passcode
             FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
             WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(active_sub_ids))})
