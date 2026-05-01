@@ -16126,37 +16126,51 @@ def aqm_reports():
         guardian_wa = whatsapp_number(guardian_phone)
 
         student_phone_html = f"""
-        <a class="btn mini success"
-           target="_blank"
-           href="https://wa.me/{student_wa}?text={student_msg}">
-           {student_phone}
-        </a>
-        <button type="button"
-                class="btn mini secondary"
-                onclick="navigator.clipboard.writeText('{student_phone}')">
-            Copy
-        </button>
+        <div style="display:flex;gap:4px;align-items:center;white-space:nowrap">
+            <a class="btn mini success"
+               target="_blank"
+               style="padding:4px 7px;font-size:11px"
+               href="https://wa.me/{student_wa}?text={student_msg}">
+               WhatsApp
+            </a>
+
+            <button type="button"
+                    class="btn mini secondary"
+                    style="padding:4px 7px;font-size:11px"
+                    title="{student_phone}"
+                    onclick="navigator.clipboard.writeText('{student_phone}')">
+                Copy
+            </button>
+        </div>
+        <div class="mini muted">{student_phone}</div>
         """ if student_wa else "—"
 
         guardian_phone_html = f"""
-        <a class="btn mini success"
-           target="_blank"
-           href="https://wa.me/{guardian_wa}?text={student_msg}">
-           {guardian_phone}
-        </a>
-        <button type="button"
-                class="btn mini secondary"
-                onclick="navigator.clipboard.writeText('{guardian_phone}')">
-            Copy
-        </button>
+        <div style="display:flex;gap:4px;align-items:center;white-space:nowrap">
+            <a class="btn mini success"
+               target="_blank"
+               style="padding:4px 7px;font-size:11px"
+               href="https://wa.me/{guardian_wa}?text={student_msg}">
+               WhatsApp
+            </a>
+
+            <button type="button"
+                    class="btn mini secondary"
+                    style="padding:4px 7px;font-size:11px"
+                    title="{guardian_phone}"
+                    onclick="navigator.clipboard.writeText('{guardian_phone}')">
+                Copy
+            </button>
+        </div>
+        <div class="mini muted">{guardian_phone}</div>
         """ if guardian_wa else "—"
 
         rows += f"""
         <tr>
             <td>{r0['full_name']}</td>
             <td>{grade_label(r0['grade'])}</td>
-            <td style="display:flex;gap:6px;flex-wrap:wrap">{student_phone_html}</td>
-            <td style="display:flex;gap:6px;flex-wrap:wrap">{guardian_phone_html}</td>
+            <td style="min-width:120px">{student_phone_html}</td>
+            <td style="min-width:120px">{guardian_phone_html}</td>
             <td>{r0['school'] or '—'}</td>
             <td>{r0['file_name']}</td>
             <td>{r0['upload_date'][:16].replace('T',' ')}</td>
