@@ -9958,6 +9958,9 @@ def admin_reports():
     r = require_admin()
     if r: return r
 
+    search = request.args.get("search", "").strip()
+    grade_filter = request.args.get("grade", "").strip()
+
     try:
         page_num = int(request.args.get("page", 1))
     except:
@@ -9969,10 +9972,34 @@ def admin_reports():
     per_page = 20
     offset = (page_num - 1) * per_page
 
+    where_parts = []
+    params = []
+
+    if search:
+        where_parts.append("s.full_name LIKE ?")
+        params.append(f"%{search}%")
+
+    if grade_filter:
+        where_parts.append("sr.grade = ?")
+        params.append(grade_filter)
+
+    where_sql = ""
+    if where_parts:
+        where_sql = "WHERE " + " AND ".join(where_parts)
+
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("SELECT COUNT(*) AS total FROM student_reports")
+    cur.execute("SELECT DISTINCT grade FROM student_reports WHERE grade IS NOT NULL ORDER BY grade")
+    grades = cur.fetchall()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS total
+        FROM student_reports sr
+        JOIN students s ON s.id = sr.student_id
+        {where_sql}
+    """, params)
+
     total_reports = cur.fetchone()["total"]
 
     total_pages = (total_reports + per_page - 1) // per_page
@@ -9985,7 +10012,7 @@ def admin_reports():
 
     offset = (page_num - 1) * per_page
 
-    cur.execute("""
+    cur.execute(f"""
         SELECT 
             sr.*, 
             s.full_name,
@@ -9999,12 +10026,21 @@ def admin_reports():
 
         FROM student_reports sr
         JOIN students s ON s.id = sr.student_id
+        {where_sql}
         ORDER BY sr.upload_date DESC
         LIMIT ? OFFSET ?
-    """, (per_page, offset))
+    """, (*params, per_page, offset))
 
     rows = cur.fetchall()
     conn.close()
+
+    grade_options = '<option value="">All Grades</option>'
+
+    for g in grades:
+        selected = "selected" if grade_filter == g["grade"] else ""
+        grade_options += f"""
+        <option value="{g['grade']}" {selected}>{grade_label(g['grade'])}</option>
+        """
 
     html = ""
 
@@ -10037,6 +10073,8 @@ def admin_reports():
         </tr>
         """
 
+    query_base = f"search={search}&grade={grade_filter}"
+
     pagination_html = ""
 
     if total_reports > per_page:
@@ -10045,14 +10083,16 @@ def admin_reports():
 
         if page_num > 1:
             prev_link = f"""
-            <a class='btn mini secondary' href='/admin/reports?page={page_num - 1}'>
+            <a class='btn mini secondary'
+               href='/admin/reports?{query_base}&page={page_num - 1}'>
                 ← Previous
             </a>
             """
 
         if page_num < total_pages:
             next_link = f"""
-            <a class='btn mini secondary' href='/admin/reports?page={page_num + 1}'>
+            <a class='btn mini secondary'
+               href='/admin/reports?{query_base}&page={page_num + 1}'>
                 Next →
             </a>
             """
@@ -10071,13 +10111,33 @@ def admin_reports():
         <h2>Student Reports</h2>
 
         <div class="stats" style="margin-bottom:12px">
-
             <div class="stat">
                 <div class="k">{total_reports}</div>
-                <div class="t">Total Reports</div>
+                <div class="t">Matching Reports</div>
+            </div>
+        </div>
+
+        <form method="get"
+              style="display:grid;grid-template-columns:2fr 1fr auto auto;gap:10px;margin-bottom:14px;align-items:end">
+
+            <div>
+                <label>Search student</label>
+                <input name="search"
+                       value="{search}"
+                       placeholder="Search by student name">
             </div>
 
-        </div>
+            <div>
+                <label>Grade</label>
+                <select name="grade">
+                    {grade_options}
+                </select>
+            </div>
+
+            <button class="btn success">Apply</button>
+
+            <a class="btn secondary" href="/admin/reports">Reset</a>
+        </form>
 
         <div class="mini muted" style="margin-bottom:10px">
             Showing {len(rows)} of {total_reports} reports.
@@ -10096,7 +10156,7 @@ def admin_reports():
                     </tr>
                 </thead>
                 <tbody>
-                    {html or "<tr><td colspan='6'>No reports yet</td></tr>"}
+                    {html or "<tr><td colspan='6'>No reports found.</td></tr>"}
                 </tbody>
             </table>
         </div>
