@@ -652,6 +652,14 @@ def init_db():
         FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
     );
     """)
+    
+    
+    cur.execute("SELECT value FROM settings WHERE key='allow_past_active_sessions'")
+    if not cur.fetchone():
+        cur.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?)",
+            ('allow_past_active_sessions', '0')
+        )
 
     # Enrollment control defaults
     cur.execute("SELECT value FROM settings WHERE key='enrollment_open'")
@@ -4908,7 +4916,19 @@ def student_home():
 
     # Sessions + Meet link for enrolled subjects
     sessions_html="<div class='empty'>No sessions yet.</div>"
-    if is_current_month and has_active_enrollment and active_sub_ids:
+
+    allow_past_active_sessions = get_setting('allow_past_active_sessions', '0') == '1'
+
+    can_view_sessions = (
+        has_active_enrollment
+        and active_sub_ids
+        and (
+            is_current_month
+            or allow_past_active_sessions
+        )
+    )
+
+    if can_view_sessions:
         q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link,s.meeting_id,s.meeting_passcode
             FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
             WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(active_sub_ids))})
@@ -11254,12 +11274,47 @@ def admin_set_system_month():
     set_setting('current_month', month)
     return redirect(url_for('admin_home'))
 
+
+@app.post('/admin/toggle-past-active-sessions')
+def admin_toggle_past_active_sessions():
+    r = require_admin()
+    if r:
+        return r
+
+    current = get_setting('allow_past_active_sessions', '0')
+    new_value = '0' if current == '1' else '1'
+
+    set_setting('allow_past_active_sessions', new_value)
+
+    return redirect(url_for('admin_sessions'))
+    
+
 @app.get('/admin/sessions')
 @require_high_admin
 def admin_sessions():
     r = require_admin()
     if r:
         return r
+        
+    allow_past_active_sessions = get_setting('allow_past_active_sessions', '0')
+
+    past_sessions_status = (
+        "<span class='chip active'>Enabled</span>"
+        if allow_past_active_sessions == '1'
+        else "<span class='chip lapsed'>Disabled</span>"
+    )
+
+    past_sessions_button_text = (
+        "Disable Past Active Month Sessions"
+        if allow_past_active_sessions == '1'
+        else "Enable Past Active Month Sessions"
+    )
+
+    past_sessions_button_class = (
+        "btn danger mini"
+        if allow_past_active_sessions == '1'
+        else "btn success mini"
+    )    
 
     conn = get_db()
     cur = conn.cursor()
@@ -11373,6 +11428,28 @@ def admin_sessions():
 
     body = f"""
     {admin_nav()}
+    
+    <section class="card soft" style="border-left:5px solid #3b82f6">
+        <h2>Past Active Month Session Access</h2>
+
+        <p class="mini muted">
+            Allow students who were ACTIVE in a selected previous month to still view their session links for that month.
+            Pending or not enrolled students will still not see session links.
+        </p>
+
+        <div style="margin-bottom:10px">
+            Current status: {past_sessions_status}
+        </div>
+
+        <form method="post"
+              action="/admin/toggle-past-active-sessions"
+              onsubmit="return confirm('Are you sure you want to change past active month session access?')">
+
+            <button class="{past_sessions_button_class}">
+                {past_sessions_button_text}
+            </button>
+        </form>
+    </section>
 
     <section class='card'>
 
