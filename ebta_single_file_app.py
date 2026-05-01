@@ -4915,25 +4915,41 @@ def student_home():
 
 
     # Sessions + Meet link for enrolled subjects
-    sessions_html="<div class='empty'>No sessions yet.</div>"
+    sessions_html = "<div class='empty'>No sessions yet.</div>"
 
     allow_past_active_sessions = get_setting('allow_past_active_sessions', '0') == '1'
 
+    # Get ACTIVE subjects for the selected month directly and safely
+    cur.execute("""
+        SELECT DISTINCT e.subject_id
+        FROM enrollments e
+        WHERE e.student_id = ?
+          AND substr(TRIM(e.month),1,7) = ?
+          AND UPPER(TRIM(e.status)) = 'ACTIVE'
+    """, (sid, month))
+
+    session_subject_rows = cur.fetchall()
+    session_sub_ids = [str(r["subject_id"]) for r in session_subject_rows]
+
     can_view_sessions = (
-        has_active_enrollment
-        and active_sub_ids
+        len(session_sub_ids) > 0
         and (
             is_current_month
             or allow_past_active_sessions
         )
     )
 
+    print("DEBUG SESSION MONTH:", month)
+    print("DEBUG ALLOW PAST SESSIONS:", allow_past_active_sessions)
+    print("DEBUG SESSION SUBJECT IDS:", session_sub_ids)
+    print("DEBUG CAN VIEW SESSIONS:", can_view_sessions)
+
     if can_view_sessions:
         q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link,s.meeting_id,s.meeting_passcode
             FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
-            WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(active_sub_ids))})
+            WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(session_sub_ids))})
             ORDER BY s.day_of_week, s.start_time"""
-        cur.execute(q, (*active_sub_ids,))
+        cur.execute(q, (*session_sub_ids,))
         sess=cur.fetchall()
         if sess:
 
