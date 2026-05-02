@@ -848,22 +848,28 @@ def whatsapp_number(phone):
 
 
 def award_photo_message(student_name):
-    return f"""Dear {student_name}, 😊✨
+    smile = "\U0001F60A"
+    sparkle = "\u2728"
+    party = "\U0001F389"
+    star = "\U0001F31F"
+    handshake = "\U0001F91D"
 
-Congratulations! 🎉 You have been selected as one of our EBTA Award Recipients for Term 1 — we are incredibly proud of you!
+    return f"""Dear {student_name}, {smile}{sparkle}
+
+Congratulations! {party} You have been selected as one of our EBTA Award Recipients for Term 1 — we are incredibly proud of you!
 
 As part of the Awards Ceremony, we would love to feature you, so please send us a clear, high-quality photo of yourself.
 
 Kindly send your picture before the end of today, so we can include you in the final ceremony presentation. LATEST: 02 May 2026.
 
-We are excited to celebrate your hard work and achievements well done once again! 🌟
+We are excited to celebrate your hard work and achievements well done once again! {star}
 
 If you need any assistance, feel free to reach out.
 
 Looking forward to your picture!
 
 Kind regards,
-The EBTA Team 🤝"""
+The EBTA Team {handshake}"""
 
 
 def secure_name(name):
