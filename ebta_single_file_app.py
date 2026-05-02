@@ -854,22 +854,22 @@ def award_photo_message(student_name):
     star = "\U0001F31F"
     handshake = "\U0001F91D"
 
-    return f"""Dear {student_name}, {smile}{sparkle}
+    return f"""Dear {student_name},
 
-Congratulations! {party} You have been selected as one of our EBTA Award Recipients for Term 1 — we are incredibly proud of you!
+Congratulations! You have been selected as one of our EBTA Award Recipients for Term 1 — we are incredibly proud of you!
 
 As part of the Awards Ceremony, we would love to feature you, so please send us a clear, high-quality photo of yourself.
 
 Kindly send your picture before the end of today, so we can include you in the final ceremony presentation. LATEST: 02 May 2026.
 
-We are excited to celebrate your hard work and achievements well done once again! {star}
+We are excited to celebrate your hard work and achievements well done once again!
 
 If you need any assistance, feel free to reach out.
 
 Looking forward to your picture!
 
 Kind regards,
-The EBTA Team {handshake}"""
+The EBTA Team"""
 
 
 def secure_name(name):
