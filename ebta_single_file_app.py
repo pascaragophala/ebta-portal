@@ -8717,6 +8717,7 @@ def admin_home():
     <div class='toolbar'>
     <a class='btn secondary' href='{url_for('admin_enrollments')}'>Manage enrollments</a>
     <a class='btn secondary' href='{url_for('admin_students')}'>Students</a>
+    <a class='btn secondary' href='{url_for('admin_followups')}'>Follow-Ups<</a>
     <a class='btn secondary' href='{url_for('admin_tutors')}'>Tutors</a>
     <a class='btn secondary' href='{url_for('admin_groups')}'>Group links</a>
     <a class='btn secondary' href='{url_for('admin_sessions')}'>Sessions & QR</a>
