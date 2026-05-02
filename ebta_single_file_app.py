@@ -35,6 +35,10 @@ DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
 UPLOADS_DIR = Path(BASE_DATA_DIR) / "uploads"
 REPORTS_DIR = UPLOADS_DIR / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+PROFILE_PICS_DIR = UPLOADS_DIR / "profile_pictures"
+PROFILE_PICS_DIR.mkdir(parents=True, exist_ok=True)
+
 UPLOAD_DIR = UPLOADS_DIR
 MATERIALS_DIR = Path(BASE_DATA_DIR) / "materials"
 SUBMISSIONS_DIR = Path(BASE_DATA_DIR) / "submissions"
@@ -393,6 +397,8 @@ def init_db():
     ensure_column(conn, "tutor_weekly_tracker", "manager_rating", "INTEGER")
     ensure_column(conn, "submissions", "is_published", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "submissions", "marked_file_path", "TEXT")
+    ensure_column(conn, "students", "profile_picture_path", "TEXT")
+    ensure_column(conn, "students", "profile_picture_uploaded_at", "TEXT")
     
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_tracker
@@ -884,6 +890,12 @@ ALLOWED_REPORT_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx'}
 def is_valid_report(filename):
     ext = os.path.splitext(filename.lower())[1]
     return ext in ALLOWED_REPORT_EXTENSIONS
+
+ALLOWED_PROFILE_PIC_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
+
+def is_valid_profile_picture(filename):
+    ext = os.path.splitext(filename.lower())[1]
+    return ext in ALLOWED_PROFILE_PIC_EXTENSIONS
 
 def normalize_phone(phone: str, phone_type: str = "SA", strict: bool = False) -> str:
 
@@ -4794,6 +4806,59 @@ def student_home():
     </div>
     """
     
+    cur.execute("""
+        SELECT full_name, profile_picture_path
+        FROM students
+        WHERE id=?
+    """, (sid,))
+
+    student_profile = cur.fetchone()
+
+    profile_pic_html = ""
+
+    if student_profile and student_profile["profile_picture_path"]:
+        profile_pic_html = f"""
+        <img src="/profile-picture/{sid}"
+             style="width:90px;height:90px;border-radius:50%;object-fit:cover;border:3px solid #1b5e20">
+        """
+    else:
+        profile_pic_html = """
+        <div style="width:90px;height:90px;border-radius:50%;background:#eef6ee;display:flex;align-items:center;justify-content:center;border:3px solid #1b5e20;font-weight:700;color:#1b5e20">
+            No Photo
+        </div>
+        """
+
+    profile_section = f"""
+    <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+        <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+            {profile_pic_html}
+
+            <div style="flex:1">
+                <h2 style="margin-bottom:4px">Profile Picture</h2>
+                <div class="mini muted" style="margin-bottom:10px">
+                    Upload a clear picture of yourself. This may also be used for EBTA awards and learner recognition.
+                </div>
+
+                <form method="post"
+                      action="/student/upload-profile-picture"
+                      enctype="multipart/form-data"
+                      style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+
+                    <input type="file"
+                           name="profile_picture"
+                           accept=".png,.jpg,.jpeg,.webp,image/*"
+                           required
+                           style="max-width:280px">
+
+                    <button class="btn mini success">
+                        Upload Profile Picture
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    """
+    
     # Add quick button to jump to current enrolled month
     if system_month in active_months and month != system_month:
         month_selector += f"""
@@ -5489,6 +5554,7 @@ def student_home():
             </p>
 
             {month_selector}
+            {profile_section}
 
         <h2>Your Enrollments</h2>
         {enr_html}
@@ -5496,6 +5562,7 @@ def student_home():
 
         <p class='mini muted'>To add more subjects, submit the Home form again with your phone number and the new subjects + PoP.</p>
     </div>
+    
     <div class='card soft' style="border-left:5px solid #25D366;">
         <h2>EBTA Notifications Groups</h2>
 
@@ -16088,7 +16155,8 @@ def aqm_reports():
                st.grade, 
                st.school,
                st.phone_whatsapp,
-               st.guardian_phone
+               st.guardian_phone,
+               st.profile_picture_path
         FROM student_reports sr
         JOIN students st ON st.id = sr.student_id
         WHERE substr(sr.upload_date,1,7)=?
@@ -16172,10 +16240,21 @@ def aqm_reports():
         <div class="mini muted">{guardian_phone}</div>
         """ if guardian_wa else "—"
 
+        profile_picture_html = "—"
+
+        if r0["profile_picture_path"] and os.path.exists(r0["profile_picture_path"]):
+            profile_picture_html = f"""
+            <a href="/profile-picture/{r0['student_id']}" target="_blank">
+                <img src="/profile-picture/{r0['student_id']}"
+                     style="width:55px;height:55px;border-radius:50%;object-fit:cover;border:2px solid #1b5e20">
+            </a>
+            """
+
         rows += f"""
         <tr>
             <td>{r0['full_name']}</td>
             <td>{grade_label(r0['grade'])}</td>
+            <td>{profile_picture_html}</td>
             <td style="min-width:120px">{student_phone_html}</td>
             <td style="min-width:120px">{guardian_phone_html}</td>
             <td>{r0['school'] or '—'}</td>
@@ -16228,12 +16307,19 @@ def aqm_reports():
 
     download_all_url = f"/aqm/download-reports-zip?month={month}"
     download_grade_url = f"/aqm/download-reports-zip?month={month}&grade={grade_filter}"
+    
+    download_all_profile_pics_url = "/aqm/download-profile-pictures-zip"
+    download_grade_profile_pics_url = f"/aqm/download-profile-pictures-zip?grade={grade_filter}"
 
     grade_download_button = ""
     if grade_filter:
         grade_download_button = f"""
         <a class="btn mini secondary" href="{download_grade_url}">
             Download {grade_label(grade_filter)} Reports
+        </a>
+        
+        <a class="btn mini success" href="{download_grade_profile_pics_url}">
+            Download {grade_label(grade_filter)} Profile Pictures
         </a>
         """
 
@@ -16267,6 +16353,10 @@ def aqm_reports():
             <a class="btn mini" href="{download_all_url}">
                 Download All Reports
             </a>
+            
+            <a class="btn mini success" href="{download_all_profile_pics_url}">
+                Download All Profile Pictures
+            </a>
 
             {grade_download_button}
         </div>
@@ -16281,6 +16371,7 @@ def aqm_reports():
                     <tr>
                         <th>Learner</th>
                         <th>Grade</th>
+                        <th>Profile Picture</th>
                         <th>Student Phone</th>
                         <th>Guardian Phone</th>
                         <th>School</th>
@@ -16290,7 +16381,7 @@ def aqm_reports():
                     </tr>
                 </thead>
                 <tbody>
-                    {rows or '<tr><td colspan="8">No academic reports found for the selected filter.</td></tr>'}
+                    {rows or '<tr><td colspan="9">No academic reports found for the selected filter.</td></tr>'}
                 </tbody>
             </table>
         </div>
@@ -17409,6 +17500,147 @@ def aqm_view_report(rid):
         os.path.basename(row["file_path"]),
         as_attachment=False
     )
+    
+    
+@app.post('/student/upload-profile-picture')
+def student_upload_profile_picture():
+    r = require_student()
+    if r: return r
+
+    sid = is_student()
+
+    file = request.files.get("profile_picture")
+
+    if not file or not file.filename:
+        return redirect(url_for("student_home"))
+
+    if not is_valid_profile_picture(file.filename):
+        return page("Invalid file", card_msg("Please upload a JPG, PNG, JPEG, or WEBP image."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT full_name, grade FROM students WHERE id=?", (sid,))
+    student = cur.fetchone()
+
+    if not student:
+        conn.close()
+        return redirect(url_for("student_home"))
+
+    ext = os.path.splitext(file.filename.lower())[1]
+    safe_student_name = secure_name(student["full_name"])
+    safe_grade = secure_name(student["grade"] or "Unknown_Grade")
+
+    grade_folder = PROFILE_PICS_DIR / safe_grade
+    grade_folder.mkdir(parents=True, exist_ok=True)
+
+    filename = f"{safe_student_name}_{sid}{ext}"
+    file_path = grade_folder / filename
+
+    file.save(file_path)
+
+    cur.execute("""
+        UPDATE students
+        SET profile_picture_path=?,
+            profile_picture_uploaded_at=?
+        WHERE id=?
+    """, (str(file_path), now_utc_iso(), sid))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("student_home"))
+    
+
+@app.get('/profile-picture/<int:sid>')
+def view_profile_picture(sid):
+    r = require_admin() if is_admin() else None
+
+    # Allow students to view only their own profile picture
+    if is_student() and is_student() != sid:
+        return redirect(url_for("student_home"))
+
+    if not is_student() and not is_admin() and not session.get("aqm_id"):
+        return redirect(url_for("student_login"))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT profile_picture_path FROM students WHERE id=?", (sid,))
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row["profile_picture_path"] or not os.path.exists(row["profile_picture_path"]):
+        return page("Not found", card_msg("Profile picture not found."))
+
+    return send_from_directory(
+        os.path.dirname(row["profile_picture_path"]),
+        os.path.basename(row["profile_picture_path"])
+    )
+
+
+@app.get('/aqm/download-profile-pictures-zip')
+def aqm_download_profile_pictures_zip():
+    r = require_aqm()
+    if r: return r
+
+    grade_filter = request.args.get("grade", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    params = []
+    grade_sql = ""
+
+    if grade_filter:
+        grade_sql = "WHERE grade = ?"
+        params.append(grade_filter)
+
+    cur.execute(f"""
+        SELECT id, full_name, grade, profile_picture_path
+        FROM students
+        {grade_sql}
+        ORDER BY grade, full_name
+    """, params)
+
+    students = cur.fetchall()
+    conn.close()
+
+    memory_file = io.BytesIO()
+    added = 0
+
+    with zipfile.ZipFile(memory_file, "w", zipfile.ZIP_DEFLATED) as zf:
+        for st in students:
+            path = st["profile_picture_path"]
+
+            if not path or not os.path.exists(path):
+                continue
+
+            ext = os.path.splitext(path)[1].lower()
+            learner_name = secure_name(st["full_name"])
+            grade_name = secure_name(grade_label(st["grade"] or "Unknown_Grade"))
+
+            zip_name = f"{grade_name}/{learner_name}{ext}"
+            zf.write(path, zip_name)
+            added += 1
+
+    if added == 0:
+        return page("No profile pictures", card_msg("No profile pictures found for the selected filter."))
+
+    memory_file.seek(0)
+
+    response = make_response(memory_file.read())
+    response.headers["Content-Type"] = "application/zip"
+
+    if grade_filter:
+        filename = f"EBTA_Profile_Pictures_{secure_name(grade_label(grade_filter))}.zip"
+    else:
+        filename = "EBTA_All_Profile_Pictures.zip"
+
+    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+
+    return response
+
 
 # --- Admin: Analytics dashboard ---
 
