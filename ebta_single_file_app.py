@@ -16121,6 +16121,7 @@ def aqm_reports():
 
     month = request.args.get("month") or get_setting("current_month")
     grade_filter = request.args.get("grade", "").strip()
+    search = request.args.get("search", "").strip()
 
     try:
         page_num = int(request.args.get("page", 1))
@@ -16143,11 +16144,15 @@ def aqm_reports():
     grades = cur.fetchall()
 
     params = [month]
-    grade_sql = ""
+    filter_sql = ""
 
     if grade_filter:
-        grade_sql = "AND st.grade = ?"
+        filter_sql += " AND st.grade = ?"
         params.append(grade_filter)
+
+    if search:
+        filter_sql += " AND st.full_name LIKE ?"
+        params.append(f"%{search}%")
 
     cur.execute(f"""
         SELECT sr.*, 
@@ -16160,7 +16165,7 @@ def aqm_reports():
         FROM student_reports sr
         JOIN students st ON st.id = sr.student_id
         WHERE substr(sr.upload_date,1,7)=?
-        {grade_sql}
+        {filter_sql}
         ORDER BY sr.upload_date DESC
     """, params)
 
@@ -16301,7 +16306,7 @@ def aqm_reports():
         if page_num > 1:
             prev_link = f"""
             <a class="btn mini secondary"
-               href="/aqm/reports?month={month}&grade={grade_filter}&page={page_num - 1}">
+               href="/aqm/reports?month={month}&grade={grade_filter}&search={search}&page={page_num - 1}"
                 ← Previous
             </a>
             """
@@ -16309,7 +16314,7 @@ def aqm_reports():
         if page_num < total_pages:
             next_link = f"""
             <a class="btn mini secondary"
-               href="/aqm/reports?month={month}&grade={grade_filter}&page={page_num + 1}">
+               href="/aqm/reports?month={month}&grade={grade_filter}&search={search}&page={page_num + 1}"
                 Next →
             </a>
             """
@@ -16352,6 +16357,13 @@ def aqm_reports():
             <div>
                 <label>Month</label>
                 <input type="month" name="month" value="{month}">
+            </div>
+
+            <div>
+                <label>Search Student</label>
+                <input name="search"
+                       value="{search}"
+                       placeholder="Search by student name">
             </div>
 
             <div>
@@ -17691,6 +17703,8 @@ def download_profile_picture(sid):
         as_attachment=True,
         download_name=download_name
     )
+
+
 
 # --- Admin: Analytics dashboard ---
 
