@@ -16244,10 +16244,27 @@ def aqm_reports():
 
         if r0["profile_picture_path"] and os.path.exists(r0["profile_picture_path"]):
             profile_picture_html = f"""
-            <a href="/profile-picture/{r0['student_id']}" target="_blank">
-                <img src="/profile-picture/{r0['student_id']}"
-                     style="width:55px;height:55px;border-radius:50%;object-fit:cover;border:2px solid #1b5e20">
-            </a>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                <a href="/profile-picture/{r0['student_id']}" target="_blank">
+                    <img src="/profile-picture/{r0['student_id']}"
+                         style="width:50px;height:50px;border-radius:50%;object-fit:cover;border:2px solid #1b5e20">
+                </a>
+
+                <div style="display:flex;flex-direction:column;gap:4px">
+                    <a class="btn mini success"
+                       style="padding:4px 7px;font-size:11px"
+                       target="_blank"
+                       href="/profile-picture/{r0['student_id']}">
+                        View
+                    </a>
+
+                    <a class="btn mini secondary"
+                       style="padding:4px 7px;font-size:11px"
+                       href="/download-profile-picture/{r0['student_id']}">
+                        Download
+                    </a>
+                </div>
+            </div>
             """
 
         rows += f"""
@@ -17641,6 +17658,39 @@ def aqm_download_profile_pictures_zip():
 
     return response
 
+
+@app.get('/download-profile-picture/<int:sid>')
+def download_profile_picture(sid):
+    if not (is_admin() or is_student() or session.get("aqm_id")):
+        return redirect(url_for("student_login"))
+
+    if is_student() and is_student() != sid:
+        return redirect(url_for("student_home"))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT full_name, profile_picture_path
+        FROM students
+        WHERE id=?
+    """, (sid,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row["profile_picture_path"] or not os.path.exists(row["profile_picture_path"]):
+        return page("Not found", card_msg("Profile picture not found."))
+
+    ext = os.path.splitext(row["profile_picture_path"])[1].lower()
+    download_name = f"{secure_name(row['full_name'])}{ext}"
+
+    return send_from_directory(
+        os.path.dirname(row["profile_picture_path"]),
+        os.path.basename(row["profile_picture_path"]),
+        as_attachment=True,
+        download_name=download_name
+    )
 
 # --- Admin: Analytics dashboard ---
 
