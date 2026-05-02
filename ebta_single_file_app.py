@@ -11,7 +11,7 @@ import time
 import hmac
 import io
 import zipfile
-from urllib.parse import urlencode, quote
+from urllib.parse import urlencode, quote_from_bytes
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from html import escape
@@ -16123,7 +16123,8 @@ def aqm_reports():
     rows = ""
 
     for r0 in reports:
-        student_msg = quote(award_photo_message(r0["full_name"]), safe='')
+        raw_msg = award_photo_message(r0["full_name"])
+        student_msg = quote_from_bytes(raw_msg.encode("utf-8"), safe="")
 
         student_phone = r0["phone_whatsapp"] or ""
         guardian_phone = r0["guardian_phone"] or ""
