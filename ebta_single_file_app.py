@@ -9250,6 +9250,7 @@ def admin_students():
     
     q = request.args.get("q", "").strip()
     selected_month = request.args.get("month", "").strip()
+    grade_filter = request.args.get("grade", "").strip()
     q_safe = escape(q)
 
     r = require_admin()
@@ -9269,6 +9270,10 @@ def admin_students():
     if selected_month:
         where_clauses.append("e.month = ?")
         params.append(selected_month)
+    
+    if grade_filter:
+        where_clauses.append("s.grade = ?")
+        params.append(grade_filter)
 
     if q:
         where_clauses.append("""
@@ -9305,6 +9310,10 @@ def admin_students():
     if selected_month:
         where_clauses.append("e.month = ?")
         params.append(selected_month)
+        
+    if grade_filter:
+        where_clauses.append("s.grade = ?")
+        params.append(grade_filter)
 
     if q:
         where_clauses.append("""
@@ -9431,20 +9440,20 @@ def admin_students():
 
     # First
     if page_num > 1:
-        page_links.append(f"<a class='links' href='?page=1&q={q}&month={selected_month}'>« First</a>")
-        page_links.append(f"<a class='links' href='?page={page_num-1}&q={q}&month={selected_month}'>‹ Prev</a>")
+        page_links.append(f"<a class='links' href='?page=1&q={q}&month={selected_month}&grade={grade_filter}'>« First</a>")
+        page_links.append(f"<a class='links' href='?page={page_num-1}&q={q}&month={selected_month}&grade={grade_filter}'>‹ Prev</a>")
 
     # Numbered pages
     for p in range(start, end + 1):
         if p == page_num:
             page_links.append(f"<span class='current'>{p}</span>")
         else:
-            page_links.append(f"<a class='links' href='?page={p}&q={q}&month={selected_month}'>{p}</a>")
+            page_links.append(f"<a class='links' href='?page={p}&q={q}&month={selected_month}&grade={grade_filter}'>{p}</a>")
 
     # Next
     if page_num < total_pages:
-        page_links.append(f"<a class='links' href='?page={page_num+1}&q={q}&month={selected_month}'>Next ›</a>")
-        page_links.append(f"<a class='links' href='?page={total_pages}&q={q}&month={selected_month}'>Last »</a>")
+        page_links.append(f"<a class='links' href='?page={page_num+1}&q={q}&month={selected_month}&grade={grade_filter}'>Next ›</a>")
+        page_links.append(f"<a class='links' href='?page={total_pages}&q={q}&month={selected_month}&grade={grade_filter}'>Last »</a>")
 
 
     nav = f"""
@@ -9464,11 +9473,20 @@ def admin_students():
                    max="{total_pages}"
                    value="{page_num}"
                    style="width:70px;padding:4px;border-radius:6px;border:1px solid #ccc">
+            <input type="hidden" name="q" value="{q_safe}">
+            <input type="hidden" name="month" value="{selected_month}">
+            <input type="hidden" name="grade" value="{grade_filter}">
             <button class="btn mini">Go</button>
         </form>
 
     </div>
     """
+
+    grade_options = '<option value="">All Grades</option>'
+
+    for g in ["G8", "G9", "G10", "G11", "G12", "G13"]:
+        selected = "selected" if grade_filter == g else ""
+        grade_options += f"<option value='{g}' {selected}>{grade_label(g)}</option>"
 
 
     body = f"""
@@ -9482,6 +9500,10 @@ def admin_students():
                        value="{q_safe}" style="min-width:220px">
 
                 <input type="month" name="month" value="{selected_month}">
+                
+                <select name="grade" style="min-width:150px">
+                    {grade_options}
+                </select>
 
                 <button class="btn mini">Search</button>
             </form>
