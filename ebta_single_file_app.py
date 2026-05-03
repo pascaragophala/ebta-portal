@@ -1236,9 +1236,10 @@ def pretty_month_label(month_str: str) -> str:
 
 def expected_class_dates_for_subject(cur, subject_id, tutor_id, month, expected_classes):
     """
-    Returns expected class dates for a subject in a month based on the session day.
-    Grade 8-12 normally expect 4 classes.
-    Grade 13 normally expects 6 classes.
+    Returns expected class dates for a subject in a month based on the tutor's active session day.
+    EBTA rule:
+    Grade 8 to Grade 12 = 4 classes per month
+    Grade 13 = 6 classes per month
     """
 
     try:
@@ -1252,7 +1253,7 @@ def expected_class_dates_for_subject(cur, subject_id, tutor_id, month, expected_
         WHERE subject_id = ?
           AND tutor_id = ?
           AND active = 1
-        ORDER BY day_of_week
+        ORDER BY day_of_week, start_time
     """, (subject_id, tutor_id))
 
     session_rows = cur.fetchall()
@@ -1269,12 +1270,14 @@ def expected_class_dates_for_subject(cur, subject_id, tutor_id, month, expected_
         d = datetime.date(year, month_num, day)
 
         # Python weekday: Monday=0, Sunday=6
-        # Your system DOW list uses Sunday=0, Monday=1, ..., Saturday=6
+        # Your system DOW: Sunday=0, Monday=1, ..., Saturday=6
         system_day = (d.weekday() + 1) % 7
 
         if system_day in session_days:
             expected_dates.append(d.isoformat())
 
+    # Very important:
+    # Only return the number of dates allowed by EBTA monthly rule.
     return expected_dates[:expected_classes]
 
 
@@ -7671,7 +7674,7 @@ def tutor_home():
 
         studs = cur.fetchall()
 
-        # Expected monthly classes:
+        # EBTA expected monthly classes:
         # Grade 8 to Grade 12 = 4 classes per month
         # Grade 13 / Upgrading = 6 classes per month
         expected_classes = 6 if s["grade"] == "G13" else 4
@@ -7697,26 +7700,37 @@ def tutor_home():
                 ORDER BY a.date
             """, (st["id"], s["subject_id"], month))
 
-            attended_dates = [r["date"] for r in cur.fetchall()]
+            # Normalize dates to YYYY-MM-DD to avoid mismatch issues
+            attended_dates = []
+            for r in cur.fetchall():
+                if r["date"]:
+                    attended_dates.append(str(r["date"])[:10])
 
-            classes_attended = len(attended_dates)
+            attended_dates = sorted(set(attended_dates))
 
-            missed_dates = [d for d in expected_dates if d not in attended_dates]
+            # Count attendance according to EBTA expected class rule
+            raw_attended_count = len(attended_dates)
+            classes_attended = min(raw_attended_count, expected_classes)
+
+            classes_missed = max(expected_classes - classes_attended, 0)
+
+            attendance_rate = f"{int(round((classes_attended / expected_classes) * 100))}%" if expected_classes > 0 else "—"
+
+            # Missed dates must never be more than classes_missed
+            missed_dates = []
 
             if expected_dates:
-                classes_missed = len(missed_dates)
-            else:
-                classes_missed = max(expected_classes - classes_attended, 0)
+                attended_set = set(attended_dates)
+                missed_dates = [d for d in expected_dates if d not in attended_set]
+                missed_dates = missed_dates[:classes_missed]
 
-            rate = f"{int(round((classes_attended / expected_classes) * 100))}%" if expected_classes > 0 else "—"
-
-            if missed_dates:
+            if classes_missed == 0:
+                missed_classes_html = "<span class='chip active'>None</span>"
+            elif missed_dates:
                 missed_classes_html = "<br>".join([
                     datetime.date.fromisoformat(d).strftime("%d %b %Y")
                     for d in missed_dates
                 ])
-            elif classes_missed == 0:
-                missed_classes_html = "<span class='chip active'>None</span>"
             else:
                 missed_classes_html = "<span class='muted'>Dates not available</span>"
 
@@ -7761,7 +7775,7 @@ def tutor_home():
                 </td>
 
                 <td>
-                    {rate}
+                    {attendance_rate}
                 </td>
 
                 <td>
@@ -7787,11 +7801,11 @@ def tutor_home():
                             <th>Student</th>
                             <th>Phone</th>
                             <th>Num Classes Attended</th>
-                            <th>Classes Attended</th>
-                            <th>Classes Missed</th>
-                            <th>Missed Classes</th>
-                            <th>Rate</th>
-                            <th>Avg mark</th>
+                            <th>Attendance Summary</th>
+                            <th>Num Classes Missed</th>
+                            <th>Missed Class Dates</th>
+                            <th>Attendance Rate</th>
+                            <th>Published Assignment Avg</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -7805,6 +7819,12 @@ def tutor_home():
         stu_sections.append(f"""
         <div class='card' id='students'>
             <h3>{grade_label(s['grade'])} — {s['subject_name']}</h3>
+
+            <div class="mini muted" style="margin-bottom:10px">
+                Attendance Rate = Num Classes Attended ÷ Expected Monthly Classes.
+                Expected monthly classes: {expected_classes}.
+            </div>
+
             {table}
         </div>
         """)
