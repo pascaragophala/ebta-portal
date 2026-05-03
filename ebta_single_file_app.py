@@ -17838,15 +17838,41 @@ def tutor_application_form():
 
     if applications_open != "1":
         body = f"""
-        <section class="wrap small">
-            <div class="card soft" style="border-left:5px solid #ef4444">
-                <h1>Applications Closed</h1>
-                <p class="muted" style="white-space:pre-wrap">
+        <section class="wrap">
+            <div class="card soft" style="
+                max-width:1100px;
+                margin:30px auto;
+                border-left:5px solid #ef4444;
+                text-align:center;
+                padding:48px 32px;
+            ">
+                <h1 style="
+                    margin:0 0 22px 0;
+                    font-size:26px;
+                    text-align:center;
+                ">
+                    Applications Closed
+                </h1>
+
+                <p class="muted" style="
+                    max-width:820px;
+                    margin:0 auto 32px auto;
+                    font-size:18px;
+                    line-height:1.8;
+                    text-align:center;
+                    white-space:pre-wrap;
+                ">
                     {escape(closed_message)}
                 </p>
-                <a class="btn secondary" href="/">
-                    Back to Home
-                </a>
+
+                <div style="display:flex;justify-content:center">
+                    <a class="btn secondary" href="/" style="
+                        min-width:180px;
+                        justify-content:center;
+                    ">
+                        Back to Home
+                    </a>
+                </div>
             </div>
         </section>
         """
@@ -18070,20 +18096,45 @@ def tutor_application_submit():
 
     if applications_open != "1":
         body = f"""
-        <section class="wrap small">
-            <div class="card soft" style="border-left:5px solid #ef4444">
-                <h1>Applications Closed</h1>
-                <p class="muted" style="white-space:pre-wrap">
+        <section class="wrap">
+            <div class="card soft" style="
+                max-width:1100px;
+                margin:30px auto;
+                border-left:5px solid #ef4444;
+                text-align:center;
+                padding:48px 32px;
+            ">
+                <h1 style="
+                    margin:0 0 22px 0;
+                    font-size:26px;
+                    text-align:center;
+                ">
+                    Applications Closed
+                </h1>
+
+                <p class="muted" style="
+                    max-width:820px;
+                    margin:0 auto 32px auto;
+                    font-size:18px;
+                    line-height:1.8;
+                    text-align:center;
+                    white-space:pre-wrap;
+                ">
                     {escape(closed_message)}
                 </p>
-                <a class="btn secondary" href="/">
-                    Back to Home
-                </a>
+
+                <div style="display:flex;justify-content:center">
+                    <a class="btn secondary" href="/" style="
+                        min-width:180px;
+                        justify-content:center;
+                    ">
+                        Back to Home
+                    </a>
+                </div>
             </div>
         </section>
         """
         return page("Applications Closed", body)
-
     # Honeypot anti-spam check
     if request.form.get("website", "").strip():
         return redirect(url_for("home"))
