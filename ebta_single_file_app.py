@@ -18696,7 +18696,7 @@ def admin_application_settings():
     applications_open = get_setting("applications_open", "1")
     closed_message = get_setting(
         "applications_closed_message",
-        "Applications are currently closed. Please check again later."
+        "Applications are currently closed while we review the submissions already received. Please check this page again soon for the next EBTA tutor recruitment intake. Thank you for your interest in joining the EBTA team."
     )
 
     open_checked = "checked" if applications_open == "1" else ""
