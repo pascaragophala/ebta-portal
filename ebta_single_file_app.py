@@ -18353,6 +18353,17 @@ def admin_applications():
                 <a class="btn mini" href="/admin/application/{a['id']}">
                     View
                 </a>
+
+                {f'''
+                <form method="post"
+                      action="/admin/application/{a['id']}/delete"
+                      onsubmit="return confirm('Delete this application?');"
+                      style="display:inline">
+                    <button class="btn mini danger">
+                        Delete
+                    </button>
+                </form>
+                ''' if is_high_admin() else ''}
             </td>
         </tr>
         """
@@ -18483,6 +18494,12 @@ def admin_application_detail(app_id):
     cv_btn = "—"
     if a["cv_file_path"] and os.path.exists(a["cv_file_path"]):
         cv_btn = f"""
+        <a class="btn mini"
+           target="_blank"
+           href="/admin/application/{a['id']}/view/cv">
+            View CV
+        </a>
+
         <a class="btn mini success"
            href="/admin/application/{a['id']}/download/cv">
             Download CV
@@ -18492,6 +18509,12 @@ def admin_application_detail(app_id):
     cert_btn = "—"
     if a["certificate_file_path"] and os.path.exists(a["certificate_file_path"]):
         cert_btn = f"""
+        <a class="btn mini"
+           target="_blank"
+           href="/admin/application/{a['id']}/view/certificate">
+            View Certificate
+        </a>
+
         <a class="btn mini secondary"
            href="/admin/application/{a['id']}/download/certificate">
             Download Certificate
@@ -18514,6 +18537,17 @@ def admin_application_detail(app_id):
             <a class="btn mini secondary" href="/admin/applications">Back to Applications</a>
             {cv_btn}
             {cert_btn}
+
+            {f'''
+            <form method="post"
+                  action="/admin/application/{a['id']}/delete"
+                  onsubmit="return confirm('Are you sure you want to delete this entire application? This will also delete the uploaded CV/certificate files.');"
+                  style="display:inline">
+                <button class="btn mini danger">
+                    Delete Application
+                </button>
+            </form>
+            ''' if is_high_admin() else ''}
         </div>
 
         <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">
@@ -18734,6 +18768,81 @@ def admin_application_settings_save():
     set_setting("applications_closed_message", closed_message)
 
     return redirect(url_for("admin_application_settings"))
+
+
+@app.get('/admin/application/<int:app_id>/view/<kind>')
+def admin_application_view_file(app_id, kind):
+
+    r = require_admin()
+    if r: return r
+
+    if kind not in ["cv", "certificate"]:
+        return page("Invalid file", card_msg("Invalid document type."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM tutor_applications WHERE id=?", (app_id,))
+    a = cur.fetchone()
+
+    conn.close()
+
+    if not a:
+        return page("Not found", card_msg("Application not found."))
+
+    if kind == "cv":
+        file_path = a["cv_file_path"]
+    else:
+        file_path = a["certificate_file_path"]
+
+    if not file_path or not os.path.exists(file_path):
+        return page("Not found", card_msg("File not found."))
+
+    return send_from_directory(
+        os.path.dirname(file_path),
+        os.path.basename(file_path),
+        as_attachment=False
+    )
+    
+    
+@app.post('/admin/application/<int:app_id>/delete')
+def admin_application_delete(app_id):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can delete applications."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT cv_file_path, certificate_file_path
+        FROM tutor_applications
+        WHERE id=?
+    """, (app_id,))
+
+    a = cur.fetchone()
+
+    if not a:
+        conn.close()
+        return redirect(url_for("admin_applications"))
+
+    # Delete uploaded files from storage
+    for file_path in [a["cv_file_path"], a["certificate_file_path"]]:
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except:
+                pass
+
+    # Delete application record
+    cur.execute("DELETE FROM tutor_applications WHERE id=?", (app_id,))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_applications"))
 
 
 # --- Admin: Analytics dashboard ---
