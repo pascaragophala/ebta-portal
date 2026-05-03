@@ -8882,6 +8882,7 @@ def admin_nav():
             f"<a class='btn secondary' href='{url_for('admin_applications')}'>Tutor Applications</a>",
             f"<a class='btn secondary' href='{url_for('admin_application_settings')}'>Application Settings</a>",
             f"<a class='btn secondary' href='{url_for('admin_management_roles')}'>Management Roles</a>",
+            f"<a class='btn secondary' href='{url_for('admin_management_applications')}'>Management Applications</a>",
             f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
             f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
 
@@ -8932,6 +8933,7 @@ def admin_home():
     <a class="btn secondary" href="{url_for('admin_applications')}">Tutor Applications</a>
     <a class="btn secondary" href="{url_for('admin_application_settings')}">Application Settings</a>
     <a class="btn secondary" href="{url_for('admin_management_roles')}">Management Roles</a>
+    <a class="btn secondary" href="{url_for('admin_management_applications')}">Management Applications</a>
     <a class="btn secondary" href="{url_for('admin_academic_quality_managers')}">AQ_Manager</a>
     <a class='btn secondary' href='{url_for('admin_reports')}'>Student Reports</a>
 
@@ -19491,6 +19493,537 @@ def management_application_submit():
     """
 
     return page("Management Application Submitted", body)
+
+@app.get('/admin/management-applications')
+def admin_management_applications():
+
+    r = require_admin()
+    if r: return r
+
+    q = request.args.get("q", "").strip()
+    role_filter = request.args.get("role", "").strip()
+    status_filter = request.args.get("status", "").strip()
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    limit = 20
+    offset = (page_num - 1) * limit
+
+    where_parts = []
+    params = []
+
+    if q:
+        where_parts.append("""
+            (
+                full_name LIKE ?
+                OR phone LIKE ?
+                OR email LIKE ?
+                OR province LIKE ?
+                OR city LIKE ?
+                OR highest_qualification LIKE ?
+                OR role_applied LIKE ?
+            )
+        """)
+        term = f"%{q}%"
+        params.extend([term, term, term, term, term, term, term])
+
+    if role_filter:
+        where_parts.append("role_applied = ?")
+        params.append(role_filter)
+
+    if status_filter:
+        where_parts.append("status = ?")
+        params.append(status_filter)
+
+    where_sql = ""
+    if where_parts:
+        where_sql = "WHERE " + " AND ".join(where_parts)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM management_applications
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"]
+    total_pages = (total + limit - 1) // limit
+
+    if total_pages == 0:
+        total_pages = 1
+
+    if page_num > total_pages:
+        page_num = total_pages
+
+    offset = (page_num - 1) * limit
+
+    cur.execute(f"""
+        SELECT *
+        FROM management_applications
+        {where_sql}
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    """, (*params, limit, offset))
+
+    applications = cur.fetchall()
+
+    cur.execute("""
+        SELECT role_name
+        FROM management_roles
+        ORDER BY role_name
+    """)
+    role_rows = cur.fetchall()
+
+    conn.close()
+
+    role_options = '<option value="">All Roles</option>'
+    for role in role_rows:
+        role_name = role["role_name"]
+        selected = "selected" if role_filter == role_name else ""
+        role_options += f"<option value='{escape(role_name)}' {selected}>{escape(role_name)}</option>"
+
+    status_options = '<option value="">All Statuses</option>'
+    for st in ["NEW", "SHORTLISTED", "INTERVIEWED", "ACCEPTED", "REJECTED"]:
+        selected = "selected" if status_filter == st else ""
+        status_options += f"<option value='{st}' {selected}>{st}</option>"
+
+    rows = ""
+
+    for a in applications:
+        rows += f"""
+        <tr>
+            <td>
+                {escape(a['full_name'])}
+                <div class="mini muted">{escape(a['phone'] or '')}</div>
+                <div class="mini muted">{escape(a['email'] or '')}</div>
+            </td>
+            <td>{escape(a['role_applied'] or '—')}</td>
+            <td>{escape(a['highest_qualification'] or '—')}</td>
+            <td>
+                {escape(a['city'] or '—')}
+                <div class="mini muted">{escape(a['province'] or '')}</div>
+            </td>
+            <td><span class="chip">{escape(a['status'])}</span></td>
+            <td>{a['created_at'][:16].replace('T',' ')}</td>
+            <td style="white-space:nowrap">
+                <a class="btn mini" href="/admin/management-application/{a['id']}">
+                    View
+                </a>
+
+                {f'''
+                <form method="post"
+                      action="/admin/management-application/{a['id']}/delete"
+                      onsubmit="return confirm('Delete this management application? This will also delete uploaded files.');"
+                      style="display:inline">
+                    <button class="btn mini danger">
+                        Delete
+                    </button>
+                </form>
+                ''' if is_high_admin() else ''}
+            </td>
+        </tr>
+        """
+
+    query_base = f"q={escape(q)}&role={escape(role_filter)}&status={escape(status_filter)}"
+
+    page_links = []
+
+    if page_num > 1:
+        page_links.append(f"<a class='links' href='/admin/management-applications?{query_base}&page=1'>« First</a>")
+        page_links.append(f"<a class='links' href='/admin/management-applications?{query_base}&page={page_num-1}'>‹ Prev</a>")
+
+    page_links.append(f"<span class='chip'>Page {page_num} of {total_pages}</span>")
+
+    if page_num < total_pages:
+        page_links.append(f"<a class='links' href='/admin/management-applications?{query_base}&page={page_num+1}'>Next ›</a>")
+        page_links.append(f"<a class='links' href='/admin/management-applications?{query_base}&page={total_pages}'>Last »</a>")
+
+    pagination = f"""
+    <div class="toolbar" style="margin-top:12px">
+        {''.join(page_links)}
+    </div>
+    """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Management Applications</h1>
+
+        <p class="muted">
+            View and manage applications for EBTA management roles.
+        </p>
+
+        <form method="get"
+              class="toolbar"
+              style="align-items:end">
+
+            <div>
+                <label>Search</label>
+                <input name="q"
+                       value="{escape(q)}"
+                       placeholder="Name, phone, email, city, qualification"
+                       style="min-width:260px">
+            </div>
+
+            <div>
+                <label>Role</label>
+                <select name="role">
+                    {role_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Status</label>
+                <select name="status">
+                    {status_options}
+                </select>
+            </div>
+
+            <button class="btn mini success">Apply</button>
+            <a class="btn mini secondary" href="/admin/management-applications">Reset</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(applications)} of {total} management application(s).
+        </div>
+
+        {pagination}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Applicant</th>
+                        <th>Role</th>
+                        <th>Qualification</th>
+                        <th>Location</th>
+                        <th>Status</th>
+                        <th>Applied</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='7'>No management applications found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination}
+    </section>
+    """
+
+    return page("Management Applications", body)
+    
+    
+@app.get('/admin/management-application/<int:app_id>')
+def admin_management_application_detail(app_id):
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM management_applications WHERE id=?", (app_id,))
+    a = cur.fetchone()
+
+    conn.close()
+
+    if not a:
+        return page("Not found", card_msg("Management application not found."))
+
+    cv_btn = "—"
+    if a["cv_file_path"] and os.path.exists(a["cv_file_path"]):
+        cv_btn = f"""
+        <a class="btn mini"
+           target="_blank"
+           href="/admin/management-application/{a['id']}/view/cv">
+            View CV
+        </a>
+
+        <a class="btn mini success"
+           href="/admin/management-application/{a['id']}/download/cv">
+            Download CV
+        </a>
+        """
+
+    cert_btn = "—"
+    if a["certificate_file_path"] and os.path.exists(a["certificate_file_path"]):
+        cert_btn = f"""
+        <a class="btn mini"
+           target="_blank"
+           href="/admin/management-application/{a['id']}/view/certificate">
+            View Certificate
+        </a>
+
+        <a class="btn mini secondary"
+           href="/admin/management-application/{a['id']}/download/certificate">
+            Download Certificate
+        </a>
+        """
+
+    status_options = ""
+    for st in ["NEW", "SHORTLISTED", "INTERVIEWED", "ACCEPTED", "REJECTED"]:
+        selected = "selected" if a["status"] == st else ""
+        status_options += f"<option value='{st}' {selected}>{st}</option>"
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>{escape(a['full_name'])}</h1>
+
+        <div class="mini muted">
+            Management Role: {escape(a['role_applied'])} | Applied: {a['created_at'][:16].replace('T',' ')}
+        </div>
+
+        <div class="toolbar" style="margin-top:12px">
+            <a class="btn mini secondary" href="/admin/management-applications">
+                Back to Management Applications
+            </a>
+
+            {cv_btn}
+            {cert_btn}
+
+            {f'''
+            <form method="post"
+                  action="/admin/management-application/{a['id']}/delete"
+                  onsubmit="return confirm('Are you sure you want to delete this entire management application? This will also delete the uploaded CV/certificate files.');"
+                  style="display:inline">
+                <button class="btn mini danger">
+                    Delete Application
+                </button>
+            </form>
+            ''' if is_high_admin() else ''}
+        </div>
+
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">
+
+            <div class="card soft">
+                <h2>Contact Details</h2>
+                <p><b>Phone:</b> {escape(a['phone'] or '—')}</p>
+                <p><b>Email:</b> {escape(a['email'] or '—')}</p>
+                <p><b>Province:</b> {escape(a['province'] or '—')}</p>
+                <p><b>City:</b> {escape(a['city'] or '—')}</p>
+            </div>
+
+            <div class="card soft">
+                <h2>Role & Academic Background</h2>
+                <p><b>Role Applied:</b> {escape(a['role_applied'] or '—')}</p>
+                <p><b>Highest Qualification:</b> {escape(a['highest_qualification'] or '—')}</p>
+                <p><b>Institution:</b> {escape(a['institution'] or '—')}</p>
+            </div>
+
+            <div class="card soft">
+                <h2>Resource Confirmations</h2>
+                <p><b>Reliable Internet:</b> {"Yes" if a["reliable_internet"] == 1 else "No"}</p>
+                <p><b>Laptop/Desktop/Tablet:</b> {"Yes" if a["device_access"] == 1 else "No"}</p>
+                <p><b>Consent:</b> {"Yes" if a["consent"] == 1 else "No"}</p>
+            </div>
+
+            <div class="card soft">
+                <h2>Current Review Status</h2>
+                <p><b>Status:</b> <span class="chip">{escape(a['status'])}</span></p>
+                <p><b>Last Updated:</b> {escape(a['updated_at'] or '—')}</p>
+            </div>
+
+        </div>
+
+        <div class="card soft" style="margin-top:12px">
+            <h2>Experience Summary</h2>
+            <p style="white-space:pre-wrap">{escape(a['experience_summary'] or '—')}</p>
+        </div>
+
+        <div class="card soft" style="margin-top:12px">
+            <h2>Motivation</h2>
+            <p style="white-space:pre-wrap">{escape(a['motivation'] or '—')}</p>
+        </div>
+
+        <div class="card soft" style="margin-top:12px">
+            <h2>Availability</h2>
+            <p style="white-space:pre-wrap">{escape(a['availability'] or '—')}</p>
+        </div>
+
+        <div class="card soft" style="margin-top:12px;border-left:5px solid #f59e0b">
+            <h2>Admin Review</h2>
+
+            <form method="post" action="/admin/management-application/{a['id']}/status" class="grid">
+
+                <div>
+                    <label>Status</label>
+                    <select name="status">
+                        {status_options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Admin Notes</label>
+                    <textarea name="admin_notes">{escape(a['admin_notes'] or '')}</textarea>
+                </div>
+
+                <button class="btn success">
+                    Save Review
+                </button>
+            </form>
+        </div>
+
+    </section>
+    """
+
+    return page("Management Application Details", body)
+    
+    
+@app.post('/admin/management-application/<int:app_id>/status')
+def admin_management_application_update_status(app_id):
+
+    r = require_admin()
+    if r: return r
+
+    status = request.form.get("status", "NEW").strip()
+    admin_notes = request.form.get("admin_notes", "").strip()
+
+    allowed_statuses = ["NEW", "SHORTLISTED", "INTERVIEWED", "ACCEPTED", "REJECTED"]
+
+    if status not in allowed_statuses:
+        status = "NEW"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE management_applications
+        SET status=?,
+            admin_notes=?,
+            updated_at=?
+        WHERE id=?
+    """, (status, admin_notes, now_utc_iso(), app_id))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_management_application_detail", app_id=app_id))
+    
+ 
+@app.get('/admin/management-application/<int:app_id>/view/<kind>')
+def admin_management_application_view_file(app_id, kind):
+
+    r = require_admin()
+    if r: return r
+
+    if kind not in ["cv", "certificate"]:
+        return page("Invalid file", card_msg("Invalid document type."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM management_applications WHERE id=?", (app_id,))
+    a = cur.fetchone()
+
+    conn.close()
+
+    if not a:
+        return page("Not found", card_msg("Management application not found."))
+
+    if kind == "cv":
+        file_path = a["cv_file_path"]
+    else:
+        file_path = a["certificate_file_path"]
+
+    if not file_path or not os.path.exists(file_path):
+        return page("Not found", card_msg("File not found."))
+
+    return send_from_directory(
+        os.path.dirname(file_path),
+        os.path.basename(file_path),
+        as_attachment=False
+    )
+
+
+@app.get('/admin/management-application/<int:app_id>/download/<kind>')
+def admin_management_application_download(app_id, kind):
+
+    r = require_admin()
+    if r: return r
+
+    if kind not in ["cv", "certificate"]:
+        return page("Invalid file", card_msg("Invalid document type."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM management_applications WHERE id=?", (app_id,))
+    a = cur.fetchone()
+
+    conn.close()
+
+    if not a:
+        return page("Not found", card_msg("Management application not found."))
+
+    if kind == "cv":
+        file_path = a["cv_file_path"]
+        file_name = a["cv_file_name"] or "Management_CV"
+    else:
+        file_path = a["certificate_file_path"]
+        file_name = a["certificate_file_name"] or "Management_Certificate"
+
+    if not file_path or not os.path.exists(file_path):
+        return page("Not found", card_msg("File not found."))
+
+    return send_from_directory(
+        os.path.dirname(file_path),
+        os.path.basename(file_path),
+        as_attachment=True,
+        download_name=file_name
+    ) 
+
+
+@app.post('/admin/management-application/<int:app_id>/delete')
+def admin_management_application_delete(app_id):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can delete management applications."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT cv_file_path, certificate_file_path
+        FROM management_applications
+        WHERE id=?
+    """, (app_id,))
+
+    a = cur.fetchone()
+
+    if not a:
+        conn.close()
+        return redirect(url_for("admin_management_applications"))
+
+    for file_path in [a["cv_file_path"], a["certificate_file_path"]]:
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except:
+                pass
+
+    cur.execute("DELETE FROM management_applications WHERE id=?", (app_id,))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_management_applications"))
+    
+    
 
 # --- Admin: Analytics dashboard ---
 
