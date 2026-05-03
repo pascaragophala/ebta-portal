@@ -1234,6 +1234,48 @@ def pretty_month_label(month_str: str) -> str:
         return month_str
 
 
+def expected_class_dates_for_subject(cur, subject_id, tutor_id, month, expected_classes):
+    """
+    Returns expected class dates for a subject in a month based on the session day.
+    Grade 8-12 normally expect 4 classes.
+    Grade 13 normally expects 6 classes.
+    """
+
+    try:
+        year, month_num = map(int, month.split("-"))
+    except:
+        return []
+
+    cur.execute("""
+        SELECT day_of_week
+        FROM sessions
+        WHERE subject_id = ?
+          AND tutor_id = ?
+          AND active = 1
+        ORDER BY day_of_week
+    """, (subject_id, tutor_id))
+
+    session_rows = cur.fetchall()
+
+    if not session_rows:
+        return []
+
+    session_days = {r["day_of_week"] for r in session_rows}
+
+    last_day = calendar.monthrange(year, month_num)[1]
+    expected_dates = []
+
+    for day in range(1, last_day + 1):
+        d = datetime.date(year, month_num, day)
+
+        # Python weekday: Monday=0, Sunday=6
+        # Your system DOW list uses Sunday=0, Monday=1, ..., Saturday=6
+        system_day = (d.weekday() + 1) % 7
+
+        if system_day in session_days:
+            expected_dates.append(d.isoformat())
+
+    return expected_dates[:expected_classes]
 
 
 
@@ -7623,14 +7665,50 @@ def tutor_home():
             ORDER BY st.full_name""",(s['subject_id'], month))
 
         studs=cur.fetchall()
-        cur.execute("SELECT COUNT(DISTINCT date) AS c FROM attendance a JOIN sessions se ON se.id=a.session_id WHERE se.subject_id=? AND strftime('%Y-%m', a.date)=?", (s['subject_id'], month))
-        total_days = cur.fetchone()['c'] or 0
-        rows=[]
+        # Expected monthly classes:
+        # Grade 8 to Grade 12 = 4 classes per month
+        # Grade 13 / Upgrading = 6 classes per month
+        expected_classes = 6 if s["grade"] == "G13" else 4
+
+        expected_dates = expected_class_dates_for_subject(
+            cur,
+            s["subject_id"],
+            tid,
+            month,
+            expected_classes
+        )
+
+        rows = []
         for st in studs:
-            cur.execute("""SELECT COUNT(*) AS c FROM attendance a JOIN sessions se ON se.id=a.session_id
-                        WHERE a.student_id=? AND se.subject_id=? AND strftime('%Y-%m', a.date)=?""",(st['id'], s['subject_id'], month))
-            c=cur.fetchone()['c'] or 0
-            rate = f"{int(round((c/total_days)*100))}%" if total_days>0 else "—"
+            cur.execute("""
+            SELECT DISTINCT a.date
+            FROM attendance a
+            JOIN sessions se ON se.id = a.session_id
+            WHERE a.student_id = ?
+              AND se.subject_id = ?
+              AND strftime('%Y-%m', a.date) = ?
+            ORDER BY a.date
+        """, (st["id"], s["subject_id"], month))
+
+        attended_dates = [r["date"] for r in cur.fetchall()]
+
+        classes_attended = len(attended_dates)
+
+        missed_dates = [d for d in expected_dates if d not in attended_dates]
+
+        classes_missed = len(missed_dates) if expected_dates else max(expected_classes - classes_attended, 0)
+
+        rate = f"{int(round((classes_attended / expected_classes) * 100))}%" if expected_classes > 0 else "—"
+
+        if missed_dates:
+            missed_classes_html = "<br>".join([
+                datetime.date.fromisoformat(d).strftime("%d %b %Y")
+                for d in missed_dates
+            ])
+        elif classes_missed == 0:
+            missed_classes_html = "<span class='chip active'>None</span>"
+        else:
+            missed_classes_html = "<span class='muted'>Dates not available</span>"
             cur.execute("""SELECT AVG(mark) AS avgm FROM submissions sub
                         JOIN materials m ON m.id=sub.material_id
                         WHERE sub.student_id=? AND m.subject_id=? AND m.month=? AND sub.mark IS NOT NULL AND sub.is_published = 1""",(st['id'], s['subject_id'], month))
@@ -7646,8 +7724,20 @@ def tutor_home():
                     {st['phone_whatsapp'] or '—'}
                 </td>
 
+               <td>
+                    {classes_attended}
+                </td>
+
                 <td>
-                    {c}
+                    {classes_attended} of {expected_classes}
+                </td>
+
+                <td>
+                    {classes_missed}
+                </td>
+
+                <td>
+                    {missed_classes_html}
                 </td>
 
                 <td>
@@ -7666,7 +7756,7 @@ def tutor_home():
             "<div class='empty'>No active students.</div>"
             if not rows
             else f"<div class='scroll-x'><table><thead><tr>"
-                 f"<th>Student</th><th>Phone</th><th>Attendance</th><th>Rate</th><th>Avg mark</th>"
+                 f"<th>Student</th><th>Phone</th><th>Num Classes Attended</th><th>Classes Attended</th><th>Classes Missed</th><th>Missed Classes</th><th>Rate</th><th>Avg mark</th>"
                  f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
         )
 
@@ -8092,6 +8182,7 @@ def tutor_home():
     </section>
     """
     return page("Tutor Portal", body)
+    
     
 @app.post('/tutor/publish_all_marks/<int:mid>')
 def publish_all_marks(mid):
