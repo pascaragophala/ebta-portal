@@ -39,6 +39,9 @@ REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 PROFILE_PICS_DIR = UPLOADS_DIR / "profile_pictures"
 PROFILE_PICS_DIR.mkdir(parents=True, exist_ok=True)
 
+APPLICATIONS_DIR = UPLOADS_DIR / "applications"
+APPLICATIONS_DIR.mkdir(parents=True, exist_ok=True)
+
 UPLOAD_DIR = UPLOADS_DIR
 MATERIALS_DIR = Path(BASE_DATA_DIR) / "materials"
 SUBMISSIONS_DIR = Path(BASE_DATA_DIR) / "submissions"
@@ -370,6 +373,43 @@ def init_db():
         UNIQUE(student_id, subject_id, month),
         FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
         FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
+    );
+    """)
+    
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS tutor_applications(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        email TEXT,
+        province TEXT,
+        city TEXT,
+
+        highest_qualification TEXT,
+        institution TEXT,
+        experience_summary TEXT,
+        availability TEXT,
+
+        grades TEXT,
+        subjects TEXT,
+
+        cv_file_path TEXT,
+        cv_file_name TEXT,
+
+        certificate_file_path TEXT,
+        certificate_file_name TEXT,
+
+        status TEXT NOT NULL DEFAULT 'NEW',
+        admin_notes TEXT,
+
+        consent INTEGER NOT NULL DEFAULT 0,
+        ip_address TEXT,
+        user_agent TEXT,
+
+        created_at TEXT NOT NULL,
+        updated_at TEXT
     );
     """)
 
@@ -896,6 +936,37 @@ ALLOWED_PROFILE_PIC_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
 def is_valid_profile_picture(filename):
     ext = os.path.splitext(filename.lower())[1]
     return ext in ALLOWED_PROFILE_PIC_EXTENSIONS
+
+ALLOWED_APPLICATION_EXTENSIONS = {'.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg'}
+
+def is_valid_application_file(filename):
+    if not filename:
+        return False
+
+    ext = os.path.splitext(filename.lower())[1]
+    return ext in ALLOWED_APPLICATION_EXTENSIONS
+
+
+def save_application_file(file, applicant_name, label):
+    if not file or not file.filename:
+        return None, None
+
+    if not is_valid_application_file(file.filename):
+        return None, None
+
+    ext = os.path.splitext(file.filename.lower())[1]
+    safe_applicant = secure_name(applicant_name)
+    safe_label = secure_name(label)
+
+    folder = APPLICATIONS_DIR / safe_applicant
+    folder.mkdir(parents=True, exist_ok=True)
+
+    filename = f"{safe_applicant}_{safe_label}_{int(time.time())}{ext}"
+    file_path = folder / filename
+
+    file.save(file_path)
+
+    return str(file_path), filename
 
 def normalize_phone(phone: str, phone_type: str = "SA", strict: bool = False) -> str:
 
@@ -8682,6 +8753,7 @@ def admin_nav():
             f"<a class='btn secondary' href='{url_for('admin_tutor_tracker')}'>Tutor Tracker</a>",
             f"<a class='btn secondary' href='{url_for('admin_tutor_operations')}'>Tutor-operations</a>",
             f"<a class='btn secondary' href='{url_for('admin_academic_quality_managers')}'>AQ_Manager</a>",
+            f"<a class='btn secondary' href='{url_for('admin_applications')}'>Tutor Applications</a>",
             f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
             f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
 
@@ -17731,6 +17803,742 @@ def download_profile_picture(sid):
         download_name=download_name
     )
 
+
+
+@app.get('/apply')
+def tutor_application_form():
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT name
+        FROM subjects
+        ORDER BY name
+    """)
+    subject_rows = cur.fetchall()
+
+    conn.close()
+
+    subjects = [r["name"] for r in subject_rows]
+
+    grade_options = "".join([
+        f"""
+        <label class="subject-item">
+            <input type="checkbox" name="grades" value="{g}">
+            <span>{grade_label(g)}</span>
+        </label>
+        """
+        for g in ["G8", "G9", "G10", "G11", "G12", "G13"]
+    ])
+
+    subject_options = "".join([
+        f"""
+        <label class="subject-item">
+            <input type="checkbox" name="subjects" value="{escape(s)}">
+            <span>{escape(s)}</span>
+        </label>
+        """
+        for s in subjects
+    ])
+
+    body = f"""
+    <section class="wrap small">
+
+        <div class="card soft" style="border-left:5px solid #1b5e20">
+            <h1>EBTA Tutor Application</h1>
+
+            <p class="muted">
+                Complete the form below to apply as an EBTA tutor. Please provide accurate details and upload your CV.
+            </p>
+
+            <form method="post"
+                  action="/apply"
+                  enctype="multipart/form-data"
+                  class="grid"
+                  style="gap:14px">
+
+                <!-- Honeypot anti-spam field -->
+                <input type="text"
+                       name="website"
+                       autocomplete="off"
+                       style="display:none">
+
+                <div class="card soft">
+                    <h2>Personal Details</h2>
+
+                    <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px">
+                        <div>
+                            <label>Full Name</label>
+                            <input name="full_name" required maxlength="120">
+                        </div>
+
+                        <div>
+                            <label>Phone Number</label>
+                            <input name="phone" required maxlength="30">
+                        </div>
+
+                        <div>
+                            <label>Email Address</label>
+                            <input name="email" type="email" maxlength="120">
+                        </div>
+
+                        <div>
+                            <label>Province</label>
+                            <input name="province" maxlength="80">
+                        </div>
+
+                        <div>
+                            <label>City / Area</label>
+                            <input name="city" maxlength="80">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card soft">
+                    <h2>Academic & Work Background</h2>
+
+                    <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px">
+                        <div>
+                            <label>Highest Qualification</label>
+                            <input name="highest_qualification" maxlength="150">
+                        </div>
+
+                        <div>
+                            <label>Institution</label>
+                            <input name="institution" maxlength="150">
+                        </div>
+                    </div>
+
+                    <div style="margin-top:12px">
+                        <label>Experience Summary</label>
+                        <textarea name="experience_summary"
+                                  maxlength="1500"
+                                  placeholder="Briefly describe your tutoring, teaching, academic, or subject experience."></textarea>
+                    </div>
+
+                    <div style="margin-top:12px">
+                        <label>Availability</label>
+                        <textarea name="availability"
+                                  maxlength="1000"
+                                  placeholder="Example: Weekdays after 17:00, Saturdays, online only, etc."></textarea>
+                    </div>
+                </div>
+
+                <div class="card soft">
+                    <h2>Grades You Can Tutor</h2>
+                    <div class="subject-grid">
+                        {grade_options}
+                    </div>
+                </div>
+
+                <div class="card soft">
+                    <h2>Subjects You Can Tutor</h2>
+                    <div class="subject-grid">
+                        {subject_options}
+                    </div>
+                </div>
+
+                <div class="card soft">
+                    <h2>Documents</h2>
+
+                    <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px">
+                        <div>
+                            <label>Upload CV</label>
+                            <input type="file"
+                                   name="cv"
+                                   accept=".pdf,.doc,.docx"
+                                   required>
+                            <div class="mini muted">
+                                Accepted: PDF, DOC, DOCX
+                            </div>
+                        </div>
+
+                        <div>
+                            <label>Upload Certificate / Transcript Optional</label>
+                            <input type="file"
+                                   name="certificate"
+                                   accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
+                            <div class="mini muted">
+                                Optional supporting document.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card soft">
+                    <label style="display:flex;gap:10px;align-items:flex-start">
+                        <input type="checkbox"
+                               name="consent"
+                               value="1"
+                               required
+                               style="width:20px;height:20px;margin-top:2px">
+                        <span>
+                            I confirm that the information provided is accurate and I consent to EBTA using my details for recruitment purposes.
+                        </span>
+                    </label>
+                </div>
+
+                <button class="btn success" style="width:100%;justify-content:center">
+                    Submit Application
+                </button>
+
+            </form>
+        </div>
+
+    </section>
+    """
+
+    return page("Tutor Application", body)
+
+
+@app.post('/apply')
+def tutor_application_submit():
+
+    # Honeypot anti-spam check
+    if request.form.get("website", "").strip():
+        return redirect(url_for("home"))
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    email = request.form.get("email", "").strip()
+    province = request.form.get("province", "").strip()
+    city = request.form.get("city", "").strip()
+
+    highest_qualification = request.form.get("highest_qualification", "").strip()
+    institution = request.form.get("institution", "").strip()
+    experience_summary = request.form.get("experience_summary", "").strip()
+    availability = request.form.get("availability", "").strip()
+
+    grades = request.form.getlist("grades")
+    subjects = request.form.getlist("subjects")
+
+    consent = 1 if request.form.get("consent") == "1" else 0
+
+    if not full_name or not phone or not grades or not subjects or consent != 1:
+        return page(
+            "Application incomplete",
+            card_msg("Please complete your name, phone number, grades, subjects, and consent checkbox.")
+        )
+
+    cv = request.files.get("cv")
+    certificate = request.files.get("certificate")
+
+    if not cv or not cv.filename:
+        return page("CV required", card_msg("Please upload your CV before submitting."))
+
+    if not is_valid_application_file(cv.filename):
+        return page("Invalid CV", card_msg("Please upload your CV as PDF, DOC, or DOCX."))
+
+    cv_path, cv_name = save_application_file(cv, full_name, "CV")
+
+    if not cv_path:
+        return page("Upload failed", card_msg("Your CV could not be uploaded. Please try again."))
+
+    cert_path, cert_name = None, None
+
+    if certificate and certificate.filename:
+        if not is_valid_application_file(certificate.filename):
+            return page("Invalid document", card_msg("Certificate must be PDF, DOC, DOCX, PNG, JPG, or JPEG."))
+
+        cert_path, cert_name = save_application_file(certificate, full_name, "Certificate")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO tutor_applications(
+            full_name,
+            phone,
+            email,
+            province,
+            city,
+            highest_qualification,
+            institution,
+            experience_summary,
+            availability,
+            grades,
+            subjects,
+            cv_file_path,
+            cv_file_name,
+            certificate_file_path,
+            certificate_file_name,
+            status,
+            consent,
+            ip_address,
+            user_agent,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        full_name,
+        phone,
+        email,
+        province,
+        city,
+        highest_qualification,
+        institution,
+        experience_summary,
+        availability,
+        json.dumps(grades),
+        json.dumps(subjects),
+        cv_path,
+        cv_name,
+        cert_path,
+        cert_name,
+        "NEW",
+        consent,
+        request.remote_addr,
+        request.headers.get("User-Agent", "")[:300],
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    body = """
+    <section class="wrap small">
+        <div class="card soft" style="border-left:5px solid #1b5e20">
+            <h1>Application Submitted</h1>
+            <p class="muted">
+                Thank you for applying to EBTA. Your application has been received successfully.
+            </p>
+            <a class="btn success" href="/">Back to Home</a>
+        </div>
+    </section>
+    """
+
+    return page("Application Submitted", body)
+    
+@app.get('/admin/applications')
+def admin_applications():
+
+    r = require_admin()
+    if r: return r
+
+    q = request.args.get("q", "").strip()
+    grade_filter = request.args.get("grade", "").strip()
+    subject_filter = request.args.get("subject", "").strip()
+    status_filter = request.args.get("status", "").strip()
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    limit = 20
+    offset = (page_num - 1) * limit
+
+    where_parts = []
+    params = []
+
+    if q:
+        where_parts.append("""
+            (
+                full_name LIKE ?
+                OR phone LIKE ?
+                OR email LIKE ?
+                OR province LIKE ?
+                OR city LIKE ?
+                OR highest_qualification LIKE ?
+            )
+        """)
+        term = f"%{q}%"
+        params.extend([term, term, term, term, term, term])
+
+    if grade_filter:
+        where_parts.append("grades LIKE ?")
+        params.append(f"%{grade_filter}%")
+
+    if subject_filter:
+        where_parts.append("subjects LIKE ?")
+        params.append(f"%{subject_filter}%")
+
+    if status_filter:
+        where_parts.append("status = ?")
+        params.append(status_filter)
+
+    where_sql = ""
+    if where_parts:
+        where_sql = "WHERE " + " AND ".join(where_parts)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM tutor_applications
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"]
+    total_pages = (total + limit - 1) // limit
+
+    if total_pages == 0:
+        total_pages = 1
+
+    if page_num > total_pages:
+        page_num = total_pages
+
+    offset = (page_num - 1) * limit
+
+    cur.execute(f"""
+        SELECT *
+        FROM tutor_applications
+        {where_sql}
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    """, (*params, limit, offset))
+
+    applications = cur.fetchall()
+
+    cur.execute("""
+        SELECT DISTINCT name
+        FROM subjects
+        ORDER BY name
+    """)
+    subject_rows = cur.fetchall()
+
+    conn.close()
+
+    grade_options = '<option value="">All Grades</option>'
+    for g in ["G8", "G9", "G10", "G11", "G12", "G13"]:
+        selected = "selected" if grade_filter == g else ""
+        grade_options += f"<option value='{g}' {selected}>{grade_label(g)}</option>"
+
+    subject_options = '<option value="">All Subjects</option>'
+    for s in subject_rows:
+        name = s["name"]
+        selected = "selected" if subject_filter == name else ""
+        subject_options += f"<option value='{escape(name)}' {selected}>{escape(name)}</option>"
+
+    status_options = ""
+    for st in ["NEW", "SHORTLISTED", "INTERVIEWED", "ACCEPTED", "REJECTED"]:
+        selected = "selected" if status_filter == st else ""
+        status_options += f"<option value='{st}' {selected}>{st}</option>"
+
+    rows = ""
+
+    for a in applications:
+        try:
+            grades = ", ".join([grade_label(g) for g in json.loads(a["grades"] or "[]")])
+        except:
+            grades = a["grades"] or "—"
+
+        try:
+            subjects = ", ".join(json.loads(a["subjects"] or "[]"))
+        except:
+            subjects = a["subjects"] or "—"
+
+        rows += f"""
+        <tr>
+            <td>
+                {escape(a['full_name'])}
+                <div class="mini muted">{escape(a['phone'] or '')}</div>
+            </td>
+            <td>{escape(grades)}</td>
+            <td>{escape(subjects)}</td>
+            <td>{escape(a['highest_qualification'] or '—')}</td>
+            <td><span class="chip">{escape(a['status'])}</span></td>
+            <td>{a['created_at'][:16].replace('T',' ')}</td>
+            <td style="white-space:nowrap">
+                <a class="btn mini" href="/admin/application/{a['id']}">
+                    View
+                </a>
+            </td>
+        </tr>
+        """
+
+    query_base = f"q={escape(q)}&grade={grade_filter}&subject={escape(subject_filter)}&status={status_filter}"
+
+    page_links = []
+
+    if page_num > 1:
+        page_links.append(f"<a class='links' href='/admin/applications?{query_base}&page=1'>« First</a>")
+        page_links.append(f"<a class='links' href='/admin/applications?{query_base}&page={page_num-1}'>‹ Prev</a>")
+
+    page_links.append(f"<span class='chip'>Page {page_num} of {total_pages}</span>")
+
+    if page_num < total_pages:
+        page_links.append(f"<a class='links' href='/admin/applications?{query_base}&page={page_num+1}'>Next ›</a>")
+        page_links.append(f"<a class='links' href='/admin/applications?{query_base}&page={total_pages}'>Last »</a>")
+
+    pagination = f"""
+    <div class="toolbar" style="margin-top:12px">
+        {''.join(page_links)}
+    </div>
+    """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Tutor Applications</h1>
+
+        <form method="get"
+              class="toolbar"
+              style="align-items:end">
+
+            <div>
+                <label>Search</label>
+                <input name="q"
+                       value="{escape(q)}"
+                       placeholder="Name, phone, email, city, qualification"
+                       style="min-width:260px">
+            </div>
+
+            <div>
+                <label>Grade</label>
+                <select name="grade">
+                    {grade_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Subject</label>
+                <select name="subject">
+                    {subject_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Status</label>
+                <select name="status">
+                    <option value="">All Statuses</option>
+                    {status_options}
+                </select>
+            </div>
+
+            <button class="btn mini success">Apply</button>
+            <a class="btn mini secondary" href="/admin/applications">Reset</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(applications)} of {total} application(s).
+        </div>
+
+        {pagination}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Applicant</th>
+                        <th>Grades</th>
+                        <th>Subjects</th>
+                        <th>Qualification</th>
+                        <th>Status</th>
+                        <th>Applied</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='7'>No applications found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination}
+    </section>
+    """
+
+    return page("Tutor Applications", body)
+    
+    
+@app.get('/admin/application/<int:app_id>')
+def admin_application_detail(app_id):
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM tutor_applications WHERE id=?", (app_id,))
+    a = cur.fetchone()
+
+    conn.close()
+
+    if not a:
+        return page("Not found", card_msg("Application not found."))
+
+    try:
+        grades = ", ".join([grade_label(g) for g in json.loads(a["grades"] or "[]")])
+    except:
+        grades = a["grades"] or "—"
+
+    try:
+        subjects = ", ".join(json.loads(a["subjects"] or "[]"))
+    except:
+        subjects = a["subjects"] or "—"
+
+    cv_btn = "—"
+    if a["cv_file_path"] and os.path.exists(a["cv_file_path"]):
+        cv_btn = f"""
+        <a class="btn mini success"
+           href="/admin/application/{a['id']}/download/cv">
+            Download CV
+        </a>
+        """
+
+    cert_btn = "—"
+    if a["certificate_file_path"] and os.path.exists(a["certificate_file_path"]):
+        cert_btn = f"""
+        <a class="btn mini secondary"
+           href="/admin/application/{a['id']}/download/certificate">
+            Download Certificate
+        </a>
+        """
+
+    status_options = ""
+    for st in ["NEW", "SHORTLISTED", "INTERVIEWED", "ACCEPTED", "REJECTED"]:
+        selected = "selected" if a["status"] == st else ""
+        status_options += f"<option value='{st}' {selected}>{st}</option>"
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>{escape(a['full_name'])}</h1>
+        <div class="mini muted">Applied: {a['created_at'][:16].replace('T',' ')}</div>
+
+        <div class="toolbar" style="margin-top:12px">
+            <a class="btn mini secondary" href="/admin/applications">Back to Applications</a>
+            {cv_btn}
+            {cert_btn}
+        </div>
+
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">
+
+            <div class="card soft">
+                <h2>Contact Details</h2>
+                <p><b>Phone:</b> {escape(a['phone'] or '—')}</p>
+                <p><b>Email:</b> {escape(a['email'] or '—')}</p>
+                <p><b>Province:</b> {escape(a['province'] or '—')}</p>
+                <p><b>City:</b> {escape(a['city'] or '—')}</p>
+            </div>
+
+            <div class="card soft">
+                <h2>Academic Background</h2>
+                <p><b>Highest Qualification:</b> {escape(a['highest_qualification'] or '—')}</p>
+                <p><b>Institution:</b> {escape(a['institution'] or '—')}</p>
+                <p><b>Grades:</b> {escape(grades)}</p>
+                <p><b>Subjects:</b> {escape(subjects)}</p>
+            </div>
+
+        </div>
+
+        <div class="card soft" style="margin-top:12px">
+            <h2>Experience Summary</h2>
+            <p style="white-space:pre-wrap">{escape(a['experience_summary'] or '—')}</p>
+        </div>
+
+        <div class="card soft" style="margin-top:12px">
+            <h2>Availability</h2>
+            <p style="white-space:pre-wrap">{escape(a['availability'] or '—')}</p>
+        </div>
+
+        <div class="card soft" style="margin-top:12px;border-left:5px solid #f59e0b">
+            <h2>Admin Review</h2>
+
+            <form method="post" action="/admin/application/{a['id']}/status" class="grid">
+
+                <div>
+                    <label>Status</label>
+                    <select name="status">
+                        {status_options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Admin Notes</label>
+                    <textarea name="admin_notes">{escape(a['admin_notes'] or '')}</textarea>
+                </div>
+
+                <button class="btn success">
+                    Save Review
+                </button>
+            </form>
+        </div>
+
+    </section>
+    """
+
+    return page("Application Details", body)
+    
+    
+@app.post('/admin/application/<int:app_id>/status')
+def admin_application_update_status(app_id):
+
+    r = require_admin()
+    if r: return r
+
+    status = request.form.get("status", "NEW").strip()
+    admin_notes = request.form.get("admin_notes", "").strip()
+
+    allowed_statuses = ["NEW", "SHORTLISTED", "INTERVIEWED", "ACCEPTED", "REJECTED"]
+
+    if status not in allowed_statuses:
+        status = "NEW"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE tutor_applications
+        SET status=?,
+            admin_notes=?,
+            updated_at=?
+        WHERE id=?
+    """, (status, admin_notes, now_utc_iso(), app_id))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_application_detail", app_id=app_id))
+    
+
+@app.get('/admin/application/<int:app_id>/download/<kind>')
+def admin_application_download(app_id, kind):
+
+    r = require_admin()
+    if r: return r
+
+    if kind not in ["cv", "certificate"]:
+        return page("Invalid file", card_msg("Invalid document type."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM tutor_applications WHERE id=?", (app_id,))
+    a = cur.fetchone()
+
+    conn.close()
+
+    if not a:
+        return page("Not found", card_msg("Application not found."))
+
+    if kind == "cv":
+        file_path = a["cv_file_path"]
+        file_name = a["cv_file_name"] or "CV"
+    else:
+        file_path = a["certificate_file_path"]
+        file_name = a["certificate_file_name"] or "Certificate"
+
+    if not file_path or not os.path.exists(file_path):
+        return page("Not found", card_msg("File not found."))
+
+    return send_from_directory(
+        os.path.dirname(file_path),
+        os.path.basename(file_path),
+        as_attachment=True,
+        download_name=file_name
+    )
 
 
 # --- Admin: Analytics dashboard ---
