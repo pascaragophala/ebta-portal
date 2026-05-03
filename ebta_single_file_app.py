@@ -494,6 +494,22 @@ def init_db():
             now_utc_iso(),
             now_utc_iso()
         ))
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS material_views(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        material_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        first_viewed_at TEXT NOT NULL,
+        last_viewed_at TEXT NOT NULL,
+        view_count INTEGER NOT NULL DEFAULT 1,
+        ip_address TEXT,
+        user_agent TEXT,
+        UNIQUE(material_id, student_id),
+        FOREIGN KEY(material_id) REFERENCES materials(id) ON DELETE CASCADE,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
 
     
     ensure_column(conn, "students", "guardian_name", "TEXT")
@@ -547,6 +563,8 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_subjects_tutor ON tutor_subjects(tutor_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_followups_name ON followups(full_name)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_followups_status ON followups(followup_status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_material_views_material ON material_views(material_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_material_views_student ON material_views(student_id)")
 
     
 
@@ -1232,6 +1250,44 @@ def pretty_month_label(month_str: str) -> str:
         return datetime.date(y, m, 1).strftime('%B %Y')
     except Exception:
         return month_str
+        
+def record_material_view(material_id, student_id):
+    conn = get_db()
+    cur = conn.cursor()
+
+    now = now_utc_iso()
+    ip = request.remote_addr
+    ua = request.headers.get("User-Agent", "")[:300]
+
+    cur.execute("""
+        INSERT INTO material_views(
+            material_id,
+            student_id,
+            first_viewed_at,
+            last_viewed_at,
+            view_count,
+            ip_address,
+            user_agent
+        )
+        VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(material_id, student_id)
+        DO UPDATE SET
+            last_viewed_at = excluded.last_viewed_at,
+            view_count = material_views.view_count + 1,
+            ip_address = excluded.ip_address,
+            user_agent = excluded.user_agent
+    """, (
+        material_id,
+        student_id,
+        now,
+        now,
+        1,
+        ip,
+        ua
+    ))
+
+    conn.commit()
+    conn.close()
 
 
 def expected_class_dates_for_subject(cur, subject_id, tutor_id, month, expected_classes):
@@ -5391,7 +5447,7 @@ def student_home():
             # assignment file
             file_link = "—"
             if a['file_path']:
-                file_link = f"<a class='btn mini' target='_blank' href='{a['file_path']}'>Download</a>"
+                file_link = f"<a class='btn mini' target='_blank' href='/student/material/{a['id']}/open'>Download</a>"
 
             # submission section
             now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))
@@ -5951,6 +6007,45 @@ def student_submit(mid):
     return redirect(url_for("student_home"))
 
 
+@app.get('/student/material/<int:mid>/open')
+def student_open_material(mid):
+
+    r = require_student()
+    if r: return r
+
+    sid = is_student()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT m.*
+        FROM materials m
+        JOIN enrollments e ON e.subject_id = m.subject_id
+        WHERE m.id = ?
+          AND e.student_id = ?
+          AND e.status = 'ACTIVE'
+          AND substr(e.month,1,7) = substr(m.month,1,7)
+        LIMIT 1
+    """, (mid, sid))
+
+    material = cur.fetchone()
+    conn.close()
+
+    if not material:
+        return page("Not allowed", card_msg("You are not allowed to access this material."))
+
+    record_material_view(mid, sid)
+
+    if material["file_path"]:
+        return redirect(material["file_path"])
+
+    if material["youtube_url"]:
+        return redirect(material["youtube_url"])
+
+    return page("No resource", card_msg("This material has no file or link attached."))
+
+
 @app.get('/student/materials')
 def student_materials():
 
@@ -6005,7 +6100,7 @@ def student_materials():
                     link = f"""
                     <a class='btn success mini'
                        target='_blank'
-                       href='{m['file_path']}'>
+                       href='/student/material/{m["id"]}/open'>
                        ⬇ Download
                     </a>
                     """
@@ -6013,7 +6108,7 @@ def student_materials():
                     link = f"""
                     <a class='btn mini'
                        target='_blank'
-                       href='{m['youtube_url']}'>
+                       href='/student/material/{m["id"]}/open'>
                        ▶ Watch
                     </a>
                     """
@@ -6173,7 +6268,7 @@ def student_assignments():
             # download button
             file_link = "—"
             if a['file_path']:
-                file_link = f"<a class='btn mini' target='_blank' href='{a['file_path']}'>Download</a>"
+                file_link = f"<a class='btn mini' target='_blank' href='/student/material/{a['id']}/open'>Download</a>"
 
             # submission / feedback
             if sub:
@@ -7574,14 +7669,33 @@ def tutor_home():
             """
         else:
             action = "<span class='muted mini'>Locked</span>"
+        
+        views_btn = f"""
+        <a class="btn mini secondary"
+           href="/tutor/material/{m['id']}/views">
+            Views
+        </a>
+        """
+        
+        cur.execute("""
+            SELECT COUNT(DISTINCT student_id) AS c
+            FROM material_views
+            WHERE material_id = ?
+        """, (m["id"],))
+
+        viewed_total = cur.fetchone()["c"] or 0
 
         row = f"""
         <tr>
             <td>{grade_label(m['grade'])} — {m['subject_name']}</td>
             <td>{icon}{m['title']}</td>
             <td>{link}</td>
+            <td>{viewed_total}</td>
             <td>{when}</td>
-            <td>{action}</td>
+            <td>
+                {views_btn}
+                {action}
+            </td>
         </tr>
         """
 
@@ -7605,6 +7719,7 @@ def tutor_home():
                 <th>Subject</th>
                 <th>Title</th>
                 <th>File</th>
+                <th>Views</th>
                 <th>Uploaded</th>
                 <th>Action</th>
             </tr>
@@ -7627,6 +7742,7 @@ def tutor_home():
                 <th>Subject</th>
                 <th>Recording</th>
                 <th>Watch</th>
+                <th>Views</th>
                 <th>Uploaded</th>
                 <th>Action</th>
             </tr>
@@ -7649,6 +7765,7 @@ def tutor_home():
                 <th>Subject</th>
                 <th>Document</th>
                 <th>File</th>
+                <th>Views</th>
                 <th>Uploaded</th>
                 <th>Action</th>
             </tr>
@@ -8264,6 +8381,144 @@ def tutor_home():
     </section>
     """
     return page("Tutor Portal", body)
+    
+
+@app.get('/tutor/material/<int:mid>/views')
+def tutor_material_views(mid):
+
+    r = require_tutor()
+    if r: return r
+
+    tid = is_tutor()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT m.*, s.name AS subject_name, s.grade
+        FROM materials m
+        JOIN subjects s ON s.id = m.subject_id
+        WHERE m.id = ?
+          AND m.tutor_id = ?
+    """, (mid, tid))
+
+    material = cur.fetchone()
+
+    if not material:
+        conn.close()
+        return page("Not allowed", card_msg("Material not found or not allowed."))
+
+    cur.execute("""
+        SELECT st.id, st.full_name, st.phone_whatsapp
+        FROM enrollments e
+        JOIN students st ON st.id = e.student_id
+        WHERE e.subject_id = ?
+          AND substr(e.month,1,7) = substr(?,1,7)
+          AND e.status = 'ACTIVE'
+        ORDER BY st.full_name
+    """, (material["subject_id"], material["month"]))
+
+    learners = cur.fetchall()
+
+    cur.execute("""
+        SELECT mv.*, st.full_name, st.phone_whatsapp
+        FROM material_views mv
+        JOIN students st ON st.id = mv.student_id
+        WHERE mv.material_id = ?
+        ORDER BY mv.last_viewed_at DESC
+    """, (mid,))
+
+    view_rows = cur.fetchall()
+
+    conn.close()
+
+    viewed_map = {v["student_id"]: v for v in view_rows}
+
+    viewed_count = len(viewed_map)
+    total_learners = len(learners)
+    not_viewed_count = max(total_learners - viewed_count, 0)
+
+    rows = ""
+
+    for learner in learners:
+        view = viewed_map.get(learner["id"])
+
+        if view:
+            status = "<span class='chip active'>Viewed</span>"
+            first_viewed = view["first_viewed_at"][:16].replace("T", " ")
+            last_viewed = view["last_viewed_at"][:16].replace("T", " ")
+            view_count = view["view_count"]
+        else:
+            status = "<span class='chip lapsed'>Not viewed</span>"
+            first_viewed = "—"
+            last_viewed = "—"
+            view_count = "0"
+
+        rows += f"""
+        <tr>
+            <td>
+                {escape(learner['full_name'])}
+                <div class="mini muted">{escape(learner['phone_whatsapp'] or '')}</div>
+            </td>
+            <td>{status}</td>
+            <td>{first_viewed}</td>
+            <td>{last_viewed}</td>
+            <td>{view_count}</td>
+        </tr>
+        """
+
+    body = f"""
+    <div class="card" style="border-left:5px solid #2563eb">
+
+        <a class="btn mini secondary" href="/tutor">
+            ← Back to Tutor Portal
+        </a>
+
+        <h2 style="margin-top:12px">Resource Views</h2>
+
+        <div class="mini muted" style="margin-bottom:12px">
+            {grade_label(material['grade'])} — {escape(material['subject_name'])}
+            <br>
+            Resource: <b>{escape(material['title'])}</b>
+        </div>
+
+        <div class="stats" style="margin-bottom:14px">
+            <div class="stat">
+                <div class="k">{total_learners}</div>
+                <div class="t">Active Learners</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{viewed_count}</div>
+                <div class="t">Viewed</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{not_viewed_count}</div>
+                <div class="t">Not Viewed</div>
+            </div>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Status</th>
+                        <th>First Viewed</th>
+                        <th>Last Viewed</th>
+                        <th>View Count</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='5'>No active learners found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+
+    return page("Resource Views", body)    
     
     
 @app.post('/tutor/publish_all_marks/<int:mid>')
