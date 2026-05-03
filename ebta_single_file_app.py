@@ -733,7 +733,7 @@ def init_db():
             "INSERT INTO settings(key,value) VALUES(?,?)",
             (
                 'applications_closed_message',
-                'Applications are currently closed. Please check again later.'
+                'Applications are currently closed while we review the submissions already received. Please check this page again soon for the next EBTA tutor recruitment intake. Thank you for your interest in joining the EBTA team.'
             )
         )    
 
@@ -17833,7 +17833,7 @@ def tutor_application_form():
     applications_open = get_setting("applications_open", "1")
     closed_message = get_setting(
         "applications_closed_message",
-        "Applications are currently closed. Please check again later."
+        "Applications are currently closed while we review the submissions already received. Please check this page again soon for the next EBTA tutor recruitment intake. Thank you for your interest in joining the EBTA team."
     )
 
     if applications_open != "1":
@@ -18065,7 +18065,7 @@ def tutor_application_submit():
     applications_open = get_setting("applications_open", "1")
     closed_message = get_setting(
         "applications_closed_message",
-        "Applications are currently closed. Please check again later."
+        "Applications are currently closed while we review the submissions already received. Please check this page again soon for the next EBTA tutor recruitment intake. Thank you for your interest in joining the EBTA team."
     )
 
     if applications_open != "1":
@@ -18762,7 +18762,7 @@ def admin_application_settings_save():
     closed_message = request.form.get("closed_message", "").strip()
 
     if not closed_message:
-        closed_message = "Applications are currently closed. Please check again later."
+        closed_message = "Applications are currently closed while we review the submissions already received. Please check this page again soon for the next EBTA tutor recruitment intake. Thank you for your interest in joining the EBTA team."
 
     set_setting("applications_open", applications_open)
     set_setting("applications_closed_message", closed_message)
