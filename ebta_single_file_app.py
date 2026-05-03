@@ -439,6 +439,8 @@ def init_db():
     ensure_column(conn, "submissions", "marked_file_path", "TEXT")
     ensure_column(conn, "students", "profile_picture_path", "TEXT")
     ensure_column(conn, "students", "profile_picture_uploaded_at", "TEXT")
+    ensure_column(conn, "tutor_applications", "reliable_internet", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "tutor_applications", "device_access", "INTEGER NOT NULL DEFAULT 0")
     
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_tracker
@@ -716,6 +718,24 @@ def init_db():
                 'Enrollments are currently closed. February enrollments open on 20 January 2026.'
             )
         )
+        
+    # Tutor application control defaults
+    cur.execute("SELECT value FROM settings WHERE key='applications_open'")
+    if not cur.fetchone():
+        cur.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?)",
+            ('applications_open', '1')
+        )
+
+    cur.execute("SELECT value FROM settings WHERE key='applications_closed_message'")
+    if not cur.fetchone():
+        cur.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?)",
+            (
+                'applications_closed_message',
+                'Applications are currently closed. Please check again later.'
+            )
+        )    
 
 
     # --- REMOVE UNWANTED SUBJECTS (SAFE CLEANUP) ---
@@ -8754,6 +8774,7 @@ def admin_nav():
             f"<a class='btn secondary' href='{url_for('admin_tutor_operations')}'>Tutor-operations</a>",
             f"<a class='btn secondary' href='{url_for('admin_academic_quality_managers')}'>AQ_Manager</a>",
             f"<a class='btn secondary' href='{url_for('admin_applications')}'>Tutor Applications</a>",
+            f"<a class='btn secondary' href='{url_for('admin_application_settings')}'>Application Settings</a>",
             f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
             f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
 
@@ -8802,6 +8823,7 @@ def admin_home():
     <a class="btn secondary" href="{url_for('admin_tutor_tracker')}">Tutor Tracker</a>
     <a class="btn secondary" href="{url_for('admin_tutor_operations')}">Tutor-operations</a>
     <a class="btn secondary" href="{url_for('admin_applications')}">Tutor Applications</a>
+    <a class="btn secondary" href="{url_for('admin_application_settings')}">Application Settings</a>
     <a class="btn secondary" href="{url_for('admin_academic_quality_managers')}">AQ_Manager</a>
     <a class='btn secondary' href='{url_for('admin_reports')}'>Student Reports</a>
 
@@ -17808,6 +17830,27 @@ def download_profile_picture(sid):
 
 @app.get('/apply')
 def tutor_application_form():
+    applications_open = get_setting("applications_open", "1")
+    closed_message = get_setting(
+        "applications_closed_message",
+        "Applications are currently closed. Please check again later."
+    )
+
+    if applications_open != "1":
+        body = f"""
+        <section class="wrap small">
+            <div class="card soft" style="border-left:5px solid #ef4444">
+                <h1>Applications Closed</h1>
+                <p class="muted" style="white-space:pre-wrap">
+                    {escape(closed_message)}
+                </p>
+                <a class="btn secondary" href="/">
+                    Back to Home
+                </a>
+            </div>
+        </section>
+        """
+        return page("Applications Closed", body)
 
     conn = get_db()
     cur = conn.cursor()
@@ -17968,6 +18011,30 @@ def tutor_application_form():
                 </div>
 
                 <div class="card soft">
+                    <h2>Required Tutor Resources</h2>
+
+                    <label style="display:flex;gap:10px;align-items:flex-start;margin-bottom:10px">
+                        <input type="checkbox"
+                               name="reliable_internet"
+                               value="1"
+                               required
+                               style="width:20px;height:20px;margin-top:2px">
+                        <span>
+                            I confirm that I have access to a reliable internet connection.
+                        </span>
+                    </label>
+
+                    <label style="display:flex;gap:10px;align-items:flex-start;margin-bottom:10px">
+                        <input type="checkbox"
+                               name="device_access"
+                               value="1"
+                               required
+                               style="width:20px;height:20px;margin-top:2px">
+                        <span>
+                            I confirm that I have access to a laptop, desktop, or tablet for tutoring.
+                        </span>
+                    </label>
+
                     <label style="display:flex;gap:10px;align-items:flex-start">
                         <input type="checkbox"
                                name="consent"
@@ -17995,6 +18062,27 @@ def tutor_application_form():
 
 @app.post('/apply')
 def tutor_application_submit():
+    applications_open = get_setting("applications_open", "1")
+    closed_message = get_setting(
+        "applications_closed_message",
+        "Applications are currently closed. Please check again later."
+    )
+
+    if applications_open != "1":
+        body = f"""
+        <section class="wrap small">
+            <div class="card soft" style="border-left:5px solid #ef4444">
+                <h1>Applications Closed</h1>
+                <p class="muted" style="white-space:pre-wrap">
+                    {escape(closed_message)}
+                </p>
+                <a class="btn secondary" href="/">
+                    Back to Home
+                </a>
+            </div>
+        </section>
+        """
+        return page("Applications Closed", body)
 
     # Honeypot anti-spam check
     if request.form.get("website", "").strip():
@@ -18014,12 +18102,22 @@ def tutor_application_submit():
     grades = request.form.getlist("grades")
     subjects = request.form.getlist("subjects")
 
+    reliable_internet = 1 if request.form.get("reliable_internet") == "1" else 0
+    device_access = 1 if request.form.get("device_access") == "1" else 0
     consent = 1 if request.form.get("consent") == "1" else 0
 
-    if not full_name or not phone or not grades or not subjects or consent != 1:
+    if (
+        not full_name
+        or not phone
+        or not grades
+        or not subjects
+        or reliable_internet != 1
+        or device_access != 1
+        or consent != 1
+    ):
         return page(
             "Application incomplete",
-            card_msg("Please complete your name, phone number, grades, subjects, and consent checkbox.")
+            card_msg("Please complete your name, phone number, grades, subjects, internet/device confirmations, and consent checkbox.")
         )
 
     cv = request.files.get("cv")
@@ -18065,13 +18163,15 @@ def tutor_application_submit():
             certificate_file_path,
             certificate_file_name,
             status,
+            reliable_internet,
+            device_access,
             consent,
             ip_address,
             user_agent,
             created_at,
             updated_at
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         full_name,
         phone,
@@ -18089,6 +18189,8 @@ def tutor_application_submit():
         cert_path,
         cert_name,
         "NEW",
+        reliable_internet,
+        device_access,
         consent,
         request.remote_addr,
         request.headers.get("User-Agent", "")[:300],
@@ -18431,6 +18533,13 @@ def admin_application_detail(app_id):
                 <p><b>Grades:</b> {escape(grades)}</p>
                 <p><b>Subjects:</b> {escape(subjects)}</p>
             </div>
+            
+            <div class="card soft">
+                <h2>Tutor Resource Confirmations</h2>
+                <p><b>Reliable Internet:</b> {"Yes" if a["reliable_internet"] == 1 else "No"}</p>
+                <p><b>Laptop/Desktop/Tablet:</b> {"Yes" if a["device_access"] == 1 else "No"}</p>
+                <p><b>Consent:</b> {"Yes" if a["consent"] == 1 else "No"}</p>
+            </div>
 
         </div>
 
@@ -18540,6 +18649,91 @@ def admin_application_download(app_id, kind):
         as_attachment=True,
         download_name=file_name
     )
+
+@app.get('/admin/application-settings')
+def admin_application_settings():
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can manage application settings."))
+
+    applications_open = get_setting("applications_open", "1")
+    closed_message = get_setting(
+        "applications_closed_message",
+        "Applications are currently closed. Please check again later."
+    )
+
+    open_checked = "checked" if applications_open == "1" else ""
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Tutor Application Settings</h1>
+
+        <p class="muted">
+            Use this page to open or close public tutor applications.
+        </p>
+
+        <form method="post"
+              action="/admin/application-settings"
+              class="grid"
+              style="gap:14px">
+
+            <div class="card soft">
+                <label style="display:flex;gap:10px;align-items:center">
+                    <input type="checkbox"
+                           name="applications_open"
+                           value="1"
+                           {open_checked}
+                           style="width:20px;height:20px">
+                    <span>
+                        Applications are open
+                    </span>
+                </label>
+
+                <div class="mini muted" style="margin-top:8px">
+                    If unticked, the public application form will show the closed message instead.
+                </div>
+            </div>
+
+            <div>
+                <label>Closed Message</label>
+                <textarea name="closed_message"
+                          style="min-height:120px">{escape(closed_message)}</textarea>
+            </div>
+
+            <button class="btn success">
+                Save Application Settings
+            </button>
+        </form>
+    </section>
+    """
+
+    return page("Application Settings", body)
+
+
+@app.post('/admin/application-settings')
+def admin_application_settings_save():
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can manage application settings."))
+
+    applications_open = "1" if request.form.get("applications_open") == "1" else "0"
+    closed_message = request.form.get("closed_message", "").strip()
+
+    if not closed_message:
+        closed_message = "Applications are currently closed. Please check again later."
+
+    set_setting("applications_open", applications_open)
+    set_setting("applications_closed_message", closed_message)
+
+    return redirect(url_for("admin_application_settings"))
 
 
 # --- Admin: Analytics dashboard ---
