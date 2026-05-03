@@ -9339,6 +9339,7 @@ def admin_students():
             s.id,
             s.full_name,
             s.phone_whatsapp,
+            s.guardian_name,
             s.guardian_phone,
             s.email,
             s.grade,
@@ -9396,7 +9397,10 @@ def admin_students():
             <td>{s['full_name']}<div class='muted'>{s['phone_whatsapp']}</div></td>
             <td>{grade_label(s['grade'])}</td>
             <td>{subjects}</td>
-            <td>{nz(s['guardian_phone'])}</td>
+            <td>
+                {nz(s['guardian_name'])}
+                <div class='muted'>{nz(s['guardian_phone'])}</div>
+            </td>
             <td>{nz(s['province'])}</td>
             <td>{nz(s['school'])}</td>
             <td>{nz(s['email'])}</td>
