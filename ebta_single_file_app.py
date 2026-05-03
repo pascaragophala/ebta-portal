@@ -8801,6 +8801,7 @@ def admin_home():
     <a class="btn secondary" href="{url_for('admin_materials')}">Unlock Uploads</a>
     <a class="btn secondary" href="{url_for('admin_tutor_tracker')}">Tutor Tracker</a>
     <a class="btn secondary" href="{url_for('admin_tutor_operations')}">Tutor-operations</a>
+    <a class="btn secondary" href="{url_for('admin_applications')}">Tutor Applications</a>
     <a class="btn secondary" href="{url_for('admin_academic_quality_managers')}">AQ_Manager</a>
     <a class='btn secondary' href='{url_for('admin_reports')}'>Student Reports</a>
 
