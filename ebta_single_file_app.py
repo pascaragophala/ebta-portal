@@ -2378,6 +2378,26 @@ background:#fff;
   }
 }
 
+.missed-dates-wrap{
+    display:flex;
+    flex-wrap:wrap;
+    gap:6px;
+    align-items:center;
+}
+
+.missed-date-chip{
+    display:inline-block;
+    padding:4px 10px;
+    border-radius:999px;
+    background:#fff7e6;
+    border:1px solid #f5d08a;
+    color:#9a6700;
+    font-size:12px;
+    font-weight:600;
+    line-height:1.2;
+    white-space:nowrap;
+}
+
 </style>
 """
 
@@ -7727,12 +7747,12 @@ def tutor_home():
             if classes_missed == 0:
                 missed_classes_html = "<span class='chip active'>None</span>"
             elif missed_dates:
-                missed_classes_html = "<br>".join([
-                    datetime.date.fromisoformat(d).strftime("%d %b %Y")
+                missed_classes_html = "<div class='missed-dates-wrap'>" + "".join([
+                    f"<span class='missed-date-chip'>{datetime.date.fromisoformat(d).strftime('%d %b')}</span>"
                     for d in missed_dates
-                ])
+                ]) + "</div>"
             else:
-                missed_classes_html = "<span class='muted'>Dates not available</span>"
+                missed_classes_html = "<span class='mini muted'>Dates not available</span>"
 
             cur.execute("""
                 SELECT AVG(mark) AS avgm
