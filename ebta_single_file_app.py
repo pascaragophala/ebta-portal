@@ -17956,12 +17956,12 @@ def tutor_application_form():
                         </div>
 
                         <div>
-                            <label>Upload Certificate / Transcript Optional</label>
+                            <label>Upload Certificate / Transcript</label>
                             <input type="file"
                                    name="certificate"
                                    accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
                             <div class="mini muted">
-                                Optional supporting document.
+                                Supporting document.
                             </div>
                         </div>
                     </div>
