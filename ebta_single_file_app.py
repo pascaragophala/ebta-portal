@@ -7655,16 +7655,22 @@ def tutor_home():
     asg_rows="".join([f"<tr><td>{grade_label(a['grade'])} — {a['subject_name']}</td><td>{a['title']}</td><td>Due: {a['due_date'] or '—'}</td><td>Total: {a['max_points'] or 100}</td><td><a class='links' href='{url_for('tutor_assignment_manage', mid=a['id'])}'>Manage</a></td></tr>" for a in asg]) or "<tr><td colspan='5'><div class='empty'>No assignments yet.</div></td></tr>"
 
     # Students overview per subject (attendance + avg mark) + simple "message a student" picker
-    stu_sections=[]
-    message_student_options=[]
-    for s in subs:
-        cur.execute("""SELECT st.id, st.full_name, st.phone_whatsapp
-            FROM enrollments e 
-            JOIN students st ON st.id=e.student_id
-            WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
-            ORDER BY st.full_name""",(s['subject_id'], month))
+    stu_sections = []
+    message_student_options = []
 
-        studs=cur.fetchall()
+    for s in subs:
+        cur.execute("""
+            SELECT st.id, st.full_name, st.phone_whatsapp
+            FROM enrollments e 
+            JOIN students st ON st.id = e.student_id
+            WHERE e.subject_id = ?
+              AND e.month = ?
+              AND e.status = 'ACTIVE'
+            ORDER BY st.full_name
+        """, (s["subject_id"], month))
+
+        studs = cur.fetchall()
+
         # Expected monthly classes:
         # Grade 8 to Grade 12 = 4 classes per month
         # Grade 13 / Upgrading = 6 classes per month
@@ -7679,40 +7685,54 @@ def tutor_home():
         )
 
         rows = []
+
         for st in studs:
             cur.execute("""
-            SELECT DISTINCT a.date
-            FROM attendance a
-            JOIN sessions se ON se.id = a.session_id
-            WHERE a.student_id = ?
-              AND se.subject_id = ?
-              AND strftime('%Y-%m', a.date) = ?
-            ORDER BY a.date
-        """, (st["id"], s["subject_id"], month))
+                SELECT DISTINCT a.date
+                FROM attendance a
+                JOIN sessions se ON se.id = a.session_id
+                WHERE a.student_id = ?
+                  AND se.subject_id = ?
+                  AND strftime('%Y-%m', a.date) = ?
+                ORDER BY a.date
+            """, (st["id"], s["subject_id"], month))
 
-        attended_dates = [r["date"] for r in cur.fetchall()]
+            attended_dates = [r["date"] for r in cur.fetchall()]
 
-        classes_attended = len(attended_dates)
+            classes_attended = len(attended_dates)
 
-        missed_dates = [d for d in expected_dates if d not in attended_dates]
+            missed_dates = [d for d in expected_dates if d not in attended_dates]
 
-        classes_missed = len(missed_dates) if expected_dates else max(expected_classes - classes_attended, 0)
+            if expected_dates:
+                classes_missed = len(missed_dates)
+            else:
+                classes_missed = max(expected_classes - classes_attended, 0)
 
-        rate = f"{int(round((classes_attended / expected_classes) * 100))}%" if expected_classes > 0 else "—"
+            rate = f"{int(round((classes_attended / expected_classes) * 100))}%" if expected_classes > 0 else "—"
 
-        if missed_dates:
-            missed_classes_html = "<br>".join([
-                datetime.date.fromisoformat(d).strftime("%d %b %Y")
-                for d in missed_dates
-            ])
-        elif classes_missed == 0:
-            missed_classes_html = "<span class='chip active'>None</span>"
-        else:
-            missed_classes_html = "<span class='muted'>Dates not available</span>"
-            cur.execute("""SELECT AVG(mark) AS avgm FROM submissions sub
-                        JOIN materials m ON m.id=sub.material_id
-                        WHERE sub.student_id=? AND m.subject_id=? AND m.month=? AND sub.mark IS NOT NULL AND sub.is_published = 1""",(st['id'], s['subject_id'], month))
-            avgm = cur.fetchone()['avgm']
+            if missed_dates:
+                missed_classes_html = "<br>".join([
+                    datetime.date.fromisoformat(d).strftime("%d %b %Y")
+                    for d in missed_dates
+                ])
+            elif classes_missed == 0:
+                missed_classes_html = "<span class='chip active'>None</span>"
+            else:
+                missed_classes_html = "<span class='muted'>Dates not available</span>"
+
+            cur.execute("""
+                SELECT AVG(mark) AS avgm
+                FROM submissions sub
+                JOIN materials m ON m.id = sub.material_id
+                WHERE sub.student_id = ?
+                  AND m.subject_id = ?
+                  AND m.month = ?
+                  AND sub.mark IS NOT NULL
+                  AND sub.is_published = 1
+            """, (st["id"], s["subject_id"], month))
+
+            avgm = cur.fetchone()["avgm"]
+
             rows.append(f"""
             <tr>
                 <td>
@@ -7724,7 +7744,7 @@ def tutor_home():
                     {st['phone_whatsapp'] or '—'}
                 </td>
 
-               <td>
+                <td>
                     {classes_attended}
                 </td>
 
@@ -7747,17 +7767,39 @@ def tutor_home():
                 <td>
                     {'-' if avgm is None else int(round(avgm))}
                 </td>
-
             </tr>
             """)
 
-            message_student_options.append((st['id'], s['subject_id'], f"{st['full_name']} — {grade_label(s['grade'])} {s['subject_name']}"))
+            message_student_options.append((
+                st["id"],
+                s["subject_id"],
+                f"{st['full_name']} — {grade_label(s['grade'])} {s['subject_name']}"
+            ))
+
         table = (
             "<div class='empty'>No active students.</div>"
             if not rows
-            else f"<div class='scroll-x'><table><thead><tr>"
-                 f"<th>Student</th><th>Phone</th><th>Num Classes Attended</th><th>Classes Attended</th><th>Classes Missed</th><th>Missed Classes</th><th>Rate</th><th>Avg mark</th>"
-                 f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+            else f"""
+            <div class='scroll-x'>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Student</th>
+                            <th>Phone</th>
+                            <th>Num Classes Attended</th>
+                            <th>Classes Attended</th>
+                            <th>Classes Missed</th>
+                            <th>Missed Classes</th>
+                            <th>Rate</th>
+                            <th>Avg mark</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {''.join(rows)}
+                    </tbody>
+                </table>
+            </div>
+            """
         )
 
         stu_sections.append(f"""
