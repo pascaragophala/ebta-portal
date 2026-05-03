@@ -412,6 +412,88 @@ def init_db():
         updated_at TEXT
     );
     """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS management_roles(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        role_name TEXT NOT NULL UNIQUE,
+        is_open INTEGER NOT NULL DEFAULT 0,
+        description TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS management_applications(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        email TEXT,
+        province TEXT,
+        city TEXT,
+
+        role_applied TEXT NOT NULL,
+
+        highest_qualification TEXT,
+        institution TEXT,
+        experience_summary TEXT,
+        motivation TEXT,
+        availability TEXT,
+
+        cv_file_path TEXT,
+        cv_file_name TEXT,
+
+        certificate_file_path TEXT,
+        certificate_file_name TEXT,
+
+        status TEXT NOT NULL DEFAULT 'NEW',
+        admin_notes TEXT,
+
+        reliable_internet INTEGER NOT NULL DEFAULT 0,
+        device_access INTEGER NOT NULL DEFAULT 0,
+        consent INTEGER NOT NULL DEFAULT 0,
+
+        ip_address TEXT,
+        user_agent TEXT,
+
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+    
+    management_roles_seed = [
+        "CEO",
+        "COO",
+        "CAO",
+        "Admin",
+        "Admission Coordinator",
+        "Admission Content Coordinator",
+        "Secretary",
+        "Treasurer",
+        "Social Media Manager",
+        "Academic Quality Manager",
+        "Tutor Manager"
+    ]
+
+    for role in management_roles_seed:
+        cur.execute("""
+            INSERT OR IGNORE INTO management_roles(
+                role_name,
+                is_open,
+                description,
+                created_at,
+                updated_at
+            )
+            VALUES(?,?,?,?,?)
+        """, (
+            role,
+            0,
+            "",
+            now_utc_iso(),
+            now_utc_iso()
+        ))
 
     
     ensure_column(conn, "students", "guardian_name", "TEXT")
@@ -987,6 +1069,30 @@ def save_application_file(file, applicant_name, label):
     file.save(file_path)
 
     return str(file_path), filename
+
+
+def save_management_application_file(file, applicant_name, role_name, label):
+    if not file or not file.filename:
+        return None, None
+
+    if not is_valid_application_file(file.filename):
+        return None, None
+
+    ext = os.path.splitext(file.filename.lower())[1]
+    safe_applicant = secure_name(applicant_name)
+    safe_role = secure_name(role_name)
+    safe_label = secure_name(label)
+
+    folder = APPLICATIONS_DIR / "management" / safe_role / safe_applicant
+    folder.mkdir(parents=True, exist_ok=True)
+
+    filename = f"{safe_applicant}_{safe_role}_{safe_label}_{int(time.time())}{ext}"
+    file_path = folder / filename
+
+    file.save(file_path)
+
+    return str(file_path), filename
+
 
 def normalize_phone(phone: str, phone_type: str = "SA", strict: bool = False) -> str:
 
@@ -8775,6 +8881,7 @@ def admin_nav():
             f"<a class='btn secondary' href='{url_for('admin_academic_quality_managers')}'>AQ_Manager</a>",
             f"<a class='btn secondary' href='{url_for('admin_applications')}'>Tutor Applications</a>",
             f"<a class='btn secondary' href='{url_for('admin_application_settings')}'>Application Settings</a>",
+            f"<a class='btn secondary' href='{url_for('admin_management_roles')}'>Management Roles</a>",
             f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
             f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
 
@@ -8824,6 +8931,7 @@ def admin_home():
     <a class="btn secondary" href="{url_for('admin_tutor_operations')}">Tutor-operations</a>
     <a class="btn secondary" href="{url_for('admin_applications')}">Tutor Applications</a>
     <a class="btn secondary" href="{url_for('admin_application_settings')}">Application Settings</a>
+    <a class="btn secondary" href="{url_for('admin_management_roles')}">Management Roles</a>
     <a class="btn secondary" href="{url_for('admin_academic_quality_managers')}">AQ_Manager</a>
     <a class='btn secondary' href='{url_for('admin_reports')}'>Student Reports</a>
 
@@ -18895,6 +19003,494 @@ def admin_application_delete(app_id):
 
     return redirect(url_for("admin_applications"))
 
+
+#Admin management site
+
+@app.get('/admin/management-roles')
+def admin_management_roles():
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can manage management application roles."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM management_roles
+        ORDER BY role_name
+    """)
+    roles = cur.fetchall()
+
+    conn.close()
+
+    rows = ""
+
+    for role in roles:
+        checked = "checked" if role["is_open"] == 1 else ""
+
+        rows += f"""
+        <tr>
+            <td>{escape(role['role_name'])}</td>
+
+            <td>
+                <span class="chip {'active' if role['is_open'] == 1 else 'lapsed'}">
+                    {'Open' if role['is_open'] == 1 else 'Closed'}
+                </span>
+            </td>
+
+            <td>
+                <form method="post"
+                      action="/admin/management-roles/{role['id']}/update"
+                      class="grid"
+                      style="gap:8px">
+
+                    <label style="display:flex;gap:10px;align-items:center">
+                        <input type="checkbox"
+                               name="is_open"
+                               value="1"
+                               {checked}
+                               style="width:20px;height:20px">
+                        <span>Role is open for applications</span>
+                    </label>
+
+                    <textarea name="description"
+                              placeholder="Optional role description or requirements">{escape(role['description'] or '')}</textarea>
+
+                    <button class="btn mini success">
+                        Save
+                    </button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Management Application Roles</h1>
+
+        <p class="muted">
+            Open or close management roles. Only open roles will appear on the public management application form.
+        </p>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Control</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Management Roles", body)
+
+
+@app.post('/admin/management-roles/<int:role_id>/update')
+def admin_management_role_update(role_id):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can manage management application roles."))
+
+    is_open = 1 if request.form.get("is_open") == "1" else 0
+    description = request.form.get("description", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE management_roles
+        SET is_open=?,
+            description=?,
+            updated_at=?
+        WHERE id=?
+    """, (
+        is_open,
+        description,
+        now_utc_iso(),
+        role_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_management_roles"))
+    
+    
+@app.get('/management-apply')
+def management_application_form():
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM management_roles
+        WHERE is_open=1
+        ORDER BY role_name
+    """)
+    open_roles = cur.fetchall()
+
+    conn.close()
+
+    if not open_roles:
+        body = """
+        <section class="wrap">
+            <div class="card soft" style="
+                max-width:900px;
+                margin:30px auto;
+                border-left:5px solid #ef4444;
+                text-align:center;
+                padding:48px 32px;
+            ">
+                <h1 style="font-size:26px;text-align:center;margin-bottom:18px">
+                    Management Applications Closed
+                </h1>
+
+                <p class="muted" style="
+                    max-width:760px;
+                    margin:0 auto 28px auto;
+                    font-size:17px;
+                    line-height:1.8;
+                    text-align:center;
+                ">
+                    Management applications are currently closed. Please check again later for available EBTA management opportunities.
+                </p>
+
+                <div style="display:flex;justify-content:center">
+                    <a class="btn secondary" href="/" style="min-width:180px;justify-content:center">
+                        Back to Home
+                    </a>
+                </div>
+            </div>
+        </section>
+        """
+        return page("Management Applications Closed", body)
+
+    role_options = ""
+
+    for role in open_roles:
+        desc = role["description"] or ""
+
+        role_options += f"""
+        <label class="subject-item">
+            <input type="radio"
+                   name="role_applied"
+                   value="{escape(role['role_name'])}"
+                   required>
+            <span>
+                <b>{escape(role['role_name'])}</b>
+                {f'<br><small class="muted">{escape(desc)}</small>' if desc else ''}
+            </span>
+        </label>
+        """
+
+    body = f"""
+    <section class="wrap small">
+
+        <div class="card soft" style="border-left:5px solid #1b5e20">
+            <h1>EBTA Management Application</h1>
+
+            <p class="muted">
+                Complete the form below to apply for an available EBTA management role.
+            </p>
+
+            <form method="post"
+                  action="/management-apply"
+                  enctype="multipart/form-data"
+                  class="grid"
+                  style="gap:14px">
+
+                <input type="text"
+                       name="website"
+                       autocomplete="off"
+                       style="display:none">
+
+                <div class="card soft">
+                    <h2>Role Applying For</h2>
+                    <div class="subject-grid">
+                        {role_options}
+                    </div>
+                </div>
+
+                <div class="card soft">
+                    <h2>Personal Details</h2>
+
+                    <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px">
+                        <div>
+                            <label>Full Name</label>
+                            <input name="full_name" required maxlength="120">
+                        </div>
+
+                        <div>
+                            <label>Phone Number</label>
+                            <input name="phone" required maxlength="30">
+                        </div>
+
+                        <div>
+                            <label>Email Address</label>
+                            <input name="email" type="email" maxlength="120">
+                        </div>
+
+                        <div>
+                            <label>Province</label>
+                            <input name="province" maxlength="80">
+                        </div>
+
+                        <div>
+                            <label>City / Area</label>
+                            <input name="city" maxlength="80">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card soft">
+                    <h2>Academic & Work Background</h2>
+
+                    <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px">
+                        <div>
+                            <label>Highest Qualification</label>
+                            <input name="highest_qualification" maxlength="150">
+                        </div>
+
+                        <div>
+                            <label>Institution</label>
+                            <input name="institution" maxlength="150">
+                        </div>
+                    </div>
+
+                    <div style="margin-top:12px">
+                        <label>Experience Summary</label>
+                        <textarea name="experience_summary"
+                                  maxlength="1500"
+                                  placeholder="Briefly describe your leadership, administration, coordination, academic, or operational experience."></textarea>
+                    </div>
+
+                    <div style="margin-top:12px">
+                        <label>Motivation</label>
+                        <textarea name="motivation"
+                                  maxlength="1500"
+                                  placeholder="Why are you suitable for this role?"></textarea>
+                    </div>
+
+                    <div style="margin-top:12px">
+                        <label>Availability</label>
+                        <textarea name="availability"
+                                  maxlength="1000"
+                                  placeholder="Example: Weekdays after 17:00, Saturdays, remote work, etc."></textarea>
+                    </div>
+                </div>
+
+                <div class="card soft">
+                    <h2>Documents</h2>
+
+                    <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px">
+                        <div>
+                            <label>Upload CV</label>
+                            <input type="file"
+                                   name="cv"
+                                   accept=".pdf,.doc,.docx"
+                                   required>
+                            <div class="mini muted">Accepted: PDF, DOC, DOCX</div>
+                        </div>
+
+                        <div>
+                            <label>Upload Certificate / Transcript</label>
+                            <input type="file"
+                                   name="certificate"
+                                   accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
+                            <div class="mini muted">Optional supporting document.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card soft">
+                    <h2>Required Resources</h2>
+
+                    <label style="display:flex;gap:10px;align-items:flex-start;margin-bottom:10px">
+                        <input type="checkbox" name="reliable_internet" value="1" required style="width:20px;height:20px;margin-top:2px">
+                        <span>I confirm that I have access to a reliable internet connection.</span>
+                    </label>
+
+                    <label style="display:flex;gap:10px;align-items:flex-start;margin-bottom:10px">
+                        <input type="checkbox" name="device_access" value="1" required style="width:20px;height:20px;margin-top:2px">
+                        <span>I confirm that I have access to a laptop, desktop, or tablet.</span>
+                    </label>
+
+                    <label style="display:flex;gap:10px;align-items:flex-start">
+                        <input type="checkbox" name="consent" value="1" required style="width:20px;height:20px;margin-top:2px">
+                        <span>I confirm that the information provided is accurate and I consent to EBTA using my details for recruitment purposes.</span>
+                    </label>
+                </div>
+
+                <button class="btn success" style="width:100%;justify-content:center">
+                    Submit Management Application
+                </button>
+            </form>
+        </div>
+    </section>
+    """
+
+    return page("Management Application", body)
+    
+    
+@app.post('/management-apply')
+def management_application_submit():
+
+    if request.form.get("website", "").strip():
+        return redirect(url_for("home"))
+
+    role_applied = request.form.get("role_applied", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM management_roles
+        WHERE role_name=? AND is_open=1
+        LIMIT 1
+    """, (role_applied,))
+
+    role = cur.fetchone()
+
+    if not role:
+        conn.close()
+        return page("Role Closed", card_msg("The selected role is no longer open for applications."))
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    email = request.form.get("email", "").strip()
+    province = request.form.get("province", "").strip()
+    city = request.form.get("city", "").strip()
+
+    highest_qualification = request.form.get("highest_qualification", "").strip()
+    institution = request.form.get("institution", "").strip()
+    experience_summary = request.form.get("experience_summary", "").strip()
+    motivation = request.form.get("motivation", "").strip()
+    availability = request.form.get("availability", "").strip()
+
+    reliable_internet = 1 if request.form.get("reliable_internet") == "1" else 0
+    device_access = 1 if request.form.get("device_access") == "1" else 0
+    consent = 1 if request.form.get("consent") == "1" else 0
+
+    if not full_name or not phone or not role_applied or reliable_internet != 1 or device_access != 1 or consent != 1:
+        conn.close()
+        return page(
+            "Application incomplete",
+            card_msg("Please complete your name, phone number, role, required confirmations, and consent checkbox.")
+        )
+
+    cv = request.files.get("cv")
+    certificate = request.files.get("certificate")
+
+    if not cv or not cv.filename:
+        conn.close()
+        return page("CV required", card_msg("Please upload your CV before submitting."))
+
+    if not is_valid_application_file(cv.filename):
+        conn.close()
+        return page("Invalid CV", card_msg("Please upload your CV as PDF, DOC, or DOCX."))
+
+    cv_path, cv_name = save_management_application_file(cv, full_name, role_applied, "CV")
+
+    if not cv_path:
+        conn.close()
+        return page("Upload failed", card_msg("Your CV could not be uploaded. Please try again."))
+
+    cert_path, cert_name = None, None
+
+    if certificate and certificate.filename:
+        if not is_valid_application_file(certificate.filename):
+            conn.close()
+            return page("Invalid document", card_msg("Certificate must be PDF, DOC, DOCX, PNG, JPG, or JPEG."))
+
+        cert_path, cert_name = save_management_application_file(certificate, full_name, role_applied, "Certificate")
+
+    cur.execute("""
+        INSERT INTO management_applications(
+            full_name,
+            phone,
+            email,
+            province,
+            city,
+            role_applied,
+            highest_qualification,
+            institution,
+            experience_summary,
+            motivation,
+            availability,
+            cv_file_path,
+            cv_file_name,
+            certificate_file_path,
+            certificate_file_name,
+            status,
+            reliable_internet,
+            device_access,
+            consent,
+            ip_address,
+            user_agent,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        full_name,
+        phone,
+        email,
+        province,
+        city,
+        role_applied,
+        highest_qualification,
+        institution,
+        experience_summary,
+        motivation,
+        availability,
+        cv_path,
+        cv_name,
+        cert_path,
+        cert_name,
+        "NEW",
+        reliable_internet,
+        device_access,
+        consent,
+        request.remote_addr,
+        request.headers.get("User-Agent", "")[:300],
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    body = """
+    <section class="wrap small">
+        <div class="card soft" style="border-left:5px solid #1b5e20">
+            <h1>Application Submitted</h1>
+            <p class="muted">
+                Thank you for applying to EBTA. Your management application has been received successfully.
+            </p>
+            <a class="btn success" href="/">Back to Home</a>
+        </div>
+    </section>
+    """
+
+    return page("Management Application Submitted", body)
 
 # --- Admin: Analytics dashboard ---
 
