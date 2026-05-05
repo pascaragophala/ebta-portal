@@ -6619,15 +6619,27 @@ def student_upload_report():
         file_upload = request.files.get("report_file_upload")
         file_camera = request.files.get("report_file_camera")
 
+        has_upload = file_upload and file_upload.filename != ""
+        has_camera = file_camera and file_camera.filename != ""
+
+        if has_upload and has_camera:
+            return page(
+                "Error",
+                "<div class='card'>Please choose only one option: upload a report file OR take a photo, not both.</div>"
+            )
+
         file = None
 
-        if file_upload and file_upload.filename != "":
+        if has_upload:
             file = file_upload
-        elif file_camera and file_camera.filename != "":
+        elif has_camera:
             file = file_camera
 
         if not file or file.filename == "":
-            return page("Error", "<div class='card'>No file selected. Please upload a report or take a photo.</div>")
+            return page(
+                "Error",
+                "<div class='card'>No file selected. Please upload a report file OR take a photo.</div>"
+            )
 
         if not is_valid_report(file.filename):
             return page("Error", "<div class='card'>Invalid file type.</div>")
@@ -6704,23 +6716,44 @@ def student_upload_report():
 
             <br>
 
+            <div class="card soft" style="
+                border-left:5px solid #2563eb;
+                margin-bottom:12px;
+                text-align:center;
+            ">
+                <h3 style="margin-bottom:6px">Choose ONE upload option</h3>
+
+                <p class="mini muted" style="margin:0">
+                    Please upload your report using only one method:
+                    <b>upload a file</b> OR <b>take a photo</b>.
+                    You do not need to do both.
+                </p>
+            </div>
+
             <div class="grid two-col" style="gap:12px;">
 
                 <div class="card soft" style="border-left:5px solid #25D366;">
-                    <h3>Upload Report File</h3>
+                    <h3>Option 1: Upload Report File</h3>
+
                     <p class="mini muted">
-                        Upload a PDF, Word document, or image report from your device.
+                        Choose this if your report is already saved on your device as a PDF, Word document, or image.
                     </p>
 
                     <input type="file"
+                           id="report_file_upload"
                            name="report_file_upload"
                            accept=".pdf,.png,.jpg,.jpeg,.doc,.docx">
+
+                    <div id="upload_file_name" class="mini muted" style="margin-top:6px;">
+                        No file selected yet
+                    </div>
                 </div>
 
                 <div class="card soft" style="border-left:5px solid #f59e0b;">
-                    <h3>Take Photo</h3>
+                    <h3>Option 2: Take Photo</h3>
+
                     <p class="mini muted">
-                        Use your phone camera to take a clear photo of the report.
+                        Choose this if you want to use your phone camera to take a clear photo of the report.
                     </p>
 
                     <input type="file"
@@ -6757,18 +6790,50 @@ def student_upload_report():
     document.addEventListener("DOMContentLoaded", function(){
 
         const cam = document.getElementById("report_camera_input");
-        const label = document.getElementById("report_camera_name");
-        const upload = document.querySelector('[name="report_file_upload"]');
+        const camLabel = document.getElementById("report_camera_name");
 
-        if(cam && label){
+        const upload = document.getElementById("report_file_upload");
+        const uploadLabel = document.getElementById("upload_file_name");
+
+        if(upload){
+            upload.addEventListener("change", function(){
+
+                if(this.files.length > 0){
+                    uploadLabel.innerText = this.files[0].name;
+
+                    // Clear camera photo if normal upload is selected
+                    if(cam){
+                        cam.value = "";
+                    }
+
+                    if(camLabel){
+                        camLabel.innerText = "No photo taken yet";
+                    }
+                } else {
+                    uploadLabel.innerText = "No file selected yet";
+                }
+
+            });
+        }
+
+        if(cam){
             cam.addEventListener("change", function(){
 
-                label.innerText = this.files.length > 0
-                    ? this.files[0].name
-                    : "No photo taken yet";
+                if(this.files.length > 0){
+                    camLabel.innerText = this.files[0].name;
 
-                // Clear upload file if camera is used
-                if(upload) upload.value = "";
+                    // Clear normal upload if camera photo is selected
+                    if(upload){
+                        upload.value = "";
+                    }
+
+                    if(uploadLabel){
+                        uploadLabel.innerText = "No file selected yet";
+                    }
+                } else {
+                    camLabel.innerText = "No photo taken yet";
+                }
+
             });
         }
 
