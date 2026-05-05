@@ -21129,9 +21129,29 @@ def admin_treasurers():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT *
-        FROM treasurers
-        ORDER BY created_at DESC
+        SELECT 
+            t.*,
+
+            (
+                SELECT COUNT(*)
+                FROM finance_records fr
+                WHERE fr.captured_by = t.id
+            ) AS finance_records_count,
+
+            (
+                SELECT COUNT(*)
+                FROM finance_payment_schedule fps
+                WHERE fps.created_by = t.id
+            ) AS payment_schedule_count,
+
+            (
+                SELECT COUNT(*)
+                FROM finance_monthly_reports fmr
+                WHERE fmr.prepared_by = t.id
+            ) AS monthly_reports_count
+
+        FROM treasurers t
+        ORDER BY t.created_at DESC
     """)
     rows = cur.fetchall()
 
@@ -21140,31 +21160,91 @@ def admin_treasurers():
     trs = ""
 
     for t in rows:
-        status = "<span class='chip active'>Active</span>" if t["is_active"] == 1 else "<span class='chip lapsed'>Inactive</span>"
+        status = (
+            "<span class='chip active'>Active</span>"
+            if t["is_active"] == 1
+            else "<span class='chip lapsed'>Inactive</span>"
+        )
+
+        linked_records = (
+            (t["finance_records_count"] or 0)
+            + (t["payment_schedule_count"] or 0)
+            + (t["monthly_reports_count"] or 0)
+        )
+
+        delete_btn = ""
+
+        if linked_records == 0:
+            delete_btn = f"""
+            <form method="post"
+                  action="/admin/treasurer/{t['id']}/delete"
+                  style="display:inline"
+                  onsubmit="return confirm('Delete this treasurer permanently?');">
+                <button class="btn mini danger">
+                    Delete
+                </button>
+            </form>
+            """
+        else:
+            delete_btn = """
+            <span class="mini muted">
+                Delete locked: finance history exists
+            </span>
+            """
 
         trs += f"""
         <tr>
             <td>
                 {escape(t['full_name'])}
-                <div class="mini muted">{escape(t['phone'])}</div>
+                <div class="mini muted">Phone: {escape(t['phone'])}</div>
             </td>
-            <td>{escape(t['email'] or '—')}</td>
-            <td>{status}</td>
-            <td>
-                <form method="post"
-                      action="/admin/treasurer/{t['id']}/reset-pin"
-                      style="display:inline"
-                      onsubmit="return confirm('Reset this treasurer PIN?')">
-                    <button class="btn mini warn">Reset PIN</button>
-                </form>
 
-                <form method="post"
-                      action="/admin/treasurer/{t['id']}/toggle"
-                      style="display:inline">
-                    <button class="btn mini secondary">
-                        {'Deactivate' if t['is_active'] == 1 else 'Activate'}
-                    </button>
-                </form>
+            <td>{escape(t['email'] or '—')}</td>
+
+            <td>
+                <span class="chip" style="font-size:14px;padding:8px 12px">
+                    {escape(t['pin'])}
+                </span>
+            </td>
+
+            <td>{status}</td>
+
+            <td>
+                <div class="mini muted">
+                    Finance records: {t['finance_records_count'] or 0}<br>
+                    Payment items: {t['payment_schedule_count'] or 0}<br>
+                    Monthly reports: {t['monthly_reports_count'] or 0}
+                </div>
+            </td>
+
+            <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+
+                    <a class="btn mini"
+                       href="/admin/treasurer/{t['id']}">
+                        View
+                    </a>
+
+                    <form method="post"
+                          action="/admin/treasurer/{t['id']}/reset-pin"
+                          style="display:inline"
+                          onsubmit="return confirm('Reset this treasurer PIN?')">
+                        <button class="btn mini warn">
+                            Reset PIN
+                        </button>
+                    </form>
+
+                    <form method="post"
+                          action="/admin/treasurer/{t['id']}/toggle"
+                          style="display:inline">
+                        <button class="btn mini secondary">
+                            {'Deactivate' if t['is_active'] == 1 else 'Activate'}
+                        </button>
+                    </form>
+
+                    {delete_btn}
+
+                </div>
             </td>
         </tr>
         """
@@ -21174,6 +21254,10 @@ def admin_treasurers():
 
     <section class="card">
         <h1>Treasurers</h1>
+
+        <p class="muted">
+            Add, view, reset PINs, activate/deactivate, and manage treasurer access.
+        </p>
 
         <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
             <h2>Add Treasurer</h2>
@@ -21214,12 +21298,14 @@ def admin_treasurers():
                     <tr>
                         <th>Treasurer</th>
                         <th>Email</th>
+                        <th>PIN</th>
                         <th>Status</th>
+                        <th>Finance Activity</th>
                         <th>Action</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {trs or "<tr><td colspan='4'>No treasurers added yet.</td></tr>"}
+                    {trs or "<tr><td colspan='6'>No treasurers added yet.</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -21227,6 +21313,311 @@ def admin_treasurers():
     """
 
     return page("Treasurers", body)
+    
+    
+@app.get('/admin/treasurer/<int:tid>')
+def admin_treasurer_detail(tid):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can view treasurer details."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM treasurers
+        WHERE id=?
+    """, (tid,))
+    t = cur.fetchone()
+
+    if not t:
+        conn.close()
+        return page("Not Found", card_msg("Treasurer not found."))
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM finance_records
+        WHERE captured_by=?
+    """, (tid,))
+    finance_records_count = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM finance_payment_schedule
+        WHERE created_by=?
+    """, (tid,))
+    payment_schedule_count = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM finance_monthly_reports
+        WHERE prepared_by=?
+    """, (tid,))
+    monthly_reports_count = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT *
+        FROM finance_records
+        WHERE captured_by=?
+        ORDER BY captured_at DESC
+        LIMIT 10
+    """, (tid,))
+    recent_records = cur.fetchall()
+
+    cur.execute("""
+        SELECT *
+        FROM finance_payment_schedule
+        WHERE created_by=?
+        ORDER BY created_at DESC
+        LIMIT 10
+    """, (tid,))
+    recent_payments = cur.fetchall()
+
+    conn.close()
+
+    status = (
+        "<span class='chip active'>Active</span>"
+        if t["is_active"] == 1
+        else "<span class='chip lapsed'>Inactive</span>"
+    )
+
+    records_rows = ""
+
+    for rec in recent_records:
+        records_rows += f"""
+        <tr>
+            <td>{escape(rec['month'])}</td>
+            <td>{escape(rec['record_type'])}</td>
+            <td>{escape(rec['category'])}</td>
+            <td>R{float(rec['amount'] or 0):,.2f}</td>
+            <td>{escape(rec['captured_at'][:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    payments_rows = ""
+
+    for p in recent_payments:
+        payments_rows += f"""
+        <tr>
+            <td>{escape(p['month'])}</td>
+            <td>{escape(p['payee_name'])}</td>
+            <td>{escape(p['category'])}</td>
+            <td>R{float(p['amount'] or 0):,.2f}</td>
+            <td>{escape(p['status'])}</td>
+        </tr>
+        """
+
+    linked_records = finance_records_count + payment_schedule_count + monthly_reports_count
+
+    delete_section = ""
+
+    if linked_records == 0:
+        delete_section = f"""
+        <form method="post"
+              action="/admin/treasurer/{t['id']}/delete"
+              onsubmit="return confirm('Delete this treasurer permanently?');">
+            <button class="btn danger">
+                Delete Treasurer
+            </button>
+        </form>
+        """
+    else:
+        delete_section = """
+        <div class="card soft" style="border-left:5px solid #ef4444;margin-top:12px">
+            <h3>Delete Locked</h3>
+            <p class="muted">
+                This treasurer cannot be deleted because they already have finance activity linked to their account.
+                You can deactivate the account instead to preserve finance history.
+            </p>
+        </div>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+
+        <a class="btn mini secondary" href="/admin/treasurers">
+            ← Back to Treasurers
+        </a>
+
+        <h1 style="margin-top:12px">
+            Treasurer Details
+        </h1>
+
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+
+            <div class="card soft">
+                <h2>Profile</h2>
+                <p><b>Name:</b> {escape(t['full_name'])}</p>
+                <p><b>Phone:</b> {escape(t['phone'])}</p>
+                <p><b>Email:</b> {escape(t['email'] or '—')}</p>
+                <p><b>Status:</b> {status}</p>
+                <p><b>Created:</b> {escape(t['created_at'] or '—')}</p>
+                <p><b>Updated:</b> {escape(t['updated_at'] or '—')}</p>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #f59e0b">
+                <h2>Login Details</h2>
+
+                <p class="muted">
+                    Share these details privately with the treasurer.
+                </p>
+
+                <p><b>Phone:</b> {escape(t['phone'])}</p>
+
+                <p>
+                    <b>PIN:</b>
+                    <span class="chip" style="font-size:18px;padding:10px 16px">
+                        {escape(t['pin'])}
+                    </span>
+                </p>
+
+                <form method="post"
+                      action="/admin/treasurer/{t['id']}/reset-pin"
+                      onsubmit="return confirm('Reset this treasurer PIN?')">
+                    <button class="btn warn">
+                        Reset PIN
+                    </button>
+                </form>
+            </div>
+
+        </div>
+
+        <div class="stats" style="margin-top:14px">
+            {stat("Finance Records", str(finance_records_count))}
+            {stat("Payment Items", str(payment_schedule_count))}
+            {stat("Monthly Reports", str(monthly_reports_count))}
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Recent Finance Records</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Month</th>
+                            <th>Type</th>
+                            <th>Category</th>
+                            <th>Amount</th>
+                            <th>Captured</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {records_rows or "<tr><td colspan='5'>No finance records captured yet.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Recent Payment Schedule Items</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Month</th>
+                            <th>Payee</th>
+                            <th>Category</th>
+                            <th>Amount</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {payments_rows or "<tr><td colspan='5'>No payment schedule items yet.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="toolbar" style="margin-top:14px">
+
+            <form method="post"
+                  action="/admin/treasurer/{t['id']}/toggle">
+                <button class="btn secondary">
+                    {'Deactivate Account' if t['is_active'] == 1 else 'Activate Account'}
+                </button>
+            </form>
+
+            {delete_section}
+
+        </div>
+
+    </section>
+    """
+
+    return page("Treasurer Details", body)    
+    
+@app.post('/admin/treasurer/<int:tid>/delete')
+def admin_treasurer_delete(tid):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can delete treasurers."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM finance_records
+        WHERE captured_by=?
+    """, (tid,))
+    finance_records_count = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM finance_payment_schedule
+        WHERE created_by=?
+    """, (tid,))
+    payment_schedule_count = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM finance_monthly_reports
+        WHERE prepared_by=?
+    """, (tid,))
+    monthly_reports_count = cur.fetchone()["c"] or 0
+
+    linked_records = finance_records_count + payment_schedule_count + monthly_reports_count
+
+    if linked_records > 0:
+        conn.close()
+        return page(
+            "Delete Blocked",
+            f"""
+            {admin_nav()}
+            <div class="card">
+                <h1>Delete Blocked</h1>
+                <p>
+                    This treasurer cannot be deleted because they already have finance activity linked to their account.
+                </p>
+                <p class="muted">
+                    Finance records: {finance_records_count}<br>
+                    Payment items: {payment_schedule_count}<br>
+                    Monthly reports: {monthly_reports_count}
+                </p>
+                <p>
+                    Please deactivate the treasurer instead to preserve finance history.
+                </p>
+                <a class="btn" href="/admin/treasurers">Back to Treasurers</a>
+            </div>
+            """
+        )
+
+    cur.execute("DELETE FROM treasurers WHERE id=?", (tid,))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_treasurers"))    
     
 
 @app.post('/admin/treasurers/add')
@@ -21272,6 +21663,7 @@ def admin_add_treasurer():
         ))
 
         conn.commit()
+        new_treasurer_id = cur.lastrowid
 
     except sqlite3.IntegrityError:
         conn.close()
@@ -21279,22 +21671,66 @@ def admin_add_treasurer():
 
     conn.close()
 
+    created_at_display = now_utc_iso()[:16].replace("T", " ")
+
     return page(
         "Treasurer Created",
         f"""
         {admin_nav()}
-        <div class="card">
-            <h1>Treasurer Created</h1>
-            <p><b>Name:</b> {escape(full_name)}</p>
-            <p><b>Phone:</b> {escape(phone)}</p>
-            <p><b>PIN:</b> <span class="chip">{pin}</span></p>
+
+        <section class="card">
+            <h1>Treasurer Created Successfully</h1>
 
             <p class="muted">
-                Share this PIN with the treasurer privately. They will use it to log in.
+                The treasurer account has been created successfully. Share the login details privately with the treasurer.
             </p>
 
-            <a class="btn" href="/admin/treasurers">Back to Treasurers</a>
-        </div>
+            <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">
+
+                <div class="card soft">
+                    <h2>Treasurer Information</h2>
+
+                    <p><b>Name:</b> {escape(full_name)}</p>
+                    <p><b>Phone:</b> {escape(phone)}</p>
+                    <p><b>Email:</b> {escape(email or '—')}</p>
+                    <p><b>Status:</b> <span class="chip active">Active</span></p>
+                    <p><b>Created:</b> {created_at_display}</p>
+                </div>
+
+                <div class="card soft" style="border-left:5px solid #f59e0b">
+                    <h2>Login Details</h2>
+
+                    <p><b>Login Phone:</b> {escape(phone)}</p>
+
+                    <p>
+                        <b>PIN:</b>
+                        <span class="chip" style="
+                            font-size:24px;
+                            padding:14px 20px;
+                            letter-spacing:2px;
+                            font-weight:800;
+                        ">
+                            {pin}
+                        </span>
+                    </p>
+
+                    <p class="mini muted">
+                        The treasurer will use this phone number and PIN to log in.
+                    </p>
+                </div>
+
+            </div>
+
+            <div class="toolbar" style="margin-top:14px">
+                <a class="btn secondary" href="/admin/treasurer/{new_treasurer_id}">
+                    View Full Profile
+                </a>
+
+                <a class="btn" href="/admin/treasurers">
+                    Back to Treasurers
+                </a>
+            </div>
+        </section>
         """
     )
 
