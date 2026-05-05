@@ -36,6 +36,9 @@ UPLOADS_DIR = Path(BASE_DATA_DIR) / "uploads"
 REPORTS_DIR = UPLOADS_DIR / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
+FINANCE_DIR = UPLOADS_DIR / "finance"
+FINANCE_DIR.mkdir(parents=True, exist_ok=True)
+
 PROFILE_PICS_DIR = UPLOADS_DIR / "profile_pictures"
 PROFILE_PICS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -510,6 +513,103 @@ def init_db():
         FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
     );
     """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS treasurers(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL UNIQUE,
+        email TEXT,
+        pin TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS finance_records(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        month TEXT NOT NULL,
+        record_type TEXT NOT NULL, -- INCOME | EXPENSE
+
+        category TEXT NOT NULL,
+        description TEXT,
+        amount REAL NOT NULL DEFAULT 0,
+
+        payment_date TEXT,
+        payment_method TEXT,
+        reference TEXT,
+
+        status TEXT NOT NULL DEFAULT 'RECORDED', 
+        -- RECORDED | PENDING | APPROVED | PAID | CANCELLED
+
+        proof_file_path TEXT,
+        proof_file_name TEXT,
+
+        captured_by INTEGER,
+        captured_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        FOREIGN KEY(captured_by) REFERENCES treasurers(id)
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS finance_payment_schedule(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        month TEXT NOT NULL,
+
+        payee_name TEXT NOT NULL,
+        payee_role TEXT,
+        category TEXT NOT NULL, -- Tutor Stipend | Management Salary | Supplier | Software | Other
+
+        amount REAL NOT NULL DEFAULT 0,
+        due_date TEXT,
+        paid_date TEXT,
+
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        -- PENDING | APPROVED | PAID | CANCELLED
+
+        approval_note TEXT,
+        payment_reference TEXT,
+
+        proof_file_path TEXT,
+        proof_file_name TEXT,
+
+        created_by INTEGER,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        FOREIGN KEY(created_by) REFERENCES treasurers(id)
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS finance_monthly_reports(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        month TEXT NOT NULL UNIQUE,
+
+        total_income REAL NOT NULL DEFAULT 0,
+        total_expenses REAL NOT NULL DEFAULT 0,
+        net_profit_loss REAL NOT NULL DEFAULT 0,
+        bank_balance REAL NOT NULL DEFAULT 0,
+
+        owed_to_ebta REAL NOT NULL DEFAULT 0,
+        owed_by_ebta REAL NOT NULL DEFAULT 0,
+
+        notes TEXT,
+        prepared_by INTEGER,
+        submitted_at TEXT,
+        status TEXT NOT NULL DEFAULT 'DRAFT',
+        -- DRAFT | SUBMITTED | REVIEWED
+
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        FOREIGN KEY(prepared_by) REFERENCES treasurers(id)
+    );
+    """)
 
     
     ensure_column(conn, "students", "guardian_name", "TEXT")
@@ -564,6 +664,11 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_followups_status ON followups(followup_status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_material_views_material ON material_views(material_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_material_views_student ON material_views(student_id)")
+    
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_finance_records_month ON finance_records(month)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_finance_records_type ON finance_records(record_type)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_finance_schedule_month ON finance_payment_schedule(month)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_finance_schedule_status ON finance_payment_schedule(status)")
 
     
 
@@ -974,6 +1079,13 @@ def is_high_admin():
 
 def is_lower_admin():
     return session.get("admin_role") == "LOWER"
+    
+def is_treasurer():
+    return session.get("treasurer_id")
+
+def require_treasurer():
+    if not is_treasurer():
+        return redirect(url_for("treasurer_login"))
 
 def is_student(): return session.get("student_id")
 def is_tutor(): return session.get("tutor_id")
@@ -9578,6 +9690,8 @@ def admin_nav():
             f"<a class='btn secondary' href='{url_for('admin_application_settings')}'>Application Settings</a>",
             f"<a class='btn secondary' href='{url_for('admin_management_roles')}'>Management Roles</a>",
             f"<a class='btn secondary' href='{url_for('admin_management_applications')}'>Management Applications</a>",
+            f"<a class='btn secondary' href='{url_for('admin_treasurers')}'>Treasurers</a>",
+            f"<a class='btn secondary' href='{url_for('admin_finance_overview')}'>Finance Overview</a>",
             f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
             f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
 
@@ -9641,6 +9755,8 @@ def admin_home():
     <a class="btn secondary" href="{url_for('admin_application_settings')}">Application Settings</a>
     <a class="btn secondary" href="{url_for('admin_management_roles')}">Management Roles</a>
     <a class="btn secondary" href="{url_for('admin_management_applications')}">Management Applications</a>
+    <a class="btn secondary" href="{url_for('admin_treasurers')}">Treasurers</a>
+    <a class="btn secondary" href="{url_for('admin_finance_overview')}">Finance Overview</a>
     <a class="btn secondary" href="{url_for('admin_academic_quality_managers')}">AQ_Manager</a>
     <a class='btn secondary' href='{url_for('admin_reports')}'>Student Reports</a>
 
@@ -20999,7 +21115,1263 @@ def admin_management_application_delete(app_id):
 
     return redirect(url_for("admin_management_applications"))
     
+
+@app.get('/admin/treasurers')
+def admin_treasurers():
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can manage treasurers."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM treasurers
+        ORDER BY created_at DESC
+    """)
+    rows = cur.fetchall()
+
+    conn.close()
+
+    trs = ""
+
+    for t in rows:
+        status = "<span class='chip active'>Active</span>" if t["is_active"] == 1 else "<span class='chip lapsed'>Inactive</span>"
+
+        trs += f"""
+        <tr>
+            <td>
+                {escape(t['full_name'])}
+                <div class="mini muted">{escape(t['phone'])}</div>
+            </td>
+            <td>{escape(t['email'] or '—')}</td>
+            <td>{status}</td>
+            <td>
+                <form method="post"
+                      action="/admin/treasurer/{t['id']}/reset-pin"
+                      style="display:inline"
+                      onsubmit="return confirm('Reset this treasurer PIN?')">
+                    <button class="btn mini warn">Reset PIN</button>
+                </form>
+
+                <form method="post"
+                      action="/admin/treasurer/{t['id']}/toggle"
+                      style="display:inline">
+                    <button class="btn mini secondary">
+                        {'Deactivate' if t['is_active'] == 1 else 'Activate'}
+                    </button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Treasurers</h1>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>Add Treasurer</h2>
+
+            <form method="post"
+                  action="/admin/treasurers/add"
+                  class="grid"
+                  style="grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end">
+
+                <div>
+                    <label>Full Name</label>
+                    <input name="full_name" required>
+                </div>
+
+                <div>
+                    <label>Phone</label>
+                    <input name="phone" required>
+                </div>
+
+                <div>
+                    <label>Email</label>
+                    <input name="email" type="email">
+                </div>
+
+                <button class="btn success">
+                    Add Treasurer
+                </button>
+            </form>
+
+            <p class="mini muted">
+                The system will generate a 5-digit PIN for the treasurer.
+            </p>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Treasurer</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {trs or "<tr><td colspan='4'>No treasurers added yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Treasurers", body)
     
+
+@app.post('/admin/treasurers/add')
+def admin_add_treasurer():
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can add treasurers."))
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    email = request.form.get("email", "").strip()
+
+    if not full_name or not phone:
+        return page("Error", card_msg("Full name and phone are required."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    pin = f"{random.randint(0, 99999):05d}"
+
+    try:
+        cur.execute("""
+            INSERT INTO treasurers(
+                full_name,
+                phone,
+                email,
+                pin,
+                is_active,
+                created_at,
+                updated_at
+            )
+            VALUES(?,?,?,?,1,?,?)
+        """, (
+            full_name,
+            phone,
+            email,
+            pin,
+            now_utc_iso(),
+            now_utc_iso()
+        ))
+
+        conn.commit()
+
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Error", card_msg("A treasurer with this phone number already exists."))
+
+    conn.close()
+
+    return page(
+        "Treasurer Created",
+        f"""
+        {admin_nav()}
+        <div class="card">
+            <h1>Treasurer Created</h1>
+            <p><b>Name:</b> {escape(full_name)}</p>
+            <p><b>Phone:</b> {escape(phone)}</p>
+            <p><b>PIN:</b> <span class="chip">{pin}</span></p>
+
+            <p class="muted">
+                Share this PIN with the treasurer privately. They will use it to log in.
+            </p>
+
+            <a class="btn" href="/admin/treasurers">Back to Treasurers</a>
+        </div>
+        """
+    )
+
+
+@app.post('/admin/treasurer/<int:tid>/reset-pin')
+def admin_treasurer_reset_pin(tid):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can reset treasurer PINs."))
+
+    new_pin = f"{random.randint(0, 99999):05d}"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE treasurers
+        SET pin=?,
+            updated_at=?
+        WHERE id=?
+    """, (new_pin, now_utc_iso(), tid))
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "PIN Reset",
+        f"""
+        {admin_nav()}
+        <div class="card">
+            <h1>Treasurer PIN Reset</h1>
+            <p>New PIN: <span class="chip">{new_pin}</span></p>
+            <a class="btn" href="/admin/treasurers">Back to Treasurers</a>
+        </div>
+        """
+    )
+
+
+@app.post('/admin/treasurer/<int:tid>/toggle')
+def admin_treasurer_toggle(tid):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can update treasurers."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT is_active FROM treasurers WHERE id=?", (tid,))
+    row = cur.fetchone()
+
+    if row:
+        new_status = 0 if row["is_active"] == 1 else 1
+
+        cur.execute("""
+            UPDATE treasurers
+            SET is_active=?,
+                updated_at=?
+            WHERE id=?
+        """, (new_status, now_utc_iso(), tid))
+
+        conn.commit()
+
+    conn.close()
+
+    return redirect(url_for("admin_treasurers"))
+    
+    
+@app.get('/treasurer/login')
+def treasurer_login():
+
+    body = """
+    <div class="card auth-card">
+        <h1>Treasurer Login</h1>
+
+        <form method="post" action="/treasurer/login" class="grid">
+            <div>
+                <label>Phone Number</label>
+                <input name="phone" required>
+            </div>
+
+            <div>
+                <label>PIN</label>
+                <input name="pin" type="password" maxlength="5" required>
+            </div>
+
+            <button class="btn success">Login</button>
+        </form>
+    </div>
+    """
+
+    return page("Treasurer Login", body)
+
+
+@app.post('/treasurer/login')
+def treasurer_login_post():
+
+    phone = request.form.get("phone", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    variants = phone_variants(phone)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    qmarks = ",".join("?" * len(variants)) if variants else "?"
+    params = variants if variants else [phone]
+
+    cur.execute(f"""
+        SELECT *
+        FROM treasurers
+        WHERE phone IN ({qmarks})
+          AND pin=?
+          AND is_active=1
+        LIMIT 1
+    """, params + [pin])
+
+    treasurer = cur.fetchone()
+    conn.close()
+
+    if not treasurer:
+        return page("Login Failed", card_msg("Invalid treasurer login details or account is inactive."))
+
+    session.clear()
+    session["treasurer_id"] = treasurer["id"]
+    session["treasurer_name"] = treasurer["full_name"]
+
+    return redirect(url_for("treasurer_dashboard"))
+
+
+@app.get('/treasurer/logout')
+def treasurer_logout():
+    session.clear()
+    return redirect(url_for("treasurer_login"))
+    
+    
+def treasurer_nav():
+    return """
+    <nav class="admin-nav">
+        <a class="btn secondary" href="/treasurer">Dashboard</a>
+        <a class="btn secondary" href="/treasurer/records">Income & Expenses</a>
+        <a class="btn secondary" href="/treasurer/payments">Payment Schedule</a>
+        <a class="btn secondary" href="/treasurer/monthly-report">Monthly Report</a>
+        <a class="btn danger" href="/treasurer/logout">Logout</a>
+    </nav>
+    """    
+    
+@app.get('/treasurer')
+def treasurer_dashboard():
+
+    r = require_treasurer()
+    if r: return r
+
+    month = request.args.get("month") or get_setting("current_month")
+    tid = is_treasurer()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=?
+          AND record_type='INCOME'
+    """, (month,))
+    total_income = cur.fetchone()["total"] or 0
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=?
+          AND record_type='EXPENSE'
+    """, (month,))
+    total_expenses = cur.fetchone()["total"] or 0
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_payment_schedule
+        WHERE month=?
+          AND status='PENDING'
+    """, (month,))
+    pending_payments = cur.fetchone()["total"] or 0
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_payment_schedule
+        WHERE month=?
+          AND status='PAID'
+    """, (month,))
+    paid_payments = cur.fetchone()["total"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM finance_payment_schedule
+        WHERE month=?
+          AND status='PENDING'
+    """, (month,))
+    pending_count = cur.fetchone()["c"] or 0
+
+    conn.close()
+
+    net = total_income - total_expenses
+
+    body = f"""
+    {treasurer_nav()}
+
+    <section class="card">
+        <h1>Treasurer Dashboard</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{month}">
+            <button class="btn mini">View Month</button>
+        </form>
+
+        <div class="stats">
+            {stat("Month", month)}
+            {stat("Income", f"R{total_income:,.2f}")}
+            {stat("Expenses", f"R{total_expenses:,.2f}")}
+            {stat("Net", f"R{net:,.2f}")}
+            {stat("Pending Payments", f"R{pending_payments:,.2f}")}
+            {stat("Paid Payments", f"R{paid_payments:,.2f}")}
+        </div>
+
+        <div class="card soft" style="border-left:5px solid #f59e0b;margin-top:14px">
+            <h2>Reminder</h2>
+            <p class="muted">
+                Monthly financial report must be submitted to COO and CEO by the 5th of each month.
+            </p>
+            <p class="mini muted">
+                Pending payment items: {pending_count}
+            </p>
+        </div>
+    </section>
+    """
+
+    return page("Treasurer Dashboard", body)
+    
+    
+@app.get('/treasurer/records')
+def treasurer_records():
+
+    r = require_treasurer()
+    if r: return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM finance_records
+        WHERE month=?
+        ORDER BY captured_at DESC
+    """, (month,))
+
+    records = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for rec in records:
+        rows += f"""
+        <tr>
+            <td>{escape(rec['record_type'])}</td>
+            <td>{escape(rec['category'])}</td>
+            <td>{escape(rec['description'] or '—')}</td>
+            <td>R{float(rec['amount'] or 0):,.2f}</td>
+            <td>{escape(rec['payment_date'] or '—')}</td>
+            <td>{escape(rec['status'])}</td>
+        </tr>
+        """
+
+    income_options = """
+    <option>Grade 8–11 fees</option>
+    <option>Grade 12 fees</option>
+    <option>Registration fees</option>
+    <option>Donations</option>
+    <option>Grants</option>
+    <option>Other Income</option>
+    """
+
+    expense_options = """
+    <option>Tutor stipends</option>
+    <option>Management salaries</option>
+    <option>Portal hosting</option>
+    <option>Software</option>
+    <option>Marketing</option>
+    <option>Awards Ceremony</option>
+    <option>Data and Communication</option>
+    <option>Other Expense</option>
+    """
+
+    body = f"""
+    {treasurer_nav()}
+
+    <section class="card">
+        <h1>Income & Expense Records</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{month}">
+            <button class="btn mini">View Month</button>
+        </form>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>Add Finance Record</h2>
+
+            <form method="post"
+                  action="/treasurer/records/add"
+                  enctype="multipart/form-data"
+                  class="grid"
+                  style="grid-template-columns:1fr 1fr;gap:10px">
+
+                <input type="hidden" name="month" value="{month}">
+
+                <div>
+                    <label>Record Type</label>
+                    <select name="record_type" id="record_type" required>
+                        <option value="INCOME">Income</option>
+                        <option value="EXPENSE">Expense</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Category</label>
+                    <select name="category" id="category" required>
+                        {income_options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Amount</label>
+                    <input name="amount" type="number" step="0.01" required>
+                </div>
+
+                <div>
+                    <label>Payment Date</label>
+                    <input name="payment_date" type="date">
+                </div>
+
+                <div>
+                    <label>Payment Method</label>
+                    <input name="payment_method" placeholder="Bank transfer, cash, gateway, etc.">
+                </div>
+
+                <div>
+                    <label>Reference</label>
+                    <input name="reference" placeholder="POP ref, bank ref, invoice number">
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <label>Description</label>
+                    <textarea name="description"></textarea>
+                </div>
+
+                <div>
+                    <label>Proof / Receipt Optional</label>
+                    <input type="file" name="proof" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx">
+                </div>
+
+                <div style="display:flex;align-items:end">
+                    <button class="btn success">Save Record</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Category</th>
+                        <th>Description</th>
+                        <th>Amount</th>
+                        <th>Payment Date</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='6'>No records for this month.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <script>
+    const incomeOptions = `{income_options}`;
+    const expenseOptions = `{expense_options}`;
+
+    document.addEventListener("DOMContentLoaded", function(){{
+        const recordType = document.getElementById("record_type");
+        const category = document.getElementById("category");
+
+        if(recordType && category){{
+            recordType.addEventListener("change", function(){{
+                category.innerHTML = this.value === "INCOME" ? incomeOptions : expenseOptions;
+            }});
+        }}
+    }});
+    </script>
+    """
+
+    return page("Finance Records", body)
+    
+    
+@app.post('/treasurer/records/add')
+def treasurer_records_add():
+
+    r = require_treasurer()
+    if r: return r
+
+    tid = is_treasurer()
+
+    month = request.form.get("month") or get_setting("current_month")
+    record_type = request.form.get("record_type", "").strip()
+    category = request.form.get("category", "").strip()
+    description = request.form.get("description", "").strip()
+    amount = float(request.form.get("amount") or 0)
+    payment_date = request.form.get("payment_date", "").strip()
+    payment_method = request.form.get("payment_method", "").strip()
+    reference = request.form.get("reference", "").strip()
+
+    proof = request.files.get("proof")
+    proof_path = None
+    proof_name = None
+
+    if proof and proof.filename:
+        proof_name = secure_name(proof.filename)
+        ext = os.path.splitext(proof_name)[1]
+        saved_name = f"finance_{tid}_{int(time.time())}{ext}"
+        path = FINANCE_DIR / saved_name
+        proof.save(path)
+        proof_path = str(path)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO finance_records(
+            month,
+            record_type,
+            category,
+            description,
+            amount,
+            payment_date,
+            payment_method,
+            reference,
+            status,
+            proof_file_path,
+            proof_file_name,
+            captured_by,
+            captured_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        month,
+        record_type,
+        category,
+        description,
+        amount,
+        payment_date,
+        payment_method,
+        reference,
+        "RECORDED",
+        proof_path,
+        proof_name,
+        tid,
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("treasurer_records", month=month))
+    
+    
+@app.get('/treasurer/payments')
+def treasurer_payments():
+
+    r = require_treasurer()
+    if r: return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM finance_payment_schedule
+        WHERE month=?
+        ORDER BY 
+            CASE status
+                WHEN 'PENDING' THEN 1
+                WHEN 'APPROVED' THEN 2
+                WHEN 'PAID' THEN 3
+                ELSE 4
+            END,
+            due_date ASC
+    """, (month,))
+
+    payments = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for p in payments:
+        proof_btn = "—"
+        if p["proof_file_path"] and os.path.exists(p["proof_file_path"]):
+            proof_btn = f"""
+            <a class="btn mini" target="_blank" href="/treasurer/payment/{p['id']}/proof">
+                View Proof
+            </a>
+            """
+
+        rows += f"""
+        <tr>
+            <td>
+                {escape(p['payee_name'])}
+                <div class="mini muted">{escape(p['payee_role'] or '')}</div>
+            </td>
+            <td>{escape(p['category'])}</td>
+            <td>R{float(p['amount'] or 0):,.2f}</td>
+            <td>{escape(p['due_date'] or '—')}</td>
+            <td>{escape(p['paid_date'] or '—')}</td>
+            <td><span class="chip">{escape(p['status'])}</span></td>
+            <td>{proof_btn}</td>
+            <td>
+                <form method="post"
+                      action="/treasurer/payment/{p['id']}/update"
+                      enctype="multipart/form-data"
+                      class="grid"
+                      style="gap:6px">
+
+                    <select name="status">
+                        {''.join([f"<option value='{s}' {'selected' if p['status']==s else ''}>{s}</option>" for s in ['PENDING','APPROVED','PAID','CANCELLED']])}
+                    </select>
+
+                    <input type="date" name="paid_date" value="{p['paid_date'] or ''}">
+                    <input name="payment_reference" placeholder="Payment reference" value="{escape(p['payment_reference'] or '')}">
+                    <input type="file" name="proof" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx">
+
+                    <button class="btn mini success">Update</button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {treasurer_nav()}
+
+    <section class="card">
+        <h1>Payment Schedule</h1>
+
+        <p class="muted">
+            Use this section to track tutor stipends, management salaries, supplier payments, software costs, and other monthly payments.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{month}">
+            <button class="btn mini">View Month</button>
+        </form>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>Add Payment</h2>
+
+            <form method="post"
+                  action="/treasurer/payments/add"
+                  class="grid"
+                  style="grid-template-columns:1fr 1fr 1fr;gap:10px">
+
+                <input type="hidden" name="month" value="{month}">
+
+                <div>
+                    <label>Payee Name</label>
+                    <input name="payee_name" required>
+                </div>
+
+                <div>
+                    <label>Payee Role</label>
+                    <input name="payee_role" placeholder="Tutor, COO, Supplier, etc.">
+                </div>
+
+                <div>
+                    <label>Category</label>
+                    <select name="category">
+                        <option>Tutor Stipend</option>
+                        <option>Management Salary</option>
+                        <option>Supplier</option>
+                        <option>Software</option>
+                        <option>Portal Hosting</option>
+                        <option>Awards Ceremony</option>
+                        <option>Other</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Amount</label>
+                    <input name="amount" type="number" step="0.01" required>
+                </div>
+
+                <div>
+                    <label>Due Date</label>
+                    <input name="due_date" type="date">
+                </div>
+
+                <div style="display:flex;align-items:end">
+                    <button class="btn success">Add Payment</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Payee</th>
+                        <th>Category</th>
+                        <th>Amount</th>
+                        <th>Due Date</th>
+                        <th>Paid Date</th>
+                        <th>Status</th>
+                        <th>Proof</th>
+                        <th>Update</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='8'>No scheduled payments for this month.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Payment Schedule", body)
+    
+    
+@app.post('/treasurer/payments/add')
+def treasurer_payments_add():
+
+    r = require_treasurer()
+    if r: return r
+
+    tid = is_treasurer()
+
+    month = request.form.get("month") or get_setting("current_month")
+    payee_name = request.form.get("payee_name", "").strip()
+    payee_role = request.form.get("payee_role", "").strip()
+    category = request.form.get("category", "").strip()
+    amount = float(request.form.get("amount") or 0)
+    due_date = request.form.get("due_date", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO finance_payment_schedule(
+            month,
+            payee_name,
+            payee_role,
+            category,
+            amount,
+            due_date,
+            status,
+            created_by,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+    """, (
+        month,
+        payee_name,
+        payee_role,
+        category,
+        amount,
+        due_date,
+        "PENDING",
+        tid,
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("treasurer_payments", month=month))
+
+
+@app.post('/treasurer/payment/<int:pid>/update')
+def treasurer_payment_update(pid):
+
+    r = require_treasurer()
+    if r: return r
+
+    status = request.form.get("status", "PENDING").strip()
+    paid_date = request.form.get("paid_date", "").strip()
+    payment_reference = request.form.get("payment_reference", "").strip()
+
+    if status not in ["PENDING", "APPROVED", "PAID", "CANCELLED"]:
+        status = "PENDING"
+
+    proof = request.files.get("proof")
+    proof_path = None
+    proof_name = None
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT month FROM finance_payment_schedule WHERE id=?", (pid,))
+    payment = cur.fetchone()
+
+    if not payment:
+        conn.close()
+        return page("Not found", card_msg("Payment record not found."))
+
+    if proof and proof.filename:
+        proof_name = secure_name(proof.filename)
+        ext = os.path.splitext(proof_name)[1]
+        saved_name = f"payment_{pid}_{int(time.time())}{ext}"
+        path = FINANCE_DIR / saved_name
+        proof.save(path)
+        proof_path = str(path)
+
+        cur.execute("""
+            UPDATE finance_payment_schedule
+            SET status=?,
+                paid_date=?,
+                payment_reference=?,
+                proof_file_path=?,
+                proof_file_name=?,
+                updated_at=?
+            WHERE id=?
+        """, (
+            status,
+            paid_date,
+            payment_reference,
+            proof_path,
+            proof_name,
+            now_utc_iso(),
+            pid
+        ))
+    else:
+        cur.execute("""
+            UPDATE finance_payment_schedule
+            SET status=?,
+                paid_date=?,
+                payment_reference=?,
+                updated_at=?
+            WHERE id=?
+        """, (
+            status,
+            paid_date,
+            payment_reference,
+            now_utc_iso(),
+            pid
+        ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("treasurer_payments", month=payment["month"]))
+    
+    
+@app.get('/treasurer/payment/<int:pid>/proof')
+def treasurer_payment_proof(pid):
+
+    r = require_treasurer()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT proof_file_path
+        FROM finance_payment_schedule
+        WHERE id=?
+    """, (pid,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row["proof_file_path"]:
+        return page("Not found", card_msg("Proof of payment not found."))
+
+    file_path = row["proof_file_path"]
+
+    if not os.path.exists(file_path):
+        return page("Missing file", card_msg("The proof file is missing from the server."))
+
+    return send_from_directory(
+        os.path.dirname(file_path),
+        os.path.basename(file_path),
+        as_attachment=False
+    )
+    
+    
+    
+@app.get('/treasurer/monthly-report')
+def treasurer_monthly_report():
+
+    r = require_treasurer()
+    if r: return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=? AND record_type='INCOME'
+    """, (month,))
+    income = cur.fetchone()["total"] or 0
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=? AND record_type='EXPENSE'
+    """, (month,))
+    expenses = cur.fetchone()["total"] or 0
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_payment_schedule
+        WHERE month=? AND status='PENDING'
+    """, (month,))
+    owed_by_ebta = cur.fetchone()["total"] or 0
+
+    cur.execute("""
+        SELECT *
+        FROM finance_monthly_reports
+        WHERE month=?
+    """, (month,))
+    report = cur.fetchone()
+
+    conn.close()
+
+    net = income - expenses
+
+    notes = report["notes"] if report else ""
+    bank_balance = report["bank_balance"] if report else 0
+    owed_to_ebta = report["owed_to_ebta"] if report else 0
+    status = report["status"] if report else "DRAFT"
+
+    body = f"""
+    {treasurer_nav()}
+
+    <section class="card">
+        <h1>Monthly Financial Report</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{month}">
+            <button class="btn mini">View Month</button>
+        </form>
+
+        <div class="stats">
+            {stat("Income", f"R{income:,.2f}")}
+            {stat("Expenses", f"R{expenses:,.2f}")}
+            {stat("Net Profit/Loss", f"R{net:,.2f}")}
+            {stat("Pending EBTA Payments", f"R{owed_by_ebta:,.2f}")}
+        </div>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-top:14px">
+            <h2>Prepare Report</h2>
+
+            <form method="post" action="/treasurer/monthly-report/save" class="grid">
+                <input type="hidden" name="month" value="{month}">
+
+                <div>
+                    <label>Bank Balance End of Month</label>
+                    <input name="bank_balance" type="number" step="0.01" value="{bank_balance}">
+                </div>
+
+                <div>
+                    <label>Owed to EBTA</label>
+                    <input name="owed_to_ebta" type="number" step="0.01" value="{owed_to_ebta}">
+                </div>
+
+                <div>
+                    <label>Notes / Concerns</label>
+                    <textarea name="notes">{escape(notes or '')}</textarea>
+                </div>
+
+                <button class="btn success">
+                    Save Monthly Report
+                </button>
+
+                <button class="btn warn" name="submit_report" value="1">
+                    Submit Report
+                </button>
+            </form>
+
+            <p class="mini muted">
+                Current status: {status}
+            </p>
+        </div>
+    </section>
+    """
+
+    return page("Monthly Financial Report", body)
+    
+    
+@app.post('/treasurer/monthly-report/save')
+def treasurer_monthly_report_save():
+
+    r = require_treasurer()
+    if r: return r
+
+    tid = is_treasurer()
+
+    month = request.form.get("month") or get_setting("current_month")
+    bank_balance = float(request.form.get("bank_balance") or 0)
+    owed_to_ebta = float(request.form.get("owed_to_ebta") or 0)
+    notes = request.form.get("notes", "").strip()
+    submit_report = request.form.get("submit_report") == "1"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=? AND record_type='INCOME'
+    """, (month,))
+    income = cur.fetchone()["total"] or 0
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=? AND record_type='EXPENSE'
+    """, (month,))
+    expenses = cur.fetchone()["total"] or 0
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_payment_schedule
+        WHERE month=? AND status='PENDING'
+    """, (month,))
+    owed_by_ebta = cur.fetchone()["total"] or 0
+
+    net = income - expenses
+    status = "SUBMITTED" if submit_report else "DRAFT"
+    submitted_at = now_utc_iso() if submit_report else None
+
+    cur.execute("""
+        INSERT INTO finance_monthly_reports(
+            month,
+            total_income,
+            total_expenses,
+            net_profit_loss,
+            bank_balance,
+            owed_to_ebta,
+            owed_by_ebta,
+            notes,
+            prepared_by,
+            submitted_at,
+            status,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(month)
+        DO UPDATE SET
+            total_income=excluded.total_income,
+            total_expenses=excluded.total_expenses,
+            net_profit_loss=excluded.net_profit_loss,
+            bank_balance=excluded.bank_balance,
+            owed_to_ebta=excluded.owed_to_ebta,
+            owed_by_ebta=excluded.owed_by_ebta,
+            notes=excluded.notes,
+            prepared_by=excluded.prepared_by,
+            submitted_at=COALESCE(excluded.submitted_at, finance_monthly_reports.submitted_at),
+            status=excluded.status,
+            updated_at=excluded.updated_at
+    """, (
+        month,
+        income,
+        expenses,
+        net,
+        bank_balance,
+        owed_to_ebta,
+        owed_by_ebta,
+        notes,
+        tid,
+        submitted_at,
+        status,
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("treasurer_monthly_report", month=month))
+
+
+@app.get('/admin/finance')
+def admin_finance_overview():
+
+    r = require_admin()
+    if r: return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=? AND record_type='INCOME'
+    """, (month,))
+    income = cur.fetchone()["total"] or 0
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=? AND record_type='EXPENSE'
+    """, (month,))
+    expenses = cur.fetchone()["total"] or 0
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_payment_schedule
+        WHERE month=? AND status='PENDING'
+    """, (month,))
+    pending = cur.fetchone()["total"] or 0
+
+    cur.execute("""
+        SELECT *
+        FROM finance_monthly_reports
+        WHERE month=?
+    """, (month,))
+    report = cur.fetchone()
+
+    conn.close()
+
+    net = income - expenses
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Finance Overview</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{month}">
+            <button class="btn mini">View Month</button>
+        </form>
+
+        <div class="stats">
+            {stat("Income", f"R{income:,.2f}")}
+            {stat("Expenses", f"R{expenses:,.2f}")}
+            {stat("Net", f"R{net:,.2f}")}
+            {stat("Pending Payments", f"R{pending:,.2f}")}
+            {stat("Report Status", report["status"] if report else "No Report")}
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Monthly Report Notes</h2>
+            <p style="white-space:pre-wrap">
+                {escape(report["notes"]) if report and report["notes"] else "No notes submitted yet."}
+            </p>
+        </div>
+    </section>
+    """
+
+    return page("Finance Overview", body)    
+
 
 # --- Admin: Analytics dashboard ---
 
