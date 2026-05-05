@@ -22012,6 +22012,7 @@ def treasurer_records():
     income_options = """
     <option>Grade 8–11 fees</option>
     <option>Grade 12 fees</option>
+    <option>Grade 13 fees</option>
     <option>Registration fees</option>
     <option>Donations</option>
     <option>Grants</option>
@@ -22026,6 +22027,7 @@ def treasurer_records():
     <option>Marketing</option>
     <option>Awards Ceremony</option>
     <option>Data and Communication</option>
+    <option>Performance Rewards</option>
     <option>Other Expense</option>
     """
 
