@@ -10423,16 +10423,101 @@ def admin_students_export():
     conn = get_db()
     cur = conn.cursor()
 
+    # =========================
+    # 1. SUMMARY STATS
+    # =========================
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM enrollments
+        WHERE month = ?
+    """, (month,))
+    total_enrollments = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM enrollments
+        WHERE month = ?
+    """, (month,))
+    total_students = cur.fetchone()["c"] or 0
+
+    status_stats = {}
+
+    for st in ["ACTIVE", "PENDING", "LAPSED"]:
+        cur.execute("""
+            SELECT COUNT(*) AS c
+            FROM enrollments
+            WHERE month = ?
+              AND status = ?
+        """, (month, st))
+        enrollment_count = cur.fetchone()["c"] or 0
+
+        cur.execute("""
+            SELECT COUNT(DISTINCT student_id) AS c
+            FROM enrollments
+            WHERE month = ?
+              AND status = ?
+        """, (month, st))
+        student_count = cur.fetchone()["c"] or 0
+
+        status_stats[st] = {
+            "enrollments": enrollment_count,
+            "students": student_count
+        }
+
+    # =========================
+    # 2. GRADE STATS
+    # =========================
+
     cur.execute("""
         SELECT
+            s.grade,
+            COUNT(e.id) AS total_enrollments,
+            COUNT(DISTINCT s.id) AS total_students,
+
+            COUNT(CASE WHEN e.status='ACTIVE' THEN 1 END) AS active_enrollments,
+            COUNT(DISTINCT CASE WHEN e.status='ACTIVE' THEN s.id END) AS active_students,
+
+            COUNT(CASE WHEN e.status='PENDING' THEN 1 END) AS pending_enrollments,
+            COUNT(DISTINCT CASE WHEN e.status='PENDING' THEN s.id END) AS pending_students,
+
+            COUNT(CASE WHEN e.status='LAPSED' THEN 1 END) AS lapsed_enrollments,
+            COUNT(DISTINCT CASE WHEN e.status='LAPSED' THEN s.id END) AS lapsed_students
+
+        FROM enrollments e
+        JOIN students s ON s.id = e.student_id
+        WHERE e.month = ?
+        GROUP BY s.grade
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER)
+    """, (month,))
+
+    grade_stats = cur.fetchall()
+
+    # =========================
+    # 3. STUDENT SUMMARY
+    # One row per student
+    # =========================
+
+    cur.execute("""
+        SELECT
+            s.id,
             s.full_name,
             s.phone_whatsapp,
+            s.guardian_name,
             s.guardian_phone,
             s.email,
             s.grade,
             s.province,
             s.school,
-            GROUP_CONCAT(DISTINCT sub.name) AS subjects
+
+            COUNT(e.id) AS total_enrollments,
+            COUNT(CASE WHEN e.status='ACTIVE' THEN 1 END) AS active_enrollments,
+            COUNT(CASE WHEN e.status='PENDING' THEN 1 END) AS pending_enrollments,
+            COUNT(CASE WHEN e.status='LAPSED' THEN 1 END) AS lapsed_enrollments,
+
+            GROUP_CONCAT(DISTINCT sub.name) AS subjects,
+            GROUP_CONCAT(DISTINCT e.status) AS statuses
+
         FROM students s
         JOIN enrollments e ON e.student_id = s.id
         JOIN subjects sub ON sub.id = e.subject_id
@@ -10441,53 +10526,237 @@ def admin_students_export():
         ORDER BY s.full_name ASC
     """, (month,))
 
-    rows = cur.fetchall()
+    student_rows = cur.fetchall()
+
+    # =========================
+    # 4. ENROLLMENT DETAILS
+    # One row per enrollment/subject
+    # =========================
+
+    cur.execute("""
+        SELECT
+            e.id AS enrollment_id,
+            s.full_name,
+            s.phone_whatsapp,
+            s.guardian_name,
+            s.guardian_phone,
+            s.email,
+            s.grade,
+            s.province,
+            s.school,
+            sub.name AS subject_name,
+            e.status,
+            e.payment_method,
+            e.amount_paid,
+            e.payment_ref,
+            e.created_at
+        FROM enrollments e
+        JOIN students s ON s.id = e.student_id
+        JOIN subjects sub ON sub.id = e.subject_id
+        WHERE e.month = ?
+        ORDER BY s.full_name ASC, sub.name ASC
+    """, (month,))
+
+    enrollment_rows = cur.fetchall()
+
     conn.close()
 
+    # =========================
+    # 5. BUILD EXCEL FILE
+    # =========================
+
     from openpyxl import Workbook
-    from openpyxl.styles import Font, Alignment
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
 
     wb = Workbook()
+
+    # Styles
+    header_fill = PatternFill(start_color="1B5E20", end_color="1B5E20", fill_type="solid")
+    light_fill = PatternFill(start_color="E8F5E9", end_color="E8F5E9", fill_type="solid")
+    yellow_fill = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
+    red_fill = PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid")
+    thin_border = Border(
+        left=Side(style="thin", color="DDDDDD"),
+        right=Side(style="thin", color="DDDDDD"),
+        top=Side(style="thin", color="DDDDDD"),
+        bottom=Side(style="thin", color="DDDDDD"),
+    )
+
+    def style_header(row):
+        for cell in row:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center")
+            cell.border = thin_border
+
+    def autofit(ws):
+        for col in ws.columns:
+            max_length = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                value = "" if cell.value is None else str(cell.value)
+                max_length = max(max_length, len(value))
+                cell.border = thin_border
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+            ws.column_dimensions[col_letter].width = min(max_length + 4, 45)
+
+    # =========================
+    # SHEET 1: SUMMARY
+    # =========================
+
     ws = wb.active
-    ws.title = f"Students {month}"
+    ws.title = "Summary"
+
+    ws["A1"] = f"EBTA Enrollment Export Summary - {month}"
+    ws["A1"].font = Font(bold=True, size=16, color="1B5E20")
+    ws.merge_cells("A1:D1")
+
+    ws.append([])
+    ws.append(["Metric", "Students", "Enrollments", "Notes"])
+    style_header(ws[3])
+
+    ws.append(["Total", total_students, total_enrollments, "Students are counted once. Enrollments count each subject registration."])
+    ws.append(["Active", status_stats["ACTIVE"]["students"], status_stats["ACTIVE"]["enrollments"], "Approved/active students and subject enrollments."])
+    ws.append(["Pending", status_stats["PENDING"]["students"], status_stats["PENDING"]["enrollments"], "Pending students and subject enrollments."])
+    ws.append(["Lapsed", status_stats["LAPSED"]["students"], status_stats["LAPSED"]["enrollments"], "Lapsed students and subject enrollments."])
+
+    ws.append([])
+    ws.append(["Breakdown by Grade"])
+    ws[9][0].font = Font(bold=True, color="1B5E20")
+
+    ws.append([
+        "Grade",
+        "Total Students",
+        "Total Enrollments",
+        "Active Students",
+        "Active Enrollments",
+        "Pending Students",
+        "Pending Enrollments",
+        "Lapsed Students",
+        "Lapsed Enrollments"
+    ])
+    style_header(ws[10])
+
+    for g in grade_stats:
+        ws.append([
+            grade_label(g["grade"]),
+            g["total_students"],
+            g["total_enrollments"],
+            g["active_students"],
+            g["active_enrollments"],
+            g["pending_students"],
+            g["pending_enrollments"],
+            g["lapsed_students"],
+            g["lapsed_enrollments"]
+        ])
+
+    autofit(ws)
+
+    # =========================
+    # SHEET 2: STUDENT SUMMARY
+    # =========================
+
+    ws2 = wb.create_sheet("Student Summary")
 
     headers = [
         "Full Name",
         "Phone",
-        "Guardian",
+        "Guardian Name",
+        "Guardian Phone",
         "Email",
         "Grade",
         "Province",
         "School",
-        "Subjects"
+        "Subjects",
+        "Statuses",
+        "Total Enrollments",
+        "Active Enrollments",
+        "Pending Enrollments",
+        "Lapsed Enrollments"
     ]
 
-    ws.append(headers)
+    ws2.append(headers)
+    style_header(ws2[1])
 
-    for col in ws[1]:
-        col.font = Font(bold=True)
-        col.alignment = Alignment(horizontal="center")
-
-    for r in rows:
-        ws.append([
+    for r in student_rows:
+        ws2.append([
             r["full_name"],
             r["phone_whatsapp"],
+            r["guardian_name"],
             r["guardian_phone"],
             r["email"],
             grade_label(r["grade"]),
             r["province"],
             r["school"],
-            r["subjects"]
+            r["subjects"],
+            r["statuses"],
+            r["total_enrollments"],
+            r["active_enrollments"],
+            r["pending_enrollments"],
+            r["lapsed_enrollments"]
         ])
 
-    for col in ws.columns:
-        max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
-        ws.column_dimensions[col[0].column_letter].width = max_length + 4
+    autofit(ws2)
 
-    file_path = f"/tmp/students_{month}.xlsx"
+    # =========================
+    # SHEET 3: ENROLLMENT DETAILS
+    # =========================
+
+    ws3 = wb.create_sheet("Enrollment Details")
+
+    headers = [
+        "Enrollment ID",
+        "Full Name",
+        "Phone",
+        "Guardian Name",
+        "Guardian Phone",
+        "Email",
+        "Grade",
+        "Province",
+        "School",
+        "Subject",
+        "Status",
+        "Payment Method",
+        "Amount Paid",
+        "Payment Ref",
+        "Created At"
+    ]
+
+    ws3.append(headers)
+    style_header(ws3[1])
+
+    for r in enrollment_rows:
+        ws3.append([
+            r["enrollment_id"],
+            r["full_name"],
+            r["phone_whatsapp"],
+            r["guardian_name"],
+            r["guardian_phone"],
+            r["email"],
+            grade_label(r["grade"]),
+            r["province"],
+            r["school"],
+            r["subject_name"],
+            r["status"],
+            r["payment_method"],
+            r["amount_paid"],
+            r["payment_ref"],
+            r["created_at"]
+        ])
+
+    autofit(ws3)
+
+    # Freeze top rows
+    ws.freeze_panes = "A4"
+    ws2.freeze_panes = "A2"
+    ws3.freeze_panes = "A2"
+
+    file_name = f"enrollment_students_{month}.xlsx"
+    file_path = f"/tmp/{file_name}"
     wb.save(file_path)
 
-    return send_from_directory("/tmp", f"students_{month}.xlsx", as_attachment=True)
+    return send_from_directory("/tmp", file_name, as_attachment=True)
 
 
 @app.get('/admin/students/compare')
