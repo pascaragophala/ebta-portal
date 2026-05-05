@@ -533,8 +533,7 @@ def init_db():
     ensure_column(conn, "followups", "updated_at", "TEXT")
     ensure_column(conn, "tutor_weekly_tracker", "manager_id", "INTEGER")
     ensure_column(conn, "tutor_weekly_tracker", "manager_rating", "INTEGER")
-    ensure_column(conn, "submissions", "is_published", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(conn, "submissions", "marked_file_path", "TEXT")
+
     ensure_column(conn, "students", "profile_picture_path", "TEXT")
     ensure_column(conn, "students", "profile_picture_uploaded_at", "TEXT")
     ensure_column(conn, "tutor_applications", "reliable_internet", "INTEGER NOT NULL DEFAULT 0")
@@ -599,6 +598,9 @@ def init_db():
         FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
     );
     """)
+    
+    ensure_column(conn, "submissions", "is_published", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "submissions", "marked_file_path", "TEXT")
     
     cur.execute("CREATE INDEX IF NOT EXISTS idx_reports_student ON student_reports(student_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_reports_grade ON student_reports(grade)")
@@ -5437,7 +5439,7 @@ def student_home():
 
             # check if student already submitted
             cur.execute("""
-                SELECT id, file_path, mark, feedback
+                SELECT id, file_path, mark, feedback, marked_file_path, is_published
                 FROM submissions
                 WHERE material_id=? AND student_id=?
             """, (a['id'], sid))
@@ -6355,7 +6357,7 @@ def student_assignments():
                         <div style="margin-top:6px">
                             <a class='btn success mini'
                                target='_blank'
-                               href='{sub['marked_file_path']}'>
+                               href='/student/view_marked_script/{a["id"]}'>
                                📄 View Marked Script
                             </a>
                         </div>
@@ -6464,6 +6466,44 @@ def student_assignments():
             {assignments_html}
         </div>
     """)
+
+
+@app.get('/student/view_marked_script/<int:mid>')
+def student_view_marked_script(mid):
+
+    r = require_student()
+    if r: return r
+
+    sid = is_student()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT marked_file_path
+        FROM submissions
+        WHERE material_id = ?
+          AND student_id = ?
+          AND is_published = 1
+          AND marked_file_path IS NOT NULL
+    """, (mid, sid))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row["marked_file_path"]:
+        return page("Not found", card_msg("Marked script is not available yet."))
+
+    file_path = row["marked_file_path"]
+
+    if not os.path.exists(file_path):
+        return page("Not found", card_msg("Marked script file was not found."))
+
+    return send_from_directory(
+        os.path.dirname(file_path),
+        os.path.basename(file_path),
+        as_attachment=False
+    )
 
 
 def student_month_selector(sid, month):
@@ -8601,35 +8641,67 @@ def tutor_upload():
     return redirect(url_for('tutor_home'))
     
     
-@app.post('/tutor/upload_marked/<int:sid>')
-def tutor_upload_marked(sid):
+@app.post('/tutor/assignment/<int:mid>/upload-marked/<int:sid>')
+def tutor_upload_marked_script(mid, sid):
 
     r = require_tutor()
     if r: return r
 
-    f = request.files.get("file")
+    tid = is_tutor()
+    f = request.files.get("marked_file")
 
-    if not f:
-        return redirect(request.referrer)
-
-    filename = secure_name(f.filename)
-
-    path = SUBMISSIONS_DIR / f"marked_{sid}_{filename}"
-    f.save(path)
+    if not f or not f.filename:
+        return redirect(url_for("tutor_assignment_manage", mid=mid))
 
     conn = get_db()
     cur = conn.cursor()
 
+    # Make sure this assignment belongs to the logged-in tutor
+    cur.execute("""
+        SELECT id
+        FROM materials
+        WHERE id = ?
+          AND tutor_id = ?
+          AND (is_assignment = 1 OR kind = 'assignment')
+    """, (mid, tid))
+
+    assignment = cur.fetchone()
+
+    if not assignment:
+        conn.close()
+        return page("Error", card_msg("Assignment not found or not allowed."))
+
+    # Make sure the learner actually submitted
+    cur.execute("""
+        SELECT id
+        FROM submissions
+        WHERE material_id = ?
+          AND student_id = ?
+    """, (mid, sid))
+
+    sub = cur.fetchone()
+
+    if not sub:
+        conn.close()
+        return page("Error", card_msg("This learner has not submitted yet."))
+
+    filename = secure_name(f.filename)
+    marked_filename = f"marked_{mid}_{sid}_{int(time.time())}_{filename}"
+    path = SUBMISSIONS_DIR / marked_filename
+
+    f.save(path)
+
     cur.execute("""
         UPDATE submissions
-        SET marked_file_path = ?
+        SET marked_file_path = ?,
+            evaluated_at = ?
         WHERE id = ?
-    """, (str(path), sid))
+    """, (str(path), now_utc_iso(), sub["id"]))
 
     conn.commit()
     conn.close()
 
-    return redirect(request.referrer)
+    return redirect(url_for("tutor_assignment_manage", mid=mid, saved=1))
     
 
 @app.post('/tutor/materials/<int:mid>/delete')
@@ -8654,160 +8726,290 @@ def tutor_delete_material(mid:int):
 
 # Tutor: manage one assignment (submissions + grading)
 @app.get('/tutor/assignment/<int:mid>')
-def tutor_assignment_manage(mid:int):
-    r=require_tutor()
+def tutor_assignment_manage(mid: int):
+
+    r = require_tutor()
     if r: return r
-    tid=is_tutor()
+
+    tid = is_tutor()
     saved = request.args.get('saved')
-    conn=get_db(); cur=conn.cursor()
-    cur.execute("""SELECT m.*, s.name AS subject_name, s.grade
-                FROM materials m JOIN subjects s ON s.id=m.subject_id
-                WHERE m.id=? AND m.tutor_id=?""",(mid,tid))
-    m=cur.fetchone()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Confirm this assignment belongs to this tutor
+    cur.execute("""
+        SELECT m.*, s.name AS subject_name, s.grade
+        FROM materials m
+        JOIN subjects s ON s.id = m.subject_id
+        WHERE m.id = ?
+          AND m.tutor_id = ?
+    """, (mid, tid))
+
+    m = cur.fetchone()
+
     if not m:
         conn.close()
         return page("Not found", card_msg("Assignment not found."))
+
     total = m['max_points'] if m['max_points'] else 100
 
-    # active students in subject (this month)
+    # Active students in this subject/month
     month = get_active_month('tutor')
-    cur.execute("""SELECT st.id, st.full_name
-                FROM enrollments e JOIN students st ON st.id=e.student_id
-                WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
-                ORDER BY st.full_name""",(m['subject_id'], month))
-    studs=cur.fetchall()
-    rows=[]
+
+    cur.execute("""
+        SELECT st.id, st.full_name
+        FROM enrollments e
+        JOIN students st ON st.id = e.student_id
+        WHERE e.subject_id = ?
+          AND e.month = ?
+          AND e.status = 'ACTIVE'
+        ORDER BY st.full_name
+    """, (m['subject_id'], month))
+
+    studs = cur.fetchall()
+    rows = []
+
     for st in studs:
-        cur.execute("SELECT id,file_path,submitted_at,mark,feedback FROM submissions WHERE material_id=? AND student_id=?", (mid, st['id']))
-        sub=cur.fetchone()
+
+        cur.execute("""
+            SELECT 
+                id,
+                file_path,
+                submitted_at,
+                mark,
+                feedback,
+                marked_file_path,
+                is_published
+            FROM submissions
+            WHERE material_id = ?
+              AND student_id = ?
+        """, (mid, st['id']))
+
+        sub = cur.fetchone()
+
         if sub:
-            
+
             file_exists = sub['file_path'] and os.path.exists(sub['file_path'])
 
-            view_section = f"""
-            <div>
+            if file_exists:
+                view_section = f"""
                 <a class='btn success mini'
                    target='_blank'
                    href='/tutor/view_submission/{sub['id']}'>
-                    📄 View Submission
+                    View Submission
                 </a>
-            </div>
-            """ if file_exists else f"""
-            <div style="padding:4px 0;">
-                <span class='mini' style="color:#b91c1c; font-weight:600;">
-                    ⚠ File missing
+                """
+            else:
+                view_section = """
+                <span class='mini' style="color:#b91c1c;font-weight:600">
+                    File missing
                 </span>
-            </div>
+                """
+
+            marked_script_btn = ""
+
+            if sub["marked_file_path"] and os.path.exists(sub["marked_file_path"]):
+                marked_script_btn = f"""
+                <a class="btn success mini"
+                   target="_blank"
+                   href="/tutor/view_marked_script/{mid}/{st['id']}">
+                    View Marked Script
+                </a>
+                """
+
+            upload_marked_form = f"""
+            <form method="post"
+                  action="/tutor/assignment/{mid}/upload-marked/{st['id']}"
+                  enctype="multipart/form-data"
+                  style="margin-top:8px">
+
+                <input type="file"
+                       name="marked_file"
+                       accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                       required
+                       class="mini">
+
+                <button class="btn mini success" style="margin-top:6px">
+                    Upload Marked Script
+                </button>
+            </form>
             """
-            
-            filelink=f"""
-            <div style="
-                display:flex;
-                flex-direction:column;
-                gap:8px;
-            ">
 
-                <!-- VIEW BUTTON -->
-                {view_section}
-
-                <!-- UPLOAD MARKED -->
-                <div style="
-                    background:#f8fafc;
-                    padding:8px;
-                    border-radius:8px;
-                    border:1px solid #e2e8f0;
-                ">
-                    <form method="post"
-                          action="/tutor/upload_marked/{sub['id']}"
-                          enctype="multipart/form-data"
-                          style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-
-                        <input type="file" name="file" required class="mini">
-
-                        <button class="btn success mini">
-                            ⬆ Upload Marked
-                        </button>
-
-                    </form>
-                </div>
-
-            </div>
-            """
             mark = '' if sub['mark'] is None else str(sub['mark'])
+
+            published_status = (
+                "<span class='chip active'>Published</span>"
+                if sub["is_published"] == 1
+                else "<span class='chip pending'>Not Published</span>"
+            )
+
             rows.append(f"""
-            <tr><td>{st['full_name']}</td>
-                <td style="min-width:260px">
-                    {filelink}
-                    <div class='mini muted' style="margin-top:4px">
-                        Submitted: {sub['submitted_at'][:16].replace('T',' ')}
+            <tr>
+                <td>
+                    {st['full_name']}
+                    <div class="mini muted" style="margin-top:4px">
+                        {published_status}
                     </div>
                 </td>
+
+                <td style="min-width:260px">
+                    <div style="display:flex;flex-direction:column;gap:8px">
+                        {view_section}
+                        {marked_script_btn}
+                        {upload_marked_form}
+
+                        <div class='mini muted'>
+                            Submitted: {sub['submitted_at'][:16].replace('T',' ')}
+                        </div>
+                    </div>
+                </td>
+
                 <td>
-                <form method='post' action='{url_for('tutor_assignment_grade', mid=mid, sid=st['id'])}' class='inlineform'>
-                    <input type='number' name='mark' min='0' max='{total}' placeholder='0..{total}' value='{mark if mark else ""}' style='width:100px'/>
-                    <input name='feedback' placeholder='Feedback' value='{sub['feedback'] or ""}'/>
-                    <button class='btn mini'>Save</button>
-                </form>
-                </td></tr>""")
+                    <form method='post'
+                          action='{url_for('tutor_assignment_grade', mid=mid, sid=st['id'])}'
+                          class='inlineform'>
+
+                        <input type='number'
+                               name='mark'
+                               min='0'
+                               max='{total}'
+                               placeholder='0..{total}'
+                               value='{mark if mark else ""}'
+                               style='width:100px'>
+
+                        <input name='feedback'
+                               placeholder='Feedback'
+                               value='{escape(sub['feedback'] or "")}'>
+
+                        <button class='btn mini'>
+                            Save
+                        </button>
+                    </form>
+                </td>
+            </tr>
+            """)
+
         else:
-            rows.append(f"<tr><td>{st['full_name']}</td><td><span class='muted'>No submission</span></td><td>—</td></tr>")
+            rows.append(f"""
+            <tr>
+                <td>{st['full_name']}</td>
+                <td><span class='muted'>No submission</span></td>
+                <td>—</td>
+            </tr>
+            """)
+
     table = (
         "<div class='empty'>No students.</div>"
         if not rows
-        else f"<div class='scroll-x'><table><thead><tr>"
-             f"<th>Student</th><th>Submission</th><th>Grade (0..{total})</th>"
-             f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+        else f"""
+        <div class='scroll-x'>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Submission / Marked Script</th>
+                        <th>Grade (0..{total})</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(rows)}
+                </tbody>
+            </table>
+        </div>
+        """
     )
 
     conn.close()
 
-    js_alert = "<script>showPopup('Grade saved', 'success');;</script>" if saved else ""
-    body=fr"""
+    js_alert = "<script>showPopup('Grade saved', 'success');</script>" if saved else ""
+
+    body = fr"""
     <a class='links' href='{url_for('tutor_home')}'>← Back</a>
+
     <section class='grid'>
-        <div class='card'><h1>{m['title']}</h1>
-        <p class='muted'>
-        {grade_label(m['grade'])} — {m['subject_name']}
-        • Due: {m['due_date'] or '—'}
-        • Total: {total}
-        </p>
+        <div class='card'>
+            <h1>{m['title']}</h1>
 
-        <div class="card soft" style="margin-top:10px;border-left:5px solid #f59e0b">
+            <p class='muted'>
+                {grade_label(m['grade'])} — {m['subject_name']}
+                • Due: {m['due_date'] or '—'}
+                • Total: {total}
+            </p>
 
-            <form method="post"
-                  action="{url_for('tutor_extend_due_date', mid=mid)}"
-                  class="inlineform"
-                  style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+            <div class="card soft" style="margin-top:10px;border-left:5px solid #f59e0b">
+                <form method="post"
+                      action="{url_for('tutor_extend_due_date', mid=mid)}"
+                      class="inlineform"
+                      style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
 
-                <div>
-                    <label class="mini muted">Extend due date</label>
-                    <input type="date"
-                           name="due_date"
-                           value="{m['due_date'] or ''}"
-                           required>
-                </div>
+                    <div>
+                        <label class="mini muted">Extend due date</label>
+                        <input type="date"
+                               name="due_date"
+                               value="{m['due_date'] or ''}"
+                               required>
+                    </div>
 
-                <button class="btn success mini">
-                    Update Due Date
-                </button>
+                    <button class="btn success mini">
+                        Update Due Date
+                    </button>
+                </form>
+            </div>
 
-            </form>
+            <div style="margin:10px 0;">
+                <form method="post" action="{url_for('publish_all_marks', mid=mid)}">
+                    <button class="btn success">
+                        Publish All Marks
+                    </button>
+                </form>
+            </div>
 
-        </div>
-
-        <div style="margin:10px 0;">
-            <form method="post" action="{url_for('publish_all_marks', mid=mid)}">
-                <button class="btn success">
-                    Publish All Marks
-                </button>
-            </form>
-        </div>
-
-        {table}
+            {table}
         </div>
     </section>
     """
+
     return page("Manage Assignment", body, extra_js=js_alert)
+    
+    
+@app.get('/tutor/view_marked_script/<int:mid>/<int:sid>')
+def tutor_view_marked_script(mid, sid):
+
+    r = require_tutor()
+    if r: return r
+
+    tid = is_tutor()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT sub.marked_file_path
+        FROM submissions sub
+        JOIN materials m ON m.id = sub.material_id
+        WHERE sub.material_id = ?
+          AND sub.student_id = ?
+          AND m.tutor_id = ?
+          AND sub.marked_file_path IS NOT NULL
+    """, (mid, sid, tid))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row["marked_file_path"]:
+        return page("Not found", card_msg("Marked script is not available yet."))
+
+    file_path = row["marked_file_path"]
+
+    if not os.path.exists(file_path):
+        return page("Not found", card_msg("Marked script file was not found."))
+
+    return send_from_directory(
+        os.path.dirname(file_path),
+        os.path.basename(file_path),
+        as_attachment=False
+    )
     
     
 @app.post('/tutor/assignment/<int:mid>/extend')
