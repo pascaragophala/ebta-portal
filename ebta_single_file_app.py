@@ -9329,8 +9329,17 @@ def admin_home():
     if r: return r
     month=get_setting('current_month')
     conn=get_db(); cur=conn.cursor()
-    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,)); total=cur.fetchone()['c']
-    counts={}
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,))
+    total = cur.fetchone()['c']
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM enrollments
+        WHERE month = ?
+    """, (month,))
+    total_students = cur.fetchone()['c']
+
+    counts = {}
     for st in ["PENDING","ACTIVE","LAPSED"]:
         cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status=?", (month,st)); counts[st]=cur.fetchone()['c']
     cur.execute("SELECT COUNT(*) AS c FROM messages WHERE resolved=0"); msg_count=cur.fetchone()['c']
@@ -9339,8 +9348,11 @@ def admin_home():
     conn.close()
     body=fr"""
     <section class='grid'><div class='stats'>
-    {stat('Current month', month)}{stat('Total enrollments', str(total))}
-    {stat('Pending', str(counts.get('PENDING',0)))}{stat('Active', str(counts.get('ACTIVE',0)))}
+    {stat('Current month', month)}
+    {stat('Total students', str(total_students))}
+    {stat('Total enrollments', str(total))}
+    {stat('Pending', str(counts.get('PENDING',0)))}
+    {stat('Active', str(counts.get('ACTIVE',0)))}
     {stat('Admin inbox', str(msg_count))}{stat('Direct msgs (unread)', str(dm_unread))}
     </div>
     <div class='toolbar'>
