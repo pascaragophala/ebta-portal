@@ -3084,6 +3084,16 @@ def page(title, body_html, extra_head="", extra_js=""):
             """, (month,))
             active_students = cur.fetchone()[0] or 0
 
+            # Tutors linked to subjects with ACTIVE enrollments in the current month
+            cur.execute("""
+                SELECT COUNT(DISTINCT ts.tutor_id)
+                FROM tutor_subjects ts
+                JOIN enrollments e ON e.subject_id = ts.subject_id
+                WHERE e.month = ?
+                  AND e.status = 'ACTIVE'
+            """, (month,))
+            tutors = cur.fetchone()[0] or 0
+
             # PIN reset messages are not month-based, keep unresolved only
             cur.execute("""
                 SELECT COUNT(*)
@@ -3094,6 +3104,7 @@ def page(title, body_html, extra_head="", extra_js=""):
             resets = cur.fetchone()[0] or 0
 
             role_title, user_name = "Admin", "Administrator"
+
             links = [
                 ("Manage enrollments", "#enrollments"),
                 ("Students", "#students"),
@@ -3107,12 +3118,38 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("Settings", "#settings"),
                 ("Logout", url_for('admin_logout'))
             ]
+
             stats_grid = f"""
             <div class='stats-mini'>
-            <div class='s'><div class='k'>{pend}</div><div class='t'>Pending this month</div></div>
-            <div class='s'><div class='k'>{active_enrollments}</div><div class='t'>Active enrollments</div></div>
-            <div class='s'><div class='k'>{students}</div><div class='t'>Students this month</div></div>
-            <div class='s'><div class='k'>{active_students}</div><div class='t'>Active students</div></div>
+                <div class='s'>
+                    <div class='k'>{pend}</div>
+                    <div class='t'>Pending this month</div>
+                </div>
+
+                <div class='s'>
+                    <div class='k'>{active_enrollments}</div>
+                    <div class='t'>Active enrollments</div>
+                </div>
+
+                <div class='s'>
+                    <div class='k'>{students}</div>
+                    <div class='t'>Students this month</div>
+                </div>
+
+                <div class='s'>
+                    <div class='k'>{active_students}</div>
+                    <div class='t'>Active students</div>
+                </div>
+
+                <div class='s'>
+                    <div class='k'>{tutors}</div>
+                    <div class='t'>Tutors this month</div>
+                </div>
+
+                <div class='s'>
+                    <div class='k'>{resets}</div>
+                    <div class='t'>PIN resets</div>
+                </div>
             </div>"""
         else:
             role_title = ""
@@ -5492,8 +5529,8 @@ def student_home():
 
     # Sessions + Meet link for enrolled subjects
     sessions_html="<div class='empty'>No sessions yet.</div>"
-    #if is_current_month and has_active_enrollment and active_sub_ids:
-    if has_active_enrollment and active_sub_ids:
+    if is_current_month and has_active_enrollment and active_sub_ids:
+    #if has_active_enrollment and active_sub_ids:
         q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link,s.meeting_id,s.meeting_passcode
             FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
             WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(active_sub_ids))})
@@ -5993,8 +6030,8 @@ def student_home():
     groups_section = ""
     sessions_section = ""
 
-    #if is_current_month and has_active_enrollment and active_sub_ids:
-    if has_active_enrollment and active_sub_ids:
+    if is_current_month and has_active_enrollment and active_sub_ids:
+    #if has_active_enrollment and active_sub_ids:
 
         groups_section = f"""
         <div class='card' style="border-left:5px solid #25D366">
