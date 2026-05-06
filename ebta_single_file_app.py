@@ -19,7 +19,6 @@ from functools import wraps
 
 
 from flask import Flask, request, redirect, url_for, render_template_string, send_from_directory, session, flash, make_response
-from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('EBTA_SECRET_KEY', 'ebta-dev-secret')
@@ -1158,31 +1157,6 @@ def secure_name(name):
     return ''.join(ch if ch in keep else '_' for ch in name)
     
 
-def hash_pin(pin):
-    return generate_password_hash(str(pin))
-
-
-def verify_pin(stored_pin, entered_pin):
-    """
-    Supports both new hashed PINs and old plain-text PINs.
-    This prevents existing treasurer accounts from breaking immediately.
-    """
-
-    if not stored_pin or not entered_pin:
-        return False
-
-    stored_pin = str(stored_pin)
-    entered_pin = str(entered_pin)
-
-    # New secure format: Werkzeug hashes usually contain method markers
-    try:
-        if stored_pin.startswith("scrypt:") or stored_pin.startswith("pbkdf2:"):
-            return check_password_hash(stored_pin, entered_pin)
-    except Exception:
-        return False
-
-    # Temporary support for old plain-text PINs
-    return stored_pin == entered_pin
 
 
 ALLOWED_REPORT_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx'}
@@ -21712,9 +21686,8 @@ def admin_add_treasurer():
 
     conn = get_db()
     cur = conn.cursor()
-    
-    raw_pin = f"{random.randint(0, 99999):05d}"
-    pin = hash_pin(raw_pin)
+
+    pin = f"{random.randint(0, 99999):05d}"
 
     try:
         cur.execute("""
@@ -21820,8 +21793,7 @@ def admin_treasurer_reset_pin(tid):
     if not is_high_admin():
         return page("Access Denied", card_msg("Only high admin can reset treasurer PINs."))
 
-    raw_pin = f"{random.randint(0, 99999):05d}"
-    stored_pin = hash_pin(raw_pin)
+    new_pin = f"{random.randint(0, 99999):05d}"
 
     conn = get_db()
     cur = conn.cursor()
@@ -21831,7 +21803,7 @@ def admin_treasurer_reset_pin(tid):
         SET pin=?,
             updated_at=?
         WHERE id=?
-    """, (stored_pin, now_utc_iso(), tid))
+    """, (new_pin, now_utc_iso(), tid))
 
     conn.commit()
     conn.close()
@@ -21842,27 +21814,7 @@ def admin_treasurer_reset_pin(tid):
         {admin_nav()}
         <div class="card">
             <h1>Treasurer PIN Reset</h1>
-
-            <div class="card soft" style="border-left:5px solid #f59e0b;margin:14px 0">
-                <h2>New Login PIN</h2>
-
-                <p>
-                    <b>New PIN:</b>
-                    <span class="chip" style="
-                        font-size:24px;
-                        padding:14px 20px;
-                        letter-spacing:2px;
-                        font-weight:800;
-                    ">
-                        {raw_pin}
-                    </span>
-                </p>
-
-                <p class="mini muted">
-                    Share this new PIN privately. It is stored securely in the database.
-                </p>
-            </div>
-
+            <p>New PIN: <span class="chip">{new_pin}</span></p>
             <a class="btn" href="/admin/treasurers">Back to Treasurers</a>
         </div>
         """
@@ -21946,36 +21898,16 @@ def treasurer_login_post():
         SELECT *
         FROM treasurers
         WHERE phone IN ({qmarks})
+          AND pin=?
           AND is_active=1
         LIMIT 1
-    """, params)
+    """, params + [pin])
 
     treasurer = cur.fetchone()
+    conn.close()
 
     if not treasurer:
-        conn.close()
         return page("Login Failed", card_msg("Invalid treasurer login details or account is inactive."))
-
-    if not verify_pin(treasurer["pin"], pin):
-        conn.close()
-        return page("Login Failed", card_msg("Invalid treasurer login details or account is inactive."))
-
-    # Optional: if old plain-text PIN was used, upgrade it automatically after successful login
-    stored_pin = str(treasurer["pin"])
-    if not (stored_pin.startswith("scrypt:") or stored_pin.startswith("pbkdf2:")):
-        cur.execute("""
-            UPDATE treasurers
-            SET pin=?,
-                updated_at=?
-            WHERE id=?
-        """, (
-            hash_pin(pin),
-            now_utc_iso(),
-            treasurer["id"]
-        ))
-        conn.commit()
-
-    conn.close()
 
     session.clear()
     session["treasurer_id"] = treasurer["id"]
