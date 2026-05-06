@@ -3084,14 +3084,11 @@ def page(title, body_html, extra_head="", extra_js=""):
             """, (month,))
             active_students = cur.fetchone()[0] or 0
 
-            # Tutors linked to subjects with ACTIVE enrollments in the current month
+            # Total tutors created on the portal
             cur.execute("""
-                SELECT COUNT(DISTINCT ts.tutor_id)
-                FROM tutor_subjects ts
-                JOIN enrollments e ON e.subject_id = ts.subject_id
-                WHERE e.month = ?
-                  AND e.status = 'ACTIVE'
-            """, (month,))
+                SELECT COUNT(*)
+                FROM tutors
+            """)
             tutors = cur.fetchone()[0] or 0
 
             # PIN reset messages are not month-based, keep unresolved only
