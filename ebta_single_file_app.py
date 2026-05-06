@@ -11855,68 +11855,287 @@ def admin_tutors():
     r = require_admin()
     if r:
         return r
+
+    q = request.args.get("q", "").strip()
+    grade_filter = request.args.get("grade", "").strip()
+    subject_filter = request.args.get("subject", "").strip()
+
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
-    SELECT t.id, t.full_name, t.phone, t.pin,
-           MIN(CAST(SUBSTR(s.grade,2) AS INTEGER)) AS grade_order
-    FROM tutors t
-    LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
-    LEFT JOIN subjects s ON s.id = ts.subject_id
-    GROUP BY t.id
-    ORDER BY grade_order ASC, t.full_name
-    """)
+
+    # Total tutors on the portal
+    cur.execute("SELECT COUNT(*) AS c FROM tutors")
+    total_tutors = cur.fetchone()["c"] or 0
+
+    # Build filtered tutor query
+    params = []
+    where = []
+
+    if q:
+        where.append("(t.full_name LIKE ? OR t.phone LIKE ?)")
+        params.extend([f"%{q}%", f"%{q}%"])
+
+    if grade_filter:
+        where.append("""
+            t.id IN (
+                SELECT ts.tutor_id
+                FROM tutor_subjects ts
+                JOIN subjects s ON s.id = ts.subject_id
+                WHERE s.grade = ?
+            )
+        """)
+        params.append(grade_filter)
+
+    if subject_filter:
+        where.append("""
+            t.id IN (
+                SELECT ts.tutor_id
+                FROM tutor_subjects ts
+                JOIN subjects s ON s.id = ts.subject_id
+                WHERE s.name = ?
+            )
+        """)
+        params.append(subject_filter)
+
+    where_sql = ""
+    if where:
+        where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT 
+            t.id,
+            t.full_name,
+            t.phone,
+            t.pin,
+            MIN(CAST(SUBSTR(s.grade,2) AS INTEGER)) AS grade_order
+        FROM tutors t
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
+        LEFT JOIN subjects s ON s.id = ts.subject_id
+        {where_sql}
+        GROUP BY t.id
+        ORDER BY grade_order ASC, t.full_name ASC
+    """, params)
+
     rows = cur.fetchall()
-    # subjects list for mapping
-    cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
+    filtered_total = len(rows)
+
+    # Subjects list for add-subject dropdown
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY CAST(SUBSTR(grade,2) AS INTEGER), name
+    """)
     subjects = cur.fetchall()
-    # existing mappings
-    cur.execute("""SELECT ts.tutor_id, s.name||' ('||s.grade||')' AS label
-                FROM tutor_subjects ts JOIN subjects s ON s.id=ts.subject_id ORDER BY s.grade,s.name""")
+
+    # Grade filter dropdown
+    cur.execute("""
+        SELECT DISTINCT grade
+        FROM subjects
+        ORDER BY CAST(SUBSTR(grade,2) AS INTEGER)
+    """)
+    grades = cur.fetchall()
+
+    # Subject filter dropdown
+    cur.execute("""
+        SELECT DISTINCT name
+        FROM subjects
+        ORDER BY name
+    """)
+    subject_names = cur.fetchall()
+
+    # Existing tutor-subject mappings
+    cur.execute("""
+        SELECT 
+            ts.tutor_id,
+            s.name || ' (' || s.grade || ')' AS label
+        FROM tutor_subjects ts
+        JOIN subjects s ON s.id = ts.subject_id
+        ORDER BY CAST(SUBSTR(s.grade,2) AS INTEGER), s.name
+    """)
+
     maps = {}
     for rmap in cur.fetchall():
-        maps.setdefault(rmap['tutor_id'], []).append(rmap['label'])
+        maps.setdefault(rmap["tutor_id"], []).append(rmap["label"])
+
     conn.close()
 
-    options = "".join([f"<option value='{s['id']}'>{s['name']} — {s['grade']}</option>" for s in subjects])
+    options = "".join([
+        f"<option value='{s['id']}'>{escape(s['name'])} — {escape(s['grade'])}</option>"
+        for s in subjects
+    ])
+
+    grade_options = "<option value=''>All Grades</option>"
+    for g in grades:
+        selected = "selected" if grade_filter == g["grade"] else ""
+        grade_options += f"<option value='{escape(g['grade'])}' {selected}>{grade_label(g['grade'])}</option>"
+
+    subject_options = "<option value=''>All Subjects</option>"
+    for s in subject_names:
+        selected = "selected" if subject_filter == s["name"] else ""
+        subject_options += f"<option value='{escape(s['name'])}' {selected}>{escape(s['name'])}</option>"
 
     trs = []
+
     for t in rows:
-        pin = t['pin'] if t['pin'] else "<span class='muted'>not set</span>"
-        mapped = ", ".join(maps.get(t['id'], [])) or "<span class='muted'>No subjects</span>"
-        trs.append(
-            f"<tr><td>{t['full_name']}<div class='muted'>{t['phone']}</div></td>"
-            f"<td>{pin}</td>"
-            f"<td>{mapped}</td>"
-            f"<td>"
-            f"<a href='{url_for('admin_tutor_edit', tid=t['id'])}' class='btn secondary mini'>Edit</a> "
-            f"<form method='post' action='{url_for('admin_tutor_reset_pin', tid=t['id'])}' style='display:inline'><button class='btn success mini'>Reset PIN</button></form> "              
-            f"<form method='post' action='{url_for('admin_tutor_add_subject', tid=t['id'])}' class='inlineform' style='margin-left:8px'>"
-            f"<select name='subject_id'>{options}</select><button class='btn mini'>Add subject</button></form>"
-            f"</td></tr>"
-        )
+        pin = escape(t["pin"]) if t["pin"] else "<span class='muted'>not set</span>"
+        mapped = ", ".join(maps.get(t["id"], [])) or "<span class='muted'>No subjects</span>"
+
+        trs.append(f"""
+        <tr>
+            <td>
+                {escape(t['full_name'])}
+                <div class='muted mini'>{escape(t['phone'])}</div>
+            </td>
+
+            <td>{pin}</td>
+
+            <td>{mapped}</td>
+
+            <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+
+                    <a href='{url_for('admin_tutor_edit', tid=t['id'])}'
+                       class='btn secondary mini'>
+                        Edit
+                    </a>
+
+                    <form method='post'
+                          action='{url_for('admin_tutor_reset_pin', tid=t['id'])}'
+                          style='display:inline'>
+                        <button class='btn success mini'>
+                            Reset PIN
+                        </button>
+                    </form>
+
+                    <form method='post'
+                          action='{url_for('admin_tutor_add_subject', tid=t['id'])}'
+                          class='inlineform'
+                          style='display:inline-grid;grid-template-columns:180px auto;gap:6px'>
+                        <select name='subject_id'>
+                            {options}
+                        </select>
+                        <button class='btn mini'>
+                            Add subject
+                        </button>
+                    </form>
+
+                </div>
+            </td>
+        </tr>
+        """)
+
+    filter_note = ""
+    if q or grade_filter or subject_filter:
+        filter_note = f"""
+        <div class="mini muted" style="margin-top:6px">
+            Showing {filtered_total} of {total_tutors} tutors based on your filters.
+        </div>
+        """
 
     body = f"""
     {admin_nav()}
+
     <section class='card'>
         <h1>Tutors</h1>
-        <div class='toolbar'>
-        <input id='tut_q' class='pill' placeholder='Search tutors' oninput="filterTable('tut_q','tut_tbl')"/>
-        <form method='post' action='{url_for('admin_tutor_add')}' class='grid' style='grid-template-columns:1fr 160px auto;gap:10px;margin-left:auto'>
-            <input name='full_name' placeholder='Full name' required />
-            <input name='phone' placeholder='Phone' required />
-            <button class='btn'>Add</button>
-        </form>
+
+        <div class="stats" style="margin-bottom:14px">
+            <div class="stat">
+                <div class="k">{total_tutors}</div>
+                <div class="t">Total Tutors</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{filtered_total}</div>
+                <div class="t">Currently Showing</div>
+            </div>
         </div>
+
+        <div class='card soft' style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>Add Tutor</h2>
+
+            <form method='post'
+                  action='{url_for('admin_tutor_add')}'
+                  class='grid'
+                  style='grid-template-columns:1fr 180px auto;gap:10px;align-items:end'>
+
+                <div>
+                    <label>Full Name</label>
+                    <input name='full_name' placeholder='Full name' required>
+                </div>
+
+                <div>
+                    <label>Phone</label>
+                    <input name='phone' placeholder='Phone' required>
+                </div>
+
+                <button class='btn'>
+                    Add Tutor
+                </button>
+            </form>
+        </div>
+
+        <div class='card soft' style="border-left:5px solid #2563eb;margin-bottom:14px">
+            <h2>Search and Filter Tutors</h2>
+
+            <form method="get"
+                  action="{url_for('admin_tutors')}"
+                  class="grid"
+                  style="grid-template-columns:1.5fr 1fr 1fr auto auto;gap:10px;align-items:end">
+
+                <div>
+                    <label>Search Tutor</label>
+                    <input name="q"
+                           value="{escape(q)}"
+                           placeholder="Search by tutor name or phone">
+                </div>
+
+                <div>
+                    <label>Grade</label>
+                    <select name="grade">
+                        {grade_options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Subject</label>
+                    <select name="subject">
+                        {subject_options}
+                    </select>
+                </div>
+
+                <button class="btn success">
+                    Apply Filter
+                </button>
+
+                <a class="btn secondary" href="{url_for('admin_tutors')}">
+                    Clear
+                </a>
+            </form>
+
+            {filter_note}
+        </div>
+
         <div class="scroll-x">
             <table id='tut_tbl'>
-            <thead><tr><th>Tutor</th><th>PIN</th><th>Subjects</th><th>Actions</th></tr></thead>
-            <tbody>{''.join(trs) if trs else "<tr><td colspan='4'><div class='empty'>No tutors yet.</div></td></tr>"}</tbody>
+                <thead>
+                    <tr>
+                        <th>Tutor</th>
+                        <th>PIN</th>
+                        <th>Subjects</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {''.join(trs) if trs else "<tr><td colspan='4'><div class='empty'>No tutors found.</div></td></tr>"}
+                </tbody>
             </table>
         </div>
     </section>
     """
+
     return page("Tutors", body)
+    
     
 @app.get('/admin/tutors/<int:tid>/edit')
 @require_high_admin
