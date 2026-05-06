@@ -3047,14 +3047,52 @@ def page(title, body_html, extra_head="", extra_js=""):
             <div class='s'><div class='k'>{unread}</div><div class='t'>Unread messages</div></div>
             </div>"""
         elif is_admin():
-            cur.execute("SELECT COUNT(*) FROM enrollments WHERE status='PENDING'")
+            month = get_setting('current_month')
+
+            # Current month pending enrollments only
+            cur.execute("""
+                SELECT COUNT(*)
+                FROM enrollments
+                WHERE month = ?
+                  AND status = 'PENDING'
+            """, (month,))
             pend = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM messages WHERE kind IN ('forgot_student_pin','forgot_tutor_pin') AND resolved=0")
-            resets = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM students")
+
+            # Current month active enrollments only
+            cur.execute("""
+                SELECT COUNT(*)
+                FROM enrollments
+                WHERE month = ?
+                  AND status = 'ACTIVE'
+            """, (month,))
+            active_enrollments = cur.fetchone()[0] or 0
+
+            # Current month unique students only
+            cur.execute("""
+                SELECT COUNT(DISTINCT student_id)
+                FROM enrollments
+                WHERE month = ?
+            """, (month,))
             students = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM tutors")
-            tutors = cur.fetchone()[0] or 0
+
+            # Current month unique active students only
+            cur.execute("""
+                SELECT COUNT(DISTINCT student_id)
+                FROM enrollments
+                WHERE month = ?
+                  AND status = 'ACTIVE'
+            """, (month,))
+            active_students = cur.fetchone()[0] or 0
+
+            # PIN reset messages are not month-based, keep unresolved only
+            cur.execute("""
+                SELECT COUNT(*)
+                FROM messages
+                WHERE kind IN ('forgot_student_pin','forgot_tutor_pin')
+                  AND resolved = 0
+            """)
+            resets = cur.fetchone()[0] or 0
+
             role_title, user_name = "Admin", "Administrator"
             links = [
                 ("Manage enrollments", "#enrollments"),
@@ -3071,10 +3109,10 @@ def page(title, body_html, extra_head="", extra_js=""):
             ]
             stats_grid = f"""
             <div class='stats-mini'>
-            <div class='s'><div class='k'>{pend}</div><div class='t'>PoPs pending</div></div>
-            <div class='s'><div class='k'>{resets}</div><div class='t'>PIN resets</div></div>
-            <div class='s'><div class='k'>{students}</div><div class='t'>Students</div></div>
-            <div class='s'><div class='k'>{tutors}</div><div class='t'>Tutors</div></div>
+            <div class='s'><div class='k'>{pend}</div><div class='t'>Pending this month</div></div>
+            <div class='s'><div class='k'>{active_enrollments}</div><div class='t'>Active enrollments</div></div>
+            <div class='s'><div class='k'>{students}</div><div class='t'>Students this month</div></div>
+            <div class='s'><div class='k'>{active_students}</div><div class='t'>Active students</div></div>
             </div>"""
         else:
             role_title = ""
