@@ -11270,6 +11270,7 @@ def admin_student_update(sid):
 
 
 @app.post('/admin/students/add')
+@require_high_admin
 def admin_student_add():
     r = require_admin()
     if r:
@@ -11328,6 +11329,7 @@ def admin_student_reset_pin(sid:int):
     return page("PIN Updated", card_msg(f"Student PIN reset to: {new_pin}"))
 
 @app.post('/admin/students/<int:sid>/delete')
+@require_high_admin
 def admin_student_delete(sid: int):
     r = require_admin()
     if r:
@@ -11639,6 +11641,7 @@ def view_report(rid):
     )
 
 @app.post('/admin/delete_report/<int:rid>')
+@require_high_admin
 def delete_report(rid):
 
     r = require_admin()
@@ -11667,6 +11670,7 @@ def delete_report(rid):
     return redirect(url_for('admin_reports'))
 
 @app.get('/admin/download_report/<int:rid>')
+@require_high_admin
 def admin_download_report(rid):
 
     r = require_admin()
@@ -11696,6 +11700,7 @@ def admin_download_report(rid):
     
     
 @app.get('/admin/download_reports_zip')
+@require_high_admin
 def admin_download_reports_zip():
 
     r = require_admin()
@@ -11909,6 +11914,7 @@ def admin_tutor_update(tid: int):
     return redirect(url_for('admin_tutors'))
 
 @app.post('/admin/tutors/add')
+@require_high_admin
 def admin_tutor_add():
     r = require_admin()
     if r:
@@ -11955,6 +11961,7 @@ def admin_tutor_reset_pin(tid:int):
     return page("PIN Updated", card_msg(f"Tutor PIN reset to: {new_pin}"))
 
 @app.post('/admin/tutors/<int:tid>/delete')
+@require_high_admin
 def admin_tutor_delete(tid:int):
     r = require_admin()
     if r:
@@ -12081,6 +12088,7 @@ def admin_uploads_control():
 
     
 @app.get('/admin/uploads-lock/<int:subject_id>')
+@require_high_admin
 def admin_uploads_lock(subject_id):
     r = require_admin()
     if r: return r
@@ -12100,6 +12108,7 @@ def admin_uploads_lock(subject_id):
     return redirect(url_for('admin_uploads_control'))
    
 @app.get('/admin/uploads-unlock/<int:subject_id>')
+@require_high_admin
 def admin_uploads_unlock(subject_id):
     r = require_admin()
     if r: return r
@@ -12401,6 +12410,7 @@ def admin_materials():
 
     
 @app.post('/admin/materials/<int:mid>/unlock')
+@require_high_admin
 def admin_unlock_material(mid):
 
     r = require_admin()
@@ -12425,6 +12435,7 @@ def admin_unlock_material(mid):
 
 
 @app.post('/admin/materials/<int:mid>/relock')
+@require_high_admin
 def admin_relock_material(mid):
 
     r = require_admin()
@@ -12448,6 +12459,7 @@ def admin_relock_material(mid):
     
 
 @app.post('/admin/materials/<int:mid>/delete')
+@require_high_admin
 def admin_delete_material(mid):
 
     r = require_admin()
@@ -12492,6 +12504,7 @@ def admin_delete_material(mid):
 # --- Admin: Groups ---
 
 @app.post('/admin/groups/toggle/<int:gid>')
+@require_high_admin
 def admin_group_toggle(gid):
     r = require_admin()
     if r:
@@ -12639,6 +12652,7 @@ def admin_groups():
 
 
 @app.post('/admin/groups')
+@require_high_admin
 def admin_groups_post():
     r = require_admin()
     if r:
@@ -12756,6 +12770,7 @@ def admin_group_edit_post(gid):
     return redirect(url_for('admin_groups'))
     
 @app.post('/admin/groups/delete/<int:gid>')
+@require_high_admin
 def admin_group_delete(gid):
     r = require_admin()
     if r:
@@ -12771,6 +12786,7 @@ def admin_group_delete(gid):
 
 
 @app.post('/admin/groups/toggle-all')
+@require_high_admin
 def admin_groups_toggle_all():
     r = require_admin()
     if r:
@@ -12881,6 +12897,7 @@ def admin_settings():
     
     
 @app.post('/admin/set-enrollment')
+@require_high_admin
 def admin_set_enrollment():
     r = require_admin()
     if r:
@@ -13135,6 +13152,7 @@ def admin_sessions():
     
 
 @app.post('/admin/sessions/toggle/<int:sid>')
+@require_high_admin
 def admin_session_toggle(sid):
     r = require_admin()
     if r:
@@ -13154,6 +13172,7 @@ def admin_session_toggle(sid):
 
 
 @app.post('/admin/sessions')
+@require_high_admin
 def admin_sessions_post():
     r = require_admin()
     if r:
@@ -13235,6 +13254,7 @@ def admin_sessions_post():
     
 
 @app.get('/admin/sessions/edit/<int:sid>')
+@require_high_admin
 def admin_session_edit(sid):
     r = require_admin()
     if r:
@@ -13306,6 +13326,7 @@ def admin_session_edit(sid):
     return page("Edit Session", body)
     
 @app.post('/admin/sessions/update/<int:sid>')
+@require_high_admin
 def admin_session_update(sid):
     r = require_admin()
     if r:
@@ -13342,6 +13363,7 @@ def admin_session_update(sid):
 # --- Session QR (uses PNG endpoint) ---
 
 @app.get('/session/<int:id>/qr')
+@require_high_admin
 def session_qr(id: int):
     r = require_admin()
     if r:
@@ -13375,6 +13397,7 @@ def session_qr(id: int):
     return page("Session QR", body)
     
 @app.post('/admin/sessions/delete/<int:sid>')
+@require_high_admin
 def admin_session_delete(sid):
     r = require_admin()
     if r:
@@ -13416,7 +13439,7 @@ def attend_get():
     body = f"""
     <section class='wrap small'>
         <div class='card'>
-        <h1>Pasco Attendance</h1>
+        <h1>EBTA Attendance</h1>
         <form method='post' action='{url_for('attend_post')}' class='grid'>
             <input type='hidden' name='code' value='{code}' />
             <div><label>Enter your WhatsApp number (e.g. 2782...)</label><input name='phone' required /></div>
@@ -13766,6 +13789,7 @@ def admin_message_resolve(mid:int):
     
 
 @app.post('/admin/messages/resolve-all')
+@require_high_admin
 def admin_messages_resolve_all():
 
     r = require_admin()
@@ -17232,6 +17256,7 @@ def aqm_dashboard():
     
     
 @app.get('/admin/academic-quality-managers')
+@require_high_admin
 def admin_academic_quality_managers():
 
     r = require_admin()
@@ -17352,6 +17377,7 @@ def admin_academic_quality_managers():
     
     
 @app.post('/admin/academic-quality-managers/add')
+@require_high_admin
 def admin_add_academic_quality_manager():
 
     r = require_admin()
@@ -17385,6 +17411,7 @@ def admin_add_academic_quality_manager():
     
     
 @app.post('/admin/academic-quality-managers/update/<int:aqm_id>')
+@require_high_admin
 def admin_update_academic_quality_manager(aqm_id):
 
     r = require_admin()
@@ -17419,6 +17446,7 @@ def admin_update_academic_quality_manager(aqm_id):
     
     
 @app.post('/admin/academic-quality-managers/delete/<int:aqm_id>')
+@require_high_admin
 def admin_delete_academic_quality_manager(aqm_id):
 
     r = require_admin()
@@ -19469,6 +19497,7 @@ def tutor_application_submit():
     return page("Application Submitted", body)
     
 @app.get('/admin/applications')
+@require_high_admin
 def admin_applications():
 
     r = require_admin()
@@ -19718,6 +19747,7 @@ def admin_applications():
     
     
 @app.get('/admin/application/<int:app_id>')
+@require_high_admin
 def admin_application_detail(app_id):
 
     r = require_admin()
@@ -19870,6 +19900,7 @@ def admin_application_detail(app_id):
     
     
 @app.post('/admin/application/<int:app_id>/status')
+@require_high_admin
 def admin_application_update_status(app_id):
 
     r = require_admin()
@@ -19901,6 +19932,7 @@ def admin_application_update_status(app_id):
     
 
 @app.get('/admin/application/<int:app_id>/download/<kind>')
+@require_high_admin
 def admin_application_download(app_id, kind):
 
     r = require_admin()
@@ -19938,6 +19970,7 @@ def admin_application_download(app_id, kind):
     )
 
 @app.get('/admin/application-settings')
+@require_high_admin
 def admin_application_settings():
 
     r = require_admin()
@@ -20003,6 +20036,7 @@ def admin_application_settings():
 
 
 @app.post('/admin/application-settings')
+@require_high_admin
 def admin_application_settings_save():
 
     r = require_admin()
@@ -20024,6 +20058,7 @@ def admin_application_settings_save():
 
 
 @app.get('/admin/application/<int:app_id>/view/<kind>')
+@require_high_admin
 def admin_application_view_file(app_id, kind):
 
     r = require_admin()
@@ -20059,6 +20094,7 @@ def admin_application_view_file(app_id, kind):
     
     
 @app.post('/admin/application/<int:app_id>/delete')
+@require_high_admin
 def admin_application_delete(app_id):
 
     r = require_admin()
@@ -20101,6 +20137,7 @@ def admin_application_delete(app_id):
 #Admin management site
 
 @app.get('/admin/management-roles')
+@require_high_admin
 def admin_management_roles():
 
     r = require_admin()
@@ -20193,6 +20230,7 @@ def admin_management_roles():
 
 
 @app.post('/admin/management-roles/<int:role_id>/update')
+@require_high_admin
 def admin_management_role_update(role_id):
 
     r = require_admin()
@@ -20587,6 +20625,7 @@ def management_application_submit():
     return page("Management Application Submitted", body)
 
 @app.get('/admin/management-applications')
+@require_high_admin
 def admin_management_applications():
 
     r = require_admin()
@@ -20817,6 +20856,7 @@ def admin_management_applications():
     
     
 @app.get('/admin/management-application/<int:app_id>')
+@require_high_admin
 def admin_management_application_detail(app_id):
 
     r = require_admin()
@@ -20975,6 +21015,7 @@ def admin_management_application_detail(app_id):
     
     
 @app.post('/admin/management-application/<int:app_id>/status')
+@require_high_admin
 def admin_management_application_update_status(app_id):
 
     r = require_admin()
@@ -21006,6 +21047,7 @@ def admin_management_application_update_status(app_id):
     
  
 @app.get('/admin/management-application/<int:app_id>/view/<kind>')
+@require_high_admin
 def admin_management_application_view_file(app_id, kind):
 
     r = require_admin()
@@ -21041,6 +21083,7 @@ def admin_management_application_view_file(app_id, kind):
 
 
 @app.get('/admin/management-application/<int:app_id>/download/<kind>')
+@require_high_admin
 def admin_management_application_download(app_id, kind):
 
     r = require_admin()
@@ -21079,6 +21122,7 @@ def admin_management_application_download(app_id, kind):
 
 
 @app.post('/admin/management-application/<int:app_id>/delete')
+@require_high_admin
 def admin_management_application_delete(app_id):
 
     r = require_admin()
@@ -21117,6 +21161,7 @@ def admin_management_application_delete(app_id):
     
 
 @app.get('/admin/treasurers')
+@require_high_admin
 def admin_treasurers():
 
     r = require_admin()
@@ -21316,6 +21361,7 @@ def admin_treasurers():
     
     
 @app.get('/admin/treasurer/<int:tid>')
+@require_high_admin
 def admin_treasurer_detail(tid):
 
     r = require_admin()
@@ -21555,6 +21601,7 @@ def admin_treasurer_detail(tid):
     return page("Treasurer Details", body)    
     
 @app.post('/admin/treasurer/<int:tid>/delete')
+@require_high_admin
 def admin_treasurer_delete(tid):
 
     r = require_admin()
@@ -21621,6 +21668,7 @@ def admin_treasurer_delete(tid):
     
 
 @app.post('/admin/treasurers/add')
+@require_high_admin
 def admin_add_treasurer():
 
     r = require_admin()
@@ -21736,6 +21784,7 @@ def admin_add_treasurer():
 
 
 @app.post('/admin/treasurer/<int:tid>/reset-pin')
+@require_high_admin
 def admin_treasurer_reset_pin(tid):
 
     r = require_admin()
@@ -21773,6 +21822,7 @@ def admin_treasurer_reset_pin(tid):
 
 
 @app.post('/admin/treasurer/<int:tid>/toggle')
+@require_high_admin
 def admin_treasurer_toggle(tid):
 
     r = require_admin()
@@ -22738,6 +22788,7 @@ def treasurer_monthly_report_save():
 
 
 @app.get('/admin/finance')
+@require_high_admin
 def admin_finance_overview():
 
     r = require_admin()
