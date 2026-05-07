@@ -8138,6 +8138,41 @@ def tutor_home():
     message_student_options = []
 
     for s in subs:
+
+        subject_id = s["subject_id"]
+
+        # Pagination for this specific subject attendance table
+        per_page = 15
+        page_param = f"att_page_{subject_id}"
+
+        try:
+            att_page = int(request.args.get(page_param, 1))
+        except:
+            att_page = 1
+
+        if att_page < 1:
+            att_page = 1
+
+        # Count total active learners for this subject/month
+        cur.execute("""
+            SELECT COUNT(*) AS c
+            FROM enrollments e
+            JOIN students st ON st.id = e.student_id
+            WHERE e.subject_id = ?
+              AND e.month = ?
+              AND e.status = 'ACTIVE'
+        """, (subject_id, month))
+
+        total_students_for_subject = cur.fetchone()["c"] or 0
+
+        total_pages = max(1, (total_students_for_subject + per_page - 1) // per_page)
+
+        if att_page > total_pages:
+            att_page = total_pages
+
+        offset = (att_page - 1) * per_page
+
+        # Fetch only learners for the current page
         cur.execute("""
             SELECT st.id, st.full_name, st.phone_whatsapp
             FROM enrollments e 
@@ -8146,9 +8181,13 @@ def tutor_home():
               AND e.month = ?
               AND e.status = 'ACTIVE'
             ORDER BY st.full_name
-        """, (s["subject_id"], month))
+            LIMIT ? OFFSET ?
+        """, (subject_id, month, per_page, offset))
 
         studs = cur.fetchall()
+
+        showing_from = offset + 1 if total_students_for_subject > 0 else 0
+        showing_to = min(offset + per_page, total_students_for_subject)
 
         # EBTA monthly cap:
         # Grade 8 to Grade 12 = 4 classes per month
@@ -8172,6 +8211,54 @@ def tutor_home():
         # Keep the cap as a safety limit, but do not create future absences.
         actual_class_dates = captured_class_dates[:monthly_cap]
         actual_classes_held = len(actual_class_dates)
+        
+        pagination_links = []
+
+        base_anchor = f"#students-{subject_id}"
+
+        if att_page > 1:
+            pagination_links.append(
+                f"<a class='btn mini secondary' href='/tutor?{page_param}=1{base_anchor}'>First</a>"
+            )
+            pagination_links.append(
+                f"<a class='btn mini secondary' href='/tutor?{page_param}={att_page - 1}{base_anchor}'>Prev</a>"
+            )
+
+        start_page = max(1, att_page - 2)
+        end_page = min(total_pages, att_page + 2)
+
+        for p in range(start_page, end_page + 1):
+            if p == att_page:
+                pagination_links.append(
+                    f"<span class='chip active'>Page {p}</span>"
+                )
+            else:
+                pagination_links.append(
+                    f"<a class='btn mini secondary' href='/tutor?{page_param}={p}{base_anchor}'>{p}</a>"
+                )
+
+        if att_page < total_pages:
+            pagination_links.append(
+                f"<a class='btn mini secondary' href='/tutor?{page_param}={att_page + 1}{base_anchor}'>Next</a>"
+            )
+            pagination_links.append(
+                f"<a class='btn mini secondary' href='/tutor?{page_param}={total_pages}{base_anchor}'>Last</a>"
+            )
+
+        pagination_html = ""
+
+        if total_students_for_subject > per_page:
+            pagination_html = f"""
+            <div class="card soft" style="margin-top:10px;border-left:5px solid #2563eb">
+                <div class="mini muted" style="margin-bottom:8px">
+                    Showing {showing_from}–{showing_to} of {total_students_for_subject} learners.
+                </div>
+
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    {''.join(pagination_links)}
+                </div>
+            </div>
+            """
 
         rows = []
 
@@ -8308,7 +8395,7 @@ def tutor_home():
         )
 
         stu_sections.append(f"""
-        <div class='card' id='students'>
+        <div class='card' id='students-{subject_id}'>
             <h3>{grade_label(s['grade'])} — {s['subject_name']}</h3>
 
             <div class="mini muted" style="margin-bottom:10px">
@@ -8318,6 +8405,8 @@ def tutor_home():
             </div>
 
             {table}
+            
+            {pagination_html}
         </div>
         """)
 
