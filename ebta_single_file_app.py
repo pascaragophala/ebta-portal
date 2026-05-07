@@ -236,6 +236,24 @@ def init_db():
         FOREIGN KEY(student_id) REFERENCES students(id)
     );
     """)
+    
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS attendance_sessions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL,
+        subject_id INTEGER NOT NULL,
+        tutor_id INTEGER NOT NULL,
+        date TEXT NOT NULL,
+        month TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        UNIQUE(session_id, date),
+        FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE
+    );
+    """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS materials(
@@ -669,6 +687,11 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_finance_records_type ON finance_records(record_type)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_finance_schedule_month ON finance_payment_schedule(month)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_finance_schedule_status ON finance_payment_schedule(status)")
+    
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_attendance_sessions_month ON attendance_sessions(month)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_attendance_sessions_subject ON attendance_sessions(subject_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_attendance_sessions_tutor ON attendance_sessions(tutor_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(date)")
 
     
 
@@ -8127,18 +8150,28 @@ def tutor_home():
 
         studs = cur.fetchall()
 
-        # EBTA expected monthly classes:
+        # EBTA monthly cap:
         # Grade 8 to Grade 12 = 4 classes per month
         # Grade 13 / Upgrading = 6 classes per month
-        expected_classes = 6 if s["grade"] == "G13" else 4
+        monthly_cap = 6 if s["grade"] == "G13" else 4
 
-        expected_dates = expected_class_dates_for_subject(
-            cur,
-            s["subject_id"],
-            tid,
-            month,
-            expected_classes
-        )
+        # Only count sessions that the tutor has actually captured.
+        # This prevents learners from being marked absent for future sessions.
+        cur.execute("""
+            SELECT DISTINCT date
+            FROM attendance_sessions
+            WHERE subject_id = ?
+              AND tutor_id = ?
+              AND month = ?
+            ORDER BY date
+        """, (s["subject_id"], tid, month))
+
+        captured_class_dates = [str(r["date"])[:10] for r in cur.fetchall()]
+        captured_class_dates = sorted(set(captured_class_dates))
+
+        # Keep the cap as a safety limit, but do not create future absences.
+        actual_class_dates = captured_class_dates[:monthly_cap]
+        actual_classes_held = len(actual_class_dates)
 
         rows = []
 
@@ -8161,23 +8194,28 @@ def tutor_home():
 
             attended_dates = sorted(set(attended_dates))
 
-            # Count attendance according to EBTA expected class rule
-            raw_attended_count = len(attended_dates)
-            classes_attended = min(raw_attended_count, expected_classes)
+            attended_set = set(attended_dates)
+            actual_class_set = set(actual_class_dates)
 
-            classes_missed = max(expected_classes - classes_attended, 0)
+            # Only count attendance for sessions that were actually captured by the tutor
+            classes_attended = len(actual_class_set.intersection(attended_set))
 
-            attendance_rate = f"{int(round((classes_attended / expected_classes) * 100))}%" if expected_classes > 0 else "—"
+            classes_missed = max(actual_classes_held - classes_attended, 0)
 
-            # Missed dates must never be more than classes_missed
-            missed_dates = []
+            attendance_rate = (
+                f"{int(round((classes_attended / actual_classes_held) * 100))}%"
+                if actual_classes_held > 0
+                else "—"
+            )
 
-            if expected_dates:
-                attended_set = set(attended_dates)
-                missed_dates = [d for d in expected_dates if d not in attended_set]
-                missed_dates = missed_dates[:classes_missed]
+            missed_dates = [
+                d for d in actual_class_dates
+                if d not in attended_set
+            ]
 
-            if classes_missed == 0:
+            if actual_classes_held == 0:
+                missed_classes_html = "<span class='mini muted'>No classes captured yet</span>"
+            elif classes_missed == 0:
                 missed_classes_html = "<span class='chip active'>None</span>"
             elif missed_dates:
                 missed_classes_html = "<div class='missed-dates-wrap'>" + "".join([
@@ -8216,7 +8254,7 @@ def tutor_home():
                 </td>
 
                 <td>
-                    {classes_attended} of {expected_classes}
+                    {classes_attended} of {actual_classes_held}
                 </td>
 
                 <td>
@@ -8274,8 +8312,9 @@ def tutor_home():
             <h3>{grade_label(s['grade'])} — {s['subject_name']}</h3>
 
             <div class="mini muted" style="margin-bottom:10px">
-                Attendance Rate = Num Classes Attended ÷ Expected Monthly Classes.
-                Expected monthly classes: {expected_classes}.
+                Attendance Rate = Num Classes Attended ÷ Captured Classes Held.
+                Only session dates captured by the tutor are counted.
+                Monthly cap: {monthly_cap}.
             </div>
 
             {table}
@@ -9561,7 +9600,7 @@ def tutor_message_admin():
 
 # Tutor: manual attendance (fixes missing route)
 @app.route('/tutor/session/<int:sid>/attendance', methods=['GET','POST'])
-def tutor_session_attendance(sid:int):
+def tutor_session_attendance(sid: int):
     r = require_tutor()
     if r:
         return r
@@ -9570,98 +9609,256 @@ def tutor_session_attendance(sid:int):
     conn = get_db()
     cur = conn.cursor()
 
-    # Get current academic month (FIX)
     month = get_active_month('tutor')
 
-    # Session + subject
     cur.execute("""
         SELECT se.*, s.name AS subject_name, s.grade
         FROM sessions se
         JOIN subjects s ON s.id = se.subject_id
-        WHERE se.id = ? AND se.tutor_id = ?
+        WHERE se.id = ?
+          AND se.tutor_id = ?
+          AND se.active = 1
     """, (sid, tid))
+
     se = cur.fetchone()
 
     if not se:
         conn.close()
         return page("Not found", card_msg("Session not found."))
 
-    # Active students for this subject + month
     cur.execute("""
-        SELECT st.id, st.full_name
+        SELECT st.id, st.full_name, st.phone_whatsapp
         FROM enrollments e
         JOIN students st ON st.id = e.student_id
-        WHERE e.subject_id = ? AND e.month = ? AND e.status = 'ACTIVE'
+        WHERE e.subject_id = ?
+          AND e.month = ?
+          AND e.status = 'ACTIVE'
         ORDER BY st.full_name
-    """, (se['subject_id'], month))
+    """, (se["subject_id"], month))
+
     studs = cur.fetchall()
 
-    # Date (default today)
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date().isoformat()
+
     date_str = (
-        request.form.get('date')
-        if request.method == 'POST'
-        else datetime.date.today().strftime('%Y-%m-%d')
+        request.form.get("date", "").strip()
+        if request.method == "POST"
+        else request.args.get("date", today).strip()
     )
 
-    if request.method == 'POST':
-        present_ids = set(map(int, request.form.getlist('present')))
+    if not date_str:
+        date_str = today
 
-        # Reset attendance for that date/session
-        cur.execute(
-            "DELETE FROM attendance WHERE session_id = ? AND date = ?",
-            (sid, date_str)
+    # Safety: attendance date must belong to selected tutor month
+    if date_str[:7] != month:
+        conn.close()
+        return page(
+            "Invalid Date",
+            card_msg(f"Attendance date must be within {pretty_month_label(month)}.")
         )
 
+    # Safety: do not allow future dates
+    if date_str > today:
+        conn.close()
+        return page(
+            "Invalid Date",
+            card_msg("You cannot mark attendance for a future date.")
+        )
+
+    if request.method == "POST":
+        present_ids = set()
+
+        for value in request.form.getlist("present"):
+            try:
+                present_ids.add(int(value))
+            except:
+                pass
+
+        # Record that this class actually happened
+        cur.execute("""
+            INSERT INTO attendance_sessions(
+                session_id,
+                subject_id,
+                tutor_id,
+                date,
+                month,
+                created_at,
+                updated_at
+            )
+            VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(session_id, date)
+            DO UPDATE SET
+                updated_at = excluded.updated_at
+        """, (
+            sid,
+            se["subject_id"],
+            tid,
+            date_str,
+            month,
+            now_utc_iso(),
+            now_utc_iso()
+        ))
+
+        # Reset attendance for this class date
+        cur.execute("""
+            DELETE FROM attendance
+            WHERE session_id = ?
+              AND date = ?
+        """, (sid, date_str))
+
         now = now_utc_iso()
+
         for st in studs:
-            if st['id'] in present_ids:
+            if st["id"] in present_ids:
                 cur.execute("""
-                    INSERT INTO attendance(session_id, student_id, date, created_at)
-                    VALUES (?, ?, ?, ?)
-                """, (sid, st['id'], date_str, now))
+                    INSERT INTO attendance(
+                        session_id,
+                        student_id,
+                        date,
+                        created_at
+                    )
+                    VALUES(?,?,?,?)
+                """, (
+                    sid,
+                    st["id"],
+                    date_str,
+                    now
+                ))
 
         conn.commit()
         conn.close()
-        return page("Saved", card_msg("Attendance saved."))
 
-    # GET: load existing attendance
-    cur.execute(
-        "SELECT student_id FROM attendance WHERE session_id = ? AND date = ?",
-        (sid, date_str)
-    )
-    already = {row['student_id'] for row in cur.fetchall()}
+        return redirect(url_for("tutor_home"))
+
+    # GET: load existing present learners for this date
+    cur.execute("""
+        SELECT student_id
+        FROM attendance
+        WHERE session_id = ?
+          AND date = ?
+    """, (sid, date_str))
+
+    already = {row["student_id"] for row in cur.fetchall()}
+
+    # Load captured class dates for this session/month
+    cur.execute("""
+        SELECT date
+        FROM attendance_sessions
+        WHERE session_id = ?
+          AND month = ?
+        ORDER BY date DESC
+    """, (sid, month))
+
+    captured_dates = cur.fetchall()
+
     conn.close()
 
     rows = []
+
     for st in studs:
-        chk = "checked" if st['id'] in already else ""
-        rows.append(
-            f"<tr><td>{st['full_name']}</td>"
-            f"<td><input type='checkbox' name='present' value='{st['id']}' {chk}/></td></tr>"
-        )
+        checked = "checked" if st["id"] in already else ""
+
+        rows.append(f"""
+        <tr>
+            <td>
+                {st['full_name']}
+                <div class="mini muted">{st['phone_whatsapp'] or '—'}</div>
+            </td>
+
+            <td style="text-align:center">
+                <input type="checkbox"
+                       name="present"
+                       value="{st['id']}"
+                       {checked}
+                       style="width:20px;height:20px">
+            </td>
+        </tr>
+        """)
+
+    captured_html = ""
+
+    if captured_dates:
+        captured_html = """
+        <div class="card soft" style="border-left:5px solid #2563eb;margin-bottom:12px">
+            <h3>Captured Session Dates</h3>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+        """
+
+        for d in captured_dates:
+            captured_html += f"""
+                <a class="chip"
+                   href="/tutor/session/{sid}/attendance?date={d['date']}">
+                    {datetime.date.fromisoformat(d['date']).strftime('%d %b %Y')}
+                </a>
+            """
+
+        captured_html += """
+            </div>
+        </div>
+        """
 
     table = (
-        "<div class='empty'>No students.</div>"
+        "<div class='empty'>No active learners for this subject/month.</div>"
         if not rows
-        else f'<div class="scroll-x"><table><thead><tr><th>Student</th><th>Present</th></tr></thead>'
-             f'<tbody>{"".join(rows)}</tbody></table></div>'
+        else f"""
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Present</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(rows)}
+                </tbody>
+            </table>
+        </div>
+        """
     )
 
     body = f"""
-    <a class='links' href='{url_for('tutor_home')}'>← Back</a>
-    <section class='card'>
-        <h1>Mark attendance — {grade_label(se['grade'])} {se['subject_name']}</h1>
-        <form method='post' class='grid'>
-            <div>
-                <label>Date (YYYY-MM-DD)</label>
-                <input name='date' value='{date_str}' required/>
+    <a class="btn mini secondary" href="/tutor">
+        ← Back to Tutor Dashboard
+    </a>
+
+    <section class="card" style="margin-top:12px">
+        <h1>Capture Attendance</h1>
+
+        <p class="muted">
+            {grade_label(se['grade'])} — {se['subject_name']}
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #f59e0b;margin-bottom:12px">
+            <h3>Important</h3>
+            <p class="mini muted">
+                Only capture attendance for sessions that have already happened.
+                The dashboard will calculate attendance only from captured session dates.
+            </p>
+        </div>
+
+        {captured_html}
+
+        <form method="post">
+            <div style="max-width:260px;margin-bottom:12px">
+                <label>Session Date</label>
+                <input type="date"
+                       name="date"
+                       value="{date_str}"
+                       max="{today}"
+                       required>
             </div>
+
             {table}
-            <button class='btn'>Save</button>
+
+            <button class="btn success" style="margin-top:12px">
+                Save Attendance
+            </button>
         </form>
     </section>
     """
-    return page("Attendance", body)
+
+    return page("Capture Attendance", body)
 
 
 # ===================== Admin Portal (guardian/email in Students, DM, analytics) ==============
