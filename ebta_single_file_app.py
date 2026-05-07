@@ -8216,46 +8216,89 @@ def tutor_home():
 
         base_anchor = f"#students-{subject_id}"
 
-        if att_page > 1:
-            pagination_links.append(
-                f"<a class='btn mini secondary' href='/tutor?{page_param}=1{base_anchor}'>First</a>"
-            )
-            pagination_links.append(
-                f"<a class='btn mini secondary' href='/tutor?{page_param}={att_page - 1}{base_anchor}'>Prev</a>"
-            )
+        def att_page_link(label, target_page, disabled=False, active=False):
+            if active:
+                return f"<span class='chip active'>{label}</span>"
 
+            if disabled:
+                return f"""
+                <span class='btn mini secondary'
+                      style="opacity:.45;pointer-events:none">
+                    {label}
+                </span>
+                """
+
+            return f"""
+            <a class='btn mini secondary'
+               href='/tutor?{page_param}={target_page}{base_anchor}'>
+                {label}
+            </a>
+            """
+
+        # Always show First and Prev
+        pagination_links.append(
+            att_page_link("First", 1, disabled=(att_page == 1))
+        )
+
+        pagination_links.append(
+            att_page_link("Prev", max(1, att_page - 1), disabled=(att_page == 1))
+        )
+
+        # Smart page numbers
         start_page = max(1, att_page - 2)
         end_page = min(total_pages, att_page + 2)
 
-        for p in range(start_page, end_page + 1):
-            if p == att_page:
-                pagination_links.append(
-                    f"<span class='chip active'>Page {p}</span>"
-                )
-            else:
-                pagination_links.append(
-                    f"<a class='btn mini secondary' href='/tutor?{page_param}={p}{base_anchor}'>{p}</a>"
-                )
+        if start_page > 1:
+            pagination_links.append(att_page_link("1", 1))
+            if start_page > 2:
+                pagination_links.append("<span class='mini muted' style='padding:6px'>...</span>")
 
-        if att_page < total_pages:
+        for p in range(start_page, end_page + 1):
             pagination_links.append(
-                f"<a class='btn mini secondary' href='/tutor?{page_param}={att_page + 1}{base_anchor}'>Next</a>"
+                att_page_link(f"{p}", p, active=(p == att_page))
             )
-            pagination_links.append(
-                f"<a class='btn mini secondary' href='/tutor?{page_param}={total_pages}{base_anchor}'>Last</a>"
-            )
+
+        if end_page < total_pages:
+            if end_page < total_pages - 1:
+                pagination_links.append("<span class='mini muted' style='padding:6px'>...</span>")
+            pagination_links.append(att_page_link(f"{total_pages}", total_pages))
+
+        # Always show Next and Last
+        pagination_links.append(
+            att_page_link("Next", min(total_pages, att_page + 1), disabled=(att_page == total_pages))
+        )
+
+        pagination_links.append(
+            att_page_link("Last", total_pages, disabled=(att_page == total_pages))
+        )
 
         pagination_html = ""
 
         if total_students_for_subject > per_page:
             pagination_html = f"""
-            <div class="card soft" style="margin-top:10px;border-left:5px solid #2563eb">
-                <div class="mini muted" style="margin-bottom:8px">
-                    Showing {showing_from}–{showing_to} of {total_students_for_subject} learners.
-                </div>
+            <div class="card soft" style="
+                margin:10px 0 12px 0;
+                border-left:5px solid #2563eb;
+                padding:10px 12px;
+            ">
+                <div style="
+                    display:flex;
+                    justify-content:space-between;
+                    align-items:center;
+                    gap:10px;
+                    flex-wrap:wrap;
+                ">
 
-                <div style="display:flex;gap:6px;flex-wrap:wrap">
-                    {''.join(pagination_links)}
+                    <div class="mini muted">
+                        Showing <b>{showing_from}–{showing_to}</b> of
+                        <b>{total_students_for_subject}</b> learners.
+                        Page <b>{att_page}</b> of <b>{total_pages}</b>.
+                    </div>
+
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                        {''.join(pagination_links)}
+                    </div>
+
                 </div>
             </div>
             """
@@ -8404,8 +8447,10 @@ def tutor_home():
                 Monthly cap: {monthly_cap}.
             </div>
 
+            {pagination_html}
+
             {table}
-            
+
             {pagination_html}
         </div>
         """)
