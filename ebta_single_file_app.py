@@ -7194,6 +7194,7 @@ def student_delete_report(rid):
 
     return redirect(url_for('student_my_reports'))
 
+
 @app.post('/student/set-month')
 def student_set_month():
     r = require_student()
@@ -11676,7 +11677,7 @@ def admin_reports():
         </div>
 
         <form method="get"
-              style="display:grid;grid-template-columns:2fr 1fr 1fr auto auto;gap:10px;margin-bottom:14px;align-items:end"
+              style="display:grid;grid-template-columns:2fr 1fr 1fr auto auto;gap:10px;margin-bottom:14px;align-items:end">
 
             <div>
                 <label>Search student</label>
@@ -11708,6 +11709,12 @@ def admin_reports():
             <a class="btn mini success" href="{download_zip_url}">
                 Download Reports as ZIP
             </a>
+
+            {"" if not is_high_admin() else """
+            <a class="btn mini secondary" href="/admin/reports/term-cleanup">
+                Term Cleanup
+            </a>
+            """}
         </div>
 
         <div class="mini muted" style="margin-bottom:10px">
@@ -11738,6 +11745,263 @@ def admin_reports():
     """
 
     return page("Student Reports", body)
+
+
+@app.get('/admin/reports/term-cleanup')
+@require_high_admin
+def admin_reports_term_cleanup():
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Reports with no term yet
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM student_reports
+        WHERE term IS NULL
+           OR TRIM(term) = ''
+    """)
+    missing_term_count = cur.fetchone()["c"] or 0
+
+    # Current Term 1 reports
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM student_reports
+        WHERE term = 'Term 1'
+    """)
+    term_one_count = cur.fetchone()["c"] or 0
+
+    # Students with more than one Term 1/blank report
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM (
+            SELECT student_id
+            FROM student_reports
+            WHERE term = 'Term 1'
+               OR term IS NULL
+               OR TRIM(term) = ''
+            GROUP BY student_id
+            HAVING COUNT(*) > 1
+        )
+    """)
+    duplicate_students_count = cur.fetchone()["c"] or 0
+
+    conn.close()
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Reports Term Cleanup</h1>
+
+        <p class="muted">
+            Use this once-off tool to update older reports that were uploaded before the Term 1, Term 2, Term 3 and Term 4 feature was added.
+        </p>
+
+        <div class="stats" style="margin-bottom:14px">
+            <div class="stat">
+                <div class="k">{missing_term_count}</div>
+                <div class="t">Reports Missing Term</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{term_one_count}</div>
+                <div class="t">Current Term 1 Reports</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{duplicate_students_count}</div>
+                <div class="t">Students With Duplicate Term 1 Reports</div>
+            </div>
+        </div>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>Option 1: Mark all old reports as Term 1</h2>
+
+            <p class="mini muted">
+                This will set every report with a blank or missing term to <b>Term 1</b>.
+                It will not delete anything.
+            </p>
+
+            <form method="post"
+                  action="/admin/reports/term-cleanup/set-term-one"
+                  onsubmit="return confirm('Set all old reports with no term to Term 1?');">
+                <button class="btn success">
+                    Set Missing Terms to Term 1
+                </button>
+            </form>
+        </div>
+
+        <div class="card soft" style="border-left:5px solid #ef4444">
+            <h2>Option 2: Remove duplicate Term 1 reports</h2>
+
+            <p class="mini muted">
+                This keeps only the latest Term 1 report per student and deletes the older duplicate report records and files.
+                Use this only if you are sure each student must have one Term 1 report.
+            </p>
+
+            <form method="post"
+                  action="/admin/reports/term-cleanup/remove-duplicates"
+                  onsubmit="return confirm('This will delete older duplicate Term 1 reports and keep only the latest one per student. Continue?');">
+                <button class="btn danger">
+                    Remove Duplicate Term 1 Reports
+                </button>
+            </form>
+        </div>
+
+        <div class="toolbar" style="margin-top:14px">
+            <a class="btn secondary" href="/admin/reports">
+                Back to Reports
+            </a>
+        </div>
+    </section>
+    """
+
+    return page("Reports Term Cleanup", body)
+
+
+@app.post('/admin/reports/term-cleanup/set-term-one')
+@require_high_admin
+def admin_reports_set_missing_terms_to_term_one():
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE student_reports
+        SET term = 'Term 1'
+        WHERE term IS NULL
+           OR TRIM(term) = ''
+    """)
+
+    updated_count = cur.rowcount
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "Reports Updated",
+        f"""
+        {admin_nav()}
+        <div class="card">
+            <h1>Reports Updated</h1>
+
+            <p>
+                <b>{updated_count}</b> old report(s) were updated to <b>Term 1</b>.
+            </p>
+
+            <div class="toolbar">
+                <a class="btn" href="/admin/reports">
+                    Go to Reports
+                </a>
+
+                <a class="btn secondary" href="/admin/reports/term-cleanup">
+                    Back to Cleanup
+                </a>
+            </div>
+        </div>
+        """
+    )
+
+
+@app.post('/admin/reports/term-cleanup/remove-duplicates')
+@require_high_admin
+def admin_reports_remove_duplicate_term_one():
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Get students who have more than one Term 1 report
+    cur.execute("""
+        SELECT student_id
+        FROM student_reports
+        WHERE term = 'Term 1'
+        GROUP BY student_id
+        HAVING COUNT(*) > 1
+    """)
+
+    duplicate_students = cur.fetchall()
+
+    deleted_count = 0
+    deleted_files_count = 0
+
+    for student in duplicate_students:
+        student_id = student["student_id"]
+
+        # Keep latest report, delete older ones
+        cur.execute("""
+            SELECT id, file_path
+            FROM student_reports
+            WHERE student_id = ?
+              AND term = 'Term 1'
+            ORDER BY upload_date DESC, id DESC
+        """, (student_id,))
+
+        reports = cur.fetchall()
+
+        # First one is latest, keep it
+        reports_to_delete = reports[1:]
+
+        for report in reports_to_delete:
+            file_path = report["file_path"]
+
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    deleted_files_count += 1
+                except Exception:
+                    pass
+
+            cur.execute("""
+                DELETE FROM student_reports
+                WHERE id = ?
+            """, (report["id"],))
+
+            deleted_count += 1
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "Duplicate Reports Removed",
+        f"""
+        {admin_nav()}
+        <div class="card">
+            <h1>Duplicate Term 1 Reports Removed</h1>
+
+            <p>
+                Deleted duplicate report records: <b>{deleted_count}</b>
+            </p>
+
+            <p>
+                Deleted duplicate files from storage: <b>{deleted_files_count}</b>
+            </p>
+
+            <p class="mini muted">
+                The latest Term 1 report per student was kept.
+            </p>
+
+            <div class="toolbar">
+                <a class="btn" href="/admin/reports">
+                    Go to Reports
+                </a>
+
+                <a class="btn secondary" href="/admin/reports/term-cleanup">
+                    Back to Cleanup
+                </a>
+            </div>
+        </div>
+        """
+    )
 
 @app.get('/admin/view_report/<int:rid>')
 def view_report(rid):
