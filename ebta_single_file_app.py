@@ -706,6 +706,7 @@ def init_db():
     
     ensure_column(conn, "submissions", "is_published", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "submissions", "marked_file_path", "TEXT")
+    ensure_column(conn, "student_reports", "term", "TEXT")
     
     cur.execute("CREATE INDEX IF NOT EXISTS idx_reports_student ON student_reports(student_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_reports_grade ON student_reports(grade)")
@@ -6799,6 +6800,11 @@ def student_upload_report():
 
         if not request.form.get("accept_terms"):
             return page("Error", "<div class='card'>You must accept terms first.</div>")
+        
+        term = request.form.get("term", "").strip()
+
+        if term not in ["Term 1", "Term 2", "Term 3", "Term 4"]:
+            return page("Error", "<div class='card'>Please select the report term.</div>")
 
         file_upload = request.files.get("report_file_upload")
         file_camera = request.files.get("report_file_camera")
@@ -6841,14 +6847,15 @@ def student_upload_report():
 
         cur.execute("""
             INSERT INTO student_reports
-            (student_id, file_name, file_path, file_type, grade, terms_accepted, terms_accepted_at, upload_date)
-            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            (student_id, file_name, file_path, file_type, grade, term, terms_accepted, terms_accepted_at, upload_date)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
         """, (
             sid,
             filename,
             str(path),
             ext,
             student['grade'],
+            term,
             now_utc_iso(),
             now_utc_iso()
         ))
@@ -6896,6 +6903,23 @@ def student_upload_report():
                     I have read and agree to the Terms and Conditions
                 </label>
 
+            </div>
+            
+            <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:12px">
+                <h3>Select Report Term</h3>
+
+                <p class="mini muted">
+                    Please choose the term for the academic report you are uploading.
+                </p>
+
+                <label>Report Term</label>
+                <select name="term" required>
+                    <option value="">Select Term</option>
+                    <option value="Term 1">Term 1</option>
+                    <option value="Term 2">Term 2</option>
+                    <option value="Term 3">Term 3</option>
+                    <option value="Term 4">Term 4</option>
+                </select>
             </div>
 
             <br>
@@ -7055,6 +7079,7 @@ def student_my_reports():
         html += f"""
         <tr>
             <td>{r['file_name']}</td>
+            <td>{r['term'] or '—'}</td>
             <td>{format_datetime(r['upload_date'])}</td>
             <td>
                 <a class='btn mini'
@@ -7087,12 +7112,13 @@ def student_my_reports():
             <thead>
                 <tr>
                     <th>File</th>
+                    <th>Term</th>
                     <th>Date</th>
                     <th>Action</th>
                 </tr>
             </thead>
             <tbody>
-                {html or "<tr><td colspan='3'>No reports uploaded</td></tr>"}
+                {html or "<tr><td colspan='4'>No reports uploaded</td></tr>"}
             </tbody>
         </table>
     </div>
@@ -11474,6 +11500,7 @@ def admin_reports():
 
     search = request.args.get("search", "").strip()
     grade_filter = request.args.get("grade", "").strip()
+    term_filter = request.args.get("term", "").strip()
 
     try:
         page_num = int(request.args.get("page", 1))
@@ -11496,6 +11523,10 @@ def admin_reports():
     if grade_filter:
         where_parts.append("sr.grade = ?")
         params.append(grade_filter)
+        
+    if term_filter:
+        where_parts.append("sr.term = ?")
+        params.append(term_filter)
 
     where_sql = ""
     if where_parts:
@@ -11556,6 +11587,14 @@ def admin_reports():
         <option value="{g['grade']}" {selected}>{grade_label(g['grade'])}</option>
         """
 
+    term_options = '<option value="">All Terms</option>'
+
+    for term in ["Term 1", "Term 2", "Term 3", "Term 4"]:
+        selected = "selected" if term_filter == term else ""
+        term_options += f"""
+        <option value="{term}" {selected}>{term}</option>
+        """
+
     html = ""
 
     for r0 in rows:
@@ -11568,6 +11607,7 @@ def admin_reports():
                     {r0['months_active'] or 0} months
                 </span>
             </td>
+            <td>{r0['term'] or '—'}</td>
             <td>{r0['file_name']}</td>
             <td>{format_datetime(r0['upload_date'])}</td>
             <td style="display:flex; gap:6px">
@@ -11590,7 +11630,7 @@ def admin_reports():
         </tr>
         """
 
-    query_base = f"search={search}&grade={grade_filter}"
+    query_base = f"search={search}&grade={grade_filter}&term={term_filter}"
     download_zip_url = f"/admin/download_reports_zip?{query_base}"
 
     pagination_html = ""
@@ -11636,7 +11676,7 @@ def admin_reports():
         </div>
 
         <form method="get"
-              style="display:grid;grid-template-columns:2fr 1fr auto auto;gap:10px;margin-bottom:14px;align-items:end">
+              style="display:grid;grid-template-columns:2fr 1fr 1fr auto auto;gap:10px;margin-bottom:14px;align-items:end"
 
             <div>
                 <label>Search student</label>
@@ -11649,6 +11689,13 @@ def admin_reports():
                 <label>Grade</label>
                 <select name="grade">
                     {grade_options}
+                </select>
+            </div>
+            
+            <div>
+                <label>Term</label>
+                <select name="term">
+                    {term_options}
                 </select>
             </div>
 
@@ -11674,13 +11721,14 @@ def admin_reports():
                         <th>Student</th>
                         <th>Grade</th>
                         <th>Months Active</th>
+                        <th>Term</th>
                         <th>File</th>
                         <th>Date</th>
                         <th>Action</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {html or "<tr><td colspan='6'>No reports found.</td></tr>"}
+                    {html or "<tr><td colspan='7'>No reports found.</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -11780,6 +11828,7 @@ def admin_download_reports_zip():
 
     search = request.args.get("search", "").strip()
     grade_filter = request.args.get("grade", "").strip()
+    term_filter = request.args.get("term", "").strip()
 
     where_parts = []
     params = []
@@ -11791,6 +11840,10 @@ def admin_download_reports_zip():
     if grade_filter:
         where_parts.append("sr.grade = ?")
         params.append(grade_filter)
+    
+    if term_filter:
+        where_parts.append("sr.term = ?")
+        params.append(term_filter)
 
     where_sql = ""
     if where_parts:
@@ -11826,7 +11879,8 @@ def admin_download_reports_zip():
             grade_name = secure_name(r0["grade"] or "Unknown_Grade")
             file_name = secure_name(r0["file_name"])
 
-            zip_name = f"{grade_name}/{learner_name}_{file_name}"
+            term_name = secure_name(r0["term"] or "No_Term")
+            zip_name = f"{grade_name}/{term_name}/{learner_name}_{file_name}"
             zf.write(file_path, zip_name)
 
     memory_file.seek(0)
@@ -11834,12 +11888,14 @@ def admin_download_reports_zip():
     response = make_response(memory_file.read())
     response.headers["Content-Type"] = "application/zip"
 
-    if grade_filter:
-        filename = f"EBTA_Reports_{secure_name(grade_filter)}.zip"
-    elif search:
-        filename = f"EBTA_Reports_Search_{secure_name(search)}.zip"
+    safe_grade = secure_name(grade_filter) if grade_filter else "All_Grades"
+    safe_term = secure_name(term_filter) if term_filter else "All_Terms"
+    safe_search = secure_name(search) if search else ""
+
+    if search:
+        filename = f"EBTA_Reports_{safe_grade}_{safe_term}_Search_{safe_search}.zip"
     else:
-        filename = "EBTA_All_Student_Reports.zip"
+        filename = f"EBTA_Reports_{safe_grade}_{safe_term}.zip"
 
     response.headers["Content-Disposition"] = f"attachment; filename={filename}"
 
@@ -17765,6 +17821,7 @@ def aqm_reports():
     month = request.args.get("month") or get_setting("current_month")
     grade_filter = request.args.get("grade", "").strip()
     search = request.args.get("search", "").strip()
+    term_filter = request.args.get("term", "").strip()
 
     try:
         page_num = int(request.args.get("page", 1))
@@ -17796,6 +17853,10 @@ def aqm_reports():
     if search:
         filter_sql += " AND st.full_name LIKE ?"
         params.append(f"%{search}%")
+        
+    if term_filter:
+        filter_sql += " AND sr.term = ?"
+        params.append(term_filter)
 
     cur.execute(f"""
         SELECT sr.*, 
@@ -17834,6 +17895,14 @@ def aqm_reports():
         selected = "selected" if grade_filter == g["grade"] else ""
         grade_options += f"""
         <option value="{g['grade']}" {selected}>{grade_label(g['grade'])}</option>
+        """
+        
+    term_options = '<option value="">All Terms</option>'
+
+    for term in ["Term 1", "Term 2", "Term 3", "Term 4"]:
+        selected = "selected" if term_filter == term else ""
+        term_options += f"""
+        <option value="{term}" {selected}>{term}</option>
         """
 
     rows = ""
@@ -17923,6 +17992,7 @@ def aqm_reports():
             <td style="min-width:120px">{student_phone_html}</td>
             <td style="min-width:120px">{guardian_phone_html}</td>
             <td>{r0['school'] or '—'}</td>
+            <td>{r0['term'] or '—'}</td>
             <td>{r0['file_name']}</td>
             <td>{r0['upload_date'][:16].replace('T',' ')}</td>
             <td style="display:flex;gap:6px;flex-wrap:wrap">
@@ -17949,7 +18019,7 @@ def aqm_reports():
         if page_num > 1:
             prev_link = f"""
             <a class="btn mini secondary"
-               href="/aqm/reports?month={month}&grade={grade_filter}&search={search}&page={page_num - 1}"
+               href="/aqm/reports?month={month}&grade={grade_filter}&search={search}&term={term_filter}&page={page_num - 1}"
                 ← Previous
             </a>
             """
@@ -17957,7 +18027,7 @@ def aqm_reports():
         if page_num < total_pages:
             next_link = f"""
             <a class="btn mini secondary"
-               href="/aqm/reports?month={month}&grade={grade_filter}&search={search}&page={page_num + 1}"
+               href="/aqm/reports?month={month}&grade={grade_filter}&search={search}&term={term_filter}&page={page_num + 1}"
                 Next →
             </a>
             """
@@ -17970,8 +18040,8 @@ def aqm_reports():
         </div>
         """
 
-    download_all_url = f"/aqm/download-reports-zip?month={month}"
-    download_grade_url = f"/aqm/download-reports-zip?month={month}&grade={grade_filter}"
+    download_all_url = f"/aqm/download-reports-zip?month={month}&term={term_filter}"
+    download_grade_url = f"/aqm/download-reports-zip?month={month}&grade={grade_filter}&term={term_filter}"
     
     download_all_profile_pics_url = "/aqm/download-profile-pictures-zip"
     download_grade_profile_pics_url = f"/aqm/download-profile-pictures-zip?grade={grade_filter}"
@@ -18015,6 +18085,13 @@ def aqm_reports():
                     {grade_options}
                 </select>
             </div>
+            
+            <div>
+                <label>Term</label>
+                <select name="term">
+                    {term_options}
+                </select>
+            </div>
 
             <div style="display:flex;align-items:end">
                 <button class="btn success">Apply Filter</button>
@@ -18047,13 +18124,14 @@ def aqm_reports():
                         <th>Student Phone</th>
                         <th>Guardian Phone</th>
                         <th>School</th>
+                        <th>Term</th>
                         <th>Report File</th>
                         <th>Uploaded</th>
                         <th>Action</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {rows or '<tr><td colspan="9">No academic reports found for the selected filter.</td></tr>'}
+                    {rows or '<tr><td colspan="10">No academic reports found for the selected filter.</td></tr>'}
                 </tbody>
             </table>
         </div>
@@ -19090,23 +19168,28 @@ def aqm_download_reports_zip():
 
     month = request.args.get("month") or get_setting("current_month")
     grade_filter = request.args.get("grade", "").strip()
+    term_filter = request.args.get("term", "").strip()
 
     conn = get_db()
     cur = conn.cursor()
 
     params = [month]
-    grade_sql = ""
+    filter_sql = ""
 
     if grade_filter:
-        grade_sql = "AND st.grade = ?"
+        filter_sql += " AND st.grade = ?"
         params.append(grade_filter)
+
+    if term_filter:
+        filter_sql += " AND sr.term = ?"
+        params.append(term_filter)
 
     cur.execute(f"""
         SELECT sr.*, st.full_name, st.grade
         FROM student_reports sr
         JOIN students st ON st.id = sr.student_id
         WHERE substr(sr.upload_date,1,7)=?
-        {grade_sql}
+        {filter_sql}
         ORDER BY st.grade, st.full_name, sr.upload_date DESC
     """, params)
 
@@ -19114,7 +19197,7 @@ def aqm_download_reports_zip():
     conn.close()
 
     if not reports:
-        return page("No reports", card_msg("No reports found for the selected month or grade."))
+        return page("No reports", card_msg("No reports found for the selected month, grade, or term."))
 
     memory_file = io.BytesIO()
 
@@ -19127,9 +19210,10 @@ def aqm_download_reports_zip():
 
             learner_name = secure_name(r0["full_name"])
             grade_name = secure_name(grade_label(r0["grade"]))
+            term_name = secure_name(r0["term"] or "No_Term")
             file_name = secure_name(r0["file_name"])
 
-            zip_name = f"{grade_name}/{learner_name}_{file_name}"
+            zip_name = f"{grade_name}/{term_name}/{learner_name}_{file_name}"
             zf.write(file_path, zip_name)
 
     memory_file.seek(0)
@@ -19137,13 +19221,15 @@ def aqm_download_reports_zip():
     response = make_response(memory_file.read())
     response.headers["Content-Type"] = "application/zip"
 
-    if grade_filter:
-        filename = f"EBTA_Reports_{month}_{secure_name(grade_label(grade_filter))}.zip"
-    else:
-        filename = f"EBTA_All_Reports_{month}.zip"
+    safe_month = secure_name(month)
+    safe_grade = secure_name(grade_label(grade_filter)) if grade_filter else "All_Grades"
+    safe_term = secure_name(term_filter) if term_filter else "All_Terms"
+
+    filename = f"EBTA_Reports_{safe_month}_{safe_grade}_{safe_term}.zip"
 
     response.headers["Content-Disposition"] = f"attachment; filename={filename}"
 
+    return response
     return response
 
 
