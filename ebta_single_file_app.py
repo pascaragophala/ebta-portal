@@ -26619,6 +26619,209 @@ def social_media_content_proof(content_id):
     )
 
 
+@app.get('/admin/social-media/logs')
+def admin_social_media_content_logs():
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            c.*,
+            sm.full_name AS manager_name
+        FROM social_media_content_logs c
+        JOIN social_media_managers sm ON sm.id = c.manager_id
+        ORDER BY COALESCE(c.posted_date, c.planned_date, c.created_at) DESC
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for c in rows:
+        post_link = "—"
+        if c["post_link"]:
+            post_link = f"""
+            <a class="btn mini secondary" target="_blank" href="{escape(c['post_link'])}">
+                Open Post
+            </a>
+            """
+
+        proof = "—"
+        if c["proof_file_path"] and os.path.exists(c["proof_file_path"]):
+            proof = f"""
+            <a class="btn mini secondary" target="_blank" href="/admin/social-media/content/{c['id']}/proof">
+                View Proof
+            </a>
+            """
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(c['title'])}</strong>
+                <div class="mini muted">{escape(c['content_type'])}</div>
+            </td>
+
+            <td>{escape(c['manager_name'])}</td>
+            <td>{escape(c['platform'])}</td>
+            <td>{escape(c['planned_date'] or '—')}</td>
+            <td>{escape(c['posted_date'] or '—')}</td>
+            <td><span class="chip">{escape(c['status'])}</span></td>
+            <td>{post_link}</td>
+            <td>{proof}</td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Social Media Content Logs</h1>
+
+        <p class="muted">
+            View content planned or posted by the Social Media Manager.
+        </p>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Content</th>
+                        <th>Manager</th>
+                        <th>Platform</th>
+                        <th>Planned</th>
+                        <th>Posted</th>
+                        <th>Status</th>
+                        <th>Post Link</th>
+                        <th>Proof</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='8'>No social media content logs yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Social Media Logs", body)
+    
+    
+@app.get('/admin/social-media/content/<int:content_id>/proof')
+def admin_social_media_content_proof(content_id):
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT proof_file_path
+        FROM social_media_content_logs
+        WHERE id=?
+    """, (content_id,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row["proof_file_path"]:
+        return page("Not Found", card_msg("Proof file not found."))
+
+    file_path = row["proof_file_path"]
+
+    if not os.path.exists(file_path):
+        return page("Missing File", card_msg("The proof file is missing from storage."))
+
+    return send_from_directory(
+        os.path.dirname(file_path),
+        os.path.basename(file_path),
+        as_attachment=False
+    )    
+    
+@app.get('/admin/social-media/reports')
+def admin_social_media_reports():
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            w.*,
+            sm.full_name AS manager_name
+        FROM social_media_weekly_reports w
+        JOIN social_media_managers sm ON sm.id = w.manager_id
+        ORDER BY w.week_start DESC, w.created_at DESC
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for w in rows:
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(w['manager_name'])}</strong>
+                <div class="mini muted">
+                    Week: {escape(w['week_start'])} to {escape(w['week_end'] or '—')}
+                </div>
+            </td>
+
+            <td>{w['posts_published'] or 0}</td>
+            <td>{w['stories_posted'] or 0}</td>
+            <td>{w['comments_received'] or 0}</td>
+            <td>{w['dms_received'] or 0}</td>
+            <td>{w['dms_responded'] or 0}</td>
+            <td><span class="chip">{escape(w['status'])}</span></td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Social Media Weekly Reports</h1>
+
+        <p class="muted">
+            View weekly reports submitted by Social Media Managers.
+        </p>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Manager / Week</th>
+                        <th>Posts</th>
+                        <th>Stories</th>
+                        <th>Comments</th>
+                        <th>DMs</th>
+                        <th>DMs Responded</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No weekly reports submitted yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Social Media Reports", body)
+
+
+
 # --- Admin: Analytics dashboard ---
 
 @app.get('/admin/analytics')
