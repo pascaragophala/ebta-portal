@@ -10331,14 +10331,36 @@ def admin_enrollments():
 
         actions = f"""
 
-        <form method='post' action='{url_for('enrollment_action', id=r['id'], action='approve')}' style='display:inline'>
+        <form method='post'
+              action='{url_for('enrollment_action', id=r['id'], action='approve')}'
+              style='display:inline'
+              onsubmit="return confirm('Approve this enrollment without sending SMS?');">
             <input type="hidden" name="page" value="{page_num}">
-            <button class='btn success'>Approve</button>
+            <button class='btn success mini'>Approve Only</button>
         </form>
 
-        <form method='post' action='{url_for('enrollment_action', id=r['id'], action='lapse')}' style='display:inline'>
+        <form method='post'
+              action='{url_for('enrollment_action', id=r['id'], action='approve_sms')}'
+              style='display:inline'
+              onsubmit="return confirm('Approve this enrollment and send SMS to the learner?');">
             <input type="hidden" name="page" value="{page_num}">
-            <button class='btn danger'>Lapse</button>
+            <button class='btn warn mini'>Approve + SMS</button>
+        </form>
+
+        <form method='post'
+              action='{url_for('enrollment_action', id=r['id'], action='sms')}'
+              style='display:inline'
+              onsubmit="return confirm('Send approval/login SMS to this learner without changing status?');">
+            <input type="hidden" name="page" value="{page_num}">
+            <button class='btn secondary mini'>SMS Only</button>
+        </form>
+
+        <form method='post'
+              action='{url_for('enrollment_action', id=r['id'], action='lapse')}'
+              style='display:inline'
+              onsubmit="return confirm('Mark this enrollment as lapsed?');">
+            <input type="hidden" name="page" value="{page_num}">
+            <button class='btn danger mini'>Lapse</button>
         </form>
 
         """
@@ -10546,12 +10568,17 @@ def enrollment_action(id: int, action: str):
     r = require_admin()
     if r:
         return r
-        
+
     page_num = int(request.form.get("page", 1))
+
+    allowed_actions = ["approve", "approve_sms", "sms", "lapse", "pending"]
+
+    if action not in allowed_actions:
+        return page("Invalid Action", card_msg("Invalid enrollment action."))
+
     conn = get_db()
     cur = conn.cursor()
 
-    notify_email = None
     notify_phone = None
     notify_name = None
     notify_pin = None
@@ -10559,112 +10586,112 @@ def enrollment_action(id: int, action: str):
     notify_grade = None
     notify_month = None
 
-    if action == 'approve':
-        # Activate enrollment
-        cur.execute("UPDATE enrollments SET status='ACTIVE' WHERE id=?", (id,))
+    # Actions that need student details for SMS
+    needs_sms_details = action in ["approve_sms", "sms"]
 
-        # Student details + current PIN
+    # Actions that should activate the enrollment
+    should_approve = action in ["approve", "approve_sms"]
+
+    if should_approve:
         cur.execute("""
-            SELECT st.id, st.full_name, st.phone_whatsapp, st.email, st.pin
-            FROM students st
-            JOIN enrollments e ON e.student_id = st.id
-            WHERE e.id = ?
+            UPDATE enrollments
+            SET status = 'ACTIVE'
+            WHERE id = ?
         """, (id,))
-        srow = cur.fetchone()
 
-        # Enrollment + subject details for the notification
+    elif action == "lapse":
         cur.execute("""
-            SELECT e.month, sub.name AS subject_name, sub.grade
-            FROM enrollments e
-            JOIN subjects sub ON sub.id = e.subject_id
-            WHERE e.id = ?
+            UPDATE enrollments
+            SET status = 'LAPSED'
+            WHERE id = ?
         """, (id,))
-        erow = cur.fetchone()
 
-        if srow:
-            notify_name = srow["full_name"]
-            notify_phone = srow["phone_whatsapp"]
-            notify_email = srow["email"]
-            notify_pin = srow["pin"]
-            if erow:
-                notify_month = erow["month"]
-                notify_subject = erow["subject_name"]
-                notify_grade = erow["grade"]
+    elif action == "pending":
 
-            # If the student does not have a PIN yet, generate one now
-            if not notify_pin:
-                pins = set()
-                cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
-                pins |= {r['pin'] for r in cur.fetchall()}
-                cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
-                pins |= {r['pin'] for r in cur.fetchall()}
-                new_pin = gen_pin(pins)
-                cur.execute("UPDATE students SET pin=? WHERE id=?", (new_pin, srow['id']))
-                notify_pin = new_pin
-
-    elif action == 'lapse':
-        cur.execute("UPDATE enrollments SET status='LAPSED' WHERE id=?", (id,))
-        
-    elif action == 'pending':
-
-        # 🔒 ONLY SUPER ADMIN CAN DO THIS
         if not is_high_admin():
             conn.close()
             return page("Access Denied", card_msg("Only super admin can set status to Pending."))
 
-        cur.execute("UPDATE enrollments SET status='PENDING' WHERE id=?", (id,))
+        cur.execute("""
+            UPDATE enrollments
+            SET status = 'PENDING'
+            WHERE id = ?
+        """, (id,))
+
+    # Load student details if SMS is requested
+    if needs_sms_details:
+
+        cur.execute("""
+            SELECT 
+                st.id,
+                st.full_name,
+                st.phone_whatsapp,
+                st.pin,
+                e.month,
+                sub.name AS subject_name,
+                sub.grade
+            FROM enrollments e
+            JOIN students st ON st.id = e.student_id
+            JOIN subjects sub ON sub.id = e.subject_id
+            WHERE e.id = ?
+        """, (id,))
+
+        row = cur.fetchone()
+
+        if row:
+            notify_name = row["full_name"]
+            notify_phone = row["phone_whatsapp"]
+            notify_pin = row["pin"]
+            notify_month = row["month"]
+            notify_subject = row["subject_name"]
+            notify_grade = row["grade"]
+
+            # Generate PIN only when SMS is actually requested
+            if not notify_pin:
+                pins = set()
+
+                cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
+                pins |= {x["pin"] for x in cur.fetchall()}
+
+                cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
+                pins |= {x["pin"] for x in cur.fetchall()}
+
+                new_pin = gen_pin(pins)
+
+                cur.execute("""
+                    UPDATE students
+                    SET pin = ?
+                    WHERE id = ?
+                """, (new_pin, row["id"]))
+
+                notify_pin = new_pin
 
     conn.commit()
     conn.close()
 
-    # --- Notifications: enrollment approved ---
+    # Send SMS only when admin selected Approve + SMS or SMS Only
     try:
-        if action == 'approve' and notify_phone and notify_pin:
-            base_url = (request.url_root or '').rstrip('/')
-            portal_link = base_url
-            login_link = base_url + url_for('student_login')
+        if needs_sms_details and notify_phone and notify_pin:
+
+            base_url = (request.url_root or "").rstrip("/")
+            login_link = base_url + url_for("student_login")
 
             month_label = pretty_month_label(notify_month) if notify_month else ""
             grade_label_txt = grade_label(notify_grade) if notify_grade else ""
             first_name = notify_name.split()[0] if notify_name else ""
 
-            email_subject = "EBTA enrollment approved"
-            email_body_lines = [
-                f"Hi {notify_name},",
-                "",
-                "Your EBTA enrollment has been approved.",
-            ]
+            if action == "approve_sms":
+                sms_intro = f"EBTA: Hi {first_name}, your enrollment is APPROVED."
+            else:
+                sms_intro = f"EBTA: Hi {first_name}, your portal login details are below."
 
-            if grade_label_txt or notify_subject or month_label:
-                detail = " ".join(x for x in [grade_label_txt, notify_subject, month_label] if x)
-                if detail.strip():
-                    email_body_lines.append(f"Subject/month: {detail}")
-                    email_body_lines.append("")
-
-            email_body_lines.extend([
-                "Login details (keep these safe):",
-                f"WhatsApp number: {notify_phone}",
-                f"PIN: {notify_pin}",
-                f"Portal: {portal_link}",
-                f"Student login: {login_link}",
-                "",
-                "You can now log in to your EBTA portal to access materials, assignments, session links and WhatsApp groups.",
-                "",
-                "IMPORTANT:",
-                "Please make sure you join ALL WhatsApp groups for the subjects you are enrolled in.",
-                "These groups are used for class communication, updates and live session reminders.",
-                "If you do not join the groups, you may miss important information.",
-                "",
-                "If you have any questions, please contact EBTA support.",
-            ])
-            email_body = "\n".join(email_body_lines)
-
-            sms_body_parts = [
-                f"EBTA: Hi {first_name}, your enrollment is APPROVED.",
-            ]
+            sms_body_parts = [sms_intro]
 
             if month_label or grade_label_txt or notify_subject:
-                detail = " ".join(x for x in [grade_label_txt, notify_subject, month_label] if x)
+                detail = " ".join(
+                    x for x in [grade_label_txt, notify_subject, month_label]
+                    if x
+                )
                 sms_body_parts.append(detail + ".")
 
             sms_body_parts.append(
@@ -10677,15 +10704,13 @@ def enrollment_action(id: int, action: str):
 
             sms_body = " ".join(sms_body_parts)
 
-            if notify_email:
-                send_email_notification(notify_email, email_subject, email_body)
-            if notify_phone:
-                send_sms_notification(notify_phone, sms_body)
+            send_sms_notification(notify_phone, sms_body)
+
     except Exception:
-        # Never break the admin flow if notifications fail
+        # Never break approval flow because of SMS issue
         pass
 
-    return redirect(url_for('admin_enrollments', page=page_num))
+    return redirect(url_for("admin_enrollments", page=page_num))
 
 
 @app.post('/admin/set-month')
