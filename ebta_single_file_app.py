@@ -10520,52 +10520,56 @@ def admin_enrollments():
 
     </div>
     """
+    
+    enrollment_style = """
+    <style>
+    .enrollment-actions{
+        display:grid;
+        grid-template-columns:repeat(2, minmax(90px, auto));
+        gap:6px;
+        align-items:center;
+    }
+
+    .enrollment-actions form{
+        margin:0;
+    }
+
+    .enrollment-actions .btn{
+        width:100%;
+        padding:7px 10px;
+        font-size:12px;
+        border-radius:999px;
+        white-space:nowrap;
+    }
+
+    .enrollment-student-cell{
+        min-width:145px;
+    }
+
+    .enrollment-actions-cell{
+        min-width:210px;
+    }
+
+    .enrollment-mini-muted{
+        font-size:12px;
+        color:#64748b;
+        line-height:1.2;
+    }
+
+    @media(max-width:900px){
+        .enrollment-actions{
+            grid-template-columns:1fr;
+        }
+    }
+    </style>
+    """
 
     body = f"""
     {admin_nav()}
 
     <section class='card'>
     
-        <style>
-        .enrollment-actions{
-            display:grid;
-            grid-template-columns:repeat(2, minmax(90px, auto));
-            gap:6px;
-            align-items:center;
-        }
-
-        .enrollment-actions form{
-            margin:0;
-        }
-
-        .enrollment-actions .btn{
-            width:100%;
-            padding:7px 10px;
-            font-size:12px;
-            border-radius:999px;
-            white-space:nowrap;
-        }
-
-        .enrollment-student-cell{
-            min-width:145px;
-        }
-
-        .enrollment-actions-cell{
-            min-width:210px;
-        }
-
-        .enrollment-mini-muted{
-            font-size:12px;
-            color:#64748b;
-            line-height:1.2;
-        }
-
-        @media(max-width:900px){
-            .enrollment-actions{
-                grid-template-columns:1fr;
-            }
-        }
-        </style>
+        {enrollment_style}
 
         <h1>Enrollments — {pretty_month_label(month)}</h1>
         
