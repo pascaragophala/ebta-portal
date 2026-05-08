@@ -26821,6 +26821,578 @@ def admin_social_media_reports():
     return page("Social Media Reports", body)
 
 
+@app.get('/social-media/weekly-reports')
+def social_media_weekly_reports():
+
+    r = require_social_media_manager()
+    if r: return r
+
+    mid = is_social_media_manager()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM social_media_weekly_reports
+        WHERE manager_id = ?
+        ORDER BY week_start DESC, created_at DESC
+    """, (mid,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for w in rows:
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(w['week_start'])}</strong>
+                <div class="mini muted">to {escape(w['week_end'] or '—')}</div>
+            </td>
+
+            <td>{w['posts_published'] or 0}</td>
+            <td>{w['stories_posted'] or 0}</td>
+            <td>{w['dms_received'] or 0}</td>
+            <td>{w['dms_responded'] or 0}</td>
+            <td>{w['comments_received'] or 0}</td>
+            <td>{w['comments_responded'] or 0}</td>
+            <td><span class="chip">{escape(w['status'])}</span></td>
+        </tr>
+        """
+
+    body = f"""
+    {social_media_nav()}
+
+    <section class="card">
+        <h1>Weekly Reports</h1>
+
+        <p class="muted">
+            Submit and track your weekly social media activity reports.
+        </p>
+
+        <div class="toolbar">
+            <a class="btn success" href="/social-media/weekly-reports/new">
+                New Weekly Report
+            </a>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Week</th>
+                        <th>Posts</th>
+                        <th>Stories</th>
+                        <th>DMs</th>
+                        <th>DMs Responded</th>
+                        <th>Comments</th>
+                        <th>Comments Responded</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='8'>No weekly reports yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Weekly Reports", body)
+    
+    
+@app.get('/social-media/weekly-reports/new')
+def social_media_new_weekly_report():
+
+    r = require_social_media_manager()
+    if r: return r
+
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date()
+    week_start = today - datetime.timedelta(days=today.weekday())
+    week_end = week_start + datetime.timedelta(days=6)
+
+    body = f"""
+    {social_media_nav()}
+
+    <section class="card">
+        <h1>New Weekly Report</h1>
+
+        <p class="muted">
+            Capture weekly activity, engagement, DMs handled, challenges, and the plan for next week.
+        </p>
+
+        <form method="post"
+              action="/social-media/weekly-reports/new"
+              class="grid"
+              style="grid-template-columns:1fr 1fr;gap:12px">
+
+            <div>
+                <label>Week Start</label>
+                <input type="date" name="week_start" value="{week_start.isoformat()}" required>
+            </div>
+
+            <div>
+                <label>Week End</label>
+                <input type="date" name="week_end" value="{week_end.isoformat()}">
+            </div>
+
+            <div>
+                <label>Posts Published</label>
+                <input type="number" name="posts_published" min="0" value="0">
+            </div>
+
+            <div>
+                <label>Stories Posted</label>
+                <input type="number" name="stories_posted" min="0" value="0">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Platforms Used</label>
+                <input name="platforms_used" placeholder="Example: Facebook, Instagram, TikTok, LinkedIn">
+            </div>
+
+            <div>
+                <label>Comments Received</label>
+                <input type="number" name="comments_received" min="0" value="0">
+            </div>
+
+            <div>
+                <label>Comments Responded</label>
+                <input type="number" name="comments_responded" min="0" value="0">
+            </div>
+
+            <div>
+                <label>DMs Received</label>
+                <input type="number" name="dms_received" min="0" value="0">
+            </div>
+
+            <div>
+                <label>DMs Responded</label>
+                <input type="number" name="dms_responded" min="0" value="0">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Best Post Link Optional</label>
+                <input name="best_post_link" placeholder="Paste link to the best performing post">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Best Post Engagement</label>
+                <input name="best_post_engagement" placeholder="Example: 540 views, 35 likes, 12 comments">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Challenges</label>
+                <textarea name="challenges" rows="4" placeholder="Mention challenges, slow engagement, complaints, delays, or blockers."></textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Next Week Plan</label>
+                <textarea name="next_week_plan" rows="5" placeholder="Briefly explain what you plan to post or improve next week."></textarea>
+            </div>
+
+            <div>
+                <label>Status</label>
+                <select name="status">
+                    <option>SUBMITTED</option>
+                    <option>DRAFT</option>
+                    <option>REVIEWED</option>
+                </select>
+            </div>
+
+            <div style="display:flex;align-items:end">
+                <button class="btn success">
+                    Submit Weekly Report
+                </button>
+            </div>
+
+        </form>
+    </section>
+    """
+
+    return page("New Weekly Report", body)
+    
+    
+@app.post('/social-media/weekly-reports/new')
+def social_media_create_weekly_report():
+
+    r = require_social_media_manager()
+    if r: return r
+
+    mid = is_social_media_manager()
+
+    week_start = request.form.get("week_start", "").strip()
+    week_end = request.form.get("week_end", "").strip()
+
+    posts_published = int(request.form.get("posts_published") or 0)
+    stories_posted = int(request.form.get("stories_posted") or 0)
+
+    platforms_used = request.form.get("platforms_used", "").strip()
+
+    comments_received = int(request.form.get("comments_received") or 0)
+    comments_responded = int(request.form.get("comments_responded") or 0)
+    dms_received = int(request.form.get("dms_received") or 0)
+    dms_responded = int(request.form.get("dms_responded") or 0)
+
+    best_post_link = request.form.get("best_post_link", "").strip()
+    best_post_engagement = request.form.get("best_post_engagement", "").strip()
+
+    challenges = request.form.get("challenges", "").strip()
+    next_week_plan = request.form.get("next_week_plan", "").strip()
+
+    status = request.form.get("status", "SUBMITTED").strip()
+
+    if status not in ["DRAFT", "SUBMITTED", "REVIEWED"]:
+        status = "SUBMITTED"
+
+    if not week_start:
+        return page("Error", card_msg("Week start date is required."))
+
+    now = now_utc_iso()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO social_media_weekly_reports(
+            manager_id,
+            week_start,
+            week_end,
+            posts_published,
+            stories_posted,
+            platforms_used,
+            comments_received,
+            dms_received,
+            dms_responded,
+            comments_responded,
+            best_post_link,
+            best_post_engagement,
+            challenges,
+            next_week_plan,
+            status,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        mid,
+        week_start,
+        week_end,
+        posts_published,
+        stories_posted,
+        platforms_used,
+        comments_received,
+        dms_received,
+        dms_responded,
+        comments_responded,
+        best_post_link,
+        best_post_engagement,
+        challenges,
+        next_week_plan,
+        status,
+        now,
+        now
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("social_media_weekly_reports"))
+    
+    
+@app.get('/social-media/crisis-logs')
+def social_media_crisis_logs():
+
+    r = require_social_media_manager()
+    if r: return r
+
+    mid = is_social_media_manager()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM social_media_crisis_logs
+        WHERE manager_id = ?
+        ORDER BY created_at DESC
+    """, (mid,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for c in rows:
+        screenshot = "—"
+        if c["screenshot_file_path"] and os.path.exists(c["screenshot_file_path"]):
+            screenshot = f"""
+            <a class="btn mini secondary" target="_blank" href="/social-media/crisis-log/{c['id']}/screenshot">
+                View Screenshot
+            </a>
+            """
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(c['issue_type'])}</strong>
+                <div class="mini muted">{escape(c['platform'])}</div>
+            </td>
+
+            <td>{escape(c['description'][:120])}{'...' if len(c['description']) > 120 else ''}</td>
+            <td>{escape(c['escalated_to'] or '—')}</td>
+            <td><span class="chip">{escape(c['status'])}</span></td>
+            <td>{escape((c['created_at'] or '')[:16].replace('T',' '))}</td>
+            <td>{screenshot}</td>
+        </tr>
+        """
+
+    body = f"""
+    {social_media_nav()}
+
+    <section class="card">
+        <h1>Crisis Logs</h1>
+
+        <p class="muted">
+            Log complaints, negative comments, PR risks, suspicious messages, or account issues.
+        </p>
+
+        <div class="toolbar">
+            <a class="btn danger" href="/social-media/crisis-logs/new">
+                Log Crisis
+            </a>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Issue</th>
+                        <th>Description</th>
+                        <th>Escalated To</th>
+                        <th>Status</th>
+                        <th>Date</th>
+                        <th>Screenshot</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='6'>No crisis logs yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Crisis Logs", body)
+    
+
+@app.get('/social-media/crisis-logs/new')
+def social_media_new_crisis_log():
+
+    r = require_social_media_manager()
+    if r: return r
+
+    body = f"""
+    {social_media_nav()}
+
+    <section class="card">
+        <h1>Log Crisis / PR Issue</h1>
+
+        <p class="muted">
+            Use this page to record negative comments, complaints, suspicious DMs, hacked account risks, or public reputation issues.
+        </p>
+
+        <form method="post"
+              action="/social-media/crisis-logs/new"
+              enctype="multipart/form-data"
+              class="grid"
+              style="grid-template-columns:1fr 1fr;gap:12px">
+
+            <div>
+                <label>Issue Type</label>
+                <select name="issue_type" required>
+                    <option>Negative Comment</option>
+                    <option>PR Risk</option>
+                    <option>Hacked Account</option>
+                    <option>Suspicious DM</option>
+                    <option>Complaint</option>
+                    <option>Incorrect Public Information</option>
+                    <option>Other</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Platform</label>
+                <select name="platform" required>
+                    <option>Facebook</option>
+                    <option>Instagram</option>
+                    <option>TikTok</option>
+                    <option>LinkedIn</option>
+                    <option>WhatsApp</option>
+                    <option>Other</option>
+                </select>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Description</label>
+                <textarea name="description" rows="6" required placeholder="Explain what happened. Include names, links, or context where possible."></textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Action Taken</label>
+                <textarea name="action_taken" rows="4" placeholder="Example: Replied professionally, did not respond, escalated to COO, saved evidence."></textarea>
+            </div>
+
+            <div>
+                <label>Escalated To</label>
+                <input name="escalated_to" placeholder="Example: COO, CEO, CAO, Admin">
+            </div>
+
+            <div>
+                <label>Status</label>
+                <select name="status">
+                    <option>OPEN</option>
+                    <option>ESCALATED</option>
+                    <option>RESOLVED</option>
+                    <option>CLOSED</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Screenshot Optional</label>
+                <input type="file" name="screenshot" accept=".png,.jpg,.jpeg,.pdf">
+            </div>
+
+            <div style="display:flex;align-items:end">
+                <button class="btn danger">
+                    Save Crisis Log
+                </button>
+            </div>
+
+        </form>
+    </section>
+    """
+
+    return page("Log Crisis", body)
+    
+
+@app.post('/social-media/crisis-logs/new')
+def social_media_create_crisis_log():
+
+    r = require_social_media_manager()
+    if r: return r
+
+    mid = is_social_media_manager()
+
+    issue_type = request.form.get("issue_type", "").strip()
+    platform = request.form.get("platform", "").strip()
+    description = request.form.get("description", "").strip()
+    action_taken = request.form.get("action_taken", "").strip()
+    escalated_to = request.form.get("escalated_to", "").strip()
+    status = request.form.get("status", "OPEN").strip()
+
+    if status not in ["OPEN", "ESCALATED", "RESOLVED", "CLOSED"]:
+        status = "OPEN"
+
+    if not issue_type or not platform or not description:
+        return page("Error", card_msg("Issue type, platform, and description are required."))
+
+    screenshot = request.files.get("screenshot")
+    screenshot_path = None
+    screenshot_name = None
+
+    if screenshot and screenshot.filename:
+        screenshot_name = secure_name(screenshot.filename)
+        ext = os.path.splitext(screenshot_name)[1].lower()
+
+        if ext not in [".png", ".jpg", ".jpeg", ".pdf"]:
+            return page("Invalid File", card_msg("Screenshot must be PNG, JPG, JPEG, or PDF."))
+
+        saved_name = f"smm_crisis_{mid}_{int(time.time())}{ext}"
+        path = SOCIAL_MEDIA_DIR / saved_name
+        screenshot.save(path)
+
+        screenshot_path = str(path)
+
+    now = now_utc_iso()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO social_media_crisis_logs(
+            manager_id,
+            issue_type,
+            platform,
+            description,
+            action_taken,
+            escalated_to,
+            status,
+            screenshot_file_path,
+            screenshot_file_name,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        mid,
+        issue_type,
+        platform,
+        description,
+        action_taken,
+        escalated_to,
+        status,
+        screenshot_path,
+        screenshot_name,
+        now,
+        now
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("social_media_crisis_logs"))
+    
+    
+@app.get('/social-media/crisis-log/<int:crisis_id>/screenshot')
+def social_media_crisis_screenshot(crisis_id):
+
+    r = require_social_media_manager()
+    if r: return r
+
+    mid = is_social_media_manager()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT screenshot_file_path
+        FROM social_media_crisis_logs
+        WHERE id=?
+          AND manager_id=?
+    """, (crisis_id, mid))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row["screenshot_file_path"]:
+        return page("Not Found", card_msg("Screenshot file not found."))
+
+    file_path = row["screenshot_file_path"]
+
+    if not os.path.exists(file_path):
+        return page("Missing File", card_msg("The screenshot file is missing from storage."))
+
+    return send_from_directory(
+        os.path.dirname(file_path),
+        os.path.basename(file_path),
+        as_attachment=False
+    )
+
 
 # --- Admin: Analytics dashboard ---
 
