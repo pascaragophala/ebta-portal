@@ -24041,14 +24041,30 @@ def admin_secretaries():
             else "<span class='chip lapsed'>Inactive</span>"
         )
 
+        pin_display = escape(s["pin"] or "—")
+
         trs += f"""
         <tr>
             <td>
                 <strong>{escape(s['full_name'])}</strong>
                 <div class="mini muted">{escape(s['phone'])}</div>
             </td>
+
             <td>{escape(s['email'] or '—')}</td>
+
+            <td>
+                <span class="chip" style="
+                    font-weight:800;
+                    font-size:14px;
+                    letter-spacing:1px;
+                    padding:7px 12px;
+                ">
+                    {pin_display}
+                </span>
+            </td>
+
             <td>{status}</td>
+
             <td>
                 <div class="mini muted">
                     Logs: {s['logs_count'] or 0}<br>
@@ -24056,6 +24072,7 @@ def admin_secretaries():
                     Action Items: {s['actions_count'] or 0}
                 </div>
             </td>
+
             <td>
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
 
@@ -24126,13 +24143,14 @@ def admin_secretaries():
                     <tr>
                         <th>Secretary</th>
                         <th>Email</th>
+                        <th>PIN</th>
                         <th>Status</th>
                         <th>Activity</th>
                         <th>Action</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {trs or "<tr><td colspan='5'>No Secretary General users added yet.</td></tr>"}
+                    {trs or "<tr><td colspan='6'>No Secretary General users added yet.</td></tr>"}
                 </tbody>
             </table>
         </div>
