@@ -10329,9 +10329,8 @@ def admin_enrollments():
             for p in files
         ) or "—"
 
-        status = str(r["status"]).upper()
+        actions = f"""
 
-        approve_only_btn = f"""
         <form method='post'
               action='{url_for('enrollment_action', id=r['id'], action='approve')}'
               style='display:inline'
@@ -10339,9 +10338,7 @@ def admin_enrollments():
             <input type="hidden" name="page" value="{page_num}">
             <button class='btn success mini'>Approve Only</button>
         </form>
-        """
 
-        approve_sms_btn = f"""
         <form method='post'
               action='{url_for('enrollment_action', id=r['id'], action='approve_sms')}'
               style='display:inline'
@@ -10349,19 +10346,15 @@ def admin_enrollments():
             <input type="hidden" name="page" value="{page_num}">
             <button class='btn warn mini'>Approve + SMS</button>
         </form>
-        """
 
-        sms_only_btn = f"""
         <form method='post'
               action='{url_for('enrollment_action', id=r['id'], action='sms')}'
               style='display:inline'
-              onsubmit="return confirm('Send portal login SMS to this learner without changing status?');">
+              onsubmit="return confirm('Send approval/login SMS to this learner without changing status?');">
             <input type="hidden" name="page" value="{page_num}">
             <button class='btn secondary mini'>SMS Only</button>
         </form>
-        """
 
-        lapse_btn = f"""
         <form method='post'
               action='{url_for('enrollment_action', id=r['id'], action='lapse')}'
               style='display:inline'
@@ -10369,70 +10362,21 @@ def admin_enrollments():
             <input type="hidden" name="page" value="{page_num}">
             <button class='btn danger mini'>Lapse</button>
         </form>
+
         """
-
-        pending_btn = ""
-
+        
+        
         if is_high_admin():
-            pending_btn = f"""
-            <form method='post'
-                  action='{url_for('enrollment_action', id=r['id'], action='pending')}'
-                  style='display:inline'
-                  onsubmit="return confirm('Move this enrollment back to pending?');">
+            actions += f"""
+            <form method='post' action='{url_for('enrollment_action', id=r['id'], action='pending')}' style='display:inline'>
                 <input type="hidden" name="page" value="{page_num}">
-                <button class='btn mini' style="background:#f59e0b;color:white">
-                    Pending
-                </button>
+                <button class='btn warn'>Pending</button>
             </form>
             """
-
-        if status == "PENDING":
-            actions = f"""
-            <div class="enrollment-actions">
-                {approve_only_btn}
-                {approve_sms_btn}
-                {sms_only_btn}
-                {lapse_btn}
-            </div>
-            """
-
-        elif status == "ACTIVE":
-            actions = f"""
-            <div class="enrollment-actions">
-                {sms_only_btn}
-                {lapse_btn}
-                {pending_btn}
-            </div>
-            """
-
-        elif status == "LAPSED":
-            actions = f"""
-            <div class="enrollment-actions">
-                {approve_only_btn}
-                {approve_sms_btn}
-                {sms_only_btn}
-                {pending_btn}
-            </div>
-            """
-
-        else:
-            actions = f"""
-            <div class="enrollment-actions">
-                {approve_only_btn}
-                {approve_sms_btn}
-                {sms_only_btn}
-                {lapse_btn}
-                {pending_btn}
-            </div>
-            """
-        
         
         trs.append(f"""
         <tr>
-            <td class="enrollment-student-cell">
-                <strong>{r['full_name']}</strong>
-                <div class='enrollment-mini-muted'>{r['phone_whatsapp']}</div>
-            </td>
+            <td>{r['full_name']}<div class='muted'>{r['phone_whatsapp']}</div></td>
             <td>{grade_label(r['grade'])}</td>
             <td>{r['subject_name']}</td>
             <td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>
@@ -10441,14 +10385,14 @@ def admin_enrollments():
             <td>{pop_html}</td>
             <td><strong>R{r['amount_paid']}</strong></td>
 
-            <td class="enrollment-actions-cell">
+            <td style="white-space:nowrap">
                 {actions}
             </td>
 
             <td>
-                <a class='btn mini secondary' target='_blank'
-                   href='{url_for('status', id=r['id'])}?{urlencode({'token': r['status_token']})}'>
-                    Open
+                <a class='links' target='_blank'
+                href='{url_for('status', id=r['id'])}?{urlencode({'token': r['status_token']})}'>
+                open
                 </a>
             </td>
         </tr>
@@ -10520,56 +10464,11 @@ def admin_enrollments():
 
     </div>
     """
-    
-    enrollment_style = """
-    <style>
-    .enrollment-actions{
-        display:grid;
-        grid-template-columns:repeat(2, minmax(90px, auto));
-        gap:6px;
-        align-items:center;
-    }
-
-    .enrollment-actions form{
-        margin:0;
-    }
-
-    .enrollment-actions .btn{
-        width:100%;
-        padding:7px 10px;
-        font-size:12px;
-        border-radius:999px;
-        white-space:nowrap;
-    }
-
-    .enrollment-student-cell{
-        min-width:145px;
-    }
-
-    .enrollment-actions-cell{
-        min-width:210px;
-    }
-
-    .enrollment-mini-muted{
-        font-size:12px;
-        color:#64748b;
-        line-height:1.2;
-    }
-
-    @media(max-width:900px){
-        .enrollment-actions{
-            grid-template-columns:1fr;
-        }
-    }
-    </style>
-    """
 
     body = f"""
     {admin_nav()}
 
     <section class='card'>
-    
-        {enrollment_style}
 
         <h1>Enrollments — {pretty_month_label(month)}</h1>
         
