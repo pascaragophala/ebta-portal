@@ -45,6 +45,9 @@ PROFILE_PICS_DIR.mkdir(parents=True, exist_ok=True)
 SECRETARY_DIR = UPLOADS_DIR / "secretary"
 SECRETARY_DIR.mkdir(parents=True, exist_ok=True)
 
+SOCIAL_MEDIA_DIR = UPLOADS_DIR / "social_media"
+SOCIAL_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+
 APPLICATIONS_DIR = UPLOADS_DIR / "applications"
 APPLICATIONS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -725,6 +728,112 @@ def init_db():
         FOREIGN KEY(secretary_id) REFERENCES secretaries(id)
     );
     """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS social_media_managers(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL UNIQUE,
+        email TEXT,
+        pin TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS social_media_content_logs(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        manager_id INTEGER NOT NULL,
+
+        title TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        platform TEXT NOT NULL,
+
+        planned_date TEXT,
+        posted_date TEXT,
+
+        caption TEXT,
+        post_link TEXT,
+
+        status TEXT NOT NULL DEFAULT 'PLANNED',
+        -- PLANNED | DRAFT | POSTED | NEEDS_APPROVAL | CANCELLED
+
+        proof_file_path TEXT,
+        proof_file_name TEXT,
+
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        FOREIGN KEY(manager_id) REFERENCES social_media_managers(id)
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS social_media_weekly_reports(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        manager_id INTEGER NOT NULL,
+
+        week_start TEXT NOT NULL,
+        week_end TEXT,
+
+        posts_published INTEGER NOT NULL DEFAULT 0,
+        stories_posted INTEGER NOT NULL DEFAULT 0,
+
+        platforms_used TEXT,
+
+        comments_received INTEGER NOT NULL DEFAULT 0,
+        dms_received INTEGER NOT NULL DEFAULT 0,
+        dms_responded INTEGER NOT NULL DEFAULT 0,
+        comments_responded INTEGER NOT NULL DEFAULT 0,
+
+        best_post_link TEXT,
+        best_post_engagement TEXT,
+
+        challenges TEXT,
+        next_week_plan TEXT,
+
+        status TEXT NOT NULL DEFAULT 'SUBMITTED',
+        -- DRAFT | SUBMITTED | REVIEWED
+
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        FOREIGN KEY(manager_id) REFERENCES social_media_managers(id)
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS social_media_crisis_logs(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        manager_id INTEGER NOT NULL,
+
+        issue_type TEXT NOT NULL,
+        -- Negative Comment | PR Risk | Hacked Account | Suspicious DM | Complaint | Other
+
+        platform TEXT NOT NULL,
+        description TEXT NOT NULL,
+
+        action_taken TEXT,
+        escalated_to TEXT,
+
+        status TEXT NOT NULL DEFAULT 'OPEN',
+        -- OPEN | ESCALATED | RESOLVED | CLOSED
+
+        screenshot_file_path TEXT,
+        screenshot_file_name TEXT,
+
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        FOREIGN KEY(manager_id) REFERENCES social_media_managers(id)
+    );
+    """)
 
     
     ensure_column(conn, "students", "guardian_name", "TEXT")
@@ -799,6 +908,16 @@ def init_db():
 
     cur.execute("CREATE INDEX IF NOT EXISTS idx_secretary_actions_status ON secretary_action_items(status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_secretary_actions_deadline ON secretary_action_items(deadline)")
+    
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_smm_content_manager ON social_media_content_logs(manager_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_smm_content_status ON social_media_content_logs(status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_smm_content_posted ON social_media_content_logs(posted_date)")
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_smm_weekly_manager ON social_media_weekly_reports(manager_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_smm_weekly_start ON social_media_weekly_reports(week_start)")
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_smm_crisis_manager ON social_media_crisis_logs(manager_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_smm_crisis_status ON social_media_crisis_logs(status)")
 
     
 
@@ -1222,6 +1341,15 @@ def is_secretary():
 def require_secretary():
     if not is_secretary():
         return redirect(url_for("secretary_login"))    
+        
+        
+def is_social_media_manager():
+    return session.get("social_media_manager_id")
+
+
+def require_social_media_manager():
+    if not is_social_media_manager():
+        return redirect(url_for("social_media_login"))
     
 
 def require_treasurer():
@@ -10242,6 +10370,9 @@ def admin_nav():
             f"<a class='btn secondary' href='{url_for('admin_secretaries')}'>Secretaries</a>",
             f"<a class='btn secondary' href='{url_for('admin_secretary_logs')}'>Secretary Logs</a>",
             f"<a class='btn secondary' href='{url_for('admin_secretary_minutes')}'>Secretary Minutes</a>",
+            f"<a class='btn secondary' href='{url_for('admin_social_media_managers')}'>Social Media Managers</a>",
+            f"<a class='btn secondary' href='{url_for('admin_social_media_content_logs')}'>Social Media Logs</a>",
+            f"<a class='btn secondary' href='{url_for('admin_social_media_reports')}'>Social Media Reports</a>",
             f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
             f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
 
@@ -10311,6 +10442,9 @@ def admin_home():
     <a class="btn secondary" href="{url_for('admin_secretaries')}">Secretaries</a>
     <a class="btn secondary" href="{url_for('admin_secretary_logs')}">Secretary Logs</a>
     <a class="btn secondary" href="{url_for('admin_secretary_minutes')}">Secretary Minutes</a>
+    <a class="btn secondary" href="{url_for('admin_social_media_managers')}">Social Media Managers</a>
+    <a class="btn secondary" href="{url_for('admin_social_media_content_logs')}">Social Media Logs</a>
+    <a class="btn secondary" href="{url_for('admin_social_media_reports')}">Social Media Reports</a>
     <a class='btn secondary' href='{url_for('admin_reports')}'>Student Reports</a>
 
     </div></section>"""
@@ -25665,6 +25799,824 @@ def admin_secretary_minutes():
     """
 
     return page("Secretary Minutes", body)
+    
+    
+
+def social_media_nav():
+    return """
+    <nav class="admin-nav">
+        <a class="btn secondary" href="/social-media">Dashboard</a>
+        <a class="btn secondary" href="/social-media/content">Content Logs</a>
+        <a class="btn secondary" href="/social-media/content/new">Create Content Log</a>
+        <a class="btn secondary" href="/social-media/weekly-reports">Weekly Reports</a>
+        <a class="btn secondary" href="/social-media/weekly-reports/new">New Weekly Report</a>
+        <a class="btn secondary" href="/social-media/crisis-logs">Crisis Logs</a>
+        <a class="btn secondary" href="/social-media/crisis-logs/new">Log Crisis</a>
+        <a class="btn danger" href="/social-media/logout">Logout</a>
+    </nav>
+    """
+
+
+@app.get('/admin/social-media-managers')
+def admin_social_media_managers():
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can manage Social Media Managers."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            sm.*,
+            (
+                SELECT COUNT(*)
+                FROM social_media_content_logs c
+                WHERE c.manager_id = sm.id
+            ) AS content_count,
+            (
+                SELECT COUNT(*)
+                FROM social_media_weekly_reports w
+                WHERE w.manager_id = sm.id
+            ) AS weekly_count,
+            (
+                SELECT COUNT(*)
+                FROM social_media_crisis_logs cl
+                WHERE cl.manager_id = sm.id
+            ) AS crisis_count
+        FROM social_media_managers sm
+        ORDER BY sm.created_at DESC
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for sm in rows:
+        status = (
+            "<span class='chip active'>Active</span>"
+            if sm["is_active"] == 1
+            else "<span class='chip lapsed'>Inactive</span>"
+        )
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(sm['full_name'])}</strong>
+                <div class="mini muted">{escape(sm['phone'])}</div>
+            </td>
+
+            <td>{escape(sm['email'] or '—')}</td>
+
+            <td>
+                <span class="chip" style="
+                    font-weight:800;
+                    font-size:14px;
+                    letter-spacing:1px;
+                    padding:7px 12px;
+                ">
+                    {escape(sm['pin'] or '—')}
+                </span>
+            </td>
+
+            <td>{status}</td>
+
+            <td>
+                <div class="mini muted">
+                    Content Logs: {sm['content_count'] or 0}<br>
+                    Weekly Reports: {sm['weekly_count'] or 0}<br>
+                    Crisis Logs: {sm['crisis_count'] or 0}
+                </div>
+            </td>
+
+            <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+
+                    <form method="post"
+                          action="/admin/social-media-manager/{sm['id']}/reset-pin"
+                          style="display:inline"
+                          onsubmit="return confirm('Reset Social Media Manager PIN?');">
+                        <button class="btn mini warn">Reset PIN</button>
+                    </form>
+
+                    <form method="post"
+                          action="/admin/social-media-manager/{sm['id']}/toggle"
+                          style="display:inline">
+                        <button class="btn mini secondary">
+                            {'Deactivate' if sm['is_active'] == 1 else 'Activate'}
+                        </button>
+                    </form>
+
+                </div>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Social Media Managers</h1>
+
+        <p class="muted">
+            Add and manage Social Media Manager portal access.
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>Add Social Media Manager</h2>
+
+            <form method="post"
+                  action="/admin/social-media-managers/add"
+                  class="grid"
+                  style="grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end">
+
+                <div>
+                    <label>Full Name</label>
+                    <input name="full_name" required>
+                </div>
+
+                <div>
+                    <label>Phone</label>
+                    <input name="phone" required>
+                </div>
+
+                <div>
+                    <label>Email</label>
+                    <input name="email" type="email">
+                </div>
+
+                <button class="btn success">Add Manager</button>
+            </form>
+
+            <p class="mini muted">
+                The system will generate a 5-digit PIN.
+            </p>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Manager</th>
+                        <th>Email</th>
+                        <th>PIN</th>
+                        <th>Status</th>
+                        <th>Activity</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {trs or "<tr><td colspan='6'>No Social Media Managers added yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Social Media Managers", body)
+    
+    
+    
+@app.post('/admin/social-media-managers/add')
+def admin_add_social_media_manager():
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can add Social Media Managers."))
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    email = request.form.get("email", "").strip()
+
+    if not full_name or not phone:
+        return page("Error", card_msg("Full name and phone are required."))
+
+    raw_pin = f"{random.randint(0, 99999):05d}"
+    created_at = now_utc_iso()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            INSERT INTO social_media_managers(
+                full_name,
+                phone,
+                email,
+                pin,
+                is_active,
+                created_at,
+                updated_at
+            )
+            VALUES(?,?,?,?,1,?,?)
+        """, (
+            full_name,
+            phone,
+            email,
+            raw_pin,
+            created_at,
+            created_at
+        ))
+
+        conn.commit()
+        manager_id = cur.lastrowid
+
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Error", card_msg("A Social Media Manager with this phone number already exists."))
+
+    conn.close()
+
+    return page(
+        "Social Media Manager Created",
+        f"""
+        {admin_nav()}
+
+        <section class="card">
+            <h1>Social Media Manager Created Successfully</h1>
+
+            <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">
+
+                <div class="card soft">
+                    <h2>Profile</h2>
+                    <p><b>Name:</b> {escape(full_name)}</p>
+                    <p><b>Phone:</b> {escape(phone)}</p>
+                    <p><b>Email:</b> {escape(email or '—')}</p>
+                    <p><b>Status:</b> <span class="chip active">Active</span></p>
+                </div>
+
+                <div class="card soft" style="border-left:5px solid #f59e0b">
+                    <h2>Login Details</h2>
+                    <p><b>Login Phone:</b> {escape(phone)}</p>
+
+                    <p>
+                        <b>PIN:</b>
+                        <span class="chip" style="font-size:24px;padding:14px 20px;letter-spacing:2px;font-weight:800">
+                            {raw_pin}
+                        </span>
+                    </p>
+
+                    <p class="mini muted">
+                        Share this PIN privately with the Social Media Manager.
+                    </p>
+                </div>
+
+            </div>
+
+            <div class="toolbar" style="margin-top:14px">
+                <a class="btn" href="/admin/social-media-managers">Back to Social Media Managers</a>
+                <a class="btn secondary" href="/social-media/login">Social Media Login Page</a>
+            </div>
+        </section>
+        """
+    )
+
+
+@app.post('/admin/social-media-manager/<int:mid>/reset-pin')
+def admin_social_media_reset_pin(mid):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can reset Social Media Manager PINs."))
+
+    raw_pin = f"{random.randint(0, 99999):05d}"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE social_media_managers
+        SET pin=?,
+            updated_at=?
+        WHERE id=?
+    """, (raw_pin, now_utc_iso(), mid))
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "PIN Reset",
+        f"""
+        {admin_nav()}
+        <div class="card">
+            <h1>Social Media Manager PIN Reset</h1>
+
+            <p>
+                <b>New PIN:</b>
+                <span class="chip" style="font-size:24px;padding:14px 20px;letter-spacing:2px;font-weight:800">
+                    {raw_pin}
+                </span>
+            </p>
+
+            <p class="mini muted">
+                Share this new PIN privately.
+            </p>
+
+            <a class="btn" href="/admin/social-media-managers">Back to Social Media Managers</a>
+        </div>
+        """
+    )
+
+
+@app.post('/admin/social-media-manager/<int:mid>/toggle')
+def admin_social_media_toggle(mid):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can update Social Media Manager accounts."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT is_active FROM social_media_managers WHERE id=?", (mid,))
+    row = cur.fetchone()
+
+    if row:
+        new_status = 0 if row["is_active"] == 1 else 1
+
+        cur.execute("""
+            UPDATE social_media_managers
+            SET is_active=?,
+                updated_at=?
+            WHERE id=?
+        """, (new_status, now_utc_iso(), mid))
+
+        conn.commit()
+
+    conn.close()
+
+    return redirect(url_for("admin_social_media_managers"))
+    
+    
+@app.get('/social-media/login')
+def social_media_login():
+
+    body = """
+    <div class="card auth-card">
+        <h1>Social Media Manager Login</h1>
+
+        <form method="post" action="/social-media/login" class="grid">
+            <div>
+                <label>Phone Number</label>
+                <input name="phone" required>
+            </div>
+
+            <div>
+                <label>PIN</label>
+                <input name="pin" type="password" maxlength="5" required>
+            </div>
+
+            <button class="btn success">Login</button>
+        </form>
+    </div>
+    """
+
+    return page("Social Media Manager Login", body)
+
+
+@app.post('/social-media/login')
+def social_media_login_post():
+
+    phone = request.form.get("phone", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    variants = phone_variants(phone)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    qmarks = ",".join("?" * len(variants)) if variants else "?"
+    params = variants if variants else [phone]
+
+    cur.execute(f"""
+        SELECT *
+        FROM social_media_managers
+        WHERE phone IN ({qmarks})
+          AND pin=?
+          AND is_active=1
+        LIMIT 1
+    """, params + [pin])
+
+    sm = cur.fetchone()
+    conn.close()
+
+    if not sm:
+        return page("Login Failed", card_msg("Invalid Social Media Manager login details or account is inactive."))
+
+    session.clear()
+    session["social_media_manager_id"] = sm["id"]
+    session["social_media_manager_name"] = sm["full_name"]
+
+    return redirect(url_for("social_media_dashboard"))
+
+
+@app.get('/social-media/logout')
+def social_media_logout():
+    session.clear()
+    return redirect(url_for("social_media_login"))
+    
+    
+@app.get('/social-media')
+def social_media_dashboard():
+
+    r = require_social_media_manager()
+    if r: return r
+
+    mid = is_social_media_manager()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM social_media_content_logs
+        WHERE manager_id=?
+    """, (mid,))
+    total_content = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM social_media_content_logs
+        WHERE manager_id=?
+          AND status='POSTED'
+    """, (mid,))
+    posted_content = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM social_media_weekly_reports
+        WHERE manager_id=?
+    """, (mid,))
+    weekly_reports = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM social_media_crisis_logs
+        WHERE manager_id=?
+          AND status IN ('OPEN','ESCALATED')
+    """, (mid,))
+    open_crisis = cur.fetchone()["c"] or 0
+
+    conn.close()
+
+    body = f"""
+    {social_media_nav()}
+
+    <section class="card">
+        <h1>Social Media Manager Dashboard</h1>
+
+        <p class="muted">
+            Welcome, {escape(session.get("social_media_manager_name", "Social Media Manager"))}.
+        </p>
+
+        <div class="stats">
+            {stat("Content Logs", str(total_content))}
+            {stat("Posted Content", str(posted_content))}
+            {stat("Weekly Reports", str(weekly_reports))}
+            {stat("Open Crisis Logs", str(open_crisis))}
+        </div>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-top:14px">
+            <h2>Role Reminder</h2>
+            <p class="muted">
+                Plan content weekly, post consistently, track engagement, respond to comments and DMs,
+                and escalate complaints or PR risks immediately.
+            </p>
+        </div>
+    </section>
+    """
+
+    return page("Social Media Dashboard", body)
+    
+    
+@app.get('/social-media/content')
+def social_media_content_logs():
+
+    r = require_social_media_manager()
+    if r: return r
+
+    mid = is_social_media_manager()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM social_media_content_logs
+        WHERE manager_id=?
+        ORDER BY COALESCE(posted_date, planned_date, created_at) DESC
+    """, (mid,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for c in rows:
+        proof = "—"
+        if c["proof_file_path"] and os.path.exists(c["proof_file_path"]):
+            proof = f"""
+            <a class="btn mini secondary" target="_blank" href="/social-media/content/{c['id']}/proof">
+                View Proof
+            </a>
+            """
+
+        post_link = "—"
+        if c["post_link"]:
+            post_link = f"<a class='btn mini secondary' target='_blank' href='{escape(c['post_link'])}'>Open Post</a>"
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(c['title'])}</strong>
+                <div class="mini muted">{escape(c['content_type'])}</div>
+            </td>
+            <td>{escape(c['platform'])}</td>
+            <td>{escape(c['planned_date'] or '—')}</td>
+            <td>{escape(c['posted_date'] or '—')}</td>
+            <td><span class="chip">{escape(c['status'])}</span></td>
+            <td>{post_link}</td>
+            <td>{proof}</td>
+        </tr>
+        """
+
+    body = f"""
+    {social_media_nav()}
+
+    <section class="card">
+        <h1>Content Logs</h1>
+
+        <div class="toolbar">
+            <a class="btn success" href="/social-media/content/new">
+                Create Content Log
+            </a>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Content</th>
+                        <th>Platform</th>
+                        <th>Planned</th>
+                        <th>Posted</th>
+                        <th>Status</th>
+                        <th>Post Link</th>
+                        <th>Proof</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No content logs yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Content Logs", body)
+    
+    
+@app.get('/social-media/content/new')
+def social_media_new_content():
+
+    r = require_social_media_manager()
+    if r: return r
+
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date().isoformat()
+
+    body = f"""
+    {social_media_nav()}
+
+    <section class="card">
+        <h1>Create Content Log</h1>
+
+        <p class="muted">
+            Use this to plan content or record content that has already been posted.
+        </p>
+
+        <form method="post"
+              action="/social-media/content/new"
+              enctype="multipart/form-data"
+              class="grid"
+              style="grid-template-columns:1fr 1fr;gap:12px">
+
+            <div>
+                <label>Title</label>
+                <input name="title" required placeholder="Example: Enrollment Open Announcement">
+            </div>
+
+            <div>
+                <label>Content Type</label>
+                <select name="content_type" required>
+                    <option>Enrollment Campaign</option>
+                    <option>Motivational Content</option>
+                    <option>Study Tip</option>
+                    <option>Event Announcement</option>
+                    <option>Tutor Recruitment</option>
+                    <option>Leadership Intro Video</option>
+                    <option>Learner Success Story</option>
+                    <option>Awards Ceremony Content</option>
+                    <option>FAQ / Educational Content</option>
+                    <option>Other</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Platform</label>
+                <select name="platform" required>
+                    <option>Facebook</option>
+                    <option>Instagram</option>
+                    <option>TikTok</option>
+                    <option>LinkedIn</option>
+                    <option>All Platforms</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Status</label>
+                <select name="status">
+                    <option>PLANNED</option>
+                    <option>DRAFT</option>
+                    <option>POSTED</option>
+                    <option>NEEDS_APPROVAL</option>
+                    <option>CANCELLED</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Planned Date</label>
+                <input type="date" name="planned_date" value="{today}">
+            </div>
+
+            <div>
+                <label>Posted Date Optional</label>
+                <input type="date" name="posted_date">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Post Link Optional</label>
+                <input name="post_link" placeholder="Paste social media post link if already published">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Caption / Post Text</label>
+                <textarea name="caption" rows="8" placeholder="Write caption or post content here..."></textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Notes Optional</label>
+                <textarea name="notes" rows="3" placeholder="COO feedback, campaign notes, or context"></textarea>
+            </div>
+
+            <div>
+                <label>Proof Screenshot Optional</label>
+                <input type="file" name="proof" accept=".png,.jpg,.jpeg,.pdf">
+            </div>
+
+            <div style="display:flex;align-items:end">
+                <button class="btn success">
+                    Save Content Log
+                </button>
+            </div>
+
+        </form>
+    </section>
+    """
+
+    return page("Create Content Log", body)
+    
+    
+@app.post('/social-media/content/new')
+def social_media_create_content():
+
+    r = require_social_media_manager()
+    if r: return r
+
+    mid = is_social_media_manager()
+
+    title = request.form.get("title", "").strip()
+    content_type = request.form.get("content_type", "").strip()
+    platform = request.form.get("platform", "").strip()
+    planned_date = request.form.get("planned_date", "").strip()
+    posted_date = request.form.get("posted_date", "").strip()
+    caption = request.form.get("caption", "").strip()
+    post_link = request.form.get("post_link", "").strip()
+    status = request.form.get("status", "PLANNED").strip()
+    notes = request.form.get("notes", "").strip()
+
+    if status not in ["PLANNED", "DRAFT", "POSTED", "NEEDS_APPROVAL", "CANCELLED"]:
+        status = "PLANNED"
+
+    if not title:
+        return page("Error", card_msg("Title is required."))
+
+    proof = request.files.get("proof")
+    proof_path = None
+    proof_name = None
+
+    if proof and proof.filename:
+        proof_name = secure_name(proof.filename)
+        ext = os.path.splitext(proof_name)[1].lower()
+
+        if ext not in [".png", ".jpg", ".jpeg", ".pdf"]:
+            return page("Invalid File", card_msg("Proof must be PNG, JPG, JPEG, or PDF."))
+
+        saved_name = f"smm_content_{mid}_{int(time.time())}{ext}"
+        path = SOCIAL_MEDIA_DIR / saved_name
+        proof.save(path)
+
+        proof_path = str(path)
+
+    now = now_utc_iso()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO social_media_content_logs(
+            manager_id,
+            title,
+            content_type,
+            platform,
+            planned_date,
+            posted_date,
+            caption,
+            post_link,
+            status,
+            proof_file_path,
+            proof_file_name,
+            notes,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        mid,
+        title,
+        content_type,
+        platform,
+        planned_date,
+        posted_date,
+        caption,
+        post_link,
+        status,
+        proof_path,
+        proof_name,
+        notes,
+        now,
+        now
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("social_media_content_logs"))
+    
+    
+@app.get('/social-media/content/<int:content_id>/proof')
+def social_media_content_proof(content_id):
+
+    r = require_social_media_manager()
+    if r: return r
+
+    mid = is_social_media_manager()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT proof_file_path
+        FROM social_media_content_logs
+        WHERE id=?
+          AND manager_id=?
+    """, (content_id, mid))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row["proof_file_path"]:
+        return page("Not Found", card_msg("Proof file not found."))
+
+    file_path = row["proof_file_path"]
+
+    if not os.path.exists(file_path):
+        return page("Missing File", card_msg("The proof file is missing from storage."))
+
+    return send_from_directory(
+        os.path.dirname(file_path),
+        os.path.basename(file_path),
+        as_attachment=False
+    )
 
 
 # --- Admin: Analytics dashboard ---
