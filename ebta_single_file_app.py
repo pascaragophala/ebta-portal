@@ -42,6 +42,9 @@ FINANCE_DIR.mkdir(parents=True, exist_ok=True)
 PROFILE_PICS_DIR = UPLOADS_DIR / "profile_pictures"
 PROFILE_PICS_DIR.mkdir(parents=True, exist_ok=True)
 
+SECRETARY_DIR = UPLOADS_DIR / "secretary"
+SECRETARY_DIR.mkdir(parents=True, exist_ok=True)
+
 APPLICATIONS_DIR = UPLOADS_DIR / "applications"
 APPLICATIONS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -628,6 +631,100 @@ def init_db():
         FOREIGN KEY(prepared_by) REFERENCES treasurers(id)
     );
     """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS secretaries(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL UNIQUE,
+        email TEXT,
+        pin TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS secretary_communication_logs(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        secretary_id INTEGER NOT NULL,
+
+        title TEXT NOT NULL,
+        message_type TEXT NOT NULL,
+        audience TEXT NOT NULL,
+
+        grade TEXT,
+        subject TEXT,
+        group_name TEXT,
+
+        message_body TEXT NOT NULL,
+
+        status TEXT NOT NULL DEFAULT 'DRAFT',
+        -- DRAFT | READY | SENT | NEEDS_APPROVAL
+
+        sent_at TEXT,
+        proof_file_path TEXT,
+        proof_file_name TEXT,
+
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        FOREIGN KEY(secretary_id) REFERENCES secretaries(id)
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS secretary_meeting_minutes(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        secretary_id INTEGER NOT NULL,
+
+        meeting_type TEXT NOT NULL,
+        meeting_date TEXT NOT NULL,
+        led_by TEXT,
+        attendees TEXT,
+
+        decisions TEXT,
+        blockers TEXT,
+        minutes_body TEXT,
+
+        status TEXT NOT NULL DEFAULT 'DRAFT',
+        -- DRAFT | SUBMITTED | SHARED | ARCHIVED
+
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        FOREIGN KEY(secretary_id) REFERENCES secretaries(id)
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS secretary_action_items(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        minutes_id INTEGER,
+        secretary_id INTEGER NOT NULL,
+
+        task TEXT NOT NULL,
+        responsible_person TEXT,
+        deadline TEXT,
+        followup_date TEXT,
+
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        -- PENDING | DONE | OVERDUE
+
+        notes TEXT,
+
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        FOREIGN KEY(minutes_id) REFERENCES secretary_meeting_minutes(id) ON DELETE CASCADE,
+        FOREIGN KEY(secretary_id) REFERENCES secretaries(id)
+    );
+    """)
 
     
     ensure_column(conn, "students", "guardian_name", "TEXT")
@@ -692,6 +789,16 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_attendance_sessions_subject ON attendance_sessions(subject_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_attendance_sessions_tutor ON attendance_sessions(tutor_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(date)")
+    
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_secretary_logs_secretary ON secretary_communication_logs(secretary_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_secretary_logs_status ON secretary_communication_logs(status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_secretary_logs_created ON secretary_communication_logs(created_at)")
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_secretary_minutes_secretary ON secretary_meeting_minutes(secretary_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_secretary_minutes_date ON secretary_meeting_minutes(meeting_date)")
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_secretary_actions_status ON secretary_action_items(status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_secretary_actions_deadline ON secretary_action_items(deadline)")
 
     
 
@@ -1106,6 +1213,16 @@ def is_lower_admin():
     
 def is_treasurer():
     return session.get("treasurer_id")
+    
+    
+def is_secretary():
+    return session.get("secretary_id")
+
+
+def require_secretary():
+    if not is_secretary():
+        return redirect(url_for("secretary_login"))    
+    
 
 def require_treasurer():
     if not is_treasurer():
@@ -10122,6 +10239,9 @@ def admin_nav():
             f"<a class='btn secondary' href='{url_for('admin_management_applications')}'>Management Applications</a>",
             f"<a class='btn secondary' href='{url_for('admin_treasurers')}'>Treasurers</a>",
             f"<a class='btn secondary' href='{url_for('admin_finance_overview')}'>Finance Overview</a>",
+            f"<a class='btn secondary' href='{url_for('admin_secretaries')}'>Secretaries</a>",
+            f"<a class='btn secondary' href='{url_for('admin_secretary_logs')}'>Secretary Logs</a>",
+            f"<a class='btn secondary' href='{url_for('admin_secretary_minutes')}'>Secretary Minutes</a>",
             f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
             f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
 
@@ -10188,6 +10308,9 @@ def admin_home():
     <a class="btn secondary" href="{url_for('admin_treasurers')}">Treasurers</a>
     <a class="btn secondary" href="{url_for('admin_finance_overview')}">Finance Overview</a>
     <a class="btn secondary" href="{url_for('admin_academic_quality_managers')}">AQ_Manager</a>
+    <a class="btn secondary" href="{url_for('admin_secretaries')}">Secretaries</a>
+    <a class="btn secondary" href="{url_for('admin_secretary_logs')}">Secretary Logs</a>
+    <a class="btn secondary" href="{url_for('admin_secretary_minutes')}">Secretary Minutes</a>
     <a class='btn secondary' href='{url_for('admin_reports')}'>Student Reports</a>
 
     </div></section>"""
@@ -23857,6 +23980,1673 @@ def admin_finance_overview():
     """
 
     return page("Finance Overview", body)    
+    
+    
+def secretary_nav():
+    return """
+    <nav class="admin-nav">
+        <a class="btn secondary" href="/secretary">Dashboard</a>
+        <a class="btn secondary" href="/secretary/communications">Communication Logs</a>
+        <a class="btn secondary" href="/secretary/communications/new">Create Message</a>
+        <a class="btn secondary" href="/secretary/minutes">Meeting Minutes</a>
+        <a class="btn secondary" href="/secretary/action-items">Action Items</a>
+        <a class="btn danger" href="/secretary/logout">Logout</a>
+    </nav>
+    """
+    
+    
+@app.get('/admin/secretaries')
+def admin_secretaries():
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can manage secretaries."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            s.*,
+            (
+                SELECT COUNT(*)
+                FROM secretary_communication_logs l
+                WHERE l.secretary_id = s.id
+            ) AS logs_count,
+            (
+                SELECT COUNT(*)
+                FROM secretary_meeting_minutes m
+                WHERE m.secretary_id = s.id
+            ) AS minutes_count,
+            (
+                SELECT COUNT(*)
+                FROM secretary_action_items a
+                WHERE a.secretary_id = s.id
+            ) AS actions_count
+        FROM secretaries s
+        ORDER BY s.created_at DESC
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for s in rows:
+        status = (
+            "<span class='chip active'>Active</span>"
+            if s["is_active"] == 1
+            else "<span class='chip lapsed'>Inactive</span>"
+        )
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(s['full_name'])}</strong>
+                <div class="mini muted">{escape(s['phone'])}</div>
+            </td>
+            <td>{escape(s['email'] or '—')}</td>
+            <td>{status}</td>
+            <td>
+                <div class="mini muted">
+                    Logs: {s['logs_count'] or 0}<br>
+                    Minutes: {s['minutes_count'] or 0}<br>
+                    Action Items: {s['actions_count'] or 0}
+                </div>
+            </td>
+            <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+
+                    <form method="post"
+                          action="/admin/secretary/{s['id']}/reset-pin"
+                          style="display:inline"
+                          onsubmit="return confirm('Reset Secretary General PIN?');">
+                        <button class="btn mini warn">Reset PIN</button>
+                    </form>
+
+                    <form method="post"
+                          action="/admin/secretary/{s['id']}/toggle"
+                          style="display:inline">
+                        <button class="btn mini secondary">
+                            {'Deactivate' if s['is_active'] == 1 else 'Activate'}
+                        </button>
+                    </form>
+
+                </div>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Secretary General Users</h1>
+
+        <p class="muted">
+            Add and manage Secretary General portal access.
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>Add Secretary General</h2>
+
+            <form method="post"
+                  action="/admin/secretaries/add"
+                  class="grid"
+                  style="grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end">
+
+                <div>
+                    <label>Full Name</label>
+                    <input name="full_name" required>
+                </div>
+
+                <div>
+                    <label>Phone</label>
+                    <input name="phone" required>
+                </div>
+
+                <div>
+                    <label>Email</label>
+                    <input name="email" type="email">
+                </div>
+
+                <button class="btn success">Add Secretary</button>
+            </form>
+
+            <p class="mini muted">
+                The system will generate a 5-digit PIN.
+            </p>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Secretary</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Activity</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {trs or "<tr><td colspan='5'>No Secretary General users added yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Secretaries", body)
+    
+    
+@app.post('/admin/secretaries/add')
+def admin_add_secretary():
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can add secretaries."))
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    email = request.form.get("email", "").strip()
+
+    if not full_name or not phone:
+        return page("Error", card_msg("Full name and phone are required."))
+
+    raw_pin = f"{random.randint(0, 99999):05d}"
+    created_at = now_utc_iso()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            INSERT INTO secretaries(
+                full_name,
+                phone,
+                email,
+                pin,
+                is_active,
+                created_at,
+                updated_at
+            )
+            VALUES(?,?,?,?,1,?,?)
+        """, (
+            full_name,
+            phone,
+            email,
+            raw_pin,
+            created_at,
+            created_at
+        ))
+
+        conn.commit()
+        secretary_id = cur.lastrowid
+
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Error", card_msg("A secretary with this phone number already exists."))
+
+    conn.close()
+
+    return page(
+        "Secretary Created",
+        f"""
+        {admin_nav()}
+
+        <section class="card">
+            <h1>Secretary General Created Successfully</h1>
+
+            <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">
+
+                <div class="card soft">
+                    <h2>Profile</h2>
+                    <p><b>Name:</b> {escape(full_name)}</p>
+                    <p><b>Phone:</b> {escape(phone)}</p>
+                    <p><b>Email:</b> {escape(email or '—')}</p>
+                    <p><b>Status:</b> <span class="chip active">Active</span></p>
+                </div>
+
+                <div class="card soft" style="border-left:5px solid #f59e0b">
+                    <h2>Login Details</h2>
+                    <p><b>Login Phone:</b> {escape(phone)}</p>
+
+                    <p>
+                        <b>PIN:</b>
+                        <span class="chip" style="font-size:24px;padding:14px 20px;letter-spacing:2px;font-weight:800">
+                            {raw_pin}
+                        </span>
+                    </p>
+
+                    <p class="mini muted">
+                        Share this PIN privately with the Secretary General.
+                    </p>
+                </div>
+
+            </div>
+
+            <div class="toolbar" style="margin-top:14px">
+                <a class="btn" href="/admin/secretaries">Back to Secretaries</a>
+                <a class="btn secondary" href="/secretary/login">Secretary Login Page</a>
+            </div>
+        </section>
+        """
+    )
+
+
+@app.post('/admin/secretary/<int:sid>/reset-pin')
+def admin_secretary_reset_pin(sid):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can reset secretary PINs."))
+
+    raw_pin = f"{random.randint(0, 99999):05d}"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE secretaries
+        SET pin=?,
+            updated_at=?
+        WHERE id=?
+    """, (raw_pin, now_utc_iso(), sid))
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "PIN Reset",
+        f"""
+        {admin_nav()}
+        <div class="card">
+            <h1>Secretary General PIN Reset</h1>
+
+            <p>
+                <b>New PIN:</b>
+                <span class="chip" style="font-size:24px;padding:14px 20px;letter-spacing:2px;font-weight:800">
+                    {raw_pin}
+                </span>
+            </p>
+
+            <p class="mini muted">
+                Share this new PIN privately.
+            </p>
+
+            <a class="btn" href="/admin/secretaries">Back to Secretaries</a>
+        </div>
+        """
+    )
+
+
+@app.post('/admin/secretary/<int:sid>/toggle')
+def admin_secretary_toggle(sid):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can update secretary accounts."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT is_active FROM secretaries WHERE id=?", (sid,))
+    row = cur.fetchone()
+
+    if row:
+        new_status = 0 if row["is_active"] == 1 else 1
+
+        cur.execute("""
+            UPDATE secretaries
+            SET is_active=?,
+                updated_at=?
+            WHERE id=?
+        """, (new_status, now_utc_iso(), sid))
+
+        conn.commit()
+
+    conn.close()
+
+    return redirect(url_for("admin_secretaries"))
+    
+    
+@app.get('/secretary/login')
+def secretary_login():
+
+    body = """
+    <div class="card auth-card">
+        <h1>Secretary General Login</h1>
+
+        <form method="post" action="/secretary/login" class="grid">
+            <div>
+                <label>Phone Number</label>
+                <input name="phone" required>
+            </div>
+
+            <div>
+                <label>PIN</label>
+                <input name="pin" type="password" maxlength="5" required>
+            </div>
+
+            <button class="btn success">Login</button>
+        </form>
+    </div>
+    """
+
+    return page("Secretary General Login", body)
+
+
+@app.post('/secretary/login')
+def secretary_login_post():
+
+    phone = request.form.get("phone", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    variants = phone_variants(phone)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    qmarks = ",".join("?" * len(variants)) if variants else "?"
+    params = variants if variants else [phone]
+
+    cur.execute(f"""
+        SELECT *
+        FROM secretaries
+        WHERE phone IN ({qmarks})
+          AND pin=?
+          AND is_active=1
+        LIMIT 1
+    """, params + [pin])
+
+    sec = cur.fetchone()
+    conn.close()
+
+    if not sec:
+        return page("Login Failed", card_msg("Invalid Secretary General login details or account is inactive."))
+
+    session.clear()
+    session["secretary_id"] = sec["id"]
+    session["secretary_name"] = sec["full_name"]
+
+    return redirect(url_for("secretary_dashboard"))
+
+
+@app.get('/secretary/logout')
+def secretary_logout():
+    session.clear()
+    return redirect(url_for("secretary_login"))
+    
+    
+@app.get('/secretary')
+def secretary_dashboard():
+
+    r = require_secretary()
+    if r: return r
+
+    sid = is_secretary()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM secretary_communication_logs
+        WHERE secretary_id=?
+    """, (sid,))
+    total_logs = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM secretary_communication_logs
+        WHERE secretary_id=?
+          AND status='SENT'
+    """, (sid,))
+    sent_logs = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM secretary_meeting_minutes
+        WHERE secretary_id=?
+    """, (sid,))
+    minutes_count = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM secretary_action_items
+        WHERE secretary_id=?
+          AND status='PENDING'
+    """, (sid,))
+    pending_actions = cur.fetchone()["c"] or 0
+
+    conn.close()
+
+    body = f"""
+    {secretary_nav()}
+
+    <section class="card">
+        <h1>Secretary General Dashboard</h1>
+
+        <p class="muted">
+            Welcome, {escape(session.get("secretary_name", "Secretary General"))}.
+        </p>
+
+        <div class="stats">
+            {stat("Communication Logs", str(total_logs))}
+            {stat("Sent Messages", str(sent_logs))}
+            {stat("Meeting Minutes", str(minutes_count))}
+            {stat("Pending Actions", str(pending_actions))}
+        </div>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-top:14px">
+            <h2>Role Reminder</h2>
+            <p class="muted">
+                Keep communication professional, record major announcements, upload proof where needed,
+                and track meeting action items until completion.
+            </p>
+        </div>
+    </section>
+    """
+
+    return page("Secretary Dashboard", body)
+    
+
+@app.get('/secretary/communications')
+def secretary_communications():
+
+    r = require_secretary()
+    if r: return r
+
+    sid = is_secretary()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM secretary_communication_logs
+        WHERE secretary_id=?
+        ORDER BY created_at DESC
+    """, (sid,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for log in rows:
+        proof = "—"
+        if log["proof_file_path"] and os.path.exists(log["proof_file_path"]):
+            proof = f"""
+            <a class="btn mini secondary" target="_blank" href="/secretary/communication/{log['id']}/proof">
+                View Proof
+            </a>
+            """
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(log['title'])}</strong>
+                <div class="mini muted">{escape(log['message_type'])}</div>
+            </td>
+            <td>{escape(log['audience'])}</td>
+            <td>{escape(log['grade'] or '—')}</td>
+            <td>{escape(log['subject'] or '—')}</td>
+            <td><span class="chip">{escape(log['status'])}</span></td>
+            <td>{escape((log['sent_at'] or log['created_at'] or '')[:16].replace('T',' '))}</td>
+            <td>{proof}</td>
+            <td>
+                <a class="btn mini" href="/secretary/communication/{log['id']}">
+                    View
+                </a>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {secretary_nav()}
+
+    <section class="card">
+        <h1>Communication Logs</h1>
+
+        <div class="toolbar">
+            <a class="btn success" href="/secretary/communications/new">
+                Create New Message
+            </a>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Message</th>
+                        <th>Audience</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Status</th>
+                        <th>Date</th>
+                        <th>Proof</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {trs or "<tr><td colspan='8'>No communication logs yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Communication Logs", body)
+    
+    
+@app.get('/secretary/communications/new')
+def secretary_new_communication():
+
+    r = require_secretary()
+    if r: return r
+
+    body = f"""
+    {secretary_nav()}
+
+    <section class="card">
+        <h1>Create Communication Log</h1>
+
+        <p class="muted">
+            Prepare the message, choose the audience, then copy it to WhatsApp.
+            After posting, upload proof screenshot or mark it as sent.
+        </p>
+
+        <form method="post"
+              action="/secretary/communications/new"
+              enctype="multipart/form-data"
+              class="grid"
+              style="grid-template-columns:1fr 1fr;gap:12px">
+
+            <div>
+                <label>Title</label>
+                <input name="title" required placeholder="Example: Friday Class Update">
+            </div>
+
+            <div>
+                <label>Message Type</label>
+                <select name="message_type" required>
+                    <option>Event Announcement</option>
+                    <option>Enrollment Reminder</option>
+                    <option>Friday Class Update</option>
+                    <option>Portal Login Support</option>
+                    <option>Parent Meeting Notice</option>
+                    <option>Awards Ceremony Notice</option>
+                    <option>Motivational Message</option>
+                    <option>Study Tip</option>
+                    <option>Crisis/Service Update</option>
+                    <option>Other</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Audience</label>
+                <select name="audience" required>
+                    <option>All Groups</option>
+                    <option>Learners Groups</option>
+                    <option>Parents Groups</option>
+                    <option>EBTA Channel</option>
+                    <option>Specific Grade</option>
+                    <option>Specific Subject Group</option>
+                    <option>Management/Internal</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Status</label>
+                <select name="status">
+                    <option>DRAFT</option>
+                    <option>READY</option>
+                    <option>SENT</option>
+                    <option>NEEDS_APPROVAL</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Grade Optional</label>
+                <select name="grade">
+                    <option value="">Not specific</option>
+                    <option value="G8">Grade 8</option>
+                    <option value="G9">Grade 9</option>
+                    <option value="G10">Grade 10</option>
+                    <option value="G11">Grade 11</option>
+                    <option value="G12">Grade 12</option>
+                    <option value="G13">Grade 13</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Subject Optional</label>
+                <input name="subject" placeholder="Example: Mathematics">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Group Name Optional</label>
+                <input name="group_name" placeholder="Example: Grade 10 Mathematics Parents Group">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Message Body</label>
+                <textarea name="message_body" required rows="10" placeholder="Write the WhatsApp-ready message here..."></textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Notes Optional</label>
+                <textarea name="notes" rows="3" placeholder="Any admin notes, context, or instruction received from COO/CEO"></textarea>
+            </div>
+
+            <div>
+                <label>Proof Screenshot Optional</label>
+                <input type="file" name="proof" accept=".png,.jpg,.jpeg,.pdf">
+            </div>
+
+            <div style="display:flex;align-items:end">
+                <button class="btn success">
+                    Save Communication Log
+                </button>
+            </div>
+
+        </form>
+    </section>
+    """
+
+    return page("Create Communication", body)
+    
+ 
+@app.post('/secretary/communications/new')
+def secretary_create_communication():
+
+    r = require_secretary()
+    if r: return r
+
+    sid = is_secretary()
+
+    title = request.form.get("title", "").strip()
+    message_type = request.form.get("message_type", "").strip()
+    audience = request.form.get("audience", "").strip()
+    grade = request.form.get("grade", "").strip()
+    subject = request.form.get("subject", "").strip()
+    group_name = request.form.get("group_name", "").strip()
+    message_body = request.form.get("message_body", "").strip()
+    status = request.form.get("status", "DRAFT").strip()
+    notes = request.form.get("notes", "").strip()
+
+    if status not in ["DRAFT", "READY", "SENT", "NEEDS_APPROVAL"]:
+        status = "DRAFT"
+
+    if not title or not message_body:
+        return page("Error", card_msg("Title and message body are required."))
+
+    proof = request.files.get("proof")
+    proof_path = None
+    proof_name = None
+
+    if proof and proof.filename:
+        proof_name = secure_name(proof.filename)
+        ext = os.path.splitext(proof_name)[1].lower()
+
+        if ext not in [".png", ".jpg", ".jpeg", ".pdf"]:
+            return page("Invalid File", card_msg("Proof must be PNG, JPG, JPEG, or PDF."))
+
+        saved_name = f"secretary_proof_{sid}_{int(time.time())}{ext}"
+        path = SECRETARY_DIR / saved_name
+        proof.save(path)
+
+        proof_path = str(path)
+
+    sent_at = now_utc_iso() if status == "SENT" else None
+    now = now_utc_iso()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO secretary_communication_logs(
+            secretary_id,
+            title,
+            message_type,
+            audience,
+            grade,
+            subject,
+            group_name,
+            message_body,
+            status,
+            sent_at,
+            proof_file_path,
+            proof_file_name,
+            notes,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        sid,
+        title,
+        message_type,
+        audience,
+        grade,
+        subject,
+        group_name,
+        message_body,
+        status,
+        sent_at,
+        proof_path,
+        proof_name,
+        notes,
+        now,
+        now
+    ))
+
+    conn.commit()
+    new_id = cur.lastrowid
+    conn.close()
+
+    return redirect(url_for("secretary_view_communication", log_id=new_id))
+    
+    
+@app.get('/secretary/communication/<int:log_id>')
+def secretary_view_communication(log_id):
+
+    r = require_secretary()
+    if r: return r
+
+    sid = is_secretary()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM secretary_communication_logs
+        WHERE id=?
+          AND secretary_id=?
+    """, (log_id, sid))
+
+    log = cur.fetchone()
+    conn.close()
+
+    if not log:
+        return page("Not Found", card_msg("Communication log not found."))
+
+    proof_btn = ""
+    if log["proof_file_path"] and os.path.exists(log["proof_file_path"]):
+        proof_btn = f"""
+        <a class="btn secondary" target="_blank" href="/secretary/communication/{log_id}/proof">
+            View Proof
+        </a>
+        """
+
+    body = f"""
+    {secretary_nav()}
+
+    <section class="card">
+        <a class="btn mini secondary" href="/secretary/communications">← Back</a>
+
+        <h1 style="margin-top:12px">{escape(log['title'])}</h1>
+
+        <div class="stats">
+            {stat("Type", escape(log["message_type"]))}
+            {stat("Audience", escape(log["audience"]))}
+            {stat("Status", escape(log["status"]))}
+        </div>
+
+        <div class="card soft" style="margin-top:14px;border-left:5px solid #1b5e20">
+            <h2>Message Body</h2>
+
+            <textarea id="messageText" rows="12" style="width:100%;padding:12px;border-radius:12px;border:1px solid #ddd">{escape(log['message_body'])}</textarea>
+
+            <div class="toolbar" style="margin-top:10px">
+                <button class="btn success" onclick="copySecretaryMessage()">
+                    Copy Message
+                </button>
+
+                <form method="post" action="/secretary/communication/{log_id}/mark-sent" style="display:inline">
+                    <button class="btn secondary">
+                        Mark as Sent
+                    </button>
+                </form>
+
+                {proof_btn}
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Details</h2>
+            <p><b>Grade:</b> {escape(log['grade'] or '—')}</p>
+            <p><b>Subject:</b> {escape(log['subject'] or '—')}</p>
+            <p><b>Group:</b> {escape(log['group_name'] or '—')}</p>
+            <p><b>Notes:</b></p>
+            <p style="white-space:pre-wrap">{escape(log['notes'] or '—')}</p>
+        </div>
+    </section>
+
+    <script>
+    function copySecretaryMessage(){{
+        const el = document.getElementById("messageText");
+        el.select();
+        el.setSelectionRange(0, 99999);
+        document.execCommand("copy");
+        alert("Message copied. You can now paste it into WhatsApp.");
+    }}
+    </script>
+    """
+
+    return page("Communication Log", body)
+    
+    
+@app.post('/secretary/communication/<int:log_id>/mark-sent')
+def secretary_mark_communication_sent(log_id):
+
+    r = require_secretary()
+    if r: return r
+
+    sid = is_secretary()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE secretary_communication_logs
+        SET status='SENT',
+            sent_at=?,
+            updated_at=?
+        WHERE id=?
+          AND secretary_id=?
+    """, (now_utc_iso(), now_utc_iso(), log_id, sid))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("secretary_view_communication", log_id=log_id))
+
+
+@app.get('/secretary/communication/<int:log_id>/proof')
+def secretary_communication_proof(log_id):
+
+    r = require_secretary()
+    if r: return r
+
+    sid = is_secretary()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT proof_file_path
+        FROM secretary_communication_logs
+        WHERE id=?
+          AND secretary_id=?
+    """, (log_id, sid))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row["proof_file_path"]:
+        return page("Not Found", card_msg("Proof file not found."))
+
+    file_path = row["proof_file_path"]
+
+    if not os.path.exists(file_path):
+        return page("Missing File", card_msg("The proof file is missing from storage."))
+
+    return send_from_directory(
+        os.path.dirname(file_path),
+        os.path.basename(file_path),
+        as_attachment=False
+    )
+    
+    
+@app.get('/secretary/minutes')
+def secretary_minutes():
+
+    r = require_secretary()
+    if r: return r
+
+    sid = is_secretary()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM secretary_meeting_minutes
+        WHERE secretary_id=?
+        ORDER BY meeting_date DESC, created_at DESC
+    """, (sid,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for m in rows:
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(m['meeting_type'])}</strong>
+                <div class="mini muted">{escape(m['meeting_date'])}</div>
+            </td>
+            <td>{escape(m['led_by'] or '—')}</td>
+            <td><span class="chip">{escape(m['status'])}</span></td>
+            <td>
+                <a class="btn mini" href="/secretary/minutes/{m['id']}">View</a>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {secretary_nav()}
+
+    <section class="card">
+        <h1>Meeting Minutes</h1>
+
+        <div class="toolbar">
+            <a class="btn success" href="/secretary/minutes/new">
+                Add Minutes
+            </a>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Meeting</th>
+                        <th>Led By</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {trs or "<tr><td colspan='4'>No meeting minutes yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Meeting Minutes", body)
+    
+    
+@app.get('/secretary/minutes/new')
+def secretary_new_minutes():
+
+    r = require_secretary()
+    if r: return r
+
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date().isoformat()
+
+    body = f"""
+    {secretary_nav()}
+
+    <section class="card">
+        <h1>Add Meeting Minutes</h1>
+
+        <form method="post"
+              action="/secretary/minutes/new"
+              class="grid"
+              style="grid-template-columns:1fr 1fr;gap:12px">
+
+            <div>
+                <label>Meeting Type</label>
+                <select name="meeting_type" required>
+                    <option>Management Meeting</option>
+                    <option>All-Staff Meeting</option>
+                    <option>Operations Meeting</option>
+                    <option>Other</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Meeting Date</label>
+                <input type="date" name="meeting_date" value="{today}" required>
+            </div>
+
+            <div>
+                <label>Led By</label>
+                <input name="led_by" placeholder="Example: Amanda (COO)">
+            </div>
+
+            <div>
+                <label>Status</label>
+                <select name="status">
+                    <option>DRAFT</option>
+                    <option>SUBMITTED</option>
+                    <option>SHARED</option>
+                    <option>ARCHIVED</option>
+                </select>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Attendees</label>
+                <input name="attendees" placeholder="Example: Amanda, Nokukhanya, Tshiamo, Mikendra">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Decisions Made</label>
+                <textarea name="decisions" rows="4"></textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Blockers / Risks</label>
+                <textarea name="blockers" rows="4"></textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Full Minutes</label>
+                <textarea name="minutes_body" rows="10"></textarea>
+            </div>
+
+            <button class="btn success">
+                Save Minutes
+            </button>
+        </form>
+    </section>
+    """
+
+    return page("Add Minutes", body)
+    
+    
+@app.post('/secretary/minutes/new')
+def secretary_create_minutes():
+
+    r = require_secretary()
+    if r: return r
+
+    sid = is_secretary()
+
+    meeting_type = request.form.get("meeting_type", "").strip()
+    meeting_date = request.form.get("meeting_date", "").strip()
+    led_by = request.form.get("led_by", "").strip()
+    attendees = request.form.get("attendees", "").strip()
+    decisions = request.form.get("decisions", "").strip()
+    blockers = request.form.get("blockers", "").strip()
+    minutes_body = request.form.get("minutes_body", "").strip()
+    status = request.form.get("status", "DRAFT").strip()
+
+    if status not in ["DRAFT", "SUBMITTED", "SHARED", "ARCHIVED"]:
+        status = "DRAFT"
+
+    now = now_utc_iso()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO secretary_meeting_minutes(
+            secretary_id,
+            meeting_type,
+            meeting_date,
+            led_by,
+            attendees,
+            decisions,
+            blockers,
+            minutes_body,
+            status,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        sid,
+        meeting_type,
+        meeting_date,
+        led_by,
+        attendees,
+        decisions,
+        blockers,
+        minutes_body,
+        status,
+        now,
+        now
+    ))
+
+    conn.commit()
+    minutes_id = cur.lastrowid
+    conn.close()
+
+    return redirect(url_for("secretary_view_minutes", minutes_id=minutes_id))
+    
+    
+@app.get('/secretary/minutes/<int:minutes_id>')
+def secretary_view_minutes(minutes_id):
+
+    r = require_secretary()
+    if r: return r
+
+    sid = is_secretary()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM secretary_meeting_minutes
+        WHERE id=?
+          AND secretary_id=?
+    """, (minutes_id, sid))
+
+    m = cur.fetchone()
+
+    if not m:
+        conn.close()
+        return page("Not Found", card_msg("Meeting minutes not found."))
+
+    cur.execute("""
+        SELECT *
+        FROM secretary_action_items
+        WHERE minutes_id=?
+          AND secretary_id=?
+        ORDER BY deadline ASC
+    """, (minutes_id, sid))
+
+    actions = cur.fetchall()
+    conn.close()
+
+    action_rows = ""
+
+    for a in actions:
+        action_rows += f"""
+        <tr>
+            <td>{escape(a['task'])}</td>
+            <td>{escape(a['responsible_person'] or '—')}</td>
+            <td>{escape(a['deadline'] or '—')}</td>
+            <td>{escape(a['followup_date'] or '—')}</td>
+            <td><span class="chip">{escape(a['status'])}</span></td>
+        </tr>
+        """
+
+    body = f"""
+    {secretary_nav()}
+
+    <section class="card">
+        <a class="btn mini secondary" href="/secretary/minutes">← Back</a>
+
+        <h1 style="margin-top:12px">{escape(m['meeting_type'])}</h1>
+
+        <div class="stats">
+            {stat("Date", escape(m["meeting_date"]))}
+            {stat("Led By", escape(m["led_by"] or "—"))}
+            {stat("Status", escape(m["status"]))}
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Attendees</h2>
+            <p>{escape(m['attendees'] or '—')}</p>
+
+            <h2>Decisions Made</h2>
+            <p style="white-space:pre-wrap">{escape(m['decisions'] or '—')}</p>
+
+            <h2>Blockers / Risks</h2>
+            <p style="white-space:pre-wrap">{escape(m['blockers'] or '—')}</p>
+
+            <h2>Full Minutes</h2>
+            <p style="white-space:pre-wrap">{escape(m['minutes_body'] or '—')}</p>
+        </div>
+
+        <div class="card soft" style="margin-top:14px;border-left:5px solid #1b5e20">
+            <h2>Add Action Item</h2>
+
+            <form method="post"
+                  action="/secretary/minutes/{minutes_id}/action/add"
+                  class="grid"
+                  style="grid-template-columns:2fr 1fr 1fr 1fr auto;gap:10px;align-items:end">
+
+                <div>
+                    <label>Task</label>
+                    <input name="task" required>
+                </div>
+
+                <div>
+                    <label>Responsible</label>
+                    <input name="responsible_person">
+                </div>
+
+                <div>
+                    <label>Deadline</label>
+                    <input type="date" name="deadline">
+                </div>
+
+                <div>
+                    <label>Follow-Up Date</label>
+                    <input type="date" name="followup_date">
+                </div>
+
+                <button class="btn success">Add</button>
+            </form>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Action Items</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Task</th>
+                            <th>Responsible</th>
+                            <th>Deadline</th>
+                            <th>Follow-Up</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {action_rows or "<tr><td colspan='5'>No action items yet.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </section>
+    """
+
+    return page("Meeting Minutes", body)
+    
+    
+@app.post('/secretary/minutes/<int:minutes_id>/action/add')
+def secretary_add_action_item(minutes_id):
+
+    r = require_secretary()
+    if r: return r
+
+    sid = is_secretary()
+
+    task = request.form.get("task", "").strip()
+    responsible_person = request.form.get("responsible_person", "").strip()
+    deadline = request.form.get("deadline", "").strip()
+    followup_date = request.form.get("followup_date", "").strip()
+
+    if not task:
+        return page("Error", card_msg("Task is required."))
+
+    now = now_utc_iso()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO secretary_action_items(
+            minutes_id,
+            secretary_id,
+            task,
+            responsible_person,
+            deadline,
+            followup_date,
+            status,
+            notes,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+    """, (
+        minutes_id,
+        sid,
+        task,
+        responsible_person,
+        deadline,
+        followup_date,
+        "PENDING",
+        "",
+        now,
+        now
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("secretary_view_minutes", minutes_id=minutes_id))
+    
+    
+@app.get('/secretary/action-items')
+def secretary_action_items():
+
+    r = require_secretary()
+    if r: return r
+
+    sid = is_secretary()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM secretary_action_items
+        WHERE secretary_id=?
+        ORDER BY 
+            CASE status
+                WHEN 'PENDING' THEN 1
+                WHEN 'OVERDUE' THEN 2
+                WHEN 'DONE' THEN 3
+                ELSE 4
+            END,
+            deadline ASC
+    """, (sid,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date().isoformat()
+
+    for a in rows:
+        current_status = a["status"]
+
+        if current_status == "PENDING" and a["deadline"] and a["deadline"] < today:
+            current_status = "OVERDUE"
+
+        trs += f"""
+        <tr>
+            <td>{escape(a['task'])}</td>
+            <td>{escape(a['responsible_person'] or '—')}</td>
+            <td>{escape(a['deadline'] or '—')}</td>
+            <td>{escape(a['followup_date'] or '—')}</td>
+            <td><span class="chip">{escape(current_status)}</span></td>
+            <td>
+                <form method="post" action="/secretary/action/{a['id']}/done" style="display:inline">
+                    <button class="btn mini success">Mark Done</button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {secretary_nav()}
+
+    <section class="card">
+        <h1>Action Items</h1>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Task</th>
+                        <th>Responsible</th>
+                        <th>Deadline</th>
+                        <th>Follow-Up</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {trs or "<tr><td colspan='6'>No action items yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Action Items", body)
+
+
+@app.post('/secretary/action/<int:action_id>/done')
+def secretary_action_done(action_id):
+
+    r = require_secretary()
+    if r: return r
+
+    sid = is_secretary()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE secretary_action_items
+        SET status='DONE',
+            updated_at=?
+        WHERE id=?
+          AND secretary_id=?
+    """, (now_utc_iso(), action_id, sid))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("secretary_action_items"))
+    
+    
+@app.get('/admin/secretary/logs')
+def admin_secretary_logs():
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            l.*,
+            s.full_name AS secretary_name
+        FROM secretary_communication_logs l
+        JOIN secretaries s ON s.id = l.secretary_id
+        ORDER BY l.created_at DESC
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for log in rows:
+        proof = "—"
+        if log["proof_file_path"] and os.path.exists(log["proof_file_path"]):
+            proof = f"""
+            <a class="btn mini secondary" target="_blank" href="/admin/secretary/log/{log['id']}/proof">
+                View Proof
+            </a>
+            """
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(log['title'])}</strong>
+                <div class="mini muted">{escape(log['message_type'])}</div>
+            </td>
+            <td>{escape(log['secretary_name'])}</td>
+            <td>{escape(log['audience'])}</td>
+            <td><span class="chip">{escape(log['status'])}</span></td>
+            <td>{escape((log['sent_at'] or log['created_at'] or '')[:16].replace('T',' '))}</td>
+            <td>{proof}</td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Secretary Communication Logs</h1>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Message</th>
+                        <th>Secretary</th>
+                        <th>Audience</th>
+                        <th>Status</th>
+                        <th>Date</th>
+                        <th>Proof</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {trs or "<tr><td colspan='6'>No communication logs yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Secretary Logs", body)
+
+
+@app.get('/admin/secretary/log/<int:log_id>/proof')
+def admin_secretary_log_proof(log_id):
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT proof_file_path
+        FROM secretary_communication_logs
+        WHERE id=?
+    """, (log_id,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row["proof_file_path"]:
+        return page("Not Found", card_msg("Proof file not found."))
+
+    file_path = row["proof_file_path"]
+
+    if not os.path.exists(file_path):
+        return page("Missing File", card_msg("The proof file is missing from storage."))
+
+    return send_from_directory(
+        os.path.dirname(file_path),
+        os.path.basename(file_path),
+        as_attachment=False
+    )
+    
+    
+@app.get('/admin/secretary/minutes')
+def admin_secretary_minutes():
+
+    r = require_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            m.*,
+            s.full_name AS secretary_name
+        FROM secretary_meeting_minutes m
+        JOIN secretaries s ON s.id = m.secretary_id
+        ORDER BY m.meeting_date DESC, m.created_at DESC
+    """)
+
+    rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT 
+            a.*,
+            s.full_name AS secretary_name
+        FROM secretary_action_items a
+        JOIN secretaries s ON s.id = a.secretary_id
+        ORDER BY 
+            CASE a.status
+                WHEN 'PENDING' THEN 1
+                WHEN 'OVERDUE' THEN 2
+                WHEN 'DONE' THEN 3
+                ELSE 4
+            END,
+            a.deadline ASC
+    """)
+
+    actions = cur.fetchall()
+    conn.close()
+
+    minute_rows = ""
+
+    for m in rows:
+        minute_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(m['meeting_type'])}</strong>
+                <div class="mini muted">{escape(m['meeting_date'])}</div>
+            </td>
+            <td>{escape(m['secretary_name'])}</td>
+            <td>{escape(m['led_by'] or '—')}</td>
+            <td><span class="chip">{escape(m['status'])}</span></td>
+        </tr>
+        """
+
+    action_rows = ""
+
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date().isoformat()
+
+    for a in actions:
+        current_status = a["status"]
+
+        if current_status == "PENDING" and a["deadline"] and a["deadline"] < today:
+            current_status = "OVERDUE"
+
+        action_rows += f"""
+        <tr>
+            <td>{escape(a['task'])}</td>
+            <td>{escape(a['responsible_person'] or '—')}</td>
+            <td>{escape(a['deadline'] or '—')}</td>
+            <td>{escape(a['followup_date'] or '—')}</td>
+            <td>{escape(a['secretary_name'])}</td>
+            <td><span class="chip">{escape(current_status)}</span></td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Secretary Meeting Minutes</h1>
+
+        <h2>Minutes Archive</h2>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Meeting</th>
+                        <th>Secretary</th>
+                        <th>Led By</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {minute_rows or "<tr><td colspan='4'>No meeting minutes yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        <h2 style="margin-top:20px">Action Items</h2>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Task</th>
+                        <th>Responsible</th>
+                        <th>Deadline</th>
+                        <th>Follow-Up</th>
+                        <th>Secretary</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {action_rows or "<tr><td colspan='6'>No action items yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Secretary Minutes", body)
 
 
 # --- Admin: Analytics dashboard ---
