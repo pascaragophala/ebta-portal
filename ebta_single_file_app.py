@@ -21570,24 +21570,121 @@ def management_application_form():
 
     role_options = ""
 
-    for role in open_roles:
-        desc = role["description"] or ""
+    for i, role in enumerate(open_roles):
+        role_name = role["role_name"] or ""
+        desc = role["description"] or "No detailed description has been added for this role yet."
 
         role_options += f"""
-        <label class="subject-item">
-            <input type="radio"
-                   name="role_applied"
-                   value="{escape(role['role_name'])}"
-                   required>
-            <span>
-                <b>{escape(role['role_name'])}</b>
-                {f'<br><small class="muted">{escape(desc)}</small>' if desc else ''}
-            </span>
-        </label>
+        <div class="mgmt-role-card">
+            <label class="mgmt-role-top">
+                <input type="radio"
+                       name="role_applied"
+                       value="{escape(role_name)}"
+                       required>
+
+                <span class="mgmt-role-name">
+                    {escape(role_name)}
+                </span>
+            </label>
+
+            <button type="button"
+                    class="btn mini secondary mgmt-desc-btn"
+                    onclick="toggleMgmtRoleDesc('mgmt-desc-{i}')">
+                View description & requirements
+            </button>
+
+            <div id="mgmt-desc-{i}" class="mgmt-role-desc" style="display:none">
+                <div class="mini muted" style="margin-bottom:6px">
+                    Role description and requirements
+                </div>
+
+                <div style="white-space:pre-wrap;line-height:1.6">
+                    {escape(desc)}
+                </div>
+            </div>
+        </div>
         """
 
     body = f"""
     <section class="wrap small">
+
+        <style>
+        .mgmt-role-grid{{
+            display:grid;
+            grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));
+            gap:12px;
+        }}
+
+        .mgmt-role-card{{
+            border:1px solid var(--border);
+            border-radius:16px;
+            background:#fff;
+            padding:14px;
+            box-shadow:var(--shadow-sm);
+            transition:var(--transition);
+        }}
+
+        .mgmt-role-card:hover{{
+            border-color:var(--primary);
+            box-shadow:var(--shadow-md);
+            transform:translateY(-1px);
+        }}
+
+        .mgmt-role-top{{
+            display:flex;
+            align-items:center;
+            gap:10px;
+            margin:0 0 10px 0;
+            cursor:pointer;
+        }}
+
+        .mgmt-role-top input[type="radio"]{{
+            width:18px;
+            height:18px;
+            flex:0 0 18px;
+            margin:0;
+        }}
+
+        .mgmt-role-name{{
+            font-weight:800;
+            font-size:15px;
+            color:var(--text);
+            line-height:1.3;
+        }}
+
+        .mgmt-desc-btn{{
+            width:100%;
+            justify-content:center;
+            margin-top:4px;
+        }}
+
+        .mgmt-role-desc{{
+            margin-top:12px;
+            padding:12px;
+            border-radius:14px;
+            background:#f8fafc;
+            border:1px solid var(--border);
+            color:var(--text);
+            font-size:14px;
+            max-height:260px;
+            overflow:auto;
+        }}
+
+        .mgmt-help-box{{
+            background:#f0fdf4;
+            border:1px solid #bbf7d0;
+            border-left:5px solid var(--primary);
+            padding:12px;
+            border-radius:14px;
+            margin-bottom:12px;
+        }}
+
+        @media(max-width:700px){{
+            .mgmt-role-grid{{
+                grid-template-columns:1fr;
+            }}
+        }}
+        </style>
 
         <div class="card soft" style="border-left:5px solid #1b5e20">
             <h1>EBTA Management Application</h1>
@@ -21609,7 +21706,15 @@ def management_application_form():
 
                 <div class="card soft">
                     <h2>Role Applying For</h2>
-                    <div class="subject-grid">
+
+                    <div class="mgmt-help-box">
+                        <strong>Select one role to apply for.</strong>
+                        <div class="mini muted" style="margin-top:4px">
+                            Click “View description & requirements” to read more about a role before applying.
+                        </div>
+                    </div>
+
+                    <div class="mgmt-role-grid">
                         {role_options}
                     </div>
                 </div>
@@ -21729,6 +21834,20 @@ def management_application_form():
                 </button>
             </form>
         </div>
+
+        <script>
+        function toggleMgmtRoleDesc(id){{
+            const box = document.getElementById(id);
+            if(!box) return;
+
+            if(box.style.display === "none" || box.style.display === ""){{
+                box.style.display = "block";
+            }} else {{
+                box.style.display = "none";
+            }}
+        }}
+        </script>
+
     </section>
     """
 
