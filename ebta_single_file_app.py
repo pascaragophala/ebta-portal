@@ -1425,6 +1425,27 @@ def secure_name(name):
     keep="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
     return ''.join(ch if ch in keep else '_' for ch in name)
     
+    
+def clean_multiline_text(text):
+    if not text:
+        return ""
+
+    lines = str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+    cleaned_lines = []
+
+    for line in lines:
+        cleaned_lines.append(line.strip())
+
+    # Remove empty lines at the start
+    while cleaned_lines and cleaned_lines[0] == "":
+        cleaned_lines.pop(0)
+
+    # Remove empty lines at the end
+    while cleaned_lines and cleaned_lines[-1] == "":
+        cleaned_lines.pop()
+
+    return "\n".join(cleaned_lines)
 
 
 
@@ -21494,7 +21515,7 @@ def admin_management_role_update(role_id):
         return page("Access Denied", card_msg("Only high admin can manage management application roles."))
 
     is_open = 1 if request.form.get("is_open") == "1" else 0
-    description = request.form.get("description", "").strip()
+    description = clean_multiline_text(request.form.get("description", ""))
 
     conn = get_db()
     cur = conn.cursor()
@@ -21572,7 +21593,7 @@ def management_application_form():
 
     for i, role in enumerate(open_roles):
         role_name = role["role_name"] or ""
-        desc = role["description"] or "No detailed description has been added for this role yet."
+        desc = clean_multiline_text(role["description"] or "No detailed description has been added for this role yet.")
 
         role_options += f"""
         <div class="mgmt-role-card">
@@ -21598,7 +21619,7 @@ def management_application_form():
                     Role description and requirements
                 </div>
 
-                <div style="white-space:pre-wrap;line-height:1.6">
+                <div class="mgmt-desc-text">
                     {escape(desc)}
                 </div>
             </div>
@@ -21668,6 +21689,14 @@ def management_application_form():
             font-size:14px;
             max-height:260px;
             overflow:auto;
+        }}
+        
+        .mgmt-desc-text{{
+            white-space:pre-line;
+            line-height:1.7;
+            text-align:left;
+            margin:0;
+            padding:0;
         }}
 
         .mgmt-help-box{{
