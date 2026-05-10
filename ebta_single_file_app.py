@@ -1446,6 +1446,113 @@ def clean_multiline_text(text):
         cleaned_lines.pop()
 
     return "\n".join(cleaned_lines)
+    
+    
+def normalise_name_for_match(name):
+    """
+    Clean a name so that matching is easier.
+    This removes symbols, extra spaces, and ignores capital letters.
+    """
+    if not name:
+        return ""
+
+    import re
+
+    cleaned = str(name).lower().strip()
+
+    # Remove punctuation and symbols, but keep letters, numbers, and spaces
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", cleaned)
+
+    # Convert multiple spaces into one space
+    cleaned = " ".join(cleaned.split())
+
+    return cleaned
+
+
+def name_tokens_for_match(name):
+    """
+    Turns a full name into separate clean words.
+
+    Example:
+    'Radebe   Fumane Mthandeni'
+    becomes:
+    ['radebe', 'fumane', 'mthandeni']
+    """
+    cleaned = normalise_name_for_match(name)
+
+    if not cleaned:
+        return []
+
+    return [x for x in cleaned.split() if x]
+
+
+def name_match_score(award_name, portal_name):
+    """
+    Gives a match score between the name from the awards list
+    and the name stored in the portal.
+
+    Handles:
+    - name then surname
+    - surname then name
+    - middle names
+    - extra spaces
+    - different capital letters
+    """
+
+    award_tokens = name_tokens_for_match(award_name)
+    portal_tokens = name_tokens_for_match(portal_name)
+
+    if not award_tokens or not portal_tokens:
+        return 0
+
+    award_set = set(award_tokens)
+    portal_set = set(portal_tokens)
+
+    common = award_set.intersection(portal_set)
+
+    # Exact cleaned name match
+    if normalise_name_for_match(award_name) == normalise_name_for_match(portal_name):
+        return 100
+
+    # Same words, but different order
+    # Example: "Radebe Fumane" and "Fumane Radebe"
+    if award_set == portal_set:
+        return 95
+
+    # All awards name words exist inside portal name
+    # Example: award = "Fumane Radebe", portal = "Fumane Mthandeni Radebe"
+    if award_set.issubset(portal_set):
+        return 90
+
+    # All portal name words exist inside award name
+    if portal_set.issubset(award_set):
+        return 88
+
+    # First and last words match in the same order
+    if len(award_tokens) >= 2 and len(portal_tokens) >= 2:
+        award_first = award_tokens[0]
+        award_last = award_tokens[-1]
+        portal_first = portal_tokens[0]
+        portal_last = portal_tokens[-1]
+
+        if award_first == portal_first and award_last == portal_last:
+            return 85
+
+        # First and last words match in reverse order
+        # Example: award = "Radebe Fumane", portal = "Fumane Radebe"
+        if award_first == portal_last and award_last == portal_first:
+            return 82
+
+    # At least two name words match
+    if len(common) >= 2:
+        return 75
+
+    # Single-name cases like "Luyanda"
+    if len(award_tokens) == 1 and award_tokens[0] in portal_set:
+        return 55
+
+    return 0    
+
 
 def parse_awards_student_list(raw_text):
     """
@@ -11529,66 +11636,96 @@ def admin_awards_student_export_post():
         award_grade_raw = item["grade"]
         award_grade = f"G{award_grade_raw}" if not str(award_grade_raw).upper().startswith("G") else str(award_grade_raw).upper()
 
-        award_name_norm = normalise_name_for_match(award_name)
+        # =========================
+        # Improved student matching
+        # Handles:
+        # - extra spaces
+        # - surname first
+        # - name first
+        # - middle names
+        # - partial two-word matches
+        # =========================
 
-        # 1. Exact case-insensitive match by full name and grade
+        award_tokens = name_tokens_for_match(award_name)
+
+        student = None
+        match_score = 0
+        match_note = ""
+
+        # 1. First search students in the same grade.
+        # This is safer because two learners can have similar names.
         cur.execute("""
             SELECT *
             FROM students
-            WHERE lower(trim(full_name)) = ?
-              AND grade = ?
-            LIMIT 1
-        """, (award_name_norm, award_grade))
+            WHERE grade = ?
+        """, (award_grade,))
 
-        student = cur.fetchone()
+        grade_candidates = cur.fetchall()
 
-        # 2. Exact case-insensitive match by full name only
+        best_student = None
+        best_score = 0
+
+        for candidate in grade_candidates:
+            score = name_match_score(award_name, candidate["full_name"])
+
+            if score > best_score:
+                best_score = score
+                best_student = candidate
+
+        # Accept same-grade matches from 55 upward.
+        # 55 is allowed because sometimes the award list has only one name.
+        if best_student and best_score >= 55:
+            student = best_student
+            match_score = best_score
+            match_note = "Matched by name words and grade"
+
+        # 2. If not found in the same grade, search all portal students.
+        # This is stricter to avoid wrong matches.
         if not student:
             cur.execute("""
                 SELECT *
                 FROM students
-                WHERE lower(trim(full_name)) = ?
-                LIMIT 1
-            """, (award_name_norm,))
+            """)
 
-            student = cur.fetchone()
+            all_candidates = cur.fetchall()
 
-        # 3. Soft LIKE match by name and grade
-        if not student:
-            name_parts = award_name.split()
+            best_student = None
+            best_score = 0
 
-            if len(name_parts) >= 2:
-                first = name_parts[0]
-                last = name_parts[-1]
+            for candidate in all_candidates:
+                score = name_match_score(award_name, candidate["full_name"])
 
-                cur.execute("""
-                    SELECT *
-                    FROM students
-                    WHERE full_name LIKE ?
-                      AND full_name LIKE ?
-                      AND grade = ?
-                    LIMIT 1
-                """, (f"%{first}%", f"%{last}%", award_grade))
+                if score > best_score:
+                    best_score = score
+                    best_student = candidate
 
-                student = cur.fetchone()
+            if best_student and best_score >= 75:
+                student = best_student
+                match_score = best_score
+                match_note = "Matched by name words, grade different or not used"
 
-        # 4. Soft LIKE match by name only
-        if not student:
-            name_parts = award_name.split()
+        # 3. Final fallback for single-name cases.
+        # Example: "Luyanda"
+        # This only accepts the match if there is exactly one possible learner in that grade.
+        if not student and len(award_tokens) == 1:
+            one_name = award_tokens[0]
 
-            if len(name_parts) >= 2:
-                first = name_parts[0]
-                last = name_parts[-1]
+            cur.execute("""
+                SELECT *
+                FROM students
+                WHERE lower(full_name) LIKE ?
+                  AND grade = ?
+                LIMIT 2
+            """, (f"%{one_name}%", award_grade))
 
-                cur.execute("""
-                    SELECT *
-                    FROM students
-                    WHERE full_name LIKE ?
-                      AND full_name LIKE ?
-                    LIMIT 1
-                """, (f"%{first}%", f"%{last}%"))
+            possible = cur.fetchall()
 
-                student = cur.fetchone()
+            if len(possible) == 1:
+                student = possible[0]
+                match_score = 50
+                match_note = "Matched by single name and grade"
+
+        
 
         if not student:
             not_found_rows.append(item)
@@ -11653,6 +11790,8 @@ def admin_awards_student_export_post():
             "award_name": award_name,
             "award_grade": award_grade_raw,
             "award_category": item["award_category"],
+            "match_score": match_score,
+            "match_note": match_note,
 
             "student_id": student["id"],
             "portal_name": student["full_name"],
@@ -11725,6 +11864,8 @@ def admin_awards_student_export_post():
         "Award Learner Name",
         "Award Grade",
         "Award Category",
+        "Match Score",
+        "Match Note",
         "Portal Student ID",
         "Portal Full Name",
         "Student Phone",
@@ -11752,6 +11893,8 @@ def admin_awards_student_export_post():
             r0["award_name"],
             r0["award_grade"],
             r0["award_category"],
+            r0["match_score"],
+            r0["match_note"],
             r0["student_id"],
             r0["portal_name"],
             r0["phone"],
@@ -11793,7 +11936,7 @@ def admin_awards_student_export_post():
             nf["learner_name"],
             nf["grade"],
             nf["award_category"],
-            "No matching student found in portal"
+            "No reliable matching student found. Please check spelling, grade, or whether the learner exists in the portal."
         ])
 
     for row in ws2.iter_rows(min_row=2):
