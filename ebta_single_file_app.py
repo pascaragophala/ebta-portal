@@ -1447,7 +1447,94 @@ def clean_multiline_text(text):
 
     return "\n".join(cleaned_lines)
 
+def parse_awards_student_list(raw_text):
+    """
+    Parses pasted award list data.
 
+    Supports lines like:
+    1   Fumane Mthandeni Radebe   8   Overall Top 1 + EMS 1st
+    2   Letlotlo Modise           8   EMS 2nd + Most Active
+
+    Returns a list of dictionaries:
+    {
+        "list_no": "1",
+        "learner_name": "...",
+        "grade": "8",
+        "award_category": "..."
+    }
+    """
+
+    if not raw_text:
+        return []
+
+    rows = []
+
+    text = str(raw_text).replace("\r\n", "\n").replace("\r", "\n")
+
+    for line in text.split("\n"):
+        line = line.strip()
+
+        if not line:
+            continue
+
+        # Skip headings or title lines
+        lower = line.lower()
+        if (
+            "ebta term" in lower
+            or "complete student list" in lower
+            or lower.startswith("#")
+            or "learner name" in lower
+            or "award category" in lower
+        ):
+            continue
+
+        # Prefer tab-separated data
+        parts = [p.strip() for p in line.split("\t") if p.strip()]
+
+        # If pasted spaces instead of tabs, try a softer split
+        if len(parts) < 4:
+            import re
+            parts = re.split(r"\s{2,}", line)
+            parts = [p.strip() for p in parts if p.strip()]
+
+        # Expected:
+        # number | learner name | grade | award category
+        if len(parts) >= 4 and parts[0].isdigit():
+            rows.append({
+                "list_no": parts[0],
+                "learner_name": parts[1],
+                "grade": parts[2],
+                "award_category": " ".join(parts[3:])
+            })
+            continue
+
+        # Fallback for lines like:
+        # 1 Fumane Mthandeni Radebe 8 Overall Top 1 + EMS 1st
+        import re
+        m = re.match(r"^(\d+)\s+(.+?)\s+(8|9|10|11|12|13)\s+(.+)$", line)
+
+        if m:
+            rows.append({
+                "list_no": m.group(1).strip(),
+                "learner_name": m.group(2).strip(),
+                "grade": m.group(3).strip(),
+                "award_category": m.group(4).strip()
+            })
+
+    return rows
+    
+def normalise_name_for_match(name):
+    if not name:
+        return ""
+
+    cleaned = str(name).lower().strip()
+
+    # Remove extra spaces
+    cleaned = " ".join(cleaned.split())
+
+    return cleaned
+    
+    
 
 ALLOWED_REPORT_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx'}
 
@@ -10396,6 +10483,7 @@ def admin_nav():
             f"<a class='btn secondary' href='{url_for('admin_social_media_reports')}'>Social Media Reports</a>",
             f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
             f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
+            f"<a class='btn secondary' href='{url_for('admin_awards_student_export')}'>Awards Export</a>",
 
         ])
 
@@ -10467,6 +10555,7 @@ def admin_home():
     <a class="btn secondary" href="{url_for('admin_social_media_content_logs')}">Social Media Logs</a>
     <a class="btn secondary" href="{url_for('admin_social_media_reports')}">Social Media Reports</a>
     <a class='btn secondary' href='{url_for('admin_reports')}'>Student Reports</a>
+    <a class='btn secondary' href='{url_for('admin_awards_student_export')}'>Awards Export</a>
 
     </div></section>"""
     return page("Admin", body)
@@ -11323,7 +11412,427 @@ def admin_students():
     return page("Students", body)
     
     
+@app.get('/admin/awards-student-export')
+@require_high_admin
+def admin_awards_student_export():
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can use the awards export tool."))
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Awards Student Export</h1>
+
+        <p class="muted">
+            Paste the awards learner list or upload a TXT/CSV file. The system will match the names against portal students and export their full portal details to Excel.
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-top:14px">
+            <h2>Paste or Upload Award Student List</h2>
+
+            <form method="post"
+                  action="/admin/awards-student-export"
+                  enctype="multipart/form-data"
+                  class="grid"
+                  style="gap:12px">
+
+                <div>
+                    <label>Paste Student List</label>
+                    <textarea name="pasted_students"
+                              rows="14"
+                              placeholder="Paste the awards list here. Example:&#10;1    Fumane Mthandeni Radebe    8    Overall Top 1 + EMS 1st"></textarea>
+                    <div class="mini muted">
+                        You can paste from Word, Excel, Google Docs, or plain text.
+                    </div>
+                </div>
+
+                <div>
+                    <label>Or Upload File Optional</label>
+                    <input type="file"
+                           name="student_file"
+                           accept=".txt,.csv">
+                    <div class="mini muted">
+                        Accepted file types: TXT or CSV.
+                    </div>
+                </div>
+
+                <button class="btn success" style="justify-content:center">
+                    Export Pasted / Uploaded Students
+                </button>
+            </form>
+        </div>
+
+        <div class="card soft" style="margin-top:14px;border-left:5px solid #f59e0b">
+            <h2>Important</h2>
+            <p class="muted">
+                The export will not change student records. It only searches for matching students and creates an Excel file.
+            </p>
+        </div>
+    </section>
+    """
+
+    return page("Awards Student Export", body)    
     
+  
+@app.post('/admin/awards-student-export')
+@require_high_admin
+def admin_awards_student_export_post():
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can use the awards export tool."))
+
+    pasted_students = request.form.get("pasted_students", "").strip()
+
+    uploaded = request.files.get("student_file")
+    uploaded_text = ""
+
+    if uploaded and uploaded.filename:
+        ext = os.path.splitext(uploaded.filename.lower())[1]
+
+        if ext not in [".txt", ".csv"]:
+            return page("Invalid File", card_msg("Please upload a TXT or CSV file only."))
+
+        try:
+            uploaded_text = uploaded.read().decode("utf-8", errors="ignore")
+        except Exception:
+            return page("File Error", card_msg("The uploaded file could not be read."))
+
+    raw_text = pasted_students
+
+    if uploaded_text:
+        raw_text = raw_text + "\n" + uploaded_text
+
+    award_rows = parse_awards_student_list(raw_text)
+
+    if not award_rows:
+        return page(
+            "No Students Found",
+            card_msg("No valid student rows were detected. Please check that the list includes number, learner name, grade, and award category.")
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    matched_rows = []
+    not_found_rows = []
+
+    for item in award_rows:
+        award_name = item["learner_name"]
+        award_grade_raw = item["grade"]
+        award_grade = f"G{award_grade_raw}" if not str(award_grade_raw).upper().startswith("G") else str(award_grade_raw).upper()
+
+        award_name_norm = normalise_name_for_match(award_name)
+
+        # 1. Exact case-insensitive match by full name and grade
+        cur.execute("""
+            SELECT *
+            FROM students
+            WHERE lower(trim(full_name)) = ?
+              AND grade = ?
+            LIMIT 1
+        """, (award_name_norm, award_grade))
+
+        student = cur.fetchone()
+
+        # 2. Exact case-insensitive match by full name only
+        if not student:
+            cur.execute("""
+                SELECT *
+                FROM students
+                WHERE lower(trim(full_name)) = ?
+                LIMIT 1
+            """, (award_name_norm,))
+
+            student = cur.fetchone()
+
+        # 3. Soft LIKE match by name and grade
+        if not student:
+            name_parts = award_name.split()
+
+            if len(name_parts) >= 2:
+                first = name_parts[0]
+                last = name_parts[-1]
+
+                cur.execute("""
+                    SELECT *
+                    FROM students
+                    WHERE full_name LIKE ?
+                      AND full_name LIKE ?
+                      AND grade = ?
+                    LIMIT 1
+                """, (f"%{first}%", f"%{last}%", award_grade))
+
+                student = cur.fetchone()
+
+        # 4. Soft LIKE match by name only
+        if not student:
+            name_parts = award_name.split()
+
+            if len(name_parts) >= 2:
+                first = name_parts[0]
+                last = name_parts[-1]
+
+                cur.execute("""
+                    SELECT *
+                    FROM students
+                    WHERE full_name LIKE ?
+                      AND full_name LIKE ?
+                    LIMIT 1
+                """, (f"%{first}%", f"%{last}%"))
+
+                student = cur.fetchone()
+
+        if not student:
+            not_found_rows.append(item)
+            continue
+
+        student_id = student["id"]
+
+        # First enrolled
+        cur.execute("""
+            SELECT MIN(created_at) AS first_enrolled
+            FROM enrollments
+            WHERE student_id = ?
+        """, (student_id,))
+
+        first_enrolled = cur.fetchone()["first_enrolled"]
+
+        first_enrolled_date = ""
+        first_enrolled_month = ""
+
+        if first_enrolled:
+            first_enrolled_date = first_enrolled[:10]
+            first_enrolled_month = first_enrolled[:7]
+
+        # All subjects
+        cur.execute("""
+            SELECT DISTINCT sub.name, sub.grade
+            FROM enrollments e
+            JOIN subjects sub ON sub.id = e.subject_id
+            WHERE e.student_id = ?
+            ORDER BY e.month, sub.grade, sub.name
+        """, (student_id,))
+
+        subjects = cur.fetchall()
+        subject_text = ", ".join([f"{r['name']} ({grade_label(r['grade'])})" for r in subjects]) or "N/A"
+
+        # All months enrolled
+        cur.execute("""
+            SELECT DISTINCT month
+            FROM enrollments
+            WHERE student_id = ?
+            ORDER BY month
+        """, (student_id,))
+
+        months = [r["month"] for r in cur.fetchall()]
+        months_text = ", ".join(months) if months else "N/A"
+
+        # Latest status
+        cur.execute("""
+            SELECT status, month
+            FROM enrollments
+            WHERE student_id = ?
+            ORDER BY month DESC, created_at DESC
+            LIMIT 1
+        """, (student_id,))
+
+        latest = cur.fetchone()
+        latest_status = latest["status"] if latest else "N/A"
+        latest_month = latest["month"] if latest else "N/A"
+
+        matched_rows.append({
+            "list_no": item["list_no"],
+            "award_name": award_name,
+            "award_grade": award_grade_raw,
+            "award_category": item["award_category"],
+
+            "student_id": student["id"],
+            "portal_name": student["full_name"],
+            "phone": student["phone_whatsapp"],
+            "guardian_name": student["guardian_name"],
+            "guardian_phone": student["guardian_phone"],
+            "email": student["email"],
+            "portal_grade": student["grade"],
+            "province": student["province"],
+            "school": student["school"],
+            "pin": student["pin"],
+
+            "first_enrolled": first_enrolled_date,
+            "first_enrolled_month": first_enrolled_month,
+            "all_subjects": subject_text,
+            "all_months": months_text,
+            "latest_status": latest_status,
+            "latest_month": latest_month
+        })
+
+    conn.close()
+
+    # =========================
+    # Build Excel
+    # =========================
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+
+    header_fill = PatternFill(start_color="1B5E20", end_color="1B5E20", fill_type="solid")
+    gold_fill = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
+    red_fill = PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid")
+
+    thin_border = Border(
+        left=Side(style="thin", color="DDDDDD"),
+        right=Side(style="thin", color="DDDDDD"),
+        top=Side(style="thin", color="DDDDDD"),
+        bottom=Side(style="thin", color="DDDDDD"),
+    )
+
+    def style_header(ws, row_num=1):
+        for cell in ws[row_num]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = thin_border
+
+    def autofit(ws):
+        for col in ws.columns:
+            max_length = 0
+            col_letter = get_column_letter(col[0].column)
+
+            for cell in col:
+                value = "" if cell.value is None else str(cell.value)
+                max_length = max(max_length, len(value))
+                cell.border = thin_border
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+            ws.column_dimensions[col_letter].width = min(max_length + 4, 55)
+
+    # Sheet 1: Matched
+    ws = wb.active
+    ws.title = "Matched Awards Students"
+
+    matched_headers = [
+        "Award List No",
+        "Award Learner Name",
+        "Award Grade",
+        "Award Category",
+        "Portal Student ID",
+        "Portal Full Name",
+        "Student Phone",
+        "Guardian Name",
+        "Guardian Phone",
+        "Email",
+        "Portal Grade",
+        "Province",
+        "School",
+        "PIN",
+        "First Enrolled Date",
+        "First Enrolled Month",
+        "All Enrolled Subjects",
+        "All Enrollment Months",
+        "Latest Status",
+        "Latest Month"
+    ]
+
+    ws.append(matched_headers)
+    style_header(ws, 1)
+
+    for r0 in matched_rows:
+        ws.append([
+            r0["list_no"],
+            r0["award_name"],
+            r0["award_grade"],
+            r0["award_category"],
+            r0["student_id"],
+            r0["portal_name"],
+            r0["phone"],
+            r0["guardian_name"],
+            r0["guardian_phone"],
+            r0["email"],
+            grade_label(r0["portal_grade"]),
+            r0["province"],
+            r0["school"],
+            r0["pin"],
+            r0["first_enrolled"],
+            r0["first_enrolled_month"],
+            r0["all_subjects"],
+            r0["all_months"],
+            r0["latest_status"],
+            r0["latest_month"]
+        ])
+
+    autofit(ws)
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+    # Sheet 2: Not Found
+    ws2 = wb.create_sheet("Not Found")
+
+    ws2.append([
+        "Award List No",
+        "Learner Name",
+        "Grade",
+        "Award Category",
+        "Reason"
+    ])
+
+    style_header(ws2, 1)
+
+    for nf in not_found_rows:
+        ws2.append([
+            nf["list_no"],
+            nf["learner_name"],
+            nf["grade"],
+            nf["award_category"],
+            "No matching student found in portal"
+        ])
+
+    for row in ws2.iter_rows(min_row=2):
+        for cell in row:
+            cell.fill = red_fill
+
+    autofit(ws2)
+    ws2.freeze_panes = "A2"
+    ws2.auto_filter.ref = ws2.dimensions
+
+    # Sheet 3: Summary
+    ws3 = wb.create_sheet("Summary")
+
+    ws3["A1"] = "EBTA Awards Student Export Summary"
+    ws3["A1"].font = Font(bold=True, size=16, color="1B5E20")
+
+    ws3.append([])
+    ws3.append(["Metric", "Count"])
+    style_header(ws3, 3)
+
+    ws3.append(["Rows detected from pasted/uploaded list", len(award_rows)])
+    ws3.append(["Matched portal students", len(matched_rows)])
+    ws3.append(["Not found", len(not_found_rows)])
+
+    autofit(ws3)
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f"EBTA_Awards_Student_Export_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+
+    response = make_response(output.read())
+    response.headers["Content-Type"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+
+    return response
+
+  
 @app.get('/admin/students/export')
 def admin_students_export():
     r = require_admin()
