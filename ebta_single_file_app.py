@@ -17002,11 +17002,24 @@ def admin_followups():
         subjects_list = [s.strip() for s in (row["subjects"] or "").split(",") if s.strip()]
 
         subjects_html = "".join(
-            f"<span class='chip subject-chip' onclick=\"window.location='?subject={escape(s)}'\">{escape(s)}</span>"
+            f"""
+            <span class='chip subject-chip'
+                  onclick="window.location='?subject={escape(s)}'">
+                {escape(s)}
+            </span>
+            <input type="hidden" name="subjects" value="{escape(s)}">
+            """
             for s in subjects_list
         )
-        
-        subjects_html = f"<div style='display:flex;flex-wrap:wrap;gap:4px'>{subjects_html}</div>"
+
+        if not subjects_html:
+            subjects_html = "<span class='mini muted'>No subjects captured</span>"
+
+        subjects_html = f"""
+        <div style="display:flex;flex-wrap:wrap;gap:4px;min-width:160px">
+            {subjects_html}
+        </div>
+        """
         
         trs.append(f"""
         <tr class="{row_class} {overdue_class}">
@@ -17364,9 +17377,9 @@ def admin_followup_update(fid):
     updated_by = request.form.get("updated_by") or "Admin"
     new_note = request.form.get("new_note", "").strip()
 
-    # Get existing notes first so they are not overwritten
+    # Get existing notes and subjects first so they are not overwritten accidentally
     cur.execute("""
-        SELECT notes
+        SELECT notes, subjects
         FROM followups
         WHERE id=?
         LIMIT 1
@@ -17383,13 +17396,23 @@ def admin_followup_update(fid):
     # Append the new note only if something was typed
     if new_note:
         timestamp = now_utc_iso()[:16].replace("T", " ")
-
         note_entry = f"[{timestamp}] {updated_by}: {new_note}"
 
         if final_notes:
             final_notes = final_notes + "\n\n" + note_entry
         else:
             final_notes = note_entry
+
+    existing_subjects = ""
+    if existing and existing["subjects"]:
+        existing_subjects = existing["subjects"].strip()
+
+    posted_subjects = [s.strip() for s in request.form.getlist("subjects") if s.strip()]
+
+    if posted_subjects:
+        final_subjects = ", ".join(posted_subjects)
+    else:
+        final_subjects = existing_subjects
 
     cur.execute("""
     UPDATE followups SET
@@ -17410,7 +17433,7 @@ def admin_followup_update(fid):
         request.form.get("full_name"),
         request.form.get("phone"),
         request.form.get("grade"),
-        ", ".join(request.form.getlist("subjects")),
+        final_subjects,
         request.form.get("issue_type"),
         request.form.get("followup_status"),
         request.form.get("payment_date"),
