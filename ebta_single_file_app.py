@@ -1630,17 +1630,6 @@ def parse_awards_student_list(raw_text):
 
     return rows
     
-def normalise_name_for_match(name):
-    if not name:
-        return ""
-
-    cleaned = str(name).lower().strip()
-
-    # Remove extra spaces
-    cleaned = " ".join(cleaned.split())
-
-    return cleaned
-    
     
 
 ALLOWED_REPORT_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx'}
@@ -11574,10 +11563,29 @@ def admin_awards_student_export():
             </form>
         </div>
 
+        <div class="card soft" style="margin-top:14px;border-left:5px solid #2563eb">
+            <h2>Export All EBTA Schools & Student Details</h2>
+
+            <p class="muted">
+                Use this option to export all students currently captured on the portal, grouped by province and school.
+                The Excel file will include student details, school statistics, province statistics, grade statistics,
+                and students with missing school or province information.
+            </p>
+
+            <form method="post"
+                  action="/admin/awards-schools-export"
+                  onsubmit="return confirm('Export all EBTA student and school information to Excel?');">
+
+                <button class="btn success" style="justify-content:center">
+                    Export All Schools & Student Details
+                </button>
+            </form>
+        </div>
+
         <div class="card soft" style="margin-top:14px;border-left:5px solid #f59e0b">
             <h2>Important</h2>
             <p class="muted">
-                The export will not change student records. It only searches for matching students and creates an Excel file.
+                These exports will not change student records. They only read portal data and create Excel files.
             </p>
         </div>
     </section>
@@ -11975,6 +11983,487 @@ def admin_awards_student_export_post():
 
     return response
 
+  
+@app.post('/admin/awards-schools-export')
+@require_high_admin
+def admin_awards_schools_export():
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can export EBTA school data."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # =========================
+    # 1. STUDENT DETAILS
+    # =========================
+
+    cur.execute("""
+        SELECT
+            s.id,
+            s.full_name,
+            s.phone_whatsapp,
+            s.guardian_name,
+            s.guardian_phone,
+            s.email,
+            s.grade,
+            s.province,
+            s.school,
+            s.pin,
+            s.created_at,
+
+            MIN(e.created_at) AS first_enrolled,
+            MAX(e.month) AS latest_month,
+
+            (
+                SELECT e2.status
+                FROM enrollments e2
+                WHERE e2.student_id = s.id
+                ORDER BY e2.month DESC, e2.created_at DESC
+                LIMIT 1
+            ) AS latest_status,
+
+            COUNT(e.id) AS total_enrollments,
+            COUNT(DISTINCT e.month) AS total_months_enrolled,
+
+            GROUP_CONCAT(DISTINCT e.month) AS enrollment_months,
+            GROUP_CONCAT(DISTINCT sub.name) AS subjects
+
+        FROM students s
+        LEFT JOIN enrollments e ON e.student_id = s.id
+        LEFT JOIN subjects sub ON sub.id = e.subject_id
+        GROUP BY s.id
+        ORDER BY
+            COALESCE(NULLIF(TRIM(s.province), ''), 'Unknown'),
+            COALESCE(NULLIF(TRIM(s.school), ''), 'Unknown'),
+            CAST(REPLACE(s.grade, 'G', '') AS INTEGER),
+            s.full_name
+    """)
+
+    student_rows = cur.fetchall()
+
+    # =========================
+    # 2. SCHOOL STATS
+    # =========================
+
+    cur.execute("""
+        SELECT
+            COALESCE(NULLIF(TRIM(s.province), ''), 'Unknown / Missing Province') AS province,
+            COALESCE(NULLIF(TRIM(s.school), ''), 'Unknown / Missing School') AS school,
+
+            COUNT(DISTINCT s.id) AS total_students,
+
+            COUNT(DISTINCT CASE WHEN s.grade='G8' THEN s.id END) AS grade_8,
+            COUNT(DISTINCT CASE WHEN s.grade='G9' THEN s.id END) AS grade_9,
+            COUNT(DISTINCT CASE WHEN s.grade='G10' THEN s.id END) AS grade_10,
+            COUNT(DISTINCT CASE WHEN s.grade='G11' THEN s.id END) AS grade_11,
+            COUNT(DISTINCT CASE WHEN s.grade='G12' THEN s.id END) AS grade_12,
+            COUNT(DISTINCT CASE WHEN s.grade='G13' THEN s.id END) AS grade_13,
+
+            COUNT(e.id) AS total_enrollments,
+            COUNT(DISTINCT e.month) AS months_active
+
+        FROM students s
+        LEFT JOIN enrollments e ON e.student_id = s.id
+        GROUP BY province, school
+        ORDER BY province, total_students DESC, school
+    """)
+
+    school_stats = cur.fetchall()
+
+    # =========================
+    # 3. PROVINCE STATS
+    # =========================
+
+    cur.execute("""
+        SELECT
+            COALESCE(NULLIF(TRIM(s.province), ''), 'Unknown / Missing Province') AS province,
+
+            COUNT(DISTINCT s.id) AS total_students,
+            COUNT(DISTINCT COALESCE(NULLIF(TRIM(s.school), ''), 'Unknown / Missing School')) AS total_schools,
+
+            COUNT(DISTINCT CASE WHEN s.grade='G8' THEN s.id END) AS grade_8,
+            COUNT(DISTINCT CASE WHEN s.grade='G9' THEN s.id END) AS grade_9,
+            COUNT(DISTINCT CASE WHEN s.grade='G10' THEN s.id END) AS grade_10,
+            COUNT(DISTINCT CASE WHEN s.grade='G11' THEN s.id END) AS grade_11,
+            COUNT(DISTINCT CASE WHEN s.grade='G12' THEN s.id END) AS grade_12,
+            COUNT(DISTINCT CASE WHEN s.grade='G13' THEN s.id END) AS grade_13,
+
+            COUNT(e.id) AS total_enrollments
+
+        FROM students s
+        LEFT JOIN enrollments e ON e.student_id = s.id
+        GROUP BY province
+        ORDER BY total_students DESC, province
+    """)
+
+    province_stats = cur.fetchall()
+
+    # =========================
+    # 4. GRADE STATS
+    # =========================
+
+    cur.execute("""
+        SELECT
+            s.grade,
+            COUNT(DISTINCT s.id) AS total_students,
+            COUNT(DISTINCT COALESCE(NULLIF(TRIM(s.school), ''), 'Unknown / Missing School')) AS total_schools,
+            COUNT(DISTINCT COALESCE(NULLIF(TRIM(s.province), ''), 'Unknown / Missing Province')) AS total_provinces,
+            COUNT(e.id) AS total_enrollments
+        FROM students s
+        LEFT JOIN enrollments e ON e.student_id = s.id
+        GROUP BY s.grade
+        ORDER BY CAST(REPLACE(s.grade, 'G', '') AS INTEGER)
+    """)
+
+    grade_stats = cur.fetchall()
+
+    # =========================
+    # 5. MISSING SCHOOL / PROVINCE
+    # =========================
+
+    cur.execute("""
+        SELECT
+            s.full_name,
+            s.phone_whatsapp,
+            s.guardian_name,
+            s.guardian_phone,
+            s.email,
+            s.grade,
+            s.province,
+            s.school,
+            s.pin,
+            s.created_at
+        FROM students s
+        WHERE s.school IS NULL
+           OR TRIM(s.school) = ''
+           OR s.province IS NULL
+           OR TRIM(s.province) = ''
+        ORDER BY s.grade, s.full_name
+    """)
+
+    missing_rows = cur.fetchall()
+
+    conn.close()
+
+    # =========================
+    # BUILD EXCEL
+    # =========================
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+
+    # Styles
+    header_fill = PatternFill(start_color="1B5E20", end_color="1B5E20", fill_type="solid")
+    red_fill = PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid")
+
+    thin_border = Border(
+        left=Side(style="thin", color="DDDDDD"),
+        right=Side(style="thin", color="DDDDDD"),
+        top=Side(style="thin", color="DDDDDD"),
+        bottom=Side(style="thin", color="DDDDDD"),
+    )
+
+    def style_header(ws, row_num=1):
+        for cell in ws[row_num]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = thin_border
+
+    def style_title(cell):
+        cell.font = Font(bold=True, size=16, color="1B5E20")
+
+    def autofit(ws):
+        for col in ws.columns:
+            max_length = 0
+            col_letter = get_column_letter(col[0].column)
+
+            for cell in col:
+                value = "" if cell.value is None else str(cell.value)
+                max_length = max(max_length, len(value))
+                cell.border = thin_border
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+            ws.column_dimensions[col_letter].width = min(max_length + 4, 55)
+
+    def nz(v):
+        return v if v and str(v).strip() else "N/A"
+
+    # =========================
+    # SHEET 1: SUMMARY
+    # =========================
+
+    ws = wb.active
+    ws.title = "Summary"
+
+    total_students = len(student_rows)
+    total_schools = len(school_stats)
+    total_provinces = len(province_stats)
+    missing_count = len(missing_rows)
+
+    ws["A1"] = "EBTA Schools & Student Details Export"
+    style_title(ws["A1"])
+    ws.merge_cells("A1:E1")
+
+    ws.append([])
+    ws.append(["Metric", "Count", "Notes"])
+    style_header(ws, 3)
+
+    ws.append(["Total Students", total_students, "All students captured on the EBTA portal"])
+    ws.append(["Total Schools", total_schools, "Unique schools based on student records"])
+    ws.append(["Total Provinces", total_provinces, "Unique provinces based on student records"])
+    ws.append(["Students Missing School or Province", missing_count, "These records should be cleaned later"])
+
+    ws.append([])
+    ws.append(["Generated At", now_utc_iso(), "Africa/Johannesburg time"])
+
+    autofit(ws)
+
+    # =========================
+    # SHEET 2: STUDENT DETAILS
+    # =========================
+
+    ws2 = wb.create_sheet("Student Details")
+
+    ws2.append([
+        "Student ID",
+        "Full Name",
+        "Phone",
+        "Guardian Name",
+        "Guardian Phone",
+        "Email",
+        "Grade",
+        "Province",
+        "School",
+        "PIN",
+        "Created At",
+        "First Enrolled Date",
+        "First Enrolled Month",
+        "Latest Enrollment Month",
+        "Latest Status",
+        "Total Enrollments",
+        "Total Months Enrolled",
+        "Enrollment Months",
+        "Subjects"
+    ])
+
+    style_header(ws2, 1)
+
+    for s in student_rows:
+        first_enrolled = s["first_enrolled"] or ""
+        first_enrolled_date = first_enrolled[:10] if first_enrolled else ""
+        first_enrolled_month = first_enrolled[:7] if first_enrolled else ""
+
+        ws2.append([
+            s["id"],
+            nz(s["full_name"]),
+            nz(s["phone_whatsapp"]),
+            nz(s["guardian_name"]),
+            nz(s["guardian_phone"]),
+            nz(s["email"]),
+            grade_label(s["grade"]) if s["grade"] else "N/A",
+            nz(s["province"]),
+            nz(s["school"]),
+            nz(s["pin"]),
+            nz((s["created_at"] or "")[:10]),
+            nz(first_enrolled_date),
+            nz(first_enrolled_month),
+            nz(s["latest_month"]),
+            nz(s["latest_status"]),
+            s["total_enrollments"] or 0,
+            s["total_months_enrolled"] or 0,
+            nz(s["enrollment_months"]),
+            nz(s["subjects"])
+        ])
+
+    ws2.freeze_panes = "A2"
+    ws2.auto_filter.ref = ws2.dimensions
+    autofit(ws2)
+
+    # =========================
+    # SHEET 3: SCHOOLS BY PROVINCE
+    # =========================
+
+    ws3 = wb.create_sheet("Schools by Province")
+
+    ws3.append([
+        "Province",
+        "School",
+        "Total Students",
+        "Grade 8",
+        "Grade 9",
+        "Grade 10",
+        "Grade 11",
+        "Grade 12",
+        "Grade 13",
+        "Total Enrollments",
+        "Months Active"
+    ])
+
+    style_header(ws3, 1)
+
+    for row in school_stats:
+        ws3.append([
+            row["province"],
+            row["school"],
+            row["total_students"] or 0,
+            row["grade_8"] or 0,
+            row["grade_9"] or 0,
+            row["grade_10"] or 0,
+            row["grade_11"] or 0,
+            row["grade_12"] or 0,
+            row["grade_13"] or 0,
+            row["total_enrollments"] or 0,
+            row["months_active"] or 0
+        ])
+
+    ws3.freeze_panes = "A2"
+    ws3.auto_filter.ref = ws3.dimensions
+    autofit(ws3)
+
+    # =========================
+    # SHEET 4: PROVINCE SUMMARY
+    # =========================
+
+    ws4 = wb.create_sheet("Province Summary")
+
+    ws4.append([
+        "Province",
+        "Total Students",
+        "Total Schools",
+        "Grade 8",
+        "Grade 9",
+        "Grade 10",
+        "Grade 11",
+        "Grade 12",
+        "Grade 13",
+        "Total Enrollments"
+    ])
+
+    style_header(ws4, 1)
+
+    for row in province_stats:
+        ws4.append([
+            row["province"],
+            row["total_students"] or 0,
+            row["total_schools"] or 0,
+            row["grade_8"] or 0,
+            row["grade_9"] or 0,
+            row["grade_10"] or 0,
+            row["grade_11"] or 0,
+            row["grade_12"] or 0,
+            row["grade_13"] or 0,
+            row["total_enrollments"] or 0
+        ])
+
+    ws4.freeze_panes = "A2"
+    ws4.auto_filter.ref = ws4.dimensions
+    autofit(ws4)
+
+    # =========================
+    # SHEET 5: GRADE SUMMARY
+    # =========================
+
+    ws5 = wb.create_sheet("Grade Summary")
+
+    ws5.append([
+        "Grade",
+        "Total Students",
+        "Total Schools",
+        "Total Provinces",
+        "Total Enrollments"
+    ])
+
+    style_header(ws5, 1)
+
+    for row in grade_stats:
+        ws5.append([
+            grade_label(row["grade"]) if row["grade"] else "N/A",
+            row["total_students"] or 0,
+            row["total_schools"] or 0,
+            row["total_provinces"] or 0,
+            row["total_enrollments"] or 0
+        ])
+
+    ws5.freeze_panes = "A2"
+    ws5.auto_filter.ref = ws5.dimensions
+    autofit(ws5)
+
+    # =========================
+    # SHEET 6: MISSING SCHOOL OR PROVINCE
+    # =========================
+
+    ws6 = wb.create_sheet("Missing School or Province")
+
+    ws6.append([
+        "Full Name",
+        "Phone",
+        "Guardian Name",
+        "Guardian Phone",
+        "Email",
+        "Grade",
+        "Province",
+        "School",
+        "PIN",
+        "Created At",
+        "Missing Field"
+    ])
+
+    style_header(ws6, 1)
+
+    for s in missing_rows:
+        missing = []
+
+        if not s["province"] or not str(s["province"]).strip():
+            missing.append("Province")
+
+        if not s["school"] or not str(s["school"]).strip():
+            missing.append("School")
+
+        ws6.append([
+            nz(s["full_name"]),
+            nz(s["phone_whatsapp"]),
+            nz(s["guardian_name"]),
+            nz(s["guardian_phone"]),
+            nz(s["email"]),
+            grade_label(s["grade"]) if s["grade"] else "N/A",
+            nz(s["province"]),
+            nz(s["school"]),
+            nz(s["pin"]),
+            nz((s["created_at"] or "")[:10]),
+            ", ".join(missing)
+        ])
+
+    for row in ws6.iter_rows(min_row=2):
+        for cell in row:
+            cell.fill = red_fill
+
+    ws6.freeze_panes = "A2"
+    ws6.auto_filter.ref = ws6.dimensions
+    autofit(ws6)
+
+    # =========================
+    # OUTPUT FILE
+    # =========================
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f"EBTA_Schools_Student_Details_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+
+    response = make_response(output.read())
+    response.headers["Content-Type"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+
+    return response  
   
 @app.get('/admin/students/export')
 def admin_students_export():
