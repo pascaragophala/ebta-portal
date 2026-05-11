@@ -834,6 +834,19 @@ def init_db():
         FOREIGN KEY(manager_id) REFERENCES social_media_managers(id)
     );
     """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS duty_admins(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL UNIQUE,
+        email TEXT,
+        pin TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
 
     
     ensure_column(conn, "students", "guardian_name", "TEXT")
@@ -919,7 +932,8 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_smm_crisis_manager ON social_media_crisis_logs(manager_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_smm_crisis_status ON social_media_crisis_logs(status)")
 
-    
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_duty_admins_phone ON duty_admins(phone)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_duty_admins_active ON duty_admins(is_active)")
 
 
     cur.execute("""
@@ -1355,6 +1369,16 @@ def require_social_media_manager():
 def require_treasurer():
     if not is_treasurer():
         return redirect(url_for("treasurer_login"))
+        
+
+def is_duty_admin():
+    return session.get("duty_admin_id")
+
+
+def require_duty_admin():
+    if not is_duty_admin():
+        return redirect(url_for("duty_admin_login"))
+
 
 def is_student(): return session.get("student_id")
 def is_tutor(): return session.get("tutor_id")
@@ -10577,6 +10601,7 @@ def admin_nav():
             f"<a class='btn secondary' href='{url_for('admin_social_media_managers')}'>Social Media Managers</a>",
             f"<a class='btn secondary' href='{url_for('admin_social_media_content_logs')}'>Social Media Logs</a>",
             f"<a class='btn secondary' href='{url_for('admin_social_media_reports')}'>Social Media Reports</a>",
+            f"<a class='btn secondary' href='{url_for('admin_duty_admins')}'>Duty Admins</a>",
             f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
             f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
             f"<a class='btn secondary' href='{url_for('admin_awards_student_export')}'>Awards Export</a>",
@@ -10650,6 +10675,7 @@ def admin_home():
     <a class="btn secondary" href="{url_for('admin_social_media_managers')}">Social Media Managers</a>
     <a class="btn secondary" href="{url_for('admin_social_media_content_logs')}">Social Media Logs</a>
     <a class="btn secondary" href="{url_for('admin_social_media_reports')}">Social Media Reports</a>
+    <a class="btn secondary" href="{url_for('admin_duty_admins')}">Duty Admins</a>
     <a class='btn secondary' href='{url_for('admin_reports')}'>Student Reports</a>
     <a class='btn secondary' href='{url_for('admin_awards_student_export')}'>Awards Export</a>
 
@@ -28784,6 +28810,1532 @@ def social_media_crisis_screenshot(crisis_id):
         os.path.basename(file_path),
         as_attachment=False
     )
+    
+
+def duty_admin_nav():
+    return f"""
+    <nav class="admin-nav">
+        <a class="btn secondary" href="{url_for('duty_admin_home')}">Dashboard</a>
+        <a class="btn secondary" href="{url_for('duty_admin_enrollments')}">Enrollments</a>
+        <a class="btn secondary" href="{url_for('duty_admin_students')}">Students</a>
+        <a class="btn secondary" href="{url_for('duty_admin_groups')}">Groups</a>
+        <a class="btn secondary" href="{url_for('duty_admin_sessions')}">Sessions</a>
+        <a class="btn secondary" href="{url_for('duty_admin_inbox')}">Inbox</a>
+        <a class="btn secondary" href="{url_for('duty_admin_direct_messages')}">Direct Messages</a>
+        <a class="btn secondary" href="{url_for('duty_admin_reports')}">Student Reports</a>
+        <a class="btn secondary" href="{url_for('duty_admin_followups')}">Follow-Ups</a>
+        <a class="btn danger" href="{url_for('duty_admin_logout')}">Logout</a>
+    </nav>
+    """
+    
+@app.get('/duty-admin/login')
+def duty_admin_login():
+
+    body = """
+    <div class="card auth-card">
+        <h1>Duty Admin Login</h1>
+
+        <p class="muted">
+            Login using the phone number and PIN provided by high admin.
+        </p>
+
+        <form method="post" action="/duty-admin/login" class="grid">
+            <div>
+                <label>Phone Number</label>
+                <input name="phone" required>
+            </div>
+
+            <div>
+                <label>PIN</label>
+                <input name="pin" type="password" maxlength="5" required>
+            </div>
+
+            <button class="btn success">Login</button>
+        </form>
+    </div>
+    """
+
+    return page("Duty Admin Login", body)
+    
+    
+@app.post('/duty-admin/login')
+def duty_admin_login_post():
+
+    phone = request.form.get("phone", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    variants = phone_variants(phone)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    qmarks = ",".join("?" * len(variants)) if variants else "?"
+    params = variants if variants else [phone]
+
+    cur.execute(f"""
+        SELECT *
+        FROM duty_admins
+        WHERE phone IN ({qmarks})
+          AND pin=?
+          AND is_active=1
+        LIMIT 1
+    """, params + [pin])
+
+    admin = cur.fetchone()
+    conn.close()
+
+    if not admin:
+        return page(
+            "Login Failed",
+            card_msg("Invalid Duty Admin login details or account is inactive.")
+        )
+
+    session.clear()
+    session["duty_admin_id"] = admin["id"]
+    session["duty_admin_name"] = admin["full_name"]
+
+    return redirect(url_for("duty_admin_home"))
+
+
+@app.get('/duty-admin/logout')
+def duty_admin_logout():
+    session.clear()
+    return redirect(url_for("duty_admin_login"))
+    
+    
+@app.get('/admin/duty-admins')
+def admin_duty_admins():
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can manage Duty Admins."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM duty_admins
+        ORDER BY created_at DESC
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for d in rows:
+        status = (
+            "<span class='chip active'>Active</span>"
+            if d["is_active"] == 1
+            else "<span class='chip lapsed'>Inactive</span>"
+        )
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(d['full_name'])}</strong>
+                <div class="mini muted">{escape(d['phone'])}</div>
+            </td>
+
+            <td>{escape(d['email'] or '—')}</td>
+
+            <td>
+                <span class="chip" style="font-weight:800;letter-spacing:1px">
+                    {escape(d['pin'] or '—')}
+                </span>
+            </td>
+
+            <td>{status}</td>
+
+            <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+
+                    <form method="post"
+                          action="/admin/duty-admin/{d['id']}/reset-pin"
+                          style="display:inline"
+                          onsubmit="return confirm('Reset Duty Admin PIN?');">
+                        <button class="btn mini warn">Reset PIN</button>
+                    </form>
+
+                    <form method="post"
+                          action="/admin/duty-admin/{d['id']}/toggle"
+                          style="display:inline">
+                        <button class="btn mini secondary">
+                            {'Deactivate' if d['is_active'] == 1 else 'Activate'}
+                        </button>
+                    </form>
+
+                </div>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Duty Admin Users</h1>
+
+        <p class="muted">
+            Add and manage low-level Duty Admin users. These users will log in from a separate Duty Admin portal.
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>Add Duty Admin</h2>
+
+            <form method="post"
+                  action="/admin/duty-admins/add"
+                  class="grid"
+                  style="grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end">
+
+                <div>
+                    <label>Full Name</label>
+                    <input name="full_name" required>
+                </div>
+
+                <div>
+                    <label>Phone</label>
+                    <input name="phone" required>
+                </div>
+
+                <div>
+                    <label>Email</label>
+                    <input name="email" type="email">
+                </div>
+
+                <button class="btn success">Add Duty Admin</button>
+            </form>
+
+            <p class="mini muted">
+                The system will generate a 5-digit PIN.
+            </p>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Duty Admin</th>
+                        <th>Email</th>
+                        <th>PIN</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='5'>No Duty Admin users added yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Duty Admin Users", body)
+    
+    
+@app.post('/admin/duty-admins/add')
+def admin_add_duty_admin():
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can add Duty Admins."))
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    email = request.form.get("email", "").strip()
+
+    if not full_name or not phone:
+        return page("Error", card_msg("Full name and phone are required."))
+
+    pin = f"{random.randint(0, 99999):05d}"
+    now = now_utc_iso()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            INSERT INTO duty_admins(
+                full_name,
+                phone,
+                email,
+                pin,
+                is_active,
+                created_at,
+                updated_at
+            )
+            VALUES(?,?,?,?,1,?,?)
+        """, (
+            full_name,
+            phone,
+            email,
+            pin,
+            now,
+            now
+        ))
+
+        conn.commit()
+
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Error", card_msg("A Duty Admin with this phone number already exists."))
+
+    conn.close()
+
+    return page(
+        "Duty Admin Created",
+        f"""
+        {admin_nav()}
+
+        <section class="card">
+            <h1>Duty Admin Created Successfully</h1>
+
+            <div class="card soft" style="border-left:5px solid #f59e0b">
+                <h2>Login Details</h2>
+
+                <p><b>Name:</b> {escape(full_name)}</p>
+                <p><b>Phone:</b> {escape(phone)}</p>
+                <p><b>Email:</b> {escape(email or '—')}</p>
+
+                <p>
+                    <b>PIN:</b>
+                    <span class="chip" style="font-size:22px;padding:12px 18px;letter-spacing:2px">
+                        {pin}
+                    </span>
+                </p>
+
+                <p class="mini muted">
+                    Share this PIN privately. They will use the phone number and PIN to log in.
+                </p>
+            </div>
+
+            <div class="toolbar" style="margin-top:14px">
+                <a class="btn" href="/admin/duty-admins">Back to Duty Admins</a>
+                <a class="btn secondary" href="/duty-admin/login">Open Duty Admin Login</a>
+            </div>
+        </section>
+        """
+    )
+    
+    
+@app.post('/admin/duty-admin/<int:did>/reset-pin')
+def admin_duty_admin_reset_pin(did):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can reset Duty Admin PINs."))
+
+    new_pin = f"{random.randint(0, 99999):05d}"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE duty_admins
+        SET pin=?,
+            updated_at=?
+        WHERE id=?
+    """, (new_pin, now_utc_iso(), did))
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "PIN Reset",
+        f"""
+        {admin_nav()}
+
+        <section class="card">
+            <h1>Duty Admin PIN Reset</h1>
+
+            <p>
+                <b>New PIN:</b>
+                <span class="chip" style="font-size:22px;padding:12px 18px;letter-spacing:2px">
+                    {new_pin}
+                </span>
+            </p>
+
+            <a class="btn" href="/admin/duty-admins">Back to Duty Admins</a>
+        </section>
+        """
+    )
+
+@app.post('/admin/duty-admin/<int:did>/toggle')
+def admin_duty_admin_toggle(did):
+
+    r = require_admin()
+    if r: return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can update Duty Admin accounts."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT is_active FROM duty_admins WHERE id=?", (did,))
+    row = cur.fetchone()
+
+    if row:
+        new_status = 0 if row["is_active"] == 1 else 1
+
+        cur.execute("""
+            UPDATE duty_admins
+            SET is_active=?,
+                updated_at=?
+            WHERE id=?
+        """, (new_status, now_utc_iso(), did))
+
+        conn.commit()
+
+    conn.close()
+
+    return redirect(url_for("admin_duty_admins"))
+    
+    
+@app.get('/duty-admin')
+def duty_admin_home():
+
+    r = require_duty_admin()
+    if r: return r
+
+    month = get_admin_active_month()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,))
+    total_enrollments = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='PENDING'", (month,))
+    pending = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='ACTIVE'", (month,))
+    active = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM enrollments
+        WHERE month=?
+    """, (month,))
+    students = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM messages WHERE resolved=0")
+    inbox_count = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM direct_messages WHERE to_role='admin' AND is_read=0")
+    dm_unread = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM followups WHERE followup_status!='RESOLVED'")
+    open_followups = cur.fetchone()["c"] or 0
+
+    conn.close()
+
+    body = f"""
+    {duty_admin_nav()}
+
+    <section class="card">
+        <h1>Duty Admin Dashboard</h1>
+
+        <p class="muted">
+            Welcome, {escape(session.get("duty_admin_name", "Duty Admin"))}.
+            This portal is for daily admin operations and follow-ups.
+        </p>
+
+        <div class="stats">
+            {stat("Current Month", month)}
+            {stat("Students", str(students))}
+            {stat("Enrollments", str(total_enrollments))}
+            {stat("Pending", str(pending))}
+            {stat("Active", str(active))}
+            {stat("Inbox", str(inbox_count))}
+            {stat("Direct Msgs", str(dm_unread))}
+            {stat("Open Follow-Ups", str(open_followups))}
+        </div>
+
+        <div class="toolbar" style="margin-top:16px">
+            <a class="btn secondary" href="{url_for('duty_admin_enrollments')}">View Enrollments</a>
+            <a class="btn secondary" href="{url_for('duty_admin_students')}">Students</a>
+            <a class="btn secondary" href="{url_for('duty_admin_followups')}">Follow-Ups</a>
+            <a class="btn secondary" href="{url_for('duty_admin_direct_messages')}">Direct Messages</a>
+            <a class="btn secondary" href="{url_for('duty_admin_reports')}">Student Reports</a>
+        </div>
+    </section>
+    """
+
+    return page("Duty Admin", body)
+    
+@app.get('/duty-admin/enrollments')
+def duty_admin_enrollments():
+
+    r = require_duty_admin()
+    if r: return r
+
+    month = get_admin_active_month()
+
+    q = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    grade = request.args.get("grade", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    where = ["e.month = ?"]
+    params = [month]
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR s.guardian_phone LIKE ?
+                OR s.email LIKE ?
+                OR sub.name LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search]
+
+    if status:
+        where.append("e.status = ?")
+        params.append(status)
+
+    if grade:
+        where.append("s.grade = ?")
+        params.append(grade)
+
+    where_sql = " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT
+            e.id,
+            e.month,
+            e.status,
+            e.payment_method,
+            e.payment_ref,
+            e.pop_url,
+            e.amount_paid,
+            e.created_at,
+
+            s.full_name,
+            s.phone_whatsapp,
+            s.guardian_name,
+            s.guardian_phone,
+            s.email,
+            s.grade,
+
+            sub.name AS subject_name,
+            sub.grade AS subject_grade
+
+        FROM enrollments e
+        JOIN students s ON s.id = e.student_id
+        JOIN subjects sub ON sub.id = e.subject_id
+        WHERE {where_sql}
+        ORDER BY e.created_at DESC
+    """, params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for r0 in rows:
+        pop_link = "—"
+
+        if r0["pop_url"]:
+            pop_link = f"<a target='_blank' href='{escape(r0['pop_url'])}'>PoP</a>"
+
+        amount = r0["amount_paid"] if r0["amount_paid"] not in [None, ""] else "—"
+
+        status_class = "pending"
+        if r0["status"] == "ACTIVE":
+            status_class = "active"
+        elif r0["status"] == "LAPSED":
+            status_class = "lapsed"
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(r0['full_name'])}</strong>
+                <div class="mini muted">{escape(r0['phone_whatsapp'] or '')}</div>
+            </td>
+
+            <td>{grade_label(r0['grade'])}</td>
+
+            <td>
+                {escape(r0['subject_name'])}
+                <div class="mini muted">{grade_label(r0['subject_grade'])}</div>
+            </td>
+
+            <td><span class="chip {status_class}">{escape(r0['status'])}</span></td>
+
+            <td>{pop_link}</td>
+
+            <td>R{escape(str(amount))}</td>
+
+            <td>
+                <div class="mini muted">
+                    Guardian: {escape(r0['guardian_name'] or '—')}<br>
+                    Guardian Phone: {escape(r0['guardian_phone'] or '—')}<br>
+                    Email: {escape(r0['email'] or '—')}
+                </div>
+            </td>
+
+            <td>{escape((r0['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {duty_admin_nav()}
+
+    <section class="card">
+        <h1>Enrollments View</h1>
+
+        <p class="muted">
+            View enrollment information for the current month.
+            This page does not allow approval, SMS sending, lapsing, or pending changes.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search student, phone, subject or email">
+
+            <select name="grade">
+                <option value="">All Grades</option>
+                {''.join(
+                    f"<option value='{g}' {'selected' if grade==g else ''}>{grade_label(g)}</option>"
+                    for g in ["G8","G9","G10","G11","G12","G13"]
+                )}
+            </select>
+
+            <select name="status">
+                <option value="">All Statuses</option>
+                <option value="PENDING" {'selected' if status=="PENDING" else ""}>PENDING</option>
+                <option value="ACTIVE" {'selected' if status=="ACTIVE" else ""}>ACTIVE</option>
+                <option value="LAPSED" {'selected' if status=="LAPSED" else ""}>LAPSED</option>
+            </select>
+
+            <button class="btn mini">Filter</button>
+        </form>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Status</th>
+                        <th>PoP</th>
+                        <th>Amount</th>
+                        <th>Contact Details</th>
+                        <th>Timestamp</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='8'>No enrollments found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Duty Admin Enrollments", body)
+    
+@app.get('/duty-admin/students')
+def duty_admin_students():
+
+    r = require_duty_admin()
+    if r: return r
+
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                full_name LIKE ?
+                OR phone_whatsapp LIKE ?
+                OR guardian_phone LIKE ?
+                OR guardian_name LIKE ?
+                OR email LIKE ?
+                OR school LIKE ?
+                OR province LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search, search, search]
+
+    if grade:
+        where.append("grade = ?")
+        params.append(grade)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    cur.execute(f"""
+        SELECT *
+        FROM students
+        {where_sql}
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), full_name
+        LIMIT 500
+    """, params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for s in rows:
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(s['full_name'])}</strong>
+                <div class="mini muted">PIN: {escape(s['pin'] or '—')}</div>
+            </td>
+            <td>{grade_label(s['grade'])}</td>
+            <td>{escape(s['phone_whatsapp'] or '—')}</td>
+            <td>
+                {escape(s['guardian_name'] or '—')}
+                <div class="mini muted">{escape(s['guardian_phone'] or '—')}</div>
+            </td>
+            <td>{escape(s['email'] or '—')}</td>
+            <td>
+                {escape(s['school'] or '—')}
+                <div class="mini muted">{escape(s['province'] or '—')}</div>
+            </td>
+            <td>{escape((s['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {duty_admin_nav()}
+
+    <section class="card">
+        <h1>Students</h1>
+
+        <p class="muted">
+            View learner details captured on the portal. Editing and deletion are restricted.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search name, phone, guardian, email, school or province">
+
+            <select name="grade">
+                <option value="">All Grades</option>
+                {''.join(
+                    f"<option value='{g}' {'selected' if grade==g else ''}>{grade_label(g)}</option>"
+                    for g in ["G8","G9","G10","G11","G12","G13"]
+                )}
+            </select>
+
+            <button class="btn mini">Search</button>
+        </form>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Grade</th>
+                        <th>Phone</th>
+                        <th>Guardian</th>
+                        <th>Email</th>
+                        <th>School / Province</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No students found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Duty Admin Students", body)
+    
+    
+@app.get('/duty-admin/groups')
+def duty_admin_groups():
+
+    r = require_duty_admin()
+    if r: return r
+
+    month = get_admin_active_month()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            g.*,
+            sub.name AS subject_name,
+            sub.grade AS subject_grade
+        FROM groups g
+        JOIN subjects sub ON sub.id = g.subject_id
+        WHERE g.month = ?
+        ORDER BY CAST(REPLACE(sub.grade,'G','') AS INTEGER), sub.name
+    """, (month,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for g in rows:
+        visible = "Visible" if g["is_visible"] == 1 else "Hidden"
+
+        invite = "—"
+        if g["invite_link"]:
+            invite = f"<a target='_blank' href='{escape(g['invite_link'])}'>Open Group</a>"
+
+        trs += f"""
+        <tr>
+            <td>{grade_label(g['subject_grade'])}</td>
+            <td>{escape(g['subject_name'])}</td>
+            <td>{escape(g['month'])}</td>
+            <td>{invite}</td>
+            <td><span class="chip">{visible}</span></td>
+            <td>{escape((g['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {duty_admin_nav()}
+
+    <section class="card">
+        <h1>Group Links</h1>
+
+        <p class="muted">
+            View group links for the current admin month. Creating, editing and deleting groups are restricted.
+        </p>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Month</th>
+                        <th>Group Link</th>
+                        <th>Visibility</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {trs or "<tr><td colspan='6'>No group links found for this month.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Duty Admin Groups", body)
+    
+  
+@app.get('/duty-admin/sessions')
+def duty_admin_sessions():
+
+    r = require_duty_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            se.*,
+            sub.name AS subject_name,
+            sub.grade AS subject_grade,
+            t.full_name AS tutor_name
+        FROM sessions se
+        JOIN subjects sub ON sub.id = se.subject_id
+        JOIN tutors t ON t.id = se.tutor_id
+        ORDER BY CAST(REPLACE(sub.grade,'G','') AS INTEGER), sub.name, se.day_of_week, se.start_time
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for s in rows:
+        meet = "—"
+        if s["meet_link"]:
+            meet = f"<a target='_blank' href='{escape(s['meet_link'])}'>Open Link</a>"
+
+        visible = "Visible" if s["is_visible"] == 1 else "Hidden"
+        active = "Active" if s["active"] == 1 else "Inactive"
+
+        trs += f"""
+        <tr>
+            <td>{grade_label(s['subject_grade'])}</td>
+            <td>{escape(s['subject_name'])}</td>
+            <td>{escape(s['tutor_name'])}</td>
+            <td>{DOW[s['day_of_week']] if s['day_of_week'] is not None else '—'}</td>
+            <td>{escape(s['start_time'])} - {escape(s['end_time'])}</td>
+            <td>{meet}</td>
+            <td>
+                <span class="chip">{active}</span>
+                <div class="mini muted">{visible}</div>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {duty_admin_nav()}
+
+    <section class="card">
+        <h1>Sessions</h1>
+
+        <p class="muted">
+            View scheduled sessions, tutors, times and meeting links. Editing is restricted.
+        </p>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Tutor</th>
+                        <th>Day</th>
+                        <th>Time</th>
+                        <th>Meet Link</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No sessions found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Duty Admin Sessions", body)
+    
+    
+@app.get('/duty-admin/inbox')
+def duty_admin_inbox():
+
+    r = require_duty_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM messages
+        ORDER BY created_at DESC
+        LIMIT 300
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    cards = ""
+
+    for m in rows:
+        status = "<span class='chip active'>Resolved</span>" if m["resolved"] == 1 else "<span class='chip pending'>Open</span>"
+
+        cards += f"""
+        <div class="msg">
+            <div class="meta">
+                {status}
+                <span style="margin-left:8px">{escape((m['created_at'] or '')[:16].replace('T',' '))}</span>
+                <span style="margin-left:8px">Kind: {escape(m['kind'] or '—')}</span>
+            </div>
+            <div style="white-space:pre-wrap">
+                {escape(m['payload'] or '')}
+            </div>
+        </div>
+        """
+
+    body = f"""
+    {duty_admin_nav()}
+
+    <section class="card">
+        <h1>Inbox</h1>
+
+        <p class="muted">
+            View system messages, portal logs and communication notices. Resolving or deleting messages is restricted.
+        </p>
+
+        <div class="feedback-list">
+            {cards or "<div class='empty'>No inbox messages found.</div>"}
+        </div>
+    </section>
+    """
+
+    return page("Duty Admin Inbox", body)
+    
+    
+@app.get('/duty-admin/direct-messages')
+def duty_admin_direct_messages():
+
+    r = require_duty_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            dm.*,
+            s.full_name AS student_name,
+            t.full_name AS tutor_name,
+            sub.name AS subject_name,
+            sub.grade AS subject_grade
+        FROM direct_messages dm
+        LEFT JOIN students s ON s.id = dm.from_id AND dm.from_role='student'
+        LEFT JOIN tutors t ON t.id = dm.from_id AND dm.from_role='tutor'
+        LEFT JOIN subjects sub ON sub.id = dm.subject_id
+        WHERE dm.to_role='admin'
+           OR dm.from_role='admin'
+        ORDER BY dm.created_at DESC
+        LIMIT 300
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    cards = ""
+
+    for dm in rows:
+        sender = "Admin"
+
+        if dm["from_role"] == "student":
+            sender = dm["student_name"] or "Student"
+        elif dm["from_role"] == "tutor":
+            sender = dm["tutor_name"] or "Tutor"
+
+        subject_line = "—"
+        if dm["subject_name"]:
+            subject_line = f"{dm['subject_name']} ({grade_label(dm['subject_grade'])})"
+
+        read_chip = "<span class='chip active'>Read</span>" if dm["is_read"] == 1 else "<span class='chip pending'>Unread</span>"
+
+        cards += f"""
+        <div class="msg">
+            <div class="meta">
+                {read_chip}
+                <span style="margin-left:8px"><b>From:</b> {escape(sender)}</span>
+                <span style="margin-left:8px"><b>Subject:</b> {escape(subject_line)}</span>
+                <span style="margin-left:8px">{escape((dm['created_at'] or '')[:16].replace('T',' '))}</span>
+            </div>
+
+            <div style="white-space:pre-wrap">
+                {escape(dm['body'] or '')}
+            </div>
+        </div>
+        """
+
+    body = f"""
+    {duty_admin_nav()}
+
+    <section class="card">
+        <h1>Direct Messages</h1>
+
+        <p class="muted">
+            View direct messages sent to admin. Replying and advanced admin actions are restricted on this portal.
+        </p>
+
+        <div class="feedback-list">
+            {cards or "<div class='empty'>No direct messages found.</div>"}
+        </div>
+    </section>
+    """
+
+    return page("Duty Admin Direct Messages", body)
+    
+    
+@app.get('/duty-admin/reports')
+def duty_admin_reports():
+
+    r = require_duty_admin()
+    if r: return r
+
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+    term = request.args.get("term", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR sr.file_name LIKE ?
+            )
+        """)
+        params += [search, search, search]
+
+    if grade:
+        where.append("s.grade = ?")
+        params.append(grade)
+
+    if term:
+        where.append("sr.term = ?")
+        params.append(term)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    cur.execute(f"""
+        SELECT
+            sr.*,
+            s.full_name,
+            s.phone_whatsapp,
+            s.guardian_name,
+            s.guardian_phone,
+            s.email,
+            s.grade AS student_grade
+        FROM student_reports sr
+        JOIN students s ON s.id = sr.student_id
+        {where_sql}
+        ORDER BY sr.upload_date DESC
+        LIMIT 500
+    """, params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for r0 in rows:
+        file_link = f"""
+        <a class="btn mini secondary"
+           target="_blank"
+           href="/duty-admin/reports/{r0['id']}/view">
+           View Report
+        </a>
+        """
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(r0['full_name'])}</strong>
+                <div class="mini muted">{escape(r0['phone_whatsapp'] or '')}</div>
+            </td>
+            <td>{grade_label(r0['student_grade'])}</td>
+            <td>{escape(r0['term'] or '—')}</td>
+            <td>{escape(r0['file_name'] or '—')}</td>
+            <td>{escape((r0['upload_date'] or '')[:16].replace('T',' '))}</td>
+            <td>{file_link}</td>
+        </tr>
+        """
+
+    body = f"""
+    {duty_admin_nav()}
+
+    <section class="card">
+        <h1>Student Reports</h1>
+
+        <p class="muted">
+            View learner uploaded reports. Deleting reports is restricted.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search student, phone or file name">
+
+            <select name="grade">
+                <option value="">All Grades</option>
+                {''.join(
+                    f"<option value='{g}' {'selected' if grade==g else ''}>{grade_label(g)}</option>"
+                    for g in ["G8","G9","G10","G11","G12","G13"]
+                )}
+            </select>
+
+            <select name="term">
+                <option value="">All Terms</option>
+                {''.join(
+                    f"<option value='{t}' {'selected' if term==t else ''}>{t}</option>"
+                    for t in ["Term-1","Term-2","Term-3","Term-4"]
+                )}
+            </select>
+
+            <button class="btn mini">Filter</button>
+        </form>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Grade</th>
+                        <th>Term</th>
+                        <th>File</th>
+                        <th>Uploaded</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {trs or "<tr><td colspan='6'>No reports found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Duty Admin Reports", body)
+    
+    
+@app.get('/duty-admin/reports/<int:report_id>/view')
+def duty_admin_report_view(report_id):
+
+    r = require_duty_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT file_path
+        FROM student_reports
+        WHERE id=?
+    """, (report_id,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row["file_path"]:
+        return page("Not Found", card_msg("Report file not found."))
+
+    file_path = row["file_path"]
+
+    if not os.path.exists(file_path):
+        return page("Missing File", card_msg("The report file is missing from storage."))
+
+    return send_from_directory(
+        os.path.dirname(file_path),
+        os.path.basename(file_path),
+        as_attachment=False
+    )
+    
+    
+@app.get('/duty-admin/followups')
+def duty_admin_followups():
+
+    r = require_duty_admin()
+    if r: return r
+
+    q = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    grade = request.args.get("grade", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT name
+        FROM subjects
+        ORDER BY name
+    """)
+    subject_rows = [x["name"] for x in cur.fetchall()]
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                full_name LIKE ?
+                OR phone LIKE ?
+                OR subjects LIKE ?
+                OR notes LIKE ?
+            )
+        """)
+        params += [search, search, search, search]
+
+    if status:
+        where.append("followup_status = ?")
+        params.append(status)
+
+    if grade:
+        where.append("grade = ?")
+        params.append(grade)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    cur.execute(f"""
+        SELECT *
+        FROM followups
+        {where_sql}
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT 300
+    """, params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for f in rows:
+        subjects_list = [x.strip() for x in (f["subjects"] or "").split(",") if x.strip()]
+        subjects_set = set(subjects_list)
+
+        subject_options = "".join(
+            f"<option value='{escape(s)}' {'selected' if s in subjects_set else ''}>{escape(s)}</option>"
+            for s in subject_rows
+        )
+
+        notes_box = f"""
+        <div style="
+            background:#f8fafc;
+            border:1px solid #e2e8f0;
+            border-radius:10px;
+            padding:8px;
+            max-height:110px;
+            overflow:auto;
+            margin-bottom:6px;
+            white-space:pre-wrap;
+            font-size:12px;
+        ">{escape(f['notes'] or 'No notes yet.')}</div>
+        """
+
+        trs += f"""
+        <tr>
+            <form method="post" action="/duty-admin/followups/{f['id']}/update">
+                <td>
+                    <input name="full_name" value="{escape(f['full_name'] or '')}">
+                    <div class="mini muted">ID: {f['id']}</div>
+                </td>
+
+                <td>
+                    <input name="phone" value="{escape(f['phone'] or '')}">
+                </td>
+
+                <td>
+                    <select name="grade">
+                        <option value="">Select</option>
+                        {''.join(
+                            f"<option value='{g}' {'selected' if f['grade']==g else ''}>{grade_label(g)}</option>"
+                            for g in ["G8","G9","G10","G11","G12","G13"]
+                        )}
+                    </select>
+                </td>
+
+                <td style="min-width:220px">
+                    <select name="subjects" multiple size="4">
+                        {subject_options}
+                    </select>
+                    <div class="mini muted">Hold Ctrl to select more than one.</div>
+                </td>
+
+                <td>
+                    <select name="issue_type">
+                        <option value="">Select</option>
+                        {''.join(
+                            f"<option value='{i}' {'selected' if f['issue_type']==i else ''}>{i}</option>"
+                            for i in ISSUE_TYPES
+                        )}
+                    </select>
+                </td>
+
+                <td>
+                    <select name="followup_status">
+                        {''.join(
+                            f"<option value='{st}' {'selected' if f['followup_status']==st else ''}>{st}</option>"
+                            for st in ["OPEN","IN PROGRESS","AWAITING POP","RESOLVED","DECLINED"]
+                        )}
+                    </select>
+                </td>
+
+                <td>
+                    <input type="date" name="payment_date" value="{escape(f['payment_date'] or '')}">
+                </td>
+
+                <td>
+                    <input type="date" name="date_communicated" value="{escape(f['date_communicated'] or '')}">
+                </td>
+
+                <td style="min-width:280px">
+                    {notes_box}
+                    <textarea name="new_note" rows="2" placeholder="Add a new note. Previous notes will be preserved."></textarea>
+                </td>
+
+                <td>
+                    <button class="btn mini success">Save</button>
+                </td>
+            </form>
+        </tr>
+        """
+
+    body = f"""
+    {duty_admin_nav()}
+
+    <section class="card">
+        <h1>Follow-Ups</h1>
+
+        <p class="muted">
+            Manage follow-up notes and learner communication. Delete actions are restricted.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search name, phone, subject or notes">
+
+            <select name="grade">
+                <option value="">All Grades</option>
+                {''.join(
+                    f"<option value='{g}' {'selected' if grade==g else ''}>{grade_label(g)}</option>"
+                    for g in ["G8","G9","G10","G11","G12","G13"]
+                )}
+            </select>
+
+            <select name="status">
+                <option value="">All Statuses</option>
+                {''.join(
+                    f"<option value='{st}' {'selected' if status==st else ''}>{st}</option>"
+                    for st in ["OPEN","IN PROGRESS","AWAITING POP","RESOLVED","DECLINED"]
+                )}
+            </select>
+
+            <button class="btn mini">Filter</button>
+        </form>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Phone</th>
+                        <th>Grade</th>
+                        <th>Subjects</th>
+                        <th>Issue</th>
+                        <th>Status</th>
+                        <th>Payment</th>
+                        <th>Communicated</th>
+                        <th>Notes</th>
+                        <th>Save</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {trs or "<tr><td colspan='10'>No follow-ups found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Duty Admin Follow-Ups", body)
+    
+    
+
+@app.post('/duty-admin/followups/<int:fid>/update')
+def duty_admin_followup_update(fid):
+
+    r = require_duty_admin()
+    if r: return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    new_note = request.form.get("new_note", "").strip()
+    updated_by = session.get("duty_admin_name", "Duty Admin")
+
+    cur.execute("""
+        SELECT notes, subjects
+        FROM followups
+        WHERE id=?
+        LIMIT 1
+    """, (fid,))
+
+    existing = cur.fetchone()
+
+    existing_notes = existing["notes"].strip() if existing and existing["notes"] else ""
+    final_notes = existing_notes
+
+    if new_note:
+        timestamp = now_utc_iso()[:16].replace("T", " ")
+        note_entry = f"[{timestamp}] {updated_by}: {new_note}"
+
+        if final_notes:
+            final_notes = final_notes + "\n\n" + note_entry
+        else:
+            final_notes = note_entry
+
+    posted_subjects = [s.strip() for s in request.form.getlist("subjects") if s.strip()]
+
+    clean_subjects = []
+    seen = set()
+
+    for sub in posted_subjects:
+        key = sub.lower()
+        if key not in seen:
+            clean_subjects.append(sub)
+            seen.add(key)
+
+    final_subjects = ", ".join(clean_subjects)
+
+    if not final_subjects and existing and existing["subjects"]:
+        final_subjects = existing["subjects"]
+
+    cur.execute("""
+        UPDATE followups
+        SET full_name=?,
+            phone=?,
+            grade=?,
+            subjects=?,
+            issue_type=?,
+            followup_status=?,
+            payment_date=?,
+            date_communicated=?,
+            notes=?,
+            updated_by=?,
+            updated_at=?
+        WHERE id=?
+    """, (
+        request.form.get("full_name"),
+        request.form.get("phone"),
+        request.form.get("grade"),
+        final_subjects,
+        request.form.get("issue_type"),
+        request.form.get("followup_status"),
+        request.form.get("payment_date"),
+        request.form.get("date_communicated"),
+        final_notes,
+        updated_by,
+        now_utc_iso(),
+        fid
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("duty_admin_followups"))
+    
+    
+
+
 
 
 # --- Admin: Analytics dashboard ---
