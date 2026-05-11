@@ -17000,24 +17000,48 @@ def admin_followups():
                 """
         
         subjects_list = [s.strip() for s in (row["subjects"] or "").split(",") if s.strip()]
+        subjects_set = set(subjects_list)
 
-        subjects_html = "".join(
+        subject_chips = "".join(
             f"""
             <span class='chip subject-chip'
                   onclick="window.location='?subject={escape(s)}'">
                 {escape(s)}
             </span>
-            <input type="hidden" name="subjects" value="{escape(s)}">
             """
             for s in subjects_list
         )
 
-        if not subjects_html:
-            subjects_html = "<span class='mini muted'>No subjects captured</span>"
+        if not subject_chips:
+            subject_chips = "<span class='mini muted'>No subjects captured</span>"
+
+        subject_options = "".join(
+            f"""
+            <option value="{escape(s)}" {'selected' if s in subjects_set else ''}>
+                {escape(s)}
+            </option>
+            """
+            for s in subjects
+        )
 
         subjects_html = f"""
-        <div style="display:flex;flex-wrap:wrap;gap:4px;min-width:160px">
-            {subjects_html}
+        <div style="display:grid;gap:6px;min-width:220px">
+
+            <div style="display:flex;flex-wrap:wrap;gap:4px">
+                {subject_chips}
+            </div>
+
+            <select name="subjects"
+                    multiple
+                    size="4"
+                    style="min-width:220px">
+                {subject_options}
+            </select>
+
+            <div class="mini muted">
+                Hold Ctrl to select more than one subject.
+            </div>
+
         </div>
         """
         
@@ -17409,8 +17433,19 @@ def admin_followup_update(fid):
 
     posted_subjects = [s.strip() for s in request.form.getlist("subjects") if s.strip()]
 
-    if posted_subjects:
-        final_subjects = ", ".join(posted_subjects)
+    # Remove duplicates while keeping the same order
+    clean_subjects = []
+    seen_subjects = set()
+
+    for sub in posted_subjects:
+        key = sub.lower()
+
+        if key not in seen_subjects:
+            clean_subjects.append(sub)
+            seen_subjects.add(key)
+
+    if clean_subjects:
+        final_subjects = ", ".join(clean_subjects)
     else:
         final_subjects = existing_subjects
 
