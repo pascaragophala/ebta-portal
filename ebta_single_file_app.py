@@ -1308,6 +1308,23 @@ def safe_url(endpoint, fallback):
 
 DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
 
+ISSUE_TYPES = [
+    "Missing R50 Registration Fee",
+    "Payment Missing",
+    "Fake Upload",
+    "Returning Student Owing",
+    "PoP Issues",
+    "Other"
+]
+
+FOLLOWUP_STATUSES = [
+    "OPEN",
+    "IN PROGRESS",
+    "AWAITING POP",
+    "RESOLVED",
+    "DECLINED"
+]
+
 def get_admin_active_month():
     """
     Admin-only working month.
@@ -1335,6 +1352,47 @@ def set_setting(key, value):
     conn.close()
 
 def grade_label(g): return g.replace("G","Grade ")
+
+
+def pagination_controls(base_path, page_num, total_pages, query_params=None):
+    """
+    Builds First / Prev / Page X / Next / Last pagination links.
+    query_params keeps search filters when changing pages.
+    """
+    query_params = query_params or {}
+
+    clean_params = {}
+
+    for key, value in query_params.items():
+        if value not in [None, ""]:
+            clean_params[key] = value
+
+    def page_link(label, target_page, css="secondary"):
+        params = dict(clean_params)
+        params["page"] = target_page
+        return f"<a class='btn mini {css}' href='{base_path}?{urlencode(params)}'>{label}</a>"
+
+    if total_pages <= 1:
+        return ""
+
+    links = []
+
+    if page_num > 1:
+        links.append(page_link("First", 1))
+        links.append(page_link("Prev", page_num - 1))
+
+    links.append(f"<span class='chip'>Page {page_num} / {total_pages}</span>")
+
+    if page_num < total_pages:
+        links.append(page_link("Next", page_num + 1))
+        links.append(page_link("Last", total_pages))
+
+    return f"""
+    <div class="toolbar" style="justify-content:center;margin:12px 0;gap:6px;flex-wrap:wrap">
+        {''.join(links)}
+    </div>
+    """
+
 
 def is_admin(): return bool(session.get("admin"))
 
@@ -29283,6 +29341,10 @@ def duty_admin_enrollments():
     q = request.args.get("q", "").strip()
     status = request.args.get("status", "").strip()
     grade = request.args.get("grade", "").strip()
+    
+    page_num = max(1, int(request.args.get("page", 1)))
+    limit = 30
+    offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
@@ -29312,6 +29374,20 @@ def duty_admin_enrollments():
         params.append(grade)
 
     where_sql = " AND ".join(where)
+    
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM enrollments e
+        JOIN students s ON s.id = e.student_id
+        JOIN subjects sub ON sub.id = e.subject_id
+        WHERE {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    data_params = list(params)
+    data_params.extend([limit, offset])
 
     cur.execute(f"""
         SELECT
@@ -29339,6 +29415,7 @@ def duty_admin_enrollments():
         JOIN subjects sub ON sub.id = e.subject_id
         WHERE {where_sql}
         ORDER BY e.created_at DESC
+        LIMIT ? OFFSET ?
     """, params)
 
     rows = cur.fetchall()
@@ -29425,7 +29502,9 @@ def duty_admin_enrollments():
 
             <button class="btn mini">Filter</button>
         </form>
-
+        
+        
+        {pagination_controls("/duty-admin/enrollments", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
         <div class="scroll-x">
             <table>
                 <thead>
@@ -29446,6 +29525,7 @@ def duty_admin_enrollments():
                 </tbody>
             </table>
         </div>
+        {pagination_controls("/duty-admin/enrollments", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
     </section>
     """
 
@@ -29459,6 +29539,10 @@ def duty_admin_students():
 
     q = request.args.get("q", "").strip()
     grade = request.args.get("grade", "").strip()
+    
+    page_num = max(1, int(request.args.get("page", 1)))
+    limit = 30
+    offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
@@ -29488,12 +29572,24 @@ def duty_admin_students():
     where_sql = "WHERE " + " AND ".join(where) if where else ""
 
     cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM students
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    data_params = list(params)
+    data_params.extend([limit, offset])
+
+    cur.execute(f"""
         SELECT *
         FROM students
         {where_sql}
         ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), full_name
-        LIMIT 500
-    """, params)
+        LIMIT ? OFFSET ?
+    """, data_params)
 
     rows = cur.fetchall()
     conn.close()
@@ -29547,6 +29643,8 @@ def duty_admin_students():
 
             <button class="btn mini">Search</button>
         </form>
+        
+        {pagination_controls("/duty-admin/students", page_num, total_pages, {"q": q, "grade": grade})}
 
         <div class="scroll-x">
             <table>
@@ -29566,6 +29664,8 @@ def duty_admin_students():
                 </tbody>
             </table>
         </div>
+        
+        {pagination_controls("/duty-admin/students", page_num, total_pages, {"q": q, "grade": grade})}
     </section>
     """
 
@@ -29579,9 +29679,23 @@ def duty_admin_groups():
     if r: return r
 
     month = get_admin_active_month()
+    
+    page_num = max(1, int(request.args.get("page", 1)))
+    limit = 30
+    offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM groups g
+        JOIN subjects sub ON sub.id = g.subject_id
+        WHERE g.month = ?
+    """, (month,))
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
 
     cur.execute("""
         SELECT
@@ -29592,7 +29706,8 @@ def duty_admin_groups():
         JOIN subjects sub ON sub.id = g.subject_id
         WHERE g.month = ?
         ORDER BY CAST(REPLACE(sub.grade,'G','') AS INTEGER), sub.name
-    """, (month,))
+        LIMIT ? OFFSET ?
+    """, (month, limit, offset))
 
     rows = cur.fetchall()
     conn.close()
@@ -29626,7 +29741,9 @@ def duty_admin_groups():
         <p class="muted">
             View group links for the current admin month. Creating, editing and deleting groups are restricted.
         </p>
-
+        
+        {pagination_controls("/duty-admin/groups", page_num, total_pages)}
+        
         <div class="scroll-x">
             <table>
                 <thead>
@@ -29644,6 +29761,8 @@ def duty_admin_groups():
                 </tbody>
             </table>
         </div>
+        
+        {pagination_controls("/duty-admin/groups", page_num, total_pages)}
     </section>
     """
 
@@ -29655,9 +29774,23 @@ def duty_admin_sessions():
 
     r = require_duty_admin()
     if r: return r
+    
+    page_num = max(1, int(request.args.get("page", 1)))
+    limit = 30
+    offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM sessions se
+        JOIN subjects sub ON sub.id = se.subject_id
+        JOIN tutors t ON t.id = se.tutor_id
+    """)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
 
     cur.execute("""
         SELECT
@@ -29669,7 +29802,8 @@ def duty_admin_sessions():
         JOIN subjects sub ON sub.id = se.subject_id
         JOIN tutors t ON t.id = se.tutor_id
         ORDER BY CAST(REPLACE(sub.grade,'G','') AS INTEGER), sub.name, se.day_of_week, se.start_time
-    """)
+        LIMIT ? OFFSET ?
+    """, (limit, offset))
 
     rows = cur.fetchall()
     conn.close()
@@ -29708,6 +29842,8 @@ def duty_admin_sessions():
         <p class="muted">
             View scheduled sessions, tutors, times and meeting links. Editing is restricted.
         </p>
+        
+        {pagination_controls("/duty-admin/sessions", page_num, total_pages)}
 
         <div class="scroll-x">
             <table>
@@ -29727,6 +29863,7 @@ def duty_admin_sessions():
                 </tbody>
             </table>
         </div>
+        {pagination_controls("/duty-admin/sessions", page_num, total_pages)}
     </section>
     """
 
@@ -29738,16 +29875,24 @@ def duty_admin_inbox():
 
     r = require_duty_admin()
     if r: return r
+    
+    page_num = max(1, int(request.args.get("page", 1)))
+    limit = 20
+    offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS c FROM messages")
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
 
     cur.execute("""
         SELECT *
         FROM messages
         ORDER BY created_at DESC
-        LIMIT 300
-    """)
+        LIMIT ? OFFSET ?
+    """, (limit, offset))
 
     rows = cur.fetchall()
     conn.close()
@@ -29779,10 +29924,14 @@ def duty_admin_inbox():
         <p class="muted">
             View system messages, portal logs and communication notices. Resolving or deleting messages is restricted.
         </p>
+        
+        {pagination_controls("/duty-admin/inbox", page_num, total_pages)}
 
         <div class="feedback-list">
             {cards or "<div class='empty'>No inbox messages found.</div>"}
         </div>
+        
+        {pagination_controls("/duty-admin/inbox", page_num, total_pages)}
     </section>
     """
 
@@ -29794,9 +29943,23 @@ def duty_admin_direct_messages():
 
     r = require_duty_admin()
     if r: return r
+    
+    page_num = max(1, int(request.args.get("page", 1)))
+    limit = 20
+    offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM direct_messages dm
+        WHERE dm.to_role='admin'
+           OR dm.from_role='admin'
+    """)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
 
     cur.execute("""
         SELECT
@@ -29812,8 +29975,8 @@ def duty_admin_direct_messages():
         WHERE dm.to_role='admin'
            OR dm.from_role='admin'
         ORDER BY dm.created_at DESC
-        LIMIT 300
-    """)
+        LIMIT ? OFFSET ?
+    """, (limit, offset))
 
     rows = cur.fetchall()
     conn.close()
@@ -29858,10 +30021,11 @@ def duty_admin_direct_messages():
         <p class="muted">
             View direct messages sent to admin. Replying and advanced admin actions are restricted on this portal.
         </p>
-
+        {pagination_controls("/duty-admin/direct-messages", page_num, total_pages)}
         <div class="feedback-list">
             {cards or "<div class='empty'>No direct messages found.</div>"}
         </div>
+        {pagination_controls("/duty-admin/direct-messages", page_num, total_pages)}
     </section>
     """
 
@@ -29877,6 +30041,10 @@ def duty_admin_reports():
     q = request.args.get("q", "").strip()
     grade = request.args.get("grade", "").strip()
     term = request.args.get("term", "").strip()
+    
+    page_num = max(1, int(request.args.get("page", 1)))
+    limit = 30
+    offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
@@ -29906,6 +30074,19 @@ def duty_admin_reports():
     where_sql = "WHERE " + " AND ".join(where) if where else ""
 
     cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM student_reports sr
+        JOIN students s ON s.id = sr.student_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    data_params = list(params)
+    data_params.extend([limit, offset])
+
+    cur.execute(f"""
         SELECT
             sr.*,
             s.full_name,
@@ -29918,8 +30099,8 @@ def duty_admin_reports():
         JOIN students s ON s.id = sr.student_id
         {where_sql}
         ORDER BY sr.upload_date DESC
-        LIMIT 500
-    """, params)
+        LIMIT ? OFFSET ?
+    """, data_params)
 
     rows = cur.fetchall()
     conn.close()
@@ -29982,7 +30163,7 @@ def duty_admin_reports():
 
             <button class="btn mini">Filter</button>
         </form>
-
+        {pagination_controls("/duty-admin/reports", page_num, total_pages, {"q": q, "grade": grade, "term": term})}
         <div class="scroll-x">
             <table>
                 <thead>
@@ -30000,6 +30181,7 @@ def duty_admin_reports():
                 </tbody>
             </table>
         </div>
+        {pagination_controls("/duty-admin/reports", page_num, total_pages, {"q": q, "grade": grade, "term": term})}
     </section>
     """
 
@@ -30048,6 +30230,10 @@ def duty_admin_followups():
     q = request.args.get("q", "").strip()
     status = request.args.get("status", "").strip()
     grade = request.args.get("grade", "").strip()
+    
+    page_num = max(1, int(request.args.get("page", 1)))
+    limit = 20
+    offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
@@ -30085,12 +30271,24 @@ def duty_admin_followups():
     where_sql = "WHERE " + " AND ".join(where) if where else ""
 
     cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM followups
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    data_params = list(params)
+    data_params.extend([limit, offset])
+
+    cur.execute(f"""
         SELECT *
         FROM followups
         {where_sql}
         ORDER BY updated_at DESC, created_at DESC
-        LIMIT 300
-    """, params)
+        LIMIT ? OFFSET ?
+    """, data_params)
 
     rows = cur.fetchall()
     conn.close()
@@ -30221,7 +30419,7 @@ def duty_admin_followups():
 
             <button class="btn mini">Filter</button>
         </form>
-
+        {pagination_controls("/duty-admin/followups", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
         <div class="scroll-x">
             <table>
                 <thead>
@@ -30243,6 +30441,7 @@ def duty_admin_followups():
                 </tbody>
             </table>
         </div>
+        {pagination_controls("/duty-admin/followups", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
     </section>
     """
 
