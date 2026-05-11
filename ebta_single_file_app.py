@@ -17074,8 +17074,25 @@ def admin_followups():
 
         <td><input type="date" name="date_communicated" value="{row['date_communicated'] or ''}"></td>
 
-        <td>
-        <textarea name="notes" rows="2">{escape(row['notes'] or '')}</textarea>
+        <td style="min-width:260px">
+
+            <div style="
+                background:#f8fafc;
+                border:1px solid #e2e8f0;
+                border-radius:10px;
+                padding:8px;
+                max-height:120px;
+                overflow:auto;
+                margin-bottom:8px;
+                white-space:pre-wrap;
+                font-size:12px;
+                line-height:1.5;
+            ">{escape(row['notes'] or 'No notes yet.')}</div>
+
+            <textarea name="new_note"
+                      rows="2"
+                      placeholder="Add a new note. Previous notes will be preserved."></textarea>
+
         </td>
 
         <td style="display:flex;gap:6px">
@@ -17333,6 +17350,7 @@ def admin_followup_create():
 
     return redirect(url_for('admin_followups'))
     
+
 @app.post('/admin/followups/update/<int:fid>')
 def admin_followup_update(fid):
 
@@ -17344,6 +17362,34 @@ def admin_followup_update(fid):
     cur = conn.cursor()
 
     updated_by = request.form.get("updated_by") or "Admin"
+    new_note = request.form.get("new_note", "").strip()
+
+    # Get existing notes first so they are not overwritten
+    cur.execute("""
+        SELECT notes
+        FROM followups
+        WHERE id=?
+        LIMIT 1
+    """, (fid,))
+
+    existing = cur.fetchone()
+
+    existing_notes = ""
+    if existing and existing["notes"]:
+        existing_notes = existing["notes"].strip()
+
+    final_notes = existing_notes
+
+    # Append the new note only if something was typed
+    if new_note:
+        timestamp = now_utc_iso()[:16].replace("T", " ")
+
+        note_entry = f"[{timestamp}] {updated_by}: {new_note}"
+
+        if final_notes:
+            final_notes = final_notes + "\n\n" + note_entry
+        else:
+            final_notes = note_entry
 
     cur.execute("""
     UPDATE followups SET
@@ -17369,7 +17415,7 @@ def admin_followup_update(fid):
         request.form.get("followup_status"),
         request.form.get("payment_date"),
         request.form.get("date_communicated"),
-        request.form.get("notes"),
+        final_notes,
         request.form.get("captured_by"),
         updated_by,
         now_utc_iso(),
@@ -17380,7 +17426,7 @@ def admin_followup_update(fid):
     conn.close()
 
     return redirect(url_for('admin_followups'))
-    
+   
 
 @app.get("/admin/followups/export")
 def export_followups():
