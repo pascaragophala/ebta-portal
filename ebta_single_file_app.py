@@ -10796,8 +10796,7 @@ def admin_enrollments():
 
         <form method='post'
               action='{url_for('enrollment_action', id=r['id'], action='approve')}'
-              style='display:inline'
-              onsubmit="return confirm('Approve this enrollment without sending SMS?');">
+              style='display:inline'>
             <input type="hidden" name="page" value="{page_num}">
             <button class='btn success mini'>Approve Only</button>
         </form>
@@ -11158,7 +11157,7 @@ def enrollment_action(id: int, action: str):
                 sms_body_parts.append(detail + ".")
 
             sms_body_parts.append(
-                f"Login with WhatsApp {notify_phone} + PIN {notify_pin} at {login_link}."
+                f"Login with WhatsApp number {notify_phone} + PIN {notify_pin} at {login_link}."
             )
 
             sms_body_parts.append(
