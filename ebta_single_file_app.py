@@ -30455,6 +30455,7 @@ def duty_admin_direct_messages():
         .dm-bubble-text {{
             white-space:pre-wrap;
             line-height:1.45;
+            text-align:left;
         }}
 
         .dm-bubble-time {{
