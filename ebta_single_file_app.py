@@ -847,6 +847,19 @@ def init_db():
         updated_at TEXT
     );
     """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS admission_coordinators(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL UNIQUE,
+        email TEXT,
+        pin TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
 
     
     ensure_column(conn, "students", "guardian_name", "TEXT")
@@ -934,6 +947,9 @@ def init_db():
 
     cur.execute("CREATE INDEX IF NOT EXISTS idx_duty_admins_phone ON duty_admins(phone)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_duty_admins_active ON duty_admins(is_active)")
+    
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_admission_coordinators_phone ON admission_coordinators(phone)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_admission_coordinators_active ON admission_coordinators(is_active)")
 
 
     cur.execute("""
@@ -1436,6 +1452,15 @@ def is_duty_admin():
 def require_duty_admin():
     if not is_duty_admin():
         return redirect(url_for("duty_admin_login"))
+        
+        
+def is_admission_coordinator():
+    return session.get("admission_coordinator_id")
+
+
+def require_admission_coordinator():
+    if not is_admission_coordinator():
+        return redirect(url_for("admission_login"))
 
 
 def is_student(): return session.get("student_id")
@@ -10697,6 +10722,7 @@ def admin_nav():
             f"<a class='btn secondary' href='{url_for('admin_social_media_content_logs')}'>Social Media Logs</a>",
             f"<a class='btn secondary' href='{url_for('admin_social_media_reports')}'>Social Media Reports</a>",
             f"<a class='btn secondary' href='{url_for('admin_duty_admins')}'>Duty Admins</a>",
+            f"<a class='btn secondary' href='{url_for('admin_admission_coordinators')}'>Admission Coordinators</a>",
             f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
             f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
             f"<a class='btn secondary' href='{url_for('admin_awards_student_export')}'>Awards Export</a>",
@@ -10771,6 +10797,7 @@ def admin_home():
     <a class="btn secondary" href="{url_for('admin_social_media_content_logs')}">Social Media Logs</a>
     <a class="btn secondary" href="{url_for('admin_social_media_reports')}">Social Media Reports</a>
     <a class="btn secondary" href="{url_for('admin_duty_admins')}">Duty Admins</a>
+    <a class="btn secondary" href="{url_for('admin_admission_coordinators')}">Admission Coordinators</a>
     <a class='btn secondary' href='{url_for('admin_reports')}'>Student Reports</a>
     <a class='btn secondary' href='{url_for('admin_awards_student_export')}'>Awards Export</a>
 
@@ -32077,6 +32104,2507 @@ def duty_admin_followup_create():
     return redirect(url_for("duty_admin_followups"))
 
 
+
+def admission_nav():
+    return f"""
+    <nav class="admin-nav">
+        <a class="btn secondary" href="{url_for('admission_home')}">Dashboard</a>
+        <a class="btn secondary" href="{url_for('admission_enrollments')}">Enrollments</a>
+        <a class="btn secondary" href="{url_for('admission_students')}">Students</a>
+        <a class="btn secondary" href="{url_for('admission_followups')}">Follow-Ups</a>
+        <a class="btn secondary" href="{url_for('admission_groups')}">Groups</a>
+        <a class="btn secondary" href="{url_for('admission_sessions')}">Sessions</a>
+        <a class="btn secondary" href="{url_for('admission_inbox')}">Inbox</a>
+        <a class="btn danger" href="{url_for('admission_logout')}">Logout</a>
+    </nav>
+    """
+    
+
+@app.get('/admission/login')
+def admission_login():
+
+    body = """
+    <div class="card auth-card">
+        <h1>Admission Coordinator Login</h1>
+
+        <p class="muted">
+            Login using the phone number and PIN provided by high admin.
+        </p>
+
+        <form method="post" action="/admission/login" class="grid">
+            <div>
+                <label>Phone Number</label>
+                <input name="phone" required>
+            </div>
+
+            <div>
+                <label>PIN</label>
+                <input name="pin" type="password" maxlength="5" required>
+            </div>
+
+            <button class="btn success">Login</button>
+        </form>
+    </div>
+    """
+
+    return page("Admission Coordinator Login", body)
+    
+    
+@app.post('/admission/login')
+def admission_login_post():
+
+    phone = request.form.get("phone", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    variants = phone_variants(phone)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    qmarks = ",".join("?" * len(variants)) if variants else "?"
+    params = variants if variants else [phone]
+
+    cur.execute(f"""
+        SELECT *
+        FROM admission_coordinators
+        WHERE phone IN ({qmarks})
+          AND pin=?
+          AND is_active=1
+        LIMIT 1
+    """, params + [pin])
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return page(
+            "Login Failed",
+            card_msg("Invalid Admission Coordinator login details or account is inactive.")
+        )
+
+    session.clear()
+    session["admission_coordinator_id"] = row["id"]
+    session["admission_coordinator_name"] = row["full_name"]
+
+    return redirect(url_for("admission_home"))
+    
+    
+@app.get('/admission/logout')
+def admission_logout():
+    session.clear()
+    return redirect(url_for("admission_login"))
+    
+
+@app.get('/admin/admission-coordinators')
+def admin_admission_coordinators():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can manage Admission Coordinators."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM admission_coordinators
+        ORDER BY created_at DESC
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for a in rows:
+        status = (
+            "<span class='chip active'>Active</span>"
+            if a["is_active"] == 1
+            else "<span class='chip lapsed'>Inactive</span>"
+        )
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(a['full_name'])}</strong>
+                <div class="mini muted">{escape(a['phone'])}</div>
+            </td>
+
+            <td>{escape(a['email'] or '—')}</td>
+
+            <td>
+                <span class="chip" style="font-weight:800;letter-spacing:1px">
+                    {escape(a['pin'] or '—')}
+                </span>
+            </td>
+
+            <td>{status}</td>
+
+            <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+
+                    <form method="post"
+                          action="/admin/admission-coordinator/{a['id']}/reset-pin"
+                          style="display:inline"
+                          onsubmit="return confirm('Reset Admission Coordinator PIN?');">
+                        <button class="btn mini warn">Reset PIN</button>
+                    </form>
+
+                    <form method="post"
+                          action="/admin/admission-coordinator/{a['id']}/toggle"
+                          style="display:inline">
+                        <button class="btn mini secondary">
+                            {'Deactivate' if a['is_active'] == 1 else 'Activate'}
+                        </button>
+                    </form>
+
+                </div>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Admission Coordinators</h1>
+
+        <p class="muted">
+            Add and manage Admission Coordinator users. These users will log in from a separate Admission portal.
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>Add Admission Coordinator</h2>
+
+            <form method="post"
+                  action="/admin/admission-coordinators/add"
+                  class="grid"
+                  style="grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end">
+
+                <div>
+                    <label>Full Name</label>
+                    <input name="full_name" required>
+                </div>
+
+                <div>
+                    <label>Phone</label>
+                    <input name="phone" required>
+                </div>
+
+                <div>
+                    <label>Email</label>
+                    <input name="email" type="email">
+                </div>
+
+                <button class="btn success">Add Coordinator</button>
+            </form>
+
+            <p class="mini muted">
+                The system will generate a 5-digit PIN.
+            </p>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Coordinator</th>
+                        <th>Email</th>
+                        <th>PIN</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='5'>No Admission Coordinators added yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Admission Coordinators", body)
+    
+    
+@app.post('/admin/admission-coordinators/add')
+def admin_add_admission_coordinator():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can add Admission Coordinators."))
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    email = request.form.get("email", "").strip()
+
+    if not full_name or not phone:
+        return page("Error", card_msg("Full name and phone are required."))
+
+    pin = f"{random.randint(0, 99999):05d}"
+    now = now_utc_iso()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            INSERT INTO admission_coordinators(
+                full_name,
+                phone,
+                email,
+                pin,
+                is_active,
+                created_at,
+                updated_at
+            )
+            VALUES(?,?,?,?,1,?,?)
+        """, (
+            full_name,
+            phone,
+            email,
+            pin,
+            now,
+            now
+        ))
+
+        conn.commit()
+
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Error", card_msg("An Admission Coordinator with this phone number already exists."))
+
+    conn.close()
+
+    return page(
+        "Admission Coordinator Created",
+        f"""
+        {admin_nav()}
+
+        <section class="card">
+            <h1>Admission Coordinator Created</h1>
+
+            <div class="card soft" style="border-left:5px solid #f59e0b">
+                <h2>Login Details</h2>
+
+                <p><b>Name:</b> {escape(full_name)}</p>
+                <p><b>Phone:</b> {escape(phone)}</p>
+                <p><b>Email:</b> {escape(email or '—')}</p>
+
+                <p>
+                    <b>PIN:</b>
+                    <span class="chip" style="font-size:22px;padding:12px 18px;letter-spacing:2px">
+                        {pin}
+                    </span>
+                </p>
+
+                <p class="mini muted">
+                    Share this PIN privately. They will use the phone number and PIN to log in.
+                </p>
+            </div>
+
+            <div class="toolbar" style="margin-top:14px">
+                <a class="btn" href="/admin/admission-coordinators">Back to Admission Coordinators</a>
+                <a class="btn secondary" href="/admission/login">Open Admission Login</a>
+            </div>
+        </section>
+        """
+    )
+    
+    
+@app.post('/admin/admission-coordinator/<int:aid>/reset-pin')
+def admin_admission_coordinator_reset_pin(aid):
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can reset Admission Coordinator PINs."))
+
+    new_pin = f"{random.randint(0, 99999):05d}"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE admission_coordinators
+        SET pin=?,
+            updated_at=?
+        WHERE id=?
+    """, (new_pin, now_utc_iso(), aid))
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "PIN Reset",
+        f"""
+        {admin_nav()}
+
+        <section class="card">
+            <h1>Admission Coordinator PIN Reset</h1>
+
+            <p>
+                <b>New PIN:</b>
+                <span class="chip" style="font-size:22px;padding:12px 18px;letter-spacing:2px">
+                    {new_pin}
+                </span>
+            </p>
+
+            <a class="btn" href="/admin/admission-coordinators">Back to Admission Coordinators</a>
+        </section>
+        """
+    )
+    
+
+@app.post('/admin/admission-coordinator/<int:aid>/toggle')
+def admin_admission_coordinator_toggle(aid):
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can update Admission Coordinator accounts."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT is_active FROM admission_coordinators WHERE id=?", (aid,))
+    row = cur.fetchone()
+
+    if row:
+        new_status = 0 if row["is_active"] == 1 else 1
+
+        cur.execute("""
+            UPDATE admission_coordinators
+            SET is_active=?,
+                updated_at=?
+            WHERE id=?
+        """, (new_status, now_utc_iso(), aid))
+
+        conn.commit()
+
+    conn.close()
+
+    return redirect(url_for("admin_admission_coordinators"))
+
+
+
+@app.get('/admission')
+def admission_home():
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    month = get_admin_active_month()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,))
+    total_enrollments = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='PENDING'", (month,))
+    pending = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='ACTIVE'", (month,))
+    active = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='LAPSED'", (month,))
+    lapsed = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM enrollments
+        WHERE month=?
+    """, (month,))
+    students = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM messages WHERE resolved=0")
+    inbox_count = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM followups WHERE followup_status!='RESOLVED'")
+    open_followups = cur.fetchone()["c"] or 0
+
+    conn.close()
+
+    body = f"""
+    {admission_nav()}
+
+    <section class="card">
+        <h1>Admission Coordinator Dashboard</h1>
+
+        <p class="muted">
+            Welcome, {escape(session.get("admission_coordinator_name", "Admission Coordinator"))}.
+            This portal is for enrollment approval, learner checks, follow-ups, groups, sessions and inbox monitoring.
+        </p>
+
+        <div class="stats">
+            {stat("Current Month", month)}
+            {stat("Students", str(students))}
+            {stat("Enrollments", str(total_enrollments))}
+            {stat("Pending", str(pending))}
+            {stat("Active", str(active))}
+            {stat("Lapsed", str(lapsed))}
+            {stat("Inbox", str(inbox_count))}
+            {stat("Open Follow-Ups", str(open_followups))}
+        </div>
+
+        <div class="toolbar" style="margin-top:16px">
+            <a class="btn secondary" href="{url_for('admission_enrollments')}">Manage Enrollments</a>
+            <a class="btn secondary" href="{url_for('admission_students')}">Students</a>
+            <a class="btn secondary" href="{url_for('admission_followups')}">Follow-Ups</a>
+            <a class="btn secondary" href="{url_for('admission_groups')}">Groups</a>
+            <a class="btn secondary" href="{url_for('admission_sessions')}">Sessions</a>
+            <a class="btn secondary" href="{url_for('admission_inbox')}">Inbox</a>
+        </div>
+    </section>
+    """
+
+    return page("Admission Dashboard", body)
+    
+    
+@app.post('/admission/enrollment/<int:id>/<action>')
+def admission_enrollment_action(id, action):
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    allowed_actions = ["approve", "approve_sms", "sms", "lapse"]
+
+    if action not in allowed_actions:
+        return page("Invalid Action", card_msg("Invalid enrollment action."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    notify_phone = None
+    notify_name = None
+    notify_pin = None
+    notify_subject = None
+    notify_grade = None
+    notify_month = None
+
+    needs_sms_details = action in ["approve_sms", "sms"]
+    should_approve = action in ["approve", "approve_sms"]
+
+    if should_approve:
+        cur.execute("""
+            UPDATE enrollments
+            SET status='ACTIVE'
+            WHERE id=?
+        """, (id,))
+
+    elif action == "lapse":
+        cur.execute("""
+            UPDATE enrollments
+            SET status='LAPSED'
+            WHERE id=?
+        """, (id,))
+
+    if needs_sms_details:
+        cur.execute("""
+            SELECT
+                st.id,
+                st.full_name,
+                st.phone_whatsapp,
+                st.pin,
+                e.month,
+                sub.name AS subject_name,
+                sub.grade
+            FROM enrollments e
+            JOIN students st ON st.id = e.student_id
+            JOIN subjects sub ON sub.id = e.subject_id
+            WHERE e.id=?
+        """, (id,))
+
+        row = cur.fetchone()
+
+        if row:
+            notify_name = row["full_name"]
+            notify_phone = row["phone_whatsapp"]
+            notify_pin = row["pin"]
+            notify_month = row["month"]
+            notify_subject = row["subject_name"]
+            notify_grade = row["grade"]
+
+            if not notify_pin:
+                pins = set()
+
+                cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
+                pins |= {x["pin"] for x in cur.fetchall()}
+
+                cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
+                pins |= {x["pin"] for x in cur.fetchall()}
+
+                new_pin = gen_pin(pins)
+
+                cur.execute("""
+                    UPDATE students
+                    SET pin=?
+                    WHERE id=?
+                """, (new_pin, row["id"]))
+
+                notify_pin = new_pin
+
+    conn.commit()
+    conn.close()
+
+    try:
+        if needs_sms_details and notify_phone and notify_pin:
+
+            base_url = (request.url_root or "").rstrip("/")
+            login_link = base_url + url_for("student_login")
+
+            month_label = pretty_month_label(notify_month) if notify_month else ""
+            grade_label_txt = grade_label(notify_grade) if notify_grade else ""
+            first_name = notify_name.split()[0] if notify_name else ""
+
+            if action == "approve_sms":
+                sms_intro = f"EBTA: Hi {first_name}, your enrollment is APPROVED."
+            else:
+                sms_intro = f"EBTA: Hi {first_name}, your portal login details are below."
+
+            sms_body_parts = [sms_intro]
+
+            if notify_subject:
+                sms_body_parts.append(f"Subject: {grade_label_txt} {notify_subject}")
+
+            if month_label:
+                sms_body_parts.append(f"Month: {month_label}")
+
+            sms_body_parts.append(f"Login: {login_link}")
+            sms_body_parts.append(f"PIN: {notify_pin}")
+
+            sms_body = "\n".join(sms_body_parts)
+
+            send_sms_notification(notify_phone, sms_body)
+
+    except Exception as e:
+        print("Admission SMS error:", e)
+
+    return redirect(request.referrer or url_for("admission_enrollments"))
+    
+    
+@app.get('/admission/enrollments')
+def admission_enrollments():
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    month = get_admin_active_month()
+
+    q = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    grade = request.args.get("grade", "").strip()
+
+    page_num = max(1, int(request.args.get("page", 1)))
+    limit = 30
+    offset = (page_num - 1) * limit
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    where = ["e.month = ?"]
+    params = [month]
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR s.guardian_phone LIKE ?
+                OR s.email LIKE ?
+                OR sub.name LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search]
+
+    if status:
+        where.append("e.status = ?")
+        params.append(status)
+
+    if grade:
+        where.append("s.grade = ?")
+        params.append(grade)
+
+    where_sql = " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM enrollments e
+        JOIN students s ON s.id = e.student_id
+        JOIN subjects sub ON sub.id = e.subject_id
+        WHERE {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    data_params = list(params)
+    data_params.extend([limit, offset])
+
+    cur.execute(f"""
+        SELECT
+            e.id,
+            e.month,
+            e.status,
+            e.payment_method,
+            e.payment_ref,
+            e.pop_url,
+            e.amount_paid,
+            e.created_at,
+
+            s.full_name,
+            s.phone_whatsapp,
+            s.guardian_name,
+            s.guardian_phone,
+            s.email,
+            s.grade,
+
+            sub.name AS subject_name,
+            sub.grade AS subject_grade
+
+        FROM enrollments e
+        JOIN students s ON s.id = e.student_id
+        JOIN subjects sub ON sub.id = e.subject_id
+        WHERE {where_sql}
+        ORDER BY e.created_at DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for row in rows:
+        pop_link = "—"
+
+        if row["pop_url"]:
+            pop_link = f"<a target='_blank' href='{escape(row['pop_url'])}'>PoP</a>"
+
+        amount = row["amount_paid"] if row["amount_paid"] not in [None, ""] else "—"
+
+        status_class = "pending"
+
+        if row["status"] == "ACTIVE":
+            status_class = "active"
+        elif row["status"] == "LAPSED":
+            status_class = "lapsed"
+
+        actions = f"""
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+
+            <form method="post" action="/admission/enrollment/{row['id']}/approve" style="display:inline">
+                <button class="btn success mini">Approve Only</button>
+            </form>
+
+            <form method="post" action="/admission/enrollment/{row['id']}/approve_sms" style="display:inline">
+                <button class="btn warn mini">Approve + SMS</button>
+            </form>
+
+            <form method="post" action="/admission/enrollment/{row['id']}/sms" style="display:inline">
+                <button class="btn secondary mini">SMS Only</button>
+            </form>
+
+            <form method="post" action="/admission/enrollment/{row['id']}/lapse" style="display:inline"
+                  onsubmit="return confirm('Lapse this enrollment?');">
+                <button class="btn danger mini">Lapse</button>
+            </form>
+
+        </div>
+        """
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(row['full_name'])}</strong>
+                <div class="mini muted">{escape(row['phone_whatsapp'] or '')}</div>
+            </td>
+
+            <td>{grade_label(row['grade'])}</td>
+
+            <td>
+                {escape(row['subject_name'])}
+                <div class="mini muted">{grade_label(row['subject_grade'])}</div>
+            </td>
+
+            <td>
+                <span class="chip {status_class}">
+                    {escape(row['status'])}
+                </span>
+            </td>
+
+            <td>{pop_link}</td>
+
+            <td>R{escape(str(amount))}</td>
+
+            <td>
+                <div class="mini muted">
+                    Guardian: {escape(row['guardian_name'] or '—')}<br>
+                    Guardian Phone: {escape(row['guardian_phone'] or '—')}<br>
+                    Email: {escape(row['email'] or '—')}
+                </div>
+            </td>
+
+            <td>{actions}</td>
+
+            <td>{escape((row['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {admission_nav()}
+
+    <section class="card">
+        <h1>Manage Enrollments</h1>
+
+        <p class="muted">
+            Admission Coordinators can approve enrollments, send SMS login details, and lapse incorrect enrollments.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search student, phone, subject or email">
+
+            <select name="grade">
+                <option value="">All Grades</option>
+                {''.join(
+                    f"<option value='{g}' {'selected' if grade==g else ''}>{grade_label(g)}</option>"
+                    for g in ["G8","G9","G10","G11","G12","G13"]
+                )}
+            </select>
+
+            <select name="status">
+                <option value="">All Statuses</option>
+                <option value="PENDING" {'selected' if status=="PENDING" else ""}>PENDING</option>
+                <option value="ACTIVE" {'selected' if status=="ACTIVE" else ""}>ACTIVE</option>
+                <option value="LAPSED" {'selected' if status=="LAPSED" else ""}>LAPSED</option>
+            </select>
+
+            <button class="btn mini">Filter</button>
+        </form>
+
+        {pagination_controls("/admission/enrollments", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Status</th>
+                        <th>PoP</th>
+                        <th>Amount</th>
+                        <th>Contact Details</th>
+                        <th>Actions</th>
+                        <th>Timestamp</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='9'>No enrollments found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/admission/enrollments", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
+    </section>
+    """
+
+    return page("Admission Enrollments", body)
+    
+    
+@app.get('/admission/students')
+def admission_students():
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+
+    page_num = max(1, int(request.args.get("page", 1)))
+    limit = 30
+    offset = (page_num - 1) * limit
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                full_name LIKE ?
+                OR phone_whatsapp LIKE ?
+                OR guardian_phone LIKE ?
+                OR guardian_name LIKE ?
+                OR email LIKE ?
+                OR school LIKE ?
+                OR province LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search, search, search]
+
+    if grade:
+        where.append("grade = ?")
+        params.append(grade)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM students
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    data_params = list(params)
+    data_params.extend([limit, offset])
+
+    cur.execute(f"""
+        SELECT *
+        FROM students
+        {where_sql}
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), full_name
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for s in rows:
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(s['full_name'])}</strong>
+                <div class="mini muted">PIN: {escape(s['pin'] or '—')}</div>
+            </td>
+
+            <td>{grade_label(s['grade'])}</td>
+
+            <td>{escape(s['phone_whatsapp'] or '—')}</td>
+
+            <td>
+                {escape(s['guardian_name'] or '—')}
+                <div class="mini muted">{escape(s['guardian_phone'] or '—')}</div>
+            </td>
+
+            <td>{escape(s['email'] or '—')}</td>
+
+            <td>
+                {escape(s['school'] or '—')}
+                <div class="mini muted">{escape(s['province'] or '—')}</div>
+            </td>
+
+            <td>{escape((s['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {admission_nav()}
+
+    <section class="card">
+        <h1>Students</h1>
+
+        <p class="muted">
+            View learner details captured on the portal. Editing and deletion are restricted on this page.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search name, phone, guardian, email, school or province">
+
+            <select name="grade">
+                <option value="">All Grades</option>
+                {''.join(
+                    f"<option value='{g}' {'selected' if grade==g else ''}>{grade_label(g)}</option>"
+                    for g in ["G8","G9","G10","G11","G12","G13"]
+                )}
+            </select>
+
+            <button class="btn mini">Search</button>
+        </form>
+
+        {pagination_controls("/admission/students", page_num, total_pages, {"q": q, "grade": grade})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Grade</th>
+                        <th>Phone</th>
+                        <th>Guardian</th>
+                        <th>Email</th>
+                        <th>School / Province</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No students found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/admission/students", page_num, total_pages, {"q": q, "grade": grade})}
+    </section>
+    """
+
+    return page("Admission Students", body)
+    
+    
+@app.get('/admission/groups')
+def admission_groups():
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    month = get_admin_active_month()
+
+    page_num = max(1, int(request.args.get("page", 1)))
+    limit = 30
+    offset = (page_num - 1) * limit
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM groups g
+        JOIN subjects sub ON sub.id = g.subject_id
+        WHERE (g.month = ? OR UPPER(g.month) = 'ALL')
+          AND g.is_visible = 1
+    """, (month,))
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    cur.execute("""
+        SELECT
+            g.*,
+            sub.name AS subject_name,
+            sub.grade AS subject_grade
+        FROM groups g
+        JOIN subjects sub ON sub.id = g.subject_id
+        WHERE (g.month = ? OR UPPER(g.month) = 'ALL')
+          AND g.is_visible = 1
+        ORDER BY
+            CASE WHEN UPPER(g.month) = 'ALL' THEN 0 ELSE 1 END,
+            CAST(REPLACE(sub.grade,'G','') AS INTEGER),
+            sub.name
+        LIMIT ? OFFSET ?
+    """, (month, limit, offset))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for g in rows:
+        visible = "Visible" if g["is_visible"] == 1 else "Hidden"
+
+        if str(g["month"]).upper() == "ALL":
+            group_type = "Permanent"
+        else:
+            group_type = pretty_month_label(g["month"])
+
+        invite = "—"
+
+        if g["invite_link"]:
+            invite = f"<a target='_blank' href='{escape(g['invite_link'])}'>Open Group</a>"
+
+        trs += f"""
+        <tr>
+            <td>{grade_label(g['subject_grade'])}</td>
+            <td>{escape(g['subject_name'])}</td>
+            <td>{escape(group_type)}</td>
+            <td>{invite}</td>
+            <td><span class="chip">{visible}</span></td>
+            <td>{escape((g['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {admission_nav()}
+
+    <section class="card">
+        <h1>Group Links</h1>
+
+        <p class="muted">
+            View visible EBTA group links. Creating, editing and deleting groups are restricted.
+        </p>
+
+        {pagination_controls("/admission/groups", page_num, total_pages)}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Group Type / Month</th>
+                        <th>Group Link</th>
+                        <th>Visibility</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='6'>No visible group links found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/admission/groups", page_num, total_pages)}
+    </section>
+    """
+
+    return page("Admission Groups", body)
+    
+
+@app.get('/admission/sessions')
+def admission_sessions():
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    page_num = max(1, int(request.args.get("page", 1)))
+    limit = 30
+    offset = (page_num - 1) * limit
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM sessions se
+        JOIN subjects sub ON sub.id = se.subject_id
+        JOIN tutors t ON t.id = se.tutor_id
+    """)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    cur.execute("""
+        SELECT
+            se.*,
+            sub.name AS subject_name,
+            sub.grade AS subject_grade,
+            t.full_name AS tutor_name
+        FROM sessions se
+        JOIN subjects sub ON sub.id = se.subject_id
+        JOIN tutors t ON t.id = se.tutor_id
+        ORDER BY CAST(REPLACE(sub.grade,'G','') AS INTEGER), sub.name, se.day_of_week, se.start_time
+        LIMIT ? OFFSET ?
+    """, (limit, offset))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for s in rows:
+        meet = "—"
+
+        if s["meet_link"]:
+            meet = f"<a target='_blank' href='{escape(s['meet_link'])}'>Open Link</a>"
+
+        visible = "Visible" if s["is_visible"] == 1 else "Hidden"
+        active = "Active" if s["active"] == 1 else "Inactive"
+
+        trs += f"""
+        <tr>
+            <td>{grade_label(s['subject_grade'])}</td>
+            <td>{escape(s['subject_name'])}</td>
+            <td>{escape(s['tutor_name'])}</td>
+            <td>{DOW[s['day_of_week']] if s['day_of_week'] is not None else '—'}</td>
+            <td>{escape(s['start_time'])} - {escape(s['end_time'])}</td>
+            <td>{meet}</td>
+            <td>
+                <span class="chip">{active}</span>
+                <div class="mini muted">{visible}</div>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admission_nav()}
+
+    <section class="card">
+        <h1>Sessions</h1>
+
+        <p class="muted">
+            View scheduled sessions, tutors, times and meeting links. Editing is restricted.
+        </p>
+
+        {pagination_controls("/admission/sessions", page_num, total_pages)}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Tutor</th>
+                        <th>Day</th>
+                        <th>Time</th>
+                        <th>Meet Link</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No sessions found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/admission/sessions", page_num, total_pages)}
+    </section>
+    """
+
+    return page("Admission Sessions", body)
+    
+    
+@app.get('/admission/inbox')
+def admission_inbox():
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    page_num = max(1, int(request.args.get("page", 1)))
+    limit = 15
+    offset = (page_num - 1) * limit
+
+    q = request.args.get("q", "").strip()
+    kind_filter = request.args.get("kind", "").strip()
+    status_filter = request.args.get("status", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS c FROM messages")
+    total_all = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM messages WHERE resolved=0")
+    total_open = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM messages WHERE resolved=1")
+    total_resolved = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT kind, COUNT(*) AS c
+        FROM messages
+        GROUP BY kind
+        ORDER BY c DESC
+    """)
+
+    kind_rows = cur.fetchall()
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("(payload LIKE ? OR kind LIKE ? OR created_at LIKE ?)")
+        params.extend([search, search, search])
+
+    if kind_filter:
+        where.append("kind = ?")
+        params.append(kind_filter)
+
+    if status_filter == "OPEN":
+        where.append("resolved = 0")
+    elif status_filter == "RESOLVED":
+        where.append("resolved = 1")
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM messages
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    data_params = list(params)
+    data_params.extend([limit, offset])
+
+    cur.execute(f"""
+        SELECT *
+        FROM messages
+        {where_sql}
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    kind_options = "".join(
+        f"""
+        <option value="{escape(k['kind'] or '')}" {'selected' if kind_filter == (k['kind'] or '') else ''}>
+            {escape((k['kind'] or 'unknown').replace('_', ' ').title())} ({k['c']})
+        </option>
+        """
+        for k in kind_rows
+    )
+
+    cards = ""
+
+    for m in rows:
+        raw_kind = m["kind"] or "unknown"
+        kind_label = raw_kind.replace("_", " ").title()
+        payload = clean_multiline_text(m["payload"] or "")
+        payload_display = payload
+
+        if raw_kind in ["sms_sent", "sms_log"] and payload.startswith("SENT TO:"):
+            phone = payload.replace("SENT TO:", "").strip()
+            payload_display = f"SMS successfully sent to {phone}"
+
+        elif raw_kind == "sms_error":
+            payload_display = payload.replace("TO:", "To: ").replace("ERROR:", "\nError: ")
+
+        elif raw_kind == "email_log":
+            payload_display = payload.replace("TO:", "To: ").replace("SUBJECT:", "\nSubject: ").replace("BODY:", "\nBody: ")
+
+        elif raw_kind == "email_error":
+            payload_display = payload.replace("TO:", "To: ").replace("SUBJECT:", "\nSubject: ").replace("ERROR:", "\nError: ")
+
+        is_resolved = m["resolved"] == 1
+
+        status_chip = (
+            "<span class='chip active'>Resolved</span>"
+            if is_resolved
+            else "<span class='chip pending'>Open</span>"
+        )
+
+        kind_class = "info"
+
+        if "sms" in raw_kind:
+            kind_class = "sms"
+        elif "email" in raw_kind:
+            kind_class = "email"
+        elif "error" in raw_kind:
+            kind_class = "error"
+
+        created_label = (m["created_at"] or "")[:16].replace("T", " ")
+
+        cards += f"""
+        <details class="inbox-item">
+            <summary class="inbox-summary">
+
+                <div class="inbox-kind {kind_class}">
+                    {escape(kind_label[:1])}
+                </div>
+
+                <div class="inbox-main">
+                    <div class="inbox-topline">
+                        <strong>{escape(kind_label)}</strong>
+                        <span class="mini muted">{escape(created_label)}</span>
+                    </div>
+
+                    <div class="inbox-preview">
+                        {escape(payload_display[:120])}{'...' if len(payload_display) > 120 else ''}
+                    </div>
+                </div>
+
+                <div class="inbox-status">
+                    {status_chip}
+                </div>
+
+            </summary>
+
+            <div class="inbox-details">
+                <div class="mini muted" style="margin-bottom:6px">
+                    Message Type: {escape(raw_kind)} | Created: {escape(created_label)}
+                </div>
+
+                <div class="inbox-payload">
+                    {escape(payload_display)}
+                </div>
+            </div>
+        </details>
+        """
+
+    body = f"""
+    {admission_nav()}
+
+    <style>
+        .inbox-header {{
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:12px;
+            flex-wrap:wrap;
+            margin-bottom:12px;
+        }}
+
+        .inbox-stats {{
+            display:grid;
+            grid-template-columns:repeat(3, minmax(0, 1fr));
+            gap:10px;
+            margin:12px 0;
+        }}
+
+        .inbox-stat {{
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:14px;
+            padding:12px;
+        }}
+
+        .inbox-stat .value {{
+            font-size:22px;
+            font-weight:800;
+            color:#065f46;
+            margin-top:2px;
+        }}
+
+        .inbox-filter {{
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:16px;
+            padding:12px;
+            margin:12px 0 14px;
+        }}
+
+        .inbox-filter form {{
+            display:grid;
+            grid-template-columns:2fr 1fr 1fr auto;
+            gap:10px;
+            align-items:end;
+        }}
+
+        .inbox-list {{
+            display:grid;
+            gap:8px;
+            margin-top:12px;
+        }}
+
+        .inbox-item {{
+            background:#fff;
+            border:1px solid var(--border);
+            border-radius:14px;
+            overflow:hidden;
+            box-shadow:var(--shadow-sm);
+        }}
+
+        .inbox-item[open] {{
+            border-left:5px solid #1b5e20;
+        }}
+
+        .inbox-summary {{
+            display:grid;
+            grid-template-columns:42px 1fr auto;
+            gap:12px;
+            align-items:center;
+            padding:12px;
+            cursor:pointer;
+            list-style:none;
+        }}
+
+        .inbox-summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .inbox-summary:hover {{
+            background:#f8fafc;
+        }}
+
+        .inbox-kind {{
+            width:42px;
+            height:42px;
+            border-radius:50%;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            color:white;
+            font-weight:800;
+            background:#1b5e20;
+        }}
+
+        .inbox-kind.sms {{
+            background:#15803d;
+        }}
+
+        .inbox-kind.email {{
+            background:#2563eb;
+        }}
+
+        .inbox-kind.error {{
+            background:#dc2626;
+        }}
+
+        .inbox-main {{
+            min-width:0;
+        }}
+
+        .inbox-topline {{
+            display:flex;
+            gap:8px;
+            align-items:center;
+            justify-content:space-between;
+        }}
+
+        .inbox-preview {{
+            color:#64748b;
+            font-size:13px;
+            margin-top:3px;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }}
+
+        .inbox-status {{
+            display:flex;
+            justify-content:flex-end;
+        }}
+
+        .inbox-details {{
+            border-top:1px solid var(--border);
+            padding:12px;
+            background:#f8fafc;
+        }}
+
+        .inbox-payload {{
+            background:#fff;
+            border:1px solid var(--border);
+            border-radius:12px;
+            padding:12px;
+            white-space:pre-wrap;
+            line-height:1.5;
+        }}
+
+        @media(max-width:850px) {{
+            .inbox-filter form {{
+                grid-template-columns:1fr 1fr;
+            }}
+
+            .inbox-stats {{
+                grid-template-columns:1fr;
+            }}
+
+            .inbox-summary {{
+                grid-template-columns:42px 1fr;
+            }}
+
+            .inbox-status {{
+                grid-column:1 / -1;
+                justify-content:flex-start;
+            }}
+        }}
+
+        @media(max-width:600px) {{
+            .inbox-filter form {{
+                grid-template-columns:1fr;
+            }}
+
+            .inbox-topline {{
+                display:block;
+            }}
+        }}
+    </style>
+
+    <section class="card">
+
+        <div class="inbox-header">
+            <div>
+                <h1>Inbox</h1>
+                <p class="muted" style="margin:0">
+                    View system messages, SMS logs and communication notices.
+                </p>
+            </div>
+
+            <span class="chip">
+                {total} result(s)
+            </span>
+        </div>
+
+        <div class="inbox-stats">
+            <div class="inbox-stat">
+                <div class="mini muted">All Messages</div>
+                <div class="value">{total_all}</div>
+            </div>
+
+            <div class="inbox-stat">
+                <div class="mini muted">Open</div>
+                <div class="value">{total_open}</div>
+            </div>
+
+            <div class="inbox-stat">
+                <div class="mini muted">Resolved</div>
+                <div class="value">{total_resolved}</div>
+            </div>
+        </div>
+
+        <div class="inbox-filter">
+            <form method="get">
+
+                <input name="q"
+                       value="{escape(q)}"
+                       placeholder="Search message, phone number, kind or date">
+
+                <select name="kind">
+                    <option value="">All Message Types</option>
+                    {kind_options}
+                </select>
+
+                <select name="status">
+                    <option value="">All Statuses</option>
+                    <option value="OPEN" {'selected' if status_filter == 'OPEN' else ''}>Open</option>
+                    <option value="RESOLVED" {'selected' if status_filter == 'RESOLVED' else ''}>Resolved</option>
+                </select>
+
+                <button class="btn mini">Filter</button>
+
+            </form>
+        </div>
+
+        {pagination_controls("/admission/inbox", page_num, total_pages, {"q": q, "kind": kind_filter, "status": status_filter})}
+
+        <div class="inbox-list">
+            {cards or "<div class='empty'>No inbox messages found.</div>"}
+        </div>
+
+        {pagination_controls("/admission/inbox", page_num, total_pages, {"q": q, "kind": kind_filter, "status": status_filter})}
+
+    </section>
+    """
+
+    return page("Admission Inbox", body)
+    
+    
+@app.get('/admission/followups')
+def admission_followups():
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    grade = request.args.get("grade", "").strip()
+
+    page_num = max(1, int(request.args.get("page", 1)))
+    limit = 20
+    offset = (page_num - 1) * limit
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT name
+        FROM subjects
+        ORDER BY name
+    """)
+    subject_rows = [x["name"] for x in cur.fetchall()]
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                full_name LIKE ?
+                OR phone LIKE ?
+                OR subjects LIKE ?
+                OR notes LIKE ?
+                OR issue_type LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search]
+
+    if status:
+        where.append("followup_status = ?")
+        params.append(status)
+
+    if grade:
+        where.append("grade = ?")
+        params.append(grade)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM followups
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    data_params = list(params)
+    data_params.extend([limit, offset])
+
+    cur.execute(f"""
+        SELECT *
+        FROM followups
+        {where_sql}
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    compact_rows = ""
+
+    for f in rows:
+
+        current_subjects = [
+            x.strip()
+            for x in (f["subjects"] or "").split(",")
+            if x.strip()
+        ]
+
+        current_subjects_lower = set(x.lower() for x in current_subjects)
+        subject_summary = ", ".join(current_subjects) if current_subjects else "No subjects"
+
+        subject_checkboxes = "".join(
+            f"""
+            <label class="compact-subject-pill {'selected' if s.lower() in current_subjects_lower else ''}">
+                <input type="checkbox"
+                       name="subjects"
+                       value="{escape(s)}"
+                       {'checked' if s.lower() in current_subjects_lower else ''}>
+                <span>{escape(s)}</span>
+            </label>
+            """
+            for s in subject_rows
+        )
+
+        if not subject_checkboxes:
+            subject_checkboxes = "<div class='mini muted'>No subjects available.</div>"
+
+        notes_display = escape(f["notes"] or "No notes yet.")
+        status_value = f["followup_status"] or "OPEN"
+
+        status_class = "pending"
+
+        if status_value == "RESOLVED":
+            status_class = "active"
+        elif status_value == "DECLINED":
+            status_class = "lapsed"
+        elif status_value == "AWAITING POP":
+            status_class = "warn"
+
+        payment_date = f["payment_date"] or "—"
+        communicated_date = f["date_communicated"] or "—"
+        issue_type = f["issue_type"] or "—"
+        student_grade = grade_label(f["grade"]) if f["grade"] else "—"
+
+        compact_rows += f"""
+        <details class="compact-follow-item">
+
+            <summary class="compact-follow-summary">
+
+                <div class="compact-student">
+                    <strong>{escape(f['full_name'] or 'Unnamed learner')}</strong>
+                    <span class="mini muted">ID: {f['id']} | {escape(f['phone'] or 'No phone')}</span>
+                </div>
+
+                <div class="compact-meta">
+                    <span>{escape(student_grade)}</span>
+                    <span>{escape(issue_type)}</span>
+                    <span>Pay: {escape(payment_date)}</span>
+                    <span>Comms: {escape(communicated_date)}</span>
+                </div>
+
+                <div class="compact-status">
+                    <span class="chip {status_class}">
+                        {escape(status_value)}
+                    </span>
+                </div>
+
+            </summary>
+
+            <form method="post" action="/admission/followups/{f['id']}/update">
+
+                <div class="compact-edit-grid">
+
+                    <div>
+                        <label>Name</label>
+                        <input name="full_name"
+                               value="{escape(f['full_name'] or '')}"
+                               placeholder="Student full name">
+                    </div>
+
+                    <div>
+                        <label>Phone</label>
+                        <input name="phone"
+                               value="{escape(f['phone'] or '')}"
+                               placeholder="Phone number">
+                    </div>
+
+                    <div>
+                        <label>Grade</label>
+                        <select name="grade">
+                            <option value="">Select Grade</option>
+                            {''.join(
+                                f"<option value='{g}' {'selected' if f['grade']==g else ''}>{grade_label(g)}</option>"
+                                for g in ["G8","G9","G10","G11","G12","G13"]
+                            )}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label>Issue Type</label>
+                        <select name="issue_type">
+                            <option value="">Select Issue</option>
+                            {''.join(
+                                f"<option value='{i}' {'selected' if f['issue_type']==i else ''}>{i}</option>"
+                                for i in ISSUE_TYPES
+                            )}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label>Status</label>
+                        <select name="followup_status">
+                            {''.join(
+                                f"<option value='{st}' {'selected' if status_value==st else ''}>{st}</option>"
+                                for st in FOLLOWUP_STATUSES
+                            )}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label>Payment Date</label>
+                        <input type="date"
+                               name="payment_date"
+                               value="{escape(f['payment_date'] or '')}">
+                    </div>
+
+                    <div>
+                        <label>Date Communicated</label>
+                        <input type="date"
+                               name="date_communicated"
+                               value="{escape(f['date_communicated'] or '')}">
+                    </div>
+
+                    <div class="compact-wide">
+                        <label>Subjects</label>
+
+                        <div class="mini muted" style="margin-bottom:6px">
+                            Current: {escape(subject_summary)}
+                        </div>
+
+                        <div class="compact-subject-box">
+                            {subject_checkboxes}
+                        </div>
+                    </div>
+
+                    <div class="compact-wide">
+                        <label>Previous Notes</label>
+                        <div class="compact-notes-box">
+                            {notes_display}
+                        </div>
+                    </div>
+
+                    <div class="compact-wide">
+                        <label>Add New Note</label>
+                        <textarea name="new_note"
+                                  rows="2"
+                                  placeholder="Add a new note. Previous notes will be preserved."></textarea>
+                    </div>
+
+                </div>
+
+                <div class="compact-actions">
+                    <button class="btn mini success">
+                        Save Follow-Up
+                    </button>
+                </div>
+
+            </form>
+
+        </details>
+        """
+
+    body = f"""
+    {admission_nav()}
+
+    <style>
+        .compact-follow-header {{
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:12px;
+            flex-wrap:wrap;
+            margin-bottom:12px;
+        }}
+
+        .compact-filter-box {{
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:16px;
+            padding:12px;
+            margin:12px 0;
+        }}
+
+        .compact-filter-box form {{
+            display:grid;
+            grid-template-columns:2fr 1fr 1fr auto;
+            gap:10px;
+            align-items:end;
+        }}
+
+        .compact-follow-list {{
+            display:grid;
+            gap:8px;
+            margin-top:12px;
+        }}
+
+        .compact-follow-item {{
+            background:#ffffff;
+            border:1px solid var(--border);
+            border-left:5px solid #1b5e20;
+            border-radius:14px;
+            box-shadow:var(--shadow-sm);
+            overflow:hidden;
+        }}
+
+        .compact-follow-item[open] {{
+            border-left-color:#16a34a;
+        }}
+
+        .compact-follow-summary {{
+            display:grid;
+            grid-template-columns:1.3fr 2.2fr auto;
+            gap:12px;
+            align-items:center;
+            padding:10px 12px;
+            cursor:pointer;
+            list-style:none;
+        }}
+
+        .compact-follow-summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .compact-follow-summary:hover {{
+            background:#f8fafc;
+        }}
+
+        .compact-student {{
+            display:grid;
+            gap:2px;
+            min-width:0;
+        }}
+
+        .compact-student strong {{
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }}
+
+        .compact-meta {{
+            display:grid;
+            grid-template-columns:repeat(4, minmax(0, 1fr));
+            gap:6px;
+            font-size:12px;
+            color:#475569;
+        }}
+
+        .compact-meta span {{
+            background:#f8fafc;
+            border:1px solid #e2e8f0;
+            border-radius:999px;
+            padding:5px 8px;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }}
+
+        .compact-status {{
+            display:flex;
+            justify-content:flex-end;
+        }}
+
+        .compact-edit-grid {{
+            display:grid;
+            grid-template-columns:repeat(4, minmax(0, 1fr));
+            gap:10px;
+            padding:12px;
+            border-top:1px solid var(--border);
+            background:#ffffff;
+        }}
+
+        .compact-wide {{
+            grid-column:1 / -1;
+        }}
+
+        .compact-subject-box {{
+            display:flex;
+            flex-wrap:wrap;
+            gap:6px;
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:12px;
+            padding:8px;
+            max-height:95px;
+            overflow:auto;
+        }}
+
+        .compact-subject-pill {{
+            display:inline-flex;
+            align-items:center;
+            gap:5px;
+            border:1px solid #cbd5e1;
+            background:#fff;
+            border-radius:999px;
+            padding:5px 8px;
+            font-size:12px;
+            cursor:pointer;
+        }}
+
+        .compact-subject-pill.selected {{
+            border-color:#16a34a;
+            background:#dcfce7;
+            color:#14532d;
+            font-weight:700;
+        }}
+
+        .compact-subject-pill input {{
+            margin:0;
+        }}
+
+        .compact-notes-box {{
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:12px;
+            padding:8px;
+            max-height:90px;
+            overflow:auto;
+            white-space:pre-wrap;
+            font-size:12px;
+            line-height:1.45;
+        }}
+
+        .compact-actions {{
+            display:flex;
+            justify-content:flex-end;
+            padding:0 12px 12px;
+        }}
+
+        @media(max-width:1000px) {{
+            .compact-follow-summary {{
+                grid-template-columns:1fr;
+            }}
+
+            .compact-meta {{
+                grid-template-columns:1fr 1fr;
+            }}
+
+            .compact-status {{
+                justify-content:flex-start;
+            }}
+
+            .compact-edit-grid {{
+                grid-template-columns:1fr 1fr;
+            }}
+
+            .compact-filter-box form {{
+                grid-template-columns:1fr 1fr;
+            }}
+        }}
+
+        @media(max-width:650px) {{
+            .compact-edit-grid {{
+                grid-template-columns:1fr;
+            }}
+
+            .compact-filter-box form {{
+                grid-template-columns:1fr;
+            }}
+
+            .compact-meta {{
+                grid-template-columns:1fr;
+            }}
+        }}
+    </style>
+
+    <section class="card">
+
+        <div class="compact-follow-header">
+            <div>
+                <h1>Follow-Ups</h1>
+                <p class="muted" style="margin:0">
+                    Click a record to open and update its details.
+                </p>
+            </div>
+
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <span class="chip">
+                    {total} record(s)
+                </span>
+
+                <a class="btn success mini" href="{url_for('admission_followup_add')}">
+                    Add Follow-Up
+                </a>
+            </div>
+        </div>
+
+        <div class="compact-filter-box">
+            <form method="get">
+
+                <input name="q"
+                       value="{escape(q)}"
+                       placeholder="Search name, phone, subject, issue or notes">
+
+                <select name="grade">
+                    <option value="">All Grades</option>
+                    {''.join(
+                        f"<option value='{g}' {'selected' if grade==g else ''}>{grade_label(g)}</option>"
+                        for g in ["G8","G9","G10","G11","G12","G13"]
+                    )}
+                </select>
+
+                <select name="status">
+                    <option value="">All Statuses</option>
+                    {''.join(
+                        f"<option value='{st}' {'selected' if status==st else ''}>{st}</option>"
+                        for st in FOLLOWUP_STATUSES
+                    )}
+                </select>
+
+                <button class="btn mini">Filter</button>
+
+            </form>
+        </div>
+
+        {pagination_controls("/admission/followups", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
+
+        <div class="compact-follow-list">
+            {compact_rows or "<div class='empty'>No follow-ups found.</div>"}
+        </div>
+
+        {pagination_controls("/admission/followups", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
+
+    </section>
+    """
+
+    return page("Admission Follow-Ups", body)
+    
+    
+@app.post('/admission/followups/<int:fid>/update')
+def admission_followup_update(fid):
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    new_note = request.form.get("new_note", "").strip()
+    updated_by = session.get("admission_coordinator_name", "Admission Coordinator")
+
+    cur.execute("""
+        SELECT notes, subjects
+        FROM followups
+        WHERE id=?
+        LIMIT 1
+    """, (fid,))
+
+    existing = cur.fetchone()
+
+    existing_notes = existing["notes"].strip() if existing and existing["notes"] else ""
+    final_notes = existing_notes
+
+    if new_note:
+        timestamp = now_utc_iso()[:16].replace("T", " ")
+        note_entry = f"[{timestamp}] {updated_by}: {new_note}"
+
+        if final_notes:
+            final_notes = final_notes + "\n\n" + note_entry
+        else:
+            final_notes = note_entry
+
+    posted_subjects = [s.strip() for s in request.form.getlist("subjects") if s.strip()]
+
+    clean_subjects = []
+    seen = set()
+
+    for sub in posted_subjects:
+        key = sub.lower()
+
+        if key not in seen:
+            clean_subjects.append(sub)
+            seen.add(key)
+
+    final_subjects = ", ".join(clean_subjects)
+
+    if not final_subjects and existing and existing["subjects"]:
+        final_subjects = existing["subjects"]
+
+    cur.execute("""
+        UPDATE followups
+        SET full_name=?,
+            phone=?,
+            grade=?,
+            subjects=?,
+            issue_type=?,
+            followup_status=?,
+            payment_date=?,
+            date_communicated=?,
+            notes=?,
+            updated_by=?,
+            updated_at=?
+        WHERE id=?
+    """, (
+        request.form.get("full_name"),
+        request.form.get("phone"),
+        request.form.get("grade"),
+        final_subjects,
+        request.form.get("issue_type"),
+        request.form.get("followup_status"),
+        request.form.get("payment_date"),
+        request.form.get("date_communicated"),
+        final_notes,
+        updated_by,
+        now_utc_iso(),
+        fid
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(request.referrer or url_for("admission_followups"))
+    
+
+@app.get('/admission/followups/add')
+def admission_followup_add():
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT name
+        FROM subjects
+        ORDER BY name
+    """)
+
+    subjects = [row["name"] for row in cur.fetchall()]
+    conn.close()
+
+    subject_checkboxes = "".join(
+        f"""
+        <label class="admission-add-subject-pill">
+            <input type="checkbox" name="subjects" value="{escape(s)}">
+            <span>{escape(s)}</span>
+        </label>
+        """
+        for s in subjects
+    )
+
+    if not subject_checkboxes:
+        subject_checkboxes = "<div class='mini muted'>No subjects available.</div>"
+
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date().isoformat()
+    captured_by_name = session.get("admission_coordinator_name", "Admission Coordinator")
+
+    body = f"""
+    {admission_nav()}
+
+    <style>
+        .admission-add-wrap {{
+            max-width:980px;
+            margin:0 auto;
+        }}
+
+        .admission-add-grid {{
+            display:grid;
+            grid-template-columns:repeat(2, minmax(0, 1fr));
+            gap:12px;
+        }}
+
+        .admission-add-wide {{
+            grid-column:1 / -1;
+        }}
+
+        .admission-add-subject-box {{
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:14px;
+            padding:10px;
+            max-height:150px;
+            overflow:auto;
+        }}
+
+        .admission-add-subject-pill {{
+            display:inline-flex;
+            align-items:center;
+            gap:6px;
+            border:1px solid #cbd5e1;
+            background:#fff;
+            border-radius:999px;
+            padding:7px 10px;
+            font-size:13px;
+            cursor:pointer;
+        }}
+
+        .admission-add-subject-pill input {{
+            margin:0;
+        }}
+
+        .admission-add-actions {{
+            display:flex;
+            justify-content:flex-end;
+            gap:8px;
+            flex-wrap:wrap;
+            margin-top:14px;
+        }}
+
+        @media(max-width:700px) {{
+            .admission-add-grid {{
+                grid-template-columns:1fr;
+            }}
+
+            .admission-add-wide {{
+                grid-column:auto;
+            }}
+        }}
+    </style>
+
+    <section class="card admission-add-wrap">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
+            <div>
+                <h1>Log New Follow-Up</h1>
+                <p class="muted" style="margin-top:4px">
+                    Add a learner follow-up. This will also appear on the main admin follow-up page.
+                </p>
+            </div>
+
+            <a class="btn secondary mini" href="{url_for('admission_followups')}">
+                Back to Follow-Ups
+            </a>
+        </div>
+
+        <form method="post"
+              action="{url_for('admission_followup_create')}"
+              class="admission-add-grid">
+
+            <div>
+                <label>Full Name</label>
+                <input name="full_name" required placeholder="Learner full name">
+            </div>
+
+            <div>
+                <label>Phone</label>
+                <input name="phone" placeholder="Learner or parent phone number">
+            </div>
+
+            <div>
+                <label>Grade</label>
+                <select name="grade">
+                    <option value="">Select Grade</option>
+                    <option value="G8">Grade 8</option>
+                    <option value="G9">Grade 9</option>
+                    <option value="G10">Grade 10</option>
+                    <option value="G11">Grade 11</option>
+                    <option value="G12">Grade 12</option>
+                    <option value="G13">Grade 13</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Issue Type</label>
+                <select name="issue_type" required>
+                    <option value="">Select Issue Type</option>
+                    {''.join(
+                        f"<option value='{escape(i)}'>{escape(i)}</option>"
+                        for i in ISSUE_TYPES
+                    )}
+                </select>
+            </div>
+
+            <div>
+                <label>Status</label>
+                <select name="followup_status">
+                    {''.join(
+                        f"<option value='{escape(st)}' {'selected' if st == 'OPEN' else ''}>{escape(st)}</option>"
+                        for st in FOLLOWUP_STATUSES
+                    )}
+                </select>
+            </div>
+
+            <div>
+                <label>Captured By</label>
+                <input value="{escape(captured_by_name)}" readonly>
+                <input type="hidden" name="captured_by" value="{escape(captured_by_name)}">
+            </div>
+
+            <div>
+                <label>Payment Date</label>
+                <input type="date" name="payment_date">
+            </div>
+
+            <div>
+                <label>Date Communicated</label>
+                <input type="date" name="date_communicated" value="{today}">
+            </div>
+
+            <div class="admission-add-wide">
+                <label>Subjects</label>
+
+                <div class="admission-add-subject-box">
+                    {subject_checkboxes}
+                </div>
+
+                <div class="mini muted" style="margin-top:6px">
+                    Tick one or more subjects linked to this follow-up.
+                </div>
+            </div>
+
+            <div class="admission-add-wide">
+                <label>Notes</label>
+                <textarea name="notes"
+                          rows="4"
+                          placeholder="Write the first follow-up note here..."></textarea>
+            </div>
+
+            <div class="admission-add-wide admission-add-actions">
+                <a class="btn secondary" href="{url_for('admission_followups')}">
+                    Cancel
+                </a>
+
+                <button class="btn success">
+                    Save Follow-Up
+                </button>
+            </div>
+
+        </form>
+    </section>
+    """
+
+    return page("Log New Follow-Up", body)
+    
+    
+@app.post('/admission/followups/create')
+def admission_followup_create():
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    grade = request.form.get("grade", "").strip()
+    issue_type = request.form.get("issue_type", "").strip()
+    followup_status = request.form.get("followup_status", "OPEN").strip() or "OPEN"
+    payment_date = request.form.get("payment_date", "").strip()
+    date_communicated = request.form.get("date_communicated", "").strip()
+    notes = request.form.get("notes", "").strip()
+
+    captured_by = session.get("admission_coordinator_name", "Admission Coordinator")
+
+    if not full_name:
+        return page("Missing Name", card_msg("Please enter the learner full name."))
+
+    if not issue_type:
+        return page("Missing Issue Type", card_msg("Please select an issue type."))
+
+    subjects = request.form.getlist("subjects")
+
+    clean_subjects = []
+    seen_subjects = set()
+
+    for sub in subjects:
+        sub = sub.strip()
+        key = sub.lower()
+
+        if sub and key not in seen_subjects:
+            clean_subjects.append(sub)
+            seen_subjects.add(key)
+
+    subjects_text = ", ".join(clean_subjects)
+
+    now = now_utc_iso()
+
+    if notes:
+        notes = f"[{now[:16].replace('T', ' ')}] {captured_by}: {notes}"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO followups(
+            full_name,
+            phone,
+            grade,
+            subjects,
+            issue_type,
+            followup_status,
+            payment_date,
+            date_communicated,
+            notes,
+            captured_by,
+            updated_by,
+            updated_at,
+            created_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        full_name,
+        phone,
+        grade,
+        subjects_text,
+        issue_type,
+        followup_status,
+        payment_date,
+        date_communicated,
+        notes,
+        captured_by,
+        captured_by,
+        now,
+        now
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admission_followups"))    
 
 
 # --- Admin: Analytics dashboard ---
