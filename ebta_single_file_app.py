@@ -30191,7 +30191,7 @@ def duty_admin_direct_messages():
         name = c["full_name"] or "Unknown"
         grade_text = f" • {grade_label(c['grade'])}" if c["grade"] else ""
         unread = c["unread"] or 0
-        last_msg = c["last_message"] or ""
+        last_msg = clean_multiline_text(c["last_message"] or "")
         last_time = (c["last_time"] or "")[:16].replace("T", " ")
 
         active_class = "active-chat" if selected == f"{role}:{cid}" else ""
@@ -30242,6 +30242,9 @@ def duty_admin_direct_messages():
         sender_label = "EBTA Admin" if is_admin_msg else (selected_person["full_name"] if selected_person else "User")
         time_label = (m["created_at"] or "")[:16].replace("T", " ")
 
+        # Clean old messages that may have been saved with leading tabs/spaces
+        clean_body = clean_multiline_text(m["body"] or "")
+
         message_bubbles += f"""
         <div class="{bubble_class}">
             <div class="dm-bubble-name">
@@ -30249,7 +30252,7 @@ def duty_admin_direct_messages():
             </div>
 
             <div class="dm-bubble-text">
-                {escape(m["body"] or "")}
+                {escape(clean_body)}
             </div>
 
             <div class="dm-bubble-time">
@@ -30564,7 +30567,7 @@ def duty_admin_direct_message_send():
 
     to_role = request.form.get("to_role", "").strip()
     to_id_raw = request.form.get("to_id", "").strip()
-    body = request.form.get("body", "").strip()
+    body = clean_multiline_text(request.form.get("body", ""))
 
     if to_role not in ["student", "tutor"]:
         return page("Invalid Recipient", card_msg("Invalid message recipient."))
@@ -31324,7 +31327,6 @@ def duty_admin_followups():
 
     return page("Duty Admin Follow-Ups", body)
     
-    
 
 @app.post('/duty-admin/followups/<int:fid>/update')
 def duty_admin_followup_update(fid):
@@ -31711,6 +31713,8 @@ def duty_admin_followup_create():
     conn.close()
 
     return redirect(url_for("duty_admin_followups"))
+
+
 
 
 # --- Admin: Analytics dashboard ---
