@@ -30285,7 +30285,7 @@ def duty_admin_followups():
     grade = request.args.get("grade", "").strip()
 
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 10
+    limit = 1
     offset = (page_num - 1) * limit
 
     conn = get_db()
