@@ -29994,94 +29994,630 @@ def duty_admin_inbox():
 def duty_admin_direct_messages():
 
     r = require_duty_admin()
-    if r: return r
-    
-    page_num = max(1, int(request.args.get("page", 1)))
-    limit = 20
-    offset = (page_num - 1) * limit
+    if r:
+        return r
+
+    selected = request.args.get("chat", "").strip()
+    q = request.args.get("q", "").strip()
+
+    selected_role = None
+    selected_id = None
+
+    if ":" in selected:
+        selected_role, selected_id_text = selected.split(":", 1)
+
+        try:
+            selected_id = int(selected_id_text)
+        except Exception:
+            selected_id = None
 
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT COUNT(*) AS c
-        FROM direct_messages dm
-        WHERE dm.to_role='admin'
-           OR dm.from_role='admin'
-    """)
+    search_filter = f"%{q}%"
 
-    total = cur.fetchone()["c"] or 0
-    total_pages = max(1, (total + limit - 1) // limit)
+    # =====================================================
+    # CONVERSATION LIST: students + tutors who messaged admin
+    # =====================================================
 
     cur.execute("""
-        SELECT
-            dm.*,
-            s.full_name AS student_name,
-            t.full_name AS tutor_name,
-            sub.name AS subject_name,
-            sub.grade AS subject_grade
-        FROM direct_messages dm
-        LEFT JOIN students s ON s.id = dm.from_id AND dm.from_role='student'
-        LEFT JOIN tutors t ON t.id = dm.from_id AND dm.from_role='tutor'
-        LEFT JOIN subjects sub ON sub.id = dm.subject_id
-        WHERE dm.to_role='admin'
-           OR dm.from_role='admin'
-        ORDER BY dm.created_at DESC
-        LIMIT ? OFFSET ?
-    """, (limit, offset))
+        SELECT *
+        FROM (
 
-    rows = cur.fetchall()
+            SELECT
+                'student' AS role,
+                s.id AS id,
+                s.full_name AS full_name,
+                s.grade AS grade,
+
+                (
+                    SELECT body
+                    FROM direct_messages dm
+                    WHERE (
+                        (dm.to_role='admin' AND dm.from_role='student' AND dm.from_id=s.id)
+                        OR
+                        (dm.from_role='admin' AND dm.to_role='student' AND dm.to_id=s.id)
+                    )
+                    ORDER BY dm.created_at DESC
+                    LIMIT 1
+                ) AS last_message,
+
+                (
+                    SELECT created_at
+                    FROM direct_messages dm
+                    WHERE (
+                        (dm.to_role='admin' AND dm.from_role='student' AND dm.from_id=s.id)
+                        OR
+                        (dm.from_role='admin' AND dm.to_role='student' AND dm.to_id=s.id)
+                    )
+                    ORDER BY dm.created_at DESC
+                    LIMIT 1
+                ) AS last_time,
+
+                (
+                    SELECT COUNT(*)
+                    FROM direct_messages dm
+                    WHERE dm.to_role='admin'
+                      AND dm.from_role='student'
+                      AND dm.from_id=s.id
+                      AND dm.is_read=0
+                ) AS unread
+
+            FROM students s
+
+            UNION ALL
+
+            SELECT
+                'tutor' AS role,
+                t.id AS id,
+                t.full_name AS full_name,
+                NULL AS grade,
+
+                (
+                    SELECT body
+                    FROM direct_messages dm
+                    WHERE (
+                        (dm.to_role='admin' AND dm.from_role='tutor' AND dm.from_id=t.id)
+                        OR
+                        (dm.from_role='admin' AND dm.to_role='tutor' AND dm.to_id=t.id)
+                    )
+                    ORDER BY dm.created_at DESC
+                    LIMIT 1
+                ) AS last_message,
+
+                (
+                    SELECT created_at
+                    FROM direct_messages dm
+                    WHERE (
+                        (dm.to_role='admin' AND dm.from_role='tutor' AND dm.from_id=t.id)
+                        OR
+                        (dm.from_role='admin' AND dm.to_role='tutor' AND dm.to_id=t.id)
+                    )
+                    ORDER BY dm.created_at DESC
+                    LIMIT 1
+                ) AS last_time,
+
+                (
+                    SELECT COUNT(*)
+                    FROM direct_messages dm
+                    WHERE dm.to_role='admin'
+                      AND dm.from_role='tutor'
+                      AND dm.from_id=t.id
+                      AND dm.is_read=0
+                ) AS unread
+
+            FROM tutors t
+        )
+        WHERE full_name LIKE ?
+          AND last_time IS NOT NULL
+        ORDER BY unread DESC, last_time DESC
+        LIMIT 300
+    """, (search_filter,))
+
+    conversations = cur.fetchall()
+
+    # Auto-select first conversation if none selected
+    if not selected and conversations:
+        selected_role = conversations[0]["role"]
+        selected_id = conversations[0]["id"]
+        selected = f"{selected_role}:{selected_id}"
+
+    # =====================================================
+    # SELECTED CONVERSATION DETAILS + MESSAGES
+    # =====================================================
+
+    selected_person = None
+    messages = []
+
+    if selected_role in ["student", "tutor"] and selected_id:
+
+        if selected_role == "student":
+            cur.execute("""
+                SELECT full_name, grade
+                FROM students
+                WHERE id=?
+            """, (selected_id,))
+        else:
+            cur.execute("""
+                SELECT full_name, NULL AS grade
+                FROM tutors
+                WHERE id=?
+            """, (selected_id,))
+
+        selected_person = cur.fetchone()
+
+        cur.execute("""
+            SELECT *
+            FROM direct_messages
+            WHERE (
+                from_role=? AND from_id=? AND to_role='admin'
+            )
+            OR (
+                from_role='admin' AND to_role=? AND to_id=?
+            )
+            ORDER BY created_at ASC
+        """, (
+            selected_role,
+            selected_id,
+            selected_role,
+            selected_id
+        ))
+
+        messages = cur.fetchall()
+
+        # Mark incoming messages as read
+        cur.execute("""
+            UPDATE direct_messages
+            SET is_read=1
+            WHERE to_role='admin'
+              AND from_role=?
+              AND from_id=?
+              AND is_read=0
+        """, (selected_role, selected_id))
+
+        conn.commit()
+
     conn.close()
 
-    cards = ""
+    # =====================================================
+    # BUILD SIDEBAR
+    # =====================================================
 
-    for dm in rows:
-        sender = "Admin"
+    chat_list = ""
 
-        if dm["from_role"] == "student":
-            sender = dm["student_name"] or "Student"
-        elif dm["from_role"] == "tutor":
-            sender = dm["tutor_name"] or "Tutor"
+    for c in conversations:
+        role = c["role"]
+        cid = c["id"]
+        name = c["full_name"] or "Unknown"
+        grade_text = f" • {grade_label(c['grade'])}" if c["grade"] else ""
+        unread = c["unread"] or 0
+        last_msg = c["last_message"] or ""
+        last_time = (c["last_time"] or "")[:16].replace("T", " ")
 
-        subject_line = "—"
-        if dm["subject_name"]:
-            subject_line = f"{dm['subject_name']} ({grade_label(dm['subject_grade'])})"
+        active_class = "active-chat" if selected == f"{role}:{cid}" else ""
 
-        read_chip = "<span class='chip active'>Read</span>" if dm["is_read"] == 1 else "<span class='chip pending'>Unread</span>"
+        unread_badge = ""
+        if unread > 0:
+            unread_badge = f"<span class='dm-unread'>{unread}</span>"
 
-        cards += f"""
-        <div class="msg">
-            <div class="meta">
-                {read_chip}
-                <span style="margin-left:8px"><b>From:</b> {escape(sender)}</span>
-                <span style="margin-left:8px"><b>Subject:</b> {escape(subject_line)}</span>
-                <span style="margin-left:8px">{escape((dm['created_at'] or '')[:16].replace('T',' '))}</span>
+        chat_list += f"""
+        <a class="dm-chat-item {active_class}"
+           href="{url_for('duty_admin_direct_messages')}?chat={role}:{cid}&q={escape(q)}">
+
+            <div class="dm-avatar">
+                {escape(name[:1].upper())}
             </div>
 
-            <div style="white-space:pre-wrap">
-                {escape(dm['body'] or '')}
+            <div class="dm-chat-info">
+                <div class="dm-chat-top">
+                    <strong>{escape(name)}</strong>
+                    {unread_badge}
+                </div>
+
+                <div class="mini muted">
+                    {escape(role.title())}{escape(grade_text)}
+                </div>
+
+                <div class="dm-last-message">
+                    {escape(last_msg[:70])}
+                </div>
+
+                <div class="mini muted">
+                    {escape(last_time)}
+                </div>
+            </div>
+        </a>
+        """
+
+    # =====================================================
+    # BUILD MESSAGE BUBBLES
+    # =====================================================
+
+    message_bubbles = ""
+
+    for m in messages:
+        is_admin_msg = m["from_role"] == "admin"
+
+        bubble_class = "dm-bubble outgoing" if is_admin_msg else "dm-bubble incoming"
+        sender_label = "EBTA Admin" if is_admin_msg else (selected_person["full_name"] if selected_person else "User")
+        time_label = (m["created_at"] or "")[:16].replace("T", " ")
+
+        message_bubbles += f"""
+        <div class="{bubble_class}">
+            <div class="dm-bubble-name">
+                {escape(sender_label)}
+            </div>
+
+            <div class="dm-bubble-text">
+                {escape(m["body"] or "")}
+            </div>
+
+            <div class="dm-bubble-time">
+                {escape(time_label)}
             </div>
         </div>
         """
 
+    if not message_bubbles:
+        message_bubbles = """
+        <div class="empty">
+            Select a conversation to view messages.
+        </div>
+        """
+
+    # =====================================================
+    # REPLY FORM
+    # =====================================================
+
+    reply_form = ""
+
+    if selected_role in ["student", "tutor"] and selected_id and selected_person:
+        reply_form = f"""
+        <form method="post"
+              action="{url_for('duty_admin_direct_message_send')}"
+              class="dm-reply-form">
+
+            <input type="hidden" name="to_role" value="{escape(selected_role)}">
+            <input type="hidden" name="to_id" value="{selected_id}">
+
+            <textarea name="body"
+                      rows="2"
+                      required
+                      placeholder="Type a reply..."></textarea>
+
+            <button class="btn success">
+                Send
+            </button>
+        </form>
+        """
+
+    selected_title = "No conversation selected"
+
+    if selected_person:
+        selected_title = selected_person["full_name"]
+
+        if selected_role == "student" and selected_person["grade"]:
+            selected_title += f" • {grade_label(selected_person['grade'])}"
+
     body = f"""
     {duty_admin_nav()}
+
+    <style>
+        .dm-layout {{
+            display:grid;
+            grid-template-columns:340px 1fr;
+            gap:14px;
+            min-height:650px;
+        }}
+
+        .dm-sidebar {{
+            border:1px solid var(--border);
+            border-radius:18px;
+            background:#ffffff;
+            overflow:hidden;
+            display:flex;
+            flex-direction:column;
+        }}
+
+        .dm-sidebar-header {{
+            padding:12px;
+            border-bottom:1px solid var(--border);
+            background:#f8fafc;
+        }}
+
+        .dm-search {{
+            display:grid;
+            grid-template-columns:1fr auto;
+            gap:8px;
+        }}
+
+        .dm-chat-list {{
+            overflow:auto;
+            max-height:560px;
+        }}
+
+        .dm-chat-item {{
+            display:grid;
+            grid-template-columns:42px 1fr;
+            gap:10px;
+            padding:12px;
+            border-bottom:1px solid #eef2f7;
+            color:inherit;
+            text-decoration:none;
+        }}
+
+        .dm-chat-item:hover,
+        .dm-chat-item.active-chat {{
+            background:#ecfdf5;
+        }}
+
+        .dm-avatar {{
+            width:42px;
+            height:42px;
+            border-radius:50%;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            background:#1b5e20;
+            color:white;
+            font-weight:800;
+        }}
+
+        .dm-chat-info {{
+            min-width:0;
+        }}
+
+        .dm-chat-top {{
+            display:flex;
+            justify-content:space-between;
+            gap:8px;
+            align-items:center;
+        }}
+
+        .dm-last-message {{
+            font-size:13px;
+            color:#64748b;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            margin-top:3px;
+        }}
+
+        .dm-unread {{
+            background:#ef4444;
+            color:#fff;
+            border-radius:999px;
+            font-size:11px;
+            padding:3px 7px;
+            font-weight:800;
+        }}
+
+        .dm-chat-panel {{
+            border:1px solid var(--border);
+            border-radius:18px;
+            background:#f8fafc;
+            display:flex;
+            flex-direction:column;
+            overflow:hidden;
+        }}
+
+        .dm-chat-header {{
+            padding:14px;
+            background:#ffffff;
+            border-bottom:1px solid var(--border);
+            display:flex;
+            justify-content:space-between;
+            gap:10px;
+            align-items:center;
+        }}
+
+        .dm-messages {{
+            padding:16px;
+            flex:1;
+            overflow:auto;
+            max-height:520px;
+            display:flex;
+            flex-direction:column;
+            gap:10px;
+        }}
+
+        .dm-bubble {{
+            max-width:72%;
+            border-radius:18px;
+            padding:10px 12px;
+            box-shadow:var(--shadow-sm);
+        }}
+
+        .dm-bubble.incoming {{
+            align-self:flex-start;
+            background:#ffffff;
+            border:1px solid #e2e8f0;
+            border-bottom-left-radius:6px;
+        }}
+
+        .dm-bubble.outgoing {{
+            align-self:flex-end;
+            background:#dcfce7;
+            border:1px solid #bbf7d0;
+            border-bottom-right-radius:6px;
+        }}
+
+        .dm-bubble-name {{
+            font-size:11px;
+            font-weight:800;
+            color:#166534;
+            margin-bottom:4px;
+        }}
+
+        .dm-bubble-text {{
+            white-space:pre-wrap;
+            line-height:1.45;
+        }}
+
+        .dm-bubble-time {{
+            font-size:11px;
+            color:#64748b;
+            margin-top:6px;
+            text-align:right;
+        }}
+
+        .dm-reply-form {{
+            display:grid;
+            grid-template-columns:1fr auto;
+            gap:10px;
+            padding:12px;
+            background:#ffffff;
+            border-top:1px solid var(--border);
+        }}
+
+        .dm-reply-form textarea {{
+            resize:vertical;
+            min-height:50px;
+            border-radius:16px;
+        }}
+
+        @media(max-width:900px) {{
+            .dm-layout {{
+                grid-template-columns:1fr;
+            }}
+
+            .dm-chat-list {{
+                max-height:300px;
+            }}
+
+            .dm-bubble {{
+                max-width:90%;
+            }}
+        }}
+
+        @media(max-width:600px) {{
+            .dm-reply-form {{
+                grid-template-columns:1fr;
+            }}
+
+            .dm-reply-form button {{
+                width:100%;
+                justify-content:center;
+            }}
+        }}
+    </style>
 
     <section class="card">
         <h1>Direct Messages</h1>
 
         <p class="muted">
-            View direct messages sent to admin. Replying and advanced admin actions are restricted on this portal.
+            View and reply to student or tutor messages from the Duty Admin portal.
         </p>
-        {pagination_controls("/duty-admin/direct-messages", page_num, total_pages)}
-        <div class="feedback-list">
-            {cards or "<div class='empty'>No direct messages found.</div>"}
+
+        <div class="dm-layout">
+
+            <aside class="dm-sidebar">
+                <div class="dm-sidebar-header">
+                    <form method="get" class="dm-search">
+                        <input name="q"
+                               value="{escape(q)}"
+                               placeholder="Search conversations">
+
+                        <button class="btn mini">Search</button>
+                    </form>
+                </div>
+
+                <div class="dm-chat-list">
+                    {chat_list or "<div class='empty'>No conversations found.</div>"}
+                </div>
+            </aside>
+
+            <main class="dm-chat-panel">
+                <div class="dm-chat-header">
+                    <div>
+                        <h2 style="margin:0">{escape(selected_title)}</h2>
+                        <div class="mini muted">
+                            Conversation with {escape(selected_role.title() if selected_role else 'user')}
+                        </div>
+                    </div>
+
+                    <span class="chip active">
+                        Messaging Enabled
+                    </span>
+                </div>
+
+                <div class="dm-messages">
+                    {message_bubbles}
+                </div>
+
+                {reply_form}
+            </main>
+
         </div>
-        {pagination_controls("/duty-admin/direct-messages", page_num, total_pages)}
     </section>
     """
 
     return page("Duty Admin Direct Messages", body)
+    
+    
+@app.post('/duty-admin/direct-messages/send')
+def duty_admin_direct_message_send():
+
+    r = require_duty_admin()
+    if r:
+        return r
+
+    to_role = request.form.get("to_role", "").strip()
+    to_id_raw = request.form.get("to_id", "").strip()
+    body = request.form.get("body", "").strip()
+
+    if to_role not in ["student", "tutor"]:
+        return page("Invalid Recipient", card_msg("Invalid message recipient."))
+
+    try:
+        to_id = int(to_id_raw)
+    except Exception:
+        return page("Invalid Recipient", card_msg("Invalid recipient ID."))
+
+    if not body:
+        return redirect(url_for("duty_admin_direct_messages", chat=f"{to_role}:{to_id}"))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Confirm recipient exists
+    if to_role == "student":
+        cur.execute("SELECT id FROM students WHERE id=?", (to_id,))
+    else:
+        cur.execute("SELECT id FROM tutors WHERE id=?", (to_id,))
+
+    recipient = cur.fetchone()
+
+    if not recipient:
+        conn.close()
+        return page("Recipient Missing", card_msg("The selected recipient could not be found."))
+
+    cur.execute("""
+        INSERT INTO direct_messages(
+            from_role,
+            from_id,
+            to_role,
+            to_id,
+            subject_id,
+            body,
+            created_at,
+            is_read
+        )
+        VALUES(?,?,?,?,?,?,?,0)
+    """, (
+        "admin",
+        0,
+        to_role,
+        to_id,
+        None,
+        body,
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("duty_admin_direct_messages", chat=f"{to_role}:{to_id}"))
     
     
 @app.get('/duty-admin/reports')
