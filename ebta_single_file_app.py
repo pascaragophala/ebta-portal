@@ -30277,19 +30277,21 @@ def duty_admin_report_view(report_id):
 def duty_admin_followups():
 
     r = require_duty_admin()
-    if r: return r
+    if r:
+        return r
 
     q = request.args.get("q", "").strip()
     status = request.args.get("status", "").strip()
     grade = request.args.get("grade", "").strip()
-    
+
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 20
+    limit = 10
     offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
 
+    # Get all subjects for the checkbox list
     cur.execute("""
         SELECT DISTINCT name
         FROM subjects
@@ -30308,9 +30310,10 @@ def duty_admin_followups():
                 OR phone LIKE ?
                 OR subjects LIKE ?
                 OR notes LIKE ?
+                OR issue_type LIKE ?
             )
         """)
-        params += [search, search, search, search]
+        params += [search, search, search, search, search]
 
     if status:
         where.append("followup_status = ?")
@@ -30322,6 +30325,7 @@ def duty_admin_followups():
 
     where_sql = "WHERE " + " AND ".join(where) if where else ""
 
+    # Count for pagination
     cur.execute(f"""
         SELECT COUNT(*) AS c
         FROM followups
@@ -30345,155 +30349,387 @@ def duty_admin_followups():
     rows = cur.fetchall()
     conn.close()
 
-    trs = ""
+    cards = ""
 
     for f in rows:
-        subjects_list = [x.strip() for x in (f["subjects"] or "").split(",") if x.strip()]
-        subjects_set = set(subjects_list)
 
-        subject_options = "".join(
-            f"<option value='{escape(s)}' {'selected' if s in subjects_set else ''}>{escape(s)}</option>"
+        current_subjects = [
+            x.strip()
+            for x in (f["subjects"] or "").split(",")
+            if x.strip()
+        ]
+
+        current_subjects_lower = set(x.lower() for x in current_subjects)
+
+        subject_checkboxes = "".join(
+            f"""
+            <label class="duty-subject-pill {'selected' if s.lower() in current_subjects_lower else ''}">
+                <input type="checkbox"
+                       name="subjects"
+                       value="{escape(s)}"
+                       {'checked' if s.lower() in current_subjects_lower else ''}>
+                <span>{escape(s)}</span>
+            </label>
+            """
             for s in subject_rows
         )
 
-        notes_box = f"""
-        <div style="
-            background:#f8fafc;
-            border:1px solid #e2e8f0;
-            border-radius:10px;
-            padding:8px;
-            max-height:110px;
-            overflow:auto;
-            margin-bottom:6px;
-            white-space:pre-wrap;
-            font-size:12px;
-        ">{escape(f['notes'] or 'No notes yet.')}</div>
-        """
+        if not subject_checkboxes:
+            subject_checkboxes = "<div class='mini muted'>No subjects available.</div>"
 
-        trs += f"""
-        <tr>
+        notes_display = escape(f["notes"] or "No notes yet.")
+
+        status_value = f["followup_status"] or "OPEN"
+
+        status_class = "pending"
+        if status_value == "RESOLVED":
+            status_class = "active"
+        elif status_value == "DECLINED":
+            status_class = "lapsed"
+        elif status_value == "IN PROGRESS":
+            status_class = "pending"
+        elif status_value == "AWAITING POP":
+            status_class = "warn"
+
+        cards += f"""
+        <div class="duty-follow-card">
+
             <form method="post" action="/duty-admin/followups/{f['id']}/update">
-                <td>
-                    <input name="full_name" value="{escape(f['full_name'] or '')}">
-                    <div class="mini muted">ID: {f['id']}</div>
-                </td>
 
-                <td>
-                    <input name="phone" value="{escape(f['phone'] or '')}">
-                </td>
+                <div class="duty-follow-header">
+                    <div>
+                        <input class="duty-follow-name"
+                               name="full_name"
+                               value="{escape(f['full_name'] or '')}"
+                               placeholder="Student full name">
 
-                <td>
-                    <select name="grade">
-                        <option value="">Select</option>
-                        {''.join(
-                            f"<option value='{g}' {'selected' if f['grade']==g else ''}>{grade_label(g)}</option>"
-                            for g in ["G8","G9","G10","G11","G12","G13"]
-                        )}
-                    </select>
-                </td>
+                        <div class="mini muted">
+                            Follow-Up ID: {f['id']}
+                        </div>
+                    </div>
 
-                <td style="min-width:220px">
-                    <select name="subjects" multiple size="4">
-                        {subject_options}
-                    </select>
-                    <div class="mini muted">Hold Ctrl to select more than one.</div>
-                </td>
+                    <span class="chip {status_class}">
+                        {escape(status_value)}
+                    </span>
+                </div>
 
-                <td>
-                    <select name="issue_type">
-                        <option value="">Select</option>
-                        {''.join(
-                            f"<option value='{i}' {'selected' if f['issue_type']==i else ''}>{i}</option>"
-                            for i in ISSUE_TYPES
-                        )}
-                    </select>
-                </td>
+                <div class="duty-follow-grid">
 
-                <td>
-                    <select name="followup_status">
-                        {''.join(
-                            f"<option value='{st}' {'selected' if f['followup_status']==st else ''}>{st}</option>"
-                            for st in ["OPEN","IN PROGRESS","AWAITING POP","RESOLVED","DECLINED"]
-                        )}
-                    </select>
-                </td>
+                    <div class="duty-field">
+                        <label>Phone</label>
+                        <input name="phone"
+                               value="{escape(f['phone'] or '')}"
+                               placeholder="Phone number">
+                    </div>
 
-                <td>
-                    <input type="date" name="payment_date" value="{escape(f['payment_date'] or '')}">
-                </td>
+                    <div class="duty-field">
+                        <label>Grade</label>
+                        <select name="grade">
+                            <option value="">Select Grade</option>
+                            {''.join(
+                                f"<option value='{g}' {'selected' if f['grade']==g else ''}>{grade_label(g)}</option>"
+                                for g in ["G8","G9","G10","G11","G12","G13"]
+                            )}
+                        </select>
+                    </div>
 
-                <td>
-                    <input type="date" name="date_communicated" value="{escape(f['date_communicated'] or '')}">
-                </td>
+                    <div class="duty-field">
+                        <label>Issue Type</label>
+                        <select name="issue_type">
+                            <option value="">Select Issue</option>
+                            {''.join(
+                                f"<option value='{i}' {'selected' if f['issue_type']==i else ''}>{i}</option>"
+                                for i in ISSUE_TYPES
+                            )}
+                        </select>
+                    </div>
 
-                <td style="min-width:280px">
-                    {notes_box}
-                    <textarea name="new_note" rows="2" placeholder="Add a new note. Previous notes will be preserved."></textarea>
-                </td>
+                    <div class="duty-field">
+                        <label>Status</label>
+                        <select name="followup_status">
+                            {''.join(
+                                f"<option value='{st}' {'selected' if status_value==st else ''}>{st}</option>"
+                                for st in FOLLOWUP_STATUSES
+                            )}
+                        </select>
+                    </div>
 
-                <td>
-                    <button class="btn mini success">Save</button>
-                </td>
+                    <div class="duty-field">
+                        <label>Payment Date</label>
+                        <input type="date"
+                               name="payment_date"
+                               value="{escape(f['payment_date'] or '')}">
+                    </div>
+
+                    <div class="duty-field">
+                        <label>Date Communicated</label>
+                        <input type="date"
+                               name="date_communicated"
+                               value="{escape(f['date_communicated'] or '')}">
+                    </div>
+
+                    <div class="duty-field duty-wide">
+                        <label>Subjects</label>
+
+                        <div class="duty-subject-box">
+                            {subject_checkboxes}
+                        </div>
+
+                        <div class="mini muted" style="margin-top:5px">
+                            Tick one or more subjects linked to this follow-up.
+                        </div>
+                    </div>
+
+                    <div class="duty-field duty-wide">
+                        <label>Previous Notes</label>
+
+                        <div class="duty-notes-box">
+                            {notes_display}
+                        </div>
+                    </div>
+
+                    <div class="duty-field duty-wide">
+                        <label>Add New Note</label>
+
+                        <textarea name="new_note"
+                                  rows="3"
+                                  placeholder="Add a new note. Previous notes will be preserved."></textarea>
+                    </div>
+
+                </div>
+
+                <div class="duty-follow-actions">
+                    <button class="btn success">
+                        Save Follow-Up
+                    </button>
+                </div>
+
             </form>
-        </tr>
+
+        </div>
         """
 
     body = f"""
     {duty_admin_nav()}
 
+    <style>
+        .duty-follow-page-header {{
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:12px;
+            flex-wrap:wrap;
+            margin-bottom:14px;
+        }}
+
+        .duty-follow-filter {{
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:16px;
+            padding:12px;
+            margin:12px 0 16px;
+        }}
+
+        .duty-follow-filter form {{
+            display:grid;
+            grid-template-columns:2fr 1fr 1fr auto;
+            gap:10px;
+            align-items:end;
+        }}
+
+        .duty-follow-list {{
+            display:grid;
+            gap:14px;
+            margin-top:14px;
+        }}
+
+        .duty-follow-card {{
+            background:#ffffff;
+            border:1px solid var(--border);
+            border-left:6px solid #1b5e20;
+            border-radius:18px;
+            padding:16px;
+            box-shadow:var(--shadow-sm);
+        }}
+
+        .duty-follow-header {{
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:12px;
+            flex-wrap:wrap;
+            margin-bottom:12px;
+        }}
+
+        .duty-follow-name {{
+            font-size:18px;
+            font-weight:800;
+            border:0;
+            border-bottom:2px solid transparent;
+            border-radius:0;
+            padding:4px 0;
+            background:transparent;
+            width:100%;
+            min-width:260px;
+        }}
+
+        .duty-follow-name:focus {{
+            border-bottom-color:var(--primary);
+            box-shadow:none;
+        }}
+
+        .duty-follow-grid {{
+            display:grid;
+            grid-template-columns:repeat(3, minmax(0, 1fr));
+            gap:12px;
+        }}
+
+        .duty-field {{
+            min-width:0;
+        }}
+
+        .duty-wide {{
+            grid-column:1 / -1;
+        }}
+
+        .duty-subject-box {{
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:14px;
+            padding:10px;
+            max-height:150px;
+            overflow:auto;
+        }}
+
+        .duty-subject-pill {{
+            display:inline-flex;
+            align-items:center;
+            gap:6px;
+            border:1px solid #cbd5e1;
+            background:#fff;
+            border-radius:999px;
+            padding:7px 10px;
+            font-size:13px;
+            cursor:pointer;
+        }}
+
+        .duty-subject-pill.selected {{
+            border-color:#16a34a;
+            background:#dcfce7;
+            color:#14532d;
+            font-weight:700;
+        }}
+
+        .duty-subject-pill input {{
+            margin:0;
+        }}
+
+        .duty-notes-box {{
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:14px;
+            padding:10px;
+            min-height:60px;
+            max-height:150px;
+            overflow:auto;
+            white-space:pre-wrap;
+            line-height:1.5;
+        }}
+
+        .duty-follow-actions {{
+            display:flex;
+            justify-content:flex-end;
+            margin-top:14px;
+        }}
+
+        @media(max-width:950px) {{
+            .duty-follow-filter form {{
+                grid-template-columns:1fr 1fr;
+            }}
+
+            .duty-follow-grid {{
+                grid-template-columns:1fr 1fr;
+            }}
+        }}
+
+        @media(max-width:650px) {{
+            .duty-follow-filter form {{
+                grid-template-columns:1fr;
+            }}
+
+            .duty-follow-grid {{
+                grid-template-columns:1fr;
+            }}
+
+            .duty-follow-actions {{
+                justify-content:stretch;
+            }}
+
+            .duty-follow-actions .btn {{
+                width:100%;
+                justify-content:center;
+            }}
+
+            .duty-follow-name {{
+                min-width:0;
+            }}
+        }}
+    </style>
+
     <section class="card">
-        <h1>Follow-Ups</h1>
 
-        <p class="muted">
-            Manage follow-up notes and learner communication. Delete actions are restricted.
-        </p>
+        <div class="duty-follow-page-header">
+            <div>
+                <h1>Follow-Ups</h1>
+                <p class="muted" style="margin:0">
+                    Manage learner follow-ups, notes, payment dates and communication updates.
+                </p>
+            </div>
 
-        <form method="get" class="toolbar">
-            <input name="q"
-                   value="{escape(q)}"
-                   placeholder="Search name, phone, subject or notes">
-
-            <select name="grade">
-                <option value="">All Grades</option>
-                {''.join(
-                    f"<option value='{g}' {'selected' if grade==g else ''}>{grade_label(g)}</option>"
-                    for g in ["G8","G9","G10","G11","G12","G13"]
-                )}
-            </select>
-
-            <select name="status">
-                <option value="">All Statuses</option>
-                {''.join(
-                    f"<option value='{st}' {'selected' if status==st else ''}>{st}</option>"
-                    for st in ["OPEN","IN PROGRESS","AWAITING POP","RESOLVED","DECLINED"]
-                )}
-            </select>
-
-            <button class="btn mini">Filter</button>
-        </form>
-        {pagination_controls("/duty-admin/followups", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
-        <div class="scroll-x">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Phone</th>
-                        <th>Grade</th>
-                        <th>Subjects</th>
-                        <th>Issue</th>
-                        <th>Status</th>
-                        <th>Payment</th>
-                        <th>Communicated</th>
-                        <th>Notes</th>
-                        <th>Save</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {trs or "<tr><td colspan='10'>No follow-ups found.</td></tr>"}
-                </tbody>
-            </table>
+            <span class="chip">
+                {total} record(s)
+            </span>
         </div>
+
+        <div class="duty-follow-filter">
+            <form method="get">
+
+                <input name="q"
+                       value="{escape(q)}"
+                       placeholder="Search name, phone, subject, issue or notes">
+
+                <select name="grade">
+                    <option value="">All Grades</option>
+                    {''.join(
+                        f"<option value='{g}' {'selected' if grade==g else ''}>{grade_label(g)}</option>"
+                        for g in ["G8","G9","G10","G11","G12","G13"]
+                    )}
+                </select>
+
+                <select name="status">
+                    <option value="">All Statuses</option>
+                    {''.join(
+                        f"<option value='{st}' {'selected' if status==st else ''}>{st}</option>"
+                        for st in FOLLOWUP_STATUSES
+                    )}
+                </select>
+
+                <button class="btn mini">Filter</button>
+
+            </form>
+        </div>
+
         {pagination_controls("/duty-admin/followups", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
+
+        <div class="duty-follow-list">
+            {cards or "<div class='empty'>No follow-ups found.</div>"}
+        </div>
+
+        {pagination_controls("/duty-admin/followups", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
+
     </section>
     """
 
@@ -30582,7 +30818,7 @@ def duty_admin_followup_update(fid):
     conn.commit()
     conn.close()
 
-    return redirect(url_for("duty_admin_followups"))
+    return redirect(request.referrer or url_for("duty_admin_followups"))
     
     
 
