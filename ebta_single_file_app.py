@@ -29453,7 +29453,7 @@ def duty_admin_enrollments():
         WHERE {where_sql}
         ORDER BY e.created_at DESC
         LIMIT ? OFFSET ?
-    """, params)
+    """, data_params)
 
     rows = cur.fetchall()
     conn.close()
@@ -29713,10 +29713,11 @@ def duty_admin_students():
 def duty_admin_groups():
 
     r = require_duty_admin()
-    if r: return r
+    if r:
+        return r
 
     month = get_admin_active_month()
-    
+
     page_num = max(1, int(request.args.get("page", 1)))
     limit = 30
     offset = (page_num - 1) * limit
@@ -29724,11 +29725,13 @@ def duty_admin_groups():
     conn = get_db()
     cur = conn.cursor()
 
+    # Count both current-month groups and permanent ALL groups
     cur.execute("""
         SELECT COUNT(*) AS c
         FROM groups g
         JOIN subjects sub ON sub.id = g.subject_id
-        WHERE g.month = ?
+        WHERE (g.month = ? OR g.month = 'ALL')
+          AND g.is_visible = 1
     """, (month,))
 
     total = cur.fetchone()["c"] or 0
@@ -29741,8 +29744,12 @@ def duty_admin_groups():
             sub.grade AS subject_grade
         FROM groups g
         JOIN subjects sub ON sub.id = g.subject_id
-        WHERE g.month = ?
-        ORDER BY CAST(REPLACE(sub.grade,'G','') AS INTEGER), sub.name
+        WHERE (g.month = ? OR g.month = 'ALL')
+          AND g.is_visible = 1
+        ORDER BY
+            CASE WHEN g.month = 'ALL' THEN 0 ELSE 1 END,
+            CAST(REPLACE(sub.grade,'G','') AS INTEGER),
+            sub.name
         LIMIT ? OFFSET ?
     """, (month, limit, offset))
 
@@ -29754,7 +29761,13 @@ def duty_admin_groups():
     for g in rows:
         visible = "Visible" if g["is_visible"] == 1 else "Hidden"
 
+        if g["month"] == "ALL":
+            group_type = "Permanent"
+        else:
+            group_type = pretty_month_label(g["month"])
+
         invite = "—"
+
         if g["invite_link"]:
             invite = f"<a target='_blank' href='{escape(g['invite_link'])}'>Open Group</a>"
 
@@ -29762,7 +29775,7 @@ def duty_admin_groups():
         <tr>
             <td>{grade_label(g['subject_grade'])}</td>
             <td>{escape(g['subject_name'])}</td>
-            <td>{escape(g['month'])}</td>
+            <td>{escape(group_type)}</td>
             <td>{invite}</td>
             <td><span class="chip">{visible}</span></td>
             <td>{escape((g['created_at'] or '')[:16].replace('T',' '))}</td>
@@ -29776,29 +29789,31 @@ def duty_admin_groups():
         <h1>Group Links</h1>
 
         <p class="muted">
-            View group links for the current admin month. Creating, editing and deleting groups are restricted.
+            View visible group links. This includes permanent group links and current-month group links.
+            Creating, editing and deleting groups are restricted.
         </p>
-        
+
         {pagination_controls("/duty-admin/groups", page_num, total_pages)}
-        
+
         <div class="scroll-x">
             <table>
                 <thead>
                     <tr>
                         <th>Grade</th>
                         <th>Subject</th>
-                        <th>Month</th>
+                        <th>Group Type / Month</th>
                         <th>Group Link</th>
                         <th>Visibility</th>
                         <th>Created</th>
                     </tr>
                 </thead>
+
                 <tbody>
-                    {trs or "<tr><td colspan='6'>No group links found for this month.</td></tr>"}
+                    {trs or "<tr><td colspan='6'>No visible group links found.</td></tr>"}
                 </tbody>
             </table>
         </div>
-        
+
         {pagination_controls("/duty-admin/groups", page_num, total_pages)}
     </section>
     """
