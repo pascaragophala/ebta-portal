@@ -3826,7 +3826,8 @@ def uploads(filename): return send_from_directory(UPLOAD_DIR, filename)
 def materials_files(filename): return send_from_directory(MATERIALS_DIR, filename)
 
 @app.route('/submission-files/<path:filename>')
-def submission_files(filename): return send_from_directory(SUBMISSIONS_DIR, filename)
+def submission_files(filename):
+    return send_from_directory(SUBMISSIONS_DIR, filename)
 
 @app.get('/logo')
 def logo():
@@ -7326,16 +7327,26 @@ def student_view_submission(mid):
     conn.close()
 
     if not row or not row["file_path"]:
-        return page("Not found", "<div class='card'>Submission file not found.</div>")
+        return page("Not found", card_msg("Submission file not found."))
 
     file_path = row["file_path"]
 
-    if not os.path.exists(file_path):
-        return page("File missing", "<div class='card'>The submitted file could not be found on the server.</div>")
+    if file_path and file_path.startswith("/submission-files/"):
+        file_path = str(SUBMISSIONS_DIR / os.path.basename(file_path))
+
+    if not file_path or not os.path.exists(file_path):
+        return page(
+            "File missing",
+            card_msg(
+                "The submitted file could not be found on the server. "
+                "The learner may need to resubmit the assignment."
+            )
+        )
 
     return send_from_directory(
         os.path.dirname(file_path),
-        os.path.basename(file_path)
+        os.path.basename(file_path),
+        as_attachment=False
     )
 
 
@@ -7852,11 +7863,37 @@ def student_submit_assignment(mid:int):
 
     dest = SUBMISSIONS_DIR / safe
 
+    # Make sure the submissions folder exists before saving
+    SUBMISSIONS_DIR.mkdir(parents=True, exist_ok=True)
+
     file.save(dest)
 
-    path = f"/submission-files/{safe}"
+    # Store the real server path, not the URL path
+    path = str(dest)
 
     now = now_utc_iso()
+
+    # Remove old submitted file if the learner is replacing an existing submission
+    cur.execute("""
+        SELECT file_path
+        FROM submissions
+        WHERE material_id=? AND student_id=?
+    """, (mid, sid))
+
+    old = cur.fetchone()
+
+    if old and old["file_path"]:
+        old_path = old["file_path"]
+
+        # Support both old URL-style paths and real server paths
+        if old_path.startswith("/submission-files/"):
+            old_path = str(SUBMISSIONS_DIR / os.path.basename(old_path))
+
+        try:
+            if os.path.exists(old_path):
+                os.remove(old_path)
+        except Exception as e:
+            print("Old submission delete error:", e)
 
     cur.execute("""
         INSERT OR REPLACE INTO submissions
