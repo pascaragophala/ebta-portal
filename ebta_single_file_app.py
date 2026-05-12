@@ -30285,13 +30285,13 @@ def duty_admin_followups():
     grade = request.args.get("grade", "").strip()
 
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 1
+    limit = 20
     offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
 
-    # Get all subjects for the checkbox list
+    # Get all subjects for checkbox list
     cur.execute("""
         SELECT DISTINCT name
         FROM subjects
@@ -30325,7 +30325,6 @@ def duty_admin_followups():
 
     where_sql = "WHERE " + " AND ".join(where) if where else ""
 
-    # Count for pagination
     cur.execute(f"""
         SELECT COUNT(*) AS c
         FROM followups
@@ -30349,7 +30348,7 @@ def duty_admin_followups():
     rows = cur.fetchall()
     conn.close()
 
-    cards = ""
+    compact_rows = ""
 
     for f in rows:
 
@@ -30361,9 +30360,11 @@ def duty_admin_followups():
 
         current_subjects_lower = set(x.lower() for x in current_subjects)
 
+        subject_summary = ", ".join(current_subjects) if current_subjects else "No subjects"
+
         subject_checkboxes = "".join(
             f"""
-            <label class="duty-subject-pill {'selected' if s.lower() in current_subjects_lower else ''}">
+            <label class="compact-subject-pill {'selected' if s.lower() in current_subjects_lower else ''}">
                 <input type="checkbox"
                        name="subjects"
                        value="{escape(s)}"
@@ -30386,43 +30387,58 @@ def duty_admin_followups():
             status_class = "active"
         elif status_value == "DECLINED":
             status_class = "lapsed"
-        elif status_value == "IN PROGRESS":
-            status_class = "pending"
         elif status_value == "AWAITING POP":
             status_class = "warn"
 
-        cards += f"""
-        <div class="duty-follow-card">
+        payment_date = f["payment_date"] or "—"
+        communicated_date = f["date_communicated"] or "—"
+        issue_type = f["issue_type"] or "—"
+        student_grade = grade_label(f["grade"]) if f["grade"] else "—"
 
-            <form method="post" action="/duty-admin/followups/{f['id']}/update">
+        compact_rows += f"""
+        <details class="compact-follow-item">
 
-                <div class="duty-follow-header">
-                    <div>
-                        <input class="duty-follow-name"
-                               name="full_name"
-                               value="{escape(f['full_name'] or '')}"
-                               placeholder="Student full name">
+            <summary class="compact-follow-summary">
 
-                        <div class="mini muted">
-                            Follow-Up ID: {f['id']}
-                        </div>
-                    </div>
+                <div class="compact-student">
+                    <strong>{escape(f['full_name'] or 'Unnamed learner')}</strong>
+                    <span class="mini muted">ID: {f['id']} | {escape(f['phone'] or 'No phone')}</span>
+                </div>
 
+                <div class="compact-meta">
+                    <span>{escape(student_grade)}</span>
+                    <span>{escape(issue_type)}</span>
+                    <span>Pay: {escape(payment_date)}</span>
+                    <span>Comms: {escape(communicated_date)}</span>
+                </div>
+
+                <div class="compact-status">
                     <span class="chip {status_class}">
                         {escape(status_value)}
                     </span>
                 </div>
 
-                <div class="duty-follow-grid">
+            </summary>
 
-                    <div class="duty-field">
+            <form method="post" action="/duty-admin/followups/{f['id']}/update">
+
+                <div class="compact-edit-grid">
+
+                    <div>
+                        <label>Name</label>
+                        <input name="full_name"
+                               value="{escape(f['full_name'] or '')}"
+                               placeholder="Student full name">
+                    </div>
+
+                    <div>
                         <label>Phone</label>
                         <input name="phone"
                                value="{escape(f['phone'] or '')}"
                                placeholder="Phone number">
                     </div>
 
-                    <div class="duty-field">
+                    <div>
                         <label>Grade</label>
                         <select name="grade">
                             <option value="">Select Grade</option>
@@ -30433,7 +30449,7 @@ def duty_admin_followups():
                         </select>
                     </div>
 
-                    <div class="duty-field">
+                    <div>
                         <label>Issue Type</label>
                         <select name="issue_type">
                             <option value="">Select Issue</option>
@@ -30444,7 +30460,7 @@ def duty_admin_followups():
                         </select>
                     </div>
 
-                    <div class="duty-field">
+                    <div>
                         <label>Status</label>
                         <select name="followup_status">
                             {''.join(
@@ -30454,105 +30470,64 @@ def duty_admin_followups():
                         </select>
                     </div>
 
-                    <div class="duty-field">
+                    <div>
                         <label>Payment Date</label>
                         <input type="date"
                                name="payment_date"
                                value="{escape(f['payment_date'] or '')}">
                     </div>
 
-                    <div class="duty-field">
+                    <div>
                         <label>Date Communicated</label>
                         <input type="date"
                                name="date_communicated"
                                value="{escape(f['date_communicated'] or '')}">
                     </div>
 
-                    <div class="duty-field duty-wide">
+                    <div class="compact-wide">
                         <label>Subjects</label>
 
-                        <div class="duty-subject-box">
-                            {subject_checkboxes}
+                        <div class="mini muted" style="margin-bottom:6px">
+                            Current: {escape(subject_summary)}
                         </div>
 
-                        <div class="mini muted" style="margin-top:5px">
-                            Tick one or more subjects linked to this follow-up.
+                        <div class="compact-subject-box">
+                            {subject_checkboxes}
                         </div>
                     </div>
 
-                    <div class="duty-field duty-wide">
+                    <div class="compact-wide">
                         <label>Previous Notes</label>
-
-                        <div class="duty-notes-box">
+                        <div class="compact-notes-box">
                             {notes_display}
                         </div>
                     </div>
 
-                    <div class="duty-field duty-wide">
+                    <div class="compact-wide">
                         <label>Add New Note</label>
-
                         <textarea name="new_note"
-                                  rows="3"
+                                  rows="2"
                                   placeholder="Add a new note. Previous notes will be preserved."></textarea>
                     </div>
 
                 </div>
 
-                <div class="duty-follow-actions">
-                    <button class="btn success">
+                <div class="compact-actions">
+                    <button class="btn mini success">
                         Save Follow-Up
                     </button>
                 </div>
 
             </form>
 
-        </div>
+        </details>
         """
 
     body = f"""
     {duty_admin_nav()}
 
     <style>
-        .duty-follow-page-header {{
-            display:flex;
-            justify-content:space-between;
-            align-items:flex-start;
-            gap:12px;
-            flex-wrap:wrap;
-            margin-bottom:14px;
-        }}
-
-        .duty-follow-filter {{
-            background:#f8fafc;
-            border:1px solid var(--border);
-            border-radius:16px;
-            padding:12px;
-            margin:12px 0 16px;
-        }}
-
-        .duty-follow-filter form {{
-            display:grid;
-            grid-template-columns:2fr 1fr 1fr auto;
-            gap:10px;
-            align-items:end;
-        }}
-
-        .duty-follow-list {{
-            display:grid;
-            gap:14px;
-            margin-top:14px;
-        }}
-
-        .duty-follow-card {{
-            background:#ffffff;
-            border:1px solid var(--border);
-            border-left:6px solid #1b5e20;
-            border-radius:18px;
-            padding:16px;
-            box-shadow:var(--shadow-sm);
-        }}
-
-        .duty-follow-header {{
+        .compact-follow-header {{
             display:flex;
             justify-content:space-between;
             align-items:flex-start;
@@ -30561,131 +30536,203 @@ def duty_admin_followups():
             margin-bottom:12px;
         }}
 
-        .duty-follow-name {{
-            font-size:18px;
-            font-weight:800;
-            border:0;
-            border-bottom:2px solid transparent;
-            border-radius:0;
-            padding:4px 0;
-            background:transparent;
-            width:100%;
-            min-width:260px;
+        .compact-filter-box {{
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:16px;
+            padding:12px;
+            margin:12px 0;
         }}
 
-        .duty-follow-name:focus {{
-            border-bottom-color:var(--primary);
-            box-shadow:none;
-        }}
-
-        .duty-follow-grid {{
+        .compact-filter-box form {{
             display:grid;
-            grid-template-columns:repeat(3, minmax(0, 1fr));
-            gap:12px;
+            grid-template-columns:2fr 1fr 1fr auto;
+            gap:10px;
+            align-items:end;
         }}
 
-        .duty-field {{
+        .compact-follow-list {{
+            display:grid;
+            gap:8px;
+            margin-top:12px;
+        }}
+
+        .compact-follow-item {{
+            background:#ffffff;
+            border:1px solid var(--border);
+            border-left:5px solid #1b5e20;
+            border-radius:14px;
+            box-shadow:var(--shadow-sm);
+            overflow:hidden;
+        }}
+
+        .compact-follow-item[open] {{
+            border-left-color:#16a34a;
+        }}
+
+        .compact-follow-summary {{
+            display:grid;
+            grid-template-columns:1.3fr 2.2fr auto;
+            gap:12px;
+            align-items:center;
+            padding:10px 12px;
+            cursor:pointer;
+            list-style:none;
+        }}
+
+        .compact-follow-summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .compact-follow-summary:hover {{
+            background:#f8fafc;
+        }}
+
+        .compact-student {{
+            display:grid;
+            gap:2px;
             min-width:0;
         }}
 
-        .duty-wide {{
+        .compact-student strong {{
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }}
+
+        .compact-meta {{
+            display:grid;
+            grid-template-columns:repeat(4, minmax(0, 1fr));
+            gap:6px;
+            font-size:12px;
+            color:#475569;
+        }}
+
+        .compact-meta span {{
+            background:#f8fafc;
+            border:1px solid #e2e8f0;
+            border-radius:999px;
+            padding:5px 8px;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }}
+
+        .compact-status {{
+            display:flex;
+            justify-content:flex-end;
+        }}
+
+        .compact-edit-grid {{
+            display:grid;
+            grid-template-columns:repeat(4, minmax(0, 1fr));
+            gap:10px;
+            padding:12px;
+            border-top:1px solid var(--border);
+            background:#ffffff;
+        }}
+
+        .compact-wide {{
             grid-column:1 / -1;
         }}
 
-        .duty-subject-box {{
+        .compact-subject-box {{
             display:flex;
             flex-wrap:wrap;
-            gap:8px;
+            gap:6px;
             background:#f8fafc;
             border:1px solid var(--border);
-            border-radius:14px;
-            padding:10px;
-            max-height:150px;
+            border-radius:12px;
+            padding:8px;
+            max-height:95px;
             overflow:auto;
         }}
 
-        .duty-subject-pill {{
+        .compact-subject-pill {{
             display:inline-flex;
             align-items:center;
-            gap:6px;
+            gap:5px;
             border:1px solid #cbd5e1;
             background:#fff;
             border-radius:999px;
-            padding:7px 10px;
-            font-size:13px;
+            padding:5px 8px;
+            font-size:12px;
             cursor:pointer;
         }}
 
-        .duty-subject-pill.selected {{
+        .compact-subject-pill.selected {{
             border-color:#16a34a;
             background:#dcfce7;
             color:#14532d;
             font-weight:700;
         }}
 
-        .duty-subject-pill input {{
+        .compact-subject-pill input {{
             margin:0;
         }}
 
-        .duty-notes-box {{
+        .compact-notes-box {{
             background:#f8fafc;
             border:1px solid var(--border);
-            border-radius:14px;
-            padding:10px;
-            min-height:60px;
-            max-height:150px;
+            border-radius:12px;
+            padding:8px;
+            max-height:90px;
             overflow:auto;
             white-space:pre-wrap;
-            line-height:1.5;
+            font-size:12px;
+            line-height:1.45;
         }}
 
-        .duty-follow-actions {{
+        .compact-actions {{
             display:flex;
             justify-content:flex-end;
-            margin-top:14px;
+            padding:0 12px 12px;
         }}
 
-        @media(max-width:950px) {{
-            .duty-follow-filter form {{
+        @media(max-width:1000px) {{
+            .compact-follow-summary {{
+                grid-template-columns:1fr;
+            }}
+
+            .compact-meta {{
                 grid-template-columns:1fr 1fr;
             }}
 
-            .duty-follow-grid {{
+            .compact-status {{
+                justify-content:flex-start;
+            }}
+
+            .compact-edit-grid {{
+                grid-template-columns:1fr 1fr;
+            }}
+
+            .compact-filter-box form {{
                 grid-template-columns:1fr 1fr;
             }}
         }}
 
         @media(max-width:650px) {{
-            .duty-follow-filter form {{
+            .compact-edit-grid {{
                 grid-template-columns:1fr;
             }}
 
-            .duty-follow-grid {{
+            .compact-filter-box form {{
                 grid-template-columns:1fr;
             }}
 
-            .duty-follow-actions {{
-                justify-content:stretch;
-            }}
-
-            .duty-follow-actions .btn {{
-                width:100%;
-                justify-content:center;
-            }}
-
-            .duty-follow-name {{
-                min-width:0;
+            .compact-meta {{
+                grid-template-columns:1fr;
             }}
         }}
     </style>
 
     <section class="card">
 
-        <div class="duty-follow-page-header">
+        <div class="compact-follow-header">
             <div>
                 <h1>Follow-Ups</h1>
                 <p class="muted" style="margin:0">
-                    Manage learner follow-ups, notes, payment dates and communication updates.
+                    Compact view. Click a record to open and update its details.
                 </p>
             </div>
 
@@ -30694,7 +30741,7 @@ def duty_admin_followups():
             </span>
         </div>
 
-        <div class="duty-follow-filter">
+        <div class="compact-filter-box">
             <form method="get">
 
                 <input name="q"
@@ -30724,8 +30771,8 @@ def duty_admin_followups():
 
         {pagination_controls("/duty-admin/followups", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
 
-        <div class="duty-follow-list">
-            {cards or "<div class='empty'>No follow-ups found.</div>"}
+        <div class="compact-follow-list">
+            {compact_rows or "<div class='empty'>No follow-ups found.</div>"}
         </div>
 
         {pagination_controls("/duty-admin/followups", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
