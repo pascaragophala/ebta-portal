@@ -32775,7 +32775,20 @@ def admission_enrollments():
             s.grade,
 
             sub.name AS subject_name,
-            sub.grade AS subject_grade
+            sub.grade AS subject_grade,
+
+            (
+                SELECT COUNT(DISTINCT e2.month)
+                FROM enrollments e2
+                WHERE e2.student_id = s.id
+                  AND e2.month < e.month
+            ) AS previous_month_count,
+
+            (
+                SELECT MIN(e3.month)
+                FROM enrollments e3
+                WHERE e3.student_id = s.id
+            ) AS first_enrolled_month
 
         FROM enrollments e
         JOIN students s ON s.id = e.student_id
@@ -32792,6 +32805,20 @@ def admission_enrollments():
 
     for row in rows:
         pop_link = "—"
+        
+        history_label = "First month"
+
+        if row["previous_month_count"] and int(row["previous_month_count"]) > 0:
+            history_label = "Returning student"
+
+        history_html = f"""
+        <span class="chip {'active' if history_label == 'First month' else 'pending'}">
+            {history_label}
+        </span>
+        <div class="mini muted">
+            First enrolled: {escape(row['first_enrolled_month'] or '—')}
+        </div>
+        """
 
         if row["pop_url"]:
             pop_link = f"<a target='_blank' href='{escape(row['pop_url'])}'>PoP</a>"
@@ -32847,6 +32874,8 @@ def admission_enrollments():
                     {escape(row['status'])}
                 </span>
             </td>
+
+            <td>{history_html}</td>
 
             <td>{pop_link}</td>
 
@@ -32909,6 +32938,7 @@ def admission_enrollments():
                         <th>Grade</th>
                         <th>Subject</th>
                         <th>Status</th>
+                        <th>History</th>
                         <th>PoP</th>
                         <th>Amount</th>
                         <th>Contact Details</th>
@@ -32918,7 +32948,7 @@ def admission_enrollments():
                 </thead>
 
                 <tbody>
-                    {trs or "<tr><td colspan='9'>No enrollments found.</td></tr>"}
+                    {trs or "<tr><td colspan='10'>No enrollments found.</td></tr>"}
                 </tbody>
             </table>
         </div>
