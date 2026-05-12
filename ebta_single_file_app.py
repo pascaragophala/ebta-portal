@@ -32710,7 +32710,7 @@ def admission_enrollments():
     grade = request.args.get("grade", "").strip()
 
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 30
+    limit = 20
     offset = (page_num - 1) * limit
 
     conn = get_db()
@@ -32726,11 +32726,12 @@ def admission_enrollments():
                 s.full_name LIKE ?
                 OR s.phone_whatsapp LIKE ?
                 OR s.guardian_phone LIKE ?
+                OR s.guardian_name LIKE ?
                 OR s.email LIKE ?
                 OR sub.name LIKE ?
             )
         """)
-        params += [search, search, search, search, search]
+        params += [search, search, search, search, search, search]
 
     if status:
         where.append("e.status = ?")
@@ -32801,53 +32802,63 @@ def admission_enrollments():
     rows = cur.fetchall()
     conn.close()
 
-    trs = ""
+    cards = ""
 
     for row in rows:
-        pop_link = "—"
-        
+
+        status_value = row["status"] or "PENDING"
+
+        status_class = "pending"
+        if status_value == "ACTIVE":
+            status_class = "active"
+        elif status_value == "LAPSED":
+            status_class = "lapsed"
+
         history_label = "First month"
+        history_class = "active"
 
         if row["previous_month_count"] and int(row["previous_month_count"]) > 0:
             history_label = "Returning student"
-
-        history_html = f"""
-        <span class="chip {'active' if history_label == 'First month' else 'pending'}">
-            {history_label}
-        </span>
-        <div class="mini muted">
-            First enrolled: {escape(row['first_enrolled_month'] or '—')}
-        </div>
-        """
-
-        if row["pop_url"]:
-            pop_link = f"<a target='_blank' href='{escape(row['pop_url'])}'>PoP</a>"
+            history_class = "pending"
 
         amount = row["amount_paid"] if row["amount_paid"] not in [None, ""] else "—"
 
-        status_class = "pending"
+        pop_link = "<span class='mini muted'>No PoP</span>"
+        if row["pop_url"]:
+            pop_link = f"""
+            <a class="btn mini secondary"
+               target="_blank"
+               href="{escape(row['pop_url'])}">
+               View PoP
+            </a>
+            """
 
-        if row["status"] == "ACTIVE":
-            status_class = "active"
-        elif row["status"] == "LAPSED":
-            status_class = "lapsed"
+        created_label = escape((row["created_at"] or "")[:16].replace("T", " "))
+
+        guardian_name = row["guardian_name"] or "—"
+        guardian_phone = row["guardian_phone"] or "—"
+        email = row["email"] or "—"
 
         actions = f"""
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <div class="admission-actions">
 
-            <form method="post" action="/admission/enrollment/{row['id']}/approve" style="display:inline">
+            <form method="post"
+                  action="{url_for('admission_enrollment_action', id=row['id'], action='approve')}">
                 <button class="btn success mini">Approve Only</button>
             </form>
 
-            <form method="post" action="/admission/enrollment/{row['id']}/approve_sms" style="display:inline">
+            <form method="post"
+                  action="{url_for('admission_enrollment_action', id=row['id'], action='approve_sms')}">
                 <button class="btn warn mini">Approve + SMS</button>
             </form>
 
-            <form method="post" action="/admission/enrollment/{row['id']}/sms" style="display:inline">
+            <form method="post"
+                  action="{url_for('admission_enrollment_action', id=row['id'], action='sms')}">
                 <button class="btn secondary mini">SMS Only</button>
             </form>
 
-            <form method="post" action="/admission/enrollment/{row['id']}/lapse" style="display:inline"
+            <form method="post"
+                  action="{url_for('admission_enrollment_action', id=row['id'], action='lapse')}"
                   onsubmit="return confirm('Lapse this enrollment?');">
                 <button class="btn danger mini">Lapse</button>
             </form>
@@ -32855,105 +32866,313 @@ def admission_enrollments():
         </div>
         """
 
-        trs += f"""
-        <tr>
-            <td>
-                <strong>{escape(row['full_name'])}</strong>
-                <div class="mini muted">{escape(row['phone_whatsapp'] or '')}</div>
-            </td>
+        cards += f"""
+        <div class="admission-enrollment-card">
 
-            <td>{grade_label(row['grade'])}</td>
+            <div class="admission-card-main">
 
-            <td>
-                {escape(row['subject_name'])}
-                <div class="mini muted">{grade_label(row['subject_grade'])}</div>
-            </td>
+                <div class="admission-student-block">
+                    <div class="admission-student-name">
+                        {escape(row['full_name'] or 'Unnamed learner')}
+                    </div>
 
-            <td>
-                <span class="chip {status_class}">
-                    {escape(row['status'])}
-                </span>
-            </td>
+                    <div class="mini muted">
+                        {escape(row['phone_whatsapp'] or 'No phone')}
+                    </div>
 
-            <td>{history_html}</td>
-
-            <td>{pop_link}</td>
-
-            <td>R{escape(str(amount))}</td>
-
-            <td>
-                <div class="mini muted">
-                    Guardian: {escape(row['guardian_name'] or '—')}<br>
-                    Guardian Phone: {escape(row['guardian_phone'] or '—')}<br>
-                    Email: {escape(row['email'] or '—')}
+                    <div class="admission-tags">
+                        <span class="chip">{grade_label(row['grade'])}</span>
+                        <span class="chip {status_class}">{escape(status_value)}</span>
+                    </div>
                 </div>
-            </td>
 
-            <td>{actions}</td>
+                <div class="admission-subject-block">
+                    <div class="mini muted">Subject</div>
 
-            <td>{escape((row['created_at'] or '')[:16].replace('T',' '))}</td>
-        </tr>
+                    <div class="admission-subject-name">
+                        {escape(row['subject_name'] or '—')}
+                    </div>
+
+                    <div class="mini muted">
+                        {grade_label(row['subject_grade'])}
+                    </div>
+                </div>
+
+                <div class="admission-history-block">
+                    <div class="mini muted">Enrollment History</div>
+
+                    <span class="chip {history_class}">
+                        {history_label}
+                    </span>
+
+                    <div class="mini muted" style="margin-top:4px">
+                        First enrolled: {escape(row['first_enrolled_month'] or '—')}
+                    </div>
+                </div>
+
+                <div class="admission-payment-block">
+                    <div class="mini muted">Payment</div>
+
+                    <div class="admission-amount">
+                        R{escape(str(amount))}
+                    </div>
+
+                    <div style="margin-top:6px">
+                        {pop_link}
+                    </div>
+                </div>
+
+            </div>
+
+            <div class="admission-card-footer">
+
+                <div class="admission-contact">
+                    <div>
+                        <span class="mini muted">Guardian</span>
+                        <strong>{escape(guardian_name)}</strong>
+                    </div>
+
+                    <div>
+                        <span class="mini muted">Guardian Phone</span>
+                        <strong>{escape(guardian_phone)}</strong>
+                    </div>
+
+                    <div>
+                        <span class="mini muted">Email</span>
+                        <strong>{escape(email)}</strong>
+                    </div>
+
+                    <div>
+                        <span class="mini muted">Timestamp</span>
+                        <strong>{created_label}</strong>
+                    </div>
+                </div>
+
+                {actions}
+
+            </div>
+
+        </div>
         """
 
     body = f"""
     {admission_nav()}
 
+    <style>
+        .admission-page-head {{
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:12px;
+            flex-wrap:wrap;
+            margin-bottom:14px;
+        }}
+
+        .admission-filter-box {{
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:16px;
+            padding:12px;
+            margin:14px 0;
+        }}
+
+        .admission-filter-box form {{
+            display:grid;
+            grid-template-columns:2fr 1fr 1fr auto;
+            gap:10px;
+            align-items:end;
+        }}
+
+        .admission-list {{
+            display:grid;
+            gap:12px;
+            margin-top:14px;
+        }}
+
+        .admission-enrollment-card {{
+            background:#fff;
+            border:1px solid var(--border);
+            border-left:5px solid #1b5e20;
+            border-radius:18px;
+            overflow:hidden;
+            box-shadow:var(--shadow-sm);
+        }}
+
+        .admission-card-main {{
+            display:grid;
+            grid-template-columns:1.4fr 1.1fr 1.1fr 0.8fr;
+            gap:14px;
+            align-items:center;
+            padding:14px;
+        }}
+
+        .admission-student-name {{
+            font-size:16px;
+            font-weight:800;
+            color:#0f172a;
+        }}
+
+        .admission-tags {{
+            display:flex;
+            gap:6px;
+            flex-wrap:wrap;
+            margin-top:8px;
+        }}
+
+        .admission-subject-name {{
+            font-size:15px;
+            font-weight:800;
+            color:#0f172a;
+            margin-top:2px;
+        }}
+
+        .admission-amount {{
+            font-size:18px;
+            font-weight:900;
+            color:#0f172a;
+            margin-top:2px;
+        }}
+
+        .admission-card-footer {{
+            display:grid;
+            grid-template-columns:1fr auto;
+            gap:14px;
+            align-items:center;
+            padding:12px 14px;
+            background:#f8fafc;
+            border-top:1px solid var(--border);
+        }}
+
+        .admission-contact {{
+            display:grid;
+            grid-template-columns:repeat(4, minmax(0, 1fr));
+            gap:10px;
+        }}
+
+        .admission-contact div {{
+            min-width:0;
+        }}
+
+        .admission-contact strong {{
+            display:block;
+            font-size:12px;
+            color:#334155;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            margin-top:2px;
+        }}
+
+        .admission-actions {{
+            display:flex;
+            gap:7px;
+            flex-wrap:wrap;
+            justify-content:flex-end;
+            align-items:center;
+        }}
+
+        .admission-actions form {{
+            margin:0;
+        }}
+
+        .admission-actions .btn {{
+            white-space:nowrap;
+        }}
+
+        @media(max-width:1050px) {{
+            .admission-card-main {{
+                grid-template-columns:1fr 1fr;
+            }}
+
+            .admission-card-footer {{
+                grid-template-columns:1fr;
+            }}
+
+            .admission-actions {{
+                justify-content:flex-start;
+            }}
+
+            .admission-contact {{
+                grid-template-columns:1fr 1fr;
+            }}
+        }}
+
+        @media(max-width:750px) {{
+            .admission-filter-box form {{
+                grid-template-columns:1fr;
+            }}
+
+            .admission-card-main {{
+                grid-template-columns:1fr;
+            }}
+
+            .admission-contact {{
+                grid-template-columns:1fr;
+            }}
+
+            .admission-actions {{
+                display:grid;
+                grid-template-columns:1fr 1fr;
+            }}
+
+            .admission-actions .btn {{
+                width:100%;
+                justify-content:center;
+            }}
+        }}
+    </style>
+
     <section class="card">
-        <h1>Manage Enrollments</h1>
 
-        <p class="muted">
-            Admission Coordinators can approve enrollments, send SMS login details, and lapse incorrect enrollments.
-        </p>
+        <div class="admission-page-head">
+            <div>
+                <h1>Manage Enrollments</h1>
 
-        <form method="get" class="toolbar">
-            <input name="q"
-                   value="{escape(q)}"
-                   placeholder="Search student, phone, subject or email">
+                <p class="muted" style="margin:0">
+                    Approve enrollments, send SMS login details, and lapse incorrect enrollments.
+                </p>
+            </div>
 
-            <select name="grade">
-                <option value="">All Grades</option>
-                {''.join(
-                    f"<option value='{g}' {'selected' if grade==g else ''}>{grade_label(g)}</option>"
-                    for g in ["G8","G9","G10","G11","G12","G13"]
-                )}
-            </select>
+            <span class="chip">
+                {total} enrollment(s)
+            </span>
+        </div>
 
-            <select name="status">
-                <option value="">All Statuses</option>
-                <option value="PENDING" {'selected' if status=="PENDING" else ""}>PENDING</option>
-                <option value="ACTIVE" {'selected' if status=="ACTIVE" else ""}>ACTIVE</option>
-                <option value="LAPSED" {'selected' if status=="LAPSED" else ""}>LAPSED</option>
-            </select>
+        <div class="admission-filter-box">
+            <form method="get">
 
-            <button class="btn mini">Filter</button>
-        </form>
+                <input name="q"
+                       value="{escape(q)}"
+                       placeholder="Search student, phone, guardian, subject or email">
 
-        {pagination_controls("/admission/enrollments", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
+                <select name="grade">
+                    <option value="">All Grades</option>
+                    {''.join(
+                        f"<option value='{g}' {'selected' if grade==g else ''}>{grade_label(g)}</option>"
+                        for g in ["G8","G9","G10","G11","G12","G13"]
+                    )}
+                </select>
 
-        <div class="scroll-x">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Student</th>
-                        <th>Grade</th>
-                        <th>Subject</th>
-                        <th>Status</th>
-                        <th>History</th>
-                        <th>PoP</th>
-                        <th>Amount</th>
-                        <th>Contact Details</th>
-                        <th>Actions</th>
-                        <th>Timestamp</th>
-                    </tr>
-                </thead>
+                <select name="status">
+                    <option value="">All Statuses</option>
+                    <option value="PENDING" {'selected' if status=="PENDING" else ""}>PENDING</option>
+                    <option value="ACTIVE" {'selected' if status=="ACTIVE" else ""}>ACTIVE</option>
+                    <option value="LAPSED" {'selected' if status=="LAPSED" else ""}>LAPSED</option>
+                </select>
 
-                <tbody>
-                    {trs or "<tr><td colspan='10'>No enrollments found.</td></tr>"}
-                </tbody>
-            </table>
+                <button class="btn mini">Filter</button>
+
+            </form>
         </div>
 
         {pagination_controls("/admission/enrollments", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
+
+        <div class="admission-list">
+            {cards or "<div class='empty'>No enrollments found.</div>"}
+        </div>
+
+        {pagination_controls("/admission/enrollments", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
+
     </section>
     """
 
