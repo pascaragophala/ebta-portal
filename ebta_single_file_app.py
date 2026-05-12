@@ -29926,64 +29926,425 @@ def duty_admin_sessions():
 def duty_admin_inbox():
 
     r = require_duty_admin()
-    if r: return r
-    
+    if r:
+        return r
+
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 20
+    limit = 15
     offset = (page_num - 1) * limit
+
+    q = request.args.get("q", "").strip()
+    kind_filter = request.args.get("kind", "").strip()
+    status_filter = request.args.get("status", "").strip()
 
     conn = get_db()
     cur = conn.cursor()
 
+    # -------------------------------------------------
+    # Stats
+    # -------------------------------------------------
     cur.execute("SELECT COUNT(*) AS c FROM messages")
+    total_all = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM messages WHERE resolved=0")
+    total_open = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM messages WHERE resolved=1")
+    total_resolved = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT kind, COUNT(*) AS c
+        FROM messages
+        GROUP BY kind
+        ORDER BY c DESC
+    """)
+    kind_rows = cur.fetchall()
+
+    # -------------------------------------------------
+    # Filters
+    # -------------------------------------------------
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("(payload LIKE ? OR kind LIKE ? OR created_at LIKE ?)")
+        params.extend([search, search, search])
+
+    if kind_filter:
+        where.append("kind = ?")
+        params.append(kind_filter)
+
+    if status_filter == "OPEN":
+        where.append("resolved = 0")
+    elif status_filter == "RESOLVED":
+        where.append("resolved = 1")
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    # -------------------------------------------------
+    # Count filtered rows
+    # -------------------------------------------------
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM messages
+        {where_sql}
+    """, params)
+
     total = cur.fetchone()["c"] or 0
     total_pages = max(1, (total + limit - 1) // limit)
 
-    cur.execute("""
+    data_params = list(params)
+    data_params.extend([limit, offset])
+
+    cur.execute(f"""
         SELECT *
         FROM messages
+        {where_sql}
         ORDER BY created_at DESC
         LIMIT ? OFFSET ?
-    """, (limit, offset))
+    """, data_params)
 
     rows = cur.fetchall()
     conn.close()
 
+    # -------------------------------------------------
+    # Kind dropdown options
+    # -------------------------------------------------
+    kind_options = "".join(
+        f"""
+        <option value="{escape(k['kind'] or '')}" {'selected' if kind_filter == (k['kind'] or '') else ''}>
+            {escape((k['kind'] or 'unknown').replace('_', ' ').title())} ({k['c']})
+        </option>
+        """
+        for k in kind_rows
+    )
+
+    # -------------------------------------------------
+    # Cards
+    # -------------------------------------------------
     cards = ""
 
     for m in rows:
-        status = "<span class='chip active'>Resolved</span>" if m["resolved"] == 1 else "<span class='chip pending'>Open</span>"
+        raw_kind = m["kind"] or "unknown"
+        kind_label = raw_kind.replace("_", " ").title()
+
+        payload = clean_multiline_text(m["payload"] or "")
+
+        # Cleaner display for SMS logs
+        payload_display = payload
+
+        if raw_kind in ["sms_sent", "sms_log"] and payload.startswith("SENT TO:"):
+            phone = payload.replace("SENT TO:", "").strip()
+            payload_display = f"SMS successfully sent to {phone}"
+
+        elif raw_kind == "sms_error":
+            payload_display = payload.replace("TO:", "To: ").replace("ERROR:", "\nError: ")
+
+        elif raw_kind == "email_log":
+            payload_display = payload.replace("TO:", "To: ").replace("SUBJECT:", "\nSubject: ").replace("BODY:", "\nBody: ")
+
+        elif raw_kind == "email_error":
+            payload_display = payload.replace("TO:", "To: ").replace("SUBJECT:", "\nSubject: ").replace("ERROR:", "\nError: ")
+
+        is_resolved = m["resolved"] == 1
+
+        status_chip = (
+            "<span class='chip active'>Resolved</span>"
+            if is_resolved
+            else "<span class='chip pending'>Open</span>"
+        )
+
+        kind_class = "info"
+
+        if "sms" in raw_kind:
+            kind_class = "sms"
+        elif "email" in raw_kind:
+            kind_class = "email"
+        elif "error" in raw_kind:
+            kind_class = "error"
+
+        created_label = format_datetime(m["created_at"])
 
         cards += f"""
-        <div class="msg">
-            <div class="meta">
-                {status}
-                <span style="margin-left:8px">{escape((m['created_at'] or '')[:16].replace('T',' '))}</span>
-                <span style="margin-left:8px">Kind: {escape(m['kind'] or '—')}</span>
+        <details class="inbox-item">
+            <summary class="inbox-summary">
+
+                <div class="inbox-kind {kind_class}">
+                    {escape(kind_label[:1])}
+                </div>
+
+                <div class="inbox-main">
+                    <div class="inbox-topline">
+                        <strong>{escape(kind_label)}</strong>
+                        <span class="mini muted">{escape(created_label)}</span>
+                    </div>
+
+                    <div class="inbox-preview">
+                        {escape(payload_display[:120])}{'...' if len(payload_display) > 120 else ''}
+                    </div>
+                </div>
+
+                <div class="inbox-status">
+                    {status_chip}
+                </div>
+
+            </summary>
+
+            <div class="inbox-details">
+                <div class="mini muted" style="margin-bottom:6px">
+                    Message Type: {escape(raw_kind)} | Created: {escape(created_label)}
+                </div>
+
+                <div class="inbox-payload">
+                    {escape(payload_display)}
+                </div>
             </div>
-            <div style="white-space:pre-wrap">
-                {escape(m['payload'] or '')}
-            </div>
-        </div>
+        </details>
         """
 
     body = f"""
     {duty_admin_nav()}
 
+    <style>
+        .inbox-header {{
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:12px;
+            flex-wrap:wrap;
+            margin-bottom:12px;
+        }}
+
+        .inbox-stats {{
+            display:grid;
+            grid-template-columns:repeat(3, minmax(0, 1fr));
+            gap:10px;
+            margin:12px 0;
+        }}
+
+        .inbox-stat {{
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:14px;
+            padding:12px;
+        }}
+
+        .inbox-stat .value {{
+            font-size:22px;
+            font-weight:800;
+            color:#065f46;
+            margin-top:2px;
+        }}
+
+        .inbox-filter {{
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:16px;
+            padding:12px;
+            margin:12px 0 14px;
+        }}
+
+        .inbox-filter form {{
+            display:grid;
+            grid-template-columns:2fr 1fr 1fr auto;
+            gap:10px;
+            align-items:end;
+        }}
+
+        .inbox-list {{
+            display:grid;
+            gap:8px;
+            margin-top:12px;
+        }}
+
+        .inbox-item {{
+            background:#fff;
+            border:1px solid var(--border);
+            border-radius:14px;
+            overflow:hidden;
+            box-shadow:var(--shadow-sm);
+        }}
+
+        .inbox-item[open] {{
+            border-left:5px solid #1b5e20;
+        }}
+
+        .inbox-summary {{
+            display:grid;
+            grid-template-columns:42px 1fr auto;
+            gap:12px;
+            align-items:center;
+            padding:12px;
+            cursor:pointer;
+            list-style:none;
+        }}
+
+        .inbox-summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .inbox-summary:hover {{
+            background:#f8fafc;
+        }}
+
+        .inbox-kind {{
+            width:42px;
+            height:42px;
+            border-radius:50%;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            color:white;
+            font-weight:800;
+            background:#1b5e20;
+        }}
+
+        .inbox-kind.sms {{
+            background:#15803d;
+        }}
+
+        .inbox-kind.email {{
+            background:#2563eb;
+        }}
+
+        .inbox-kind.error {{
+            background:#dc2626;
+        }}
+
+        .inbox-main {{
+            min-width:0;
+        }}
+
+        .inbox-topline {{
+            display:flex;
+            gap:8px;
+            align-items:center;
+            justify-content:space-between;
+        }}
+
+        .inbox-preview {{
+            color:#64748b;
+            font-size:13px;
+            margin-top:3px;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }}
+
+        .inbox-status {{
+            display:flex;
+            justify-content:flex-end;
+        }}
+
+        .inbox-details {{
+            border-top:1px solid var(--border);
+            padding:12px;
+            background:#f8fafc;
+        }}
+
+        .inbox-payload {{
+            background:#fff;
+            border:1px solid var(--border);
+            border-radius:12px;
+            padding:12px;
+            white-space:pre-wrap;
+            line-height:1.5;
+        }}
+
+        @media(max-width:850px) {{
+            .inbox-filter form {{
+                grid-template-columns:1fr 1fr;
+            }}
+
+            .inbox-stats {{
+                grid-template-columns:1fr;
+            }}
+
+            .inbox-summary {{
+                grid-template-columns:42px 1fr;
+            }}
+
+            .inbox-status {{
+                grid-column:1 / -1;
+                justify-content:flex-start;
+            }}
+        }}
+
+        @media(max-width:600px) {{
+            .inbox-filter form {{
+                grid-template-columns:1fr;
+            }}
+
+            .inbox-topline {{
+                display:block;
+            }}
+        }}
+    </style>
+
     <section class="card">
-        <h1>Inbox</h1>
 
-        <p class="muted">
-            View system messages, portal logs and communication notices. Resolving or deleting messages is restricted.
-        </p>
-        
-        {pagination_controls("/duty-admin/inbox", page_num, total_pages)}
+        <div class="inbox-header">
+            <div>
+                <h1>Inbox</h1>
+                <p class="muted" style="margin:0">
+                    View system messages, portal logs and communication notices.
+                </p>
+            </div>
 
-        <div class="feedback-list">
+            <span class="chip">
+                {total} result(s)
+            </span>
+        </div>
+
+        <div class="inbox-stats">
+            <div class="inbox-stat">
+                <div class="mini muted">All Messages</div>
+                <div class="value">{total_all}</div>
+            </div>
+
+            <div class="inbox-stat">
+                <div class="mini muted">Open</div>
+                <div class="value">{total_open}</div>
+            </div>
+
+            <div class="inbox-stat">
+                <div class="mini muted">Resolved</div>
+                <div class="value">{total_resolved}</div>
+            </div>
+        </div>
+
+        <div class="inbox-filter">
+            <form method="get">
+
+                <input name="q"
+                       value="{escape(q)}"
+                       placeholder="Search message, phone number, kind or date">
+
+                <select name="kind">
+                    <option value="">All Message Types</option>
+                    {kind_options}
+                </select>
+
+                <select name="status">
+                    <option value="">All Statuses</option>
+                    <option value="OPEN" {'selected' if status_filter == 'OPEN' else ''}>Open</option>
+                    <option value="RESOLVED" {'selected' if status_filter == 'RESOLVED' else ''}>Resolved</option>
+                </select>
+
+                <button class="btn mini">Filter</button>
+
+            </form>
+        </div>
+
+        {pagination_controls("/duty-admin/inbox", page_num, total_pages, {"q": q, "kind": kind_filter, "status": status_filter})}
+
+        <div class="inbox-list">
             {cards or "<div class='empty'>No inbox messages found.</div>"}
         </div>
-        
-        {pagination_controls("/duty-admin/inbox", page_num, total_pages)}
+
+        {pagination_controls("/duty-admin/inbox", page_num, total_pages, {"q": q, "kind": kind_filter, "status": status_filter})}
+
     </section>
     """
 
