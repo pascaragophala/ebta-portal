@@ -30736,9 +30736,15 @@ def duty_admin_followups():
                 </p>
             </div>
 
-            <span class="chip">
-                {total} record(s)
-            </span>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <span class="chip">
+                    {total} record(s)
+                </span>
+
+                <a class="btn success mini" href="{url_for('duty_admin_followup_add')}">
+                    Add Follow-Up
+                </a>
+            </div>
         </div>
 
         <div class="compact-filter-box">
@@ -30868,8 +30874,307 @@ def duty_admin_followup_update(fid):
     return redirect(request.referrer or url_for("duty_admin_followups"))
     
     
+@app.get('/duty-admin/followups/add')
+def duty_admin_followup_add():
+
+    r = require_duty_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT name
+        FROM subjects
+        ORDER BY name
+    """)
+
+    subjects = [row["name"] for row in cur.fetchall()]
+    conn.close()
+
+    subject_checkboxes = "".join(
+        f"""
+        <label class="duty-add-subject-pill">
+            <input type="checkbox" name="subjects" value="{escape(s)}">
+            <span>{escape(s)}</span>
+        </label>
+        """
+        for s in subjects
+    )
+
+    if not subject_checkboxes:
+        subject_checkboxes = "<div class='mini muted'>No subjects available.</div>"
+
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date().isoformat()
+
+    captured_by_name = session.get("duty_admin_name", "Duty Admin")
+
+    body = f"""
+    {duty_admin_nav()}
+
+    <style>
+        .duty-add-wrap {{
+            max-width:980px;
+            margin:0 auto;
+        }}
+
+        .duty-add-grid {{
+            display:grid;
+            grid-template-columns:repeat(2, minmax(0, 1fr));
+            gap:12px;
+        }}
+
+        .duty-add-wide {{
+            grid-column:1 / -1;
+        }}
+
+        .duty-add-subject-box {{
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:14px;
+            padding:10px;
+            max-height:150px;
+            overflow:auto;
+        }}
+
+        .duty-add-subject-pill {{
+            display:inline-flex;
+            align-items:center;
+            gap:6px;
+            border:1px solid #cbd5e1;
+            background:#fff;
+            border-radius:999px;
+            padding:7px 10px;
+            font-size:13px;
+            cursor:pointer;
+        }}
+
+        .duty-add-subject-pill input {{
+            margin:0;
+        }}
+
+        .duty-add-actions {{
+            display:flex;
+            justify-content:flex-end;
+            gap:8px;
+            flex-wrap:wrap;
+            margin-top:14px;
+        }}
+
+        @media(max-width:700px) {{
+            .duty-add-grid {{
+                grid-template-columns:1fr;
+            }}
+
+            .duty-add-wide {{
+                grid-column:auto;
+            }}
+        }}
+    </style>
+
+    <section class="card duty-add-wrap">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
+            <div>
+                <h1>Log New Follow-Up</h1>
+                <p class="muted" style="margin-top:4px">
+                    Add a learner follow-up. This will also appear on the normal admin follow-up page.
+                </p>
+            </div>
+
+            <a class="btn secondary mini" href="{url_for('duty_admin_followups')}">
+                Back to Follow-Ups
+            </a>
+        </div>
+
+        <form method="post"
+              action="{url_for('duty_admin_followup_create')}"
+              class="duty-add-grid">
+
+            <div>
+                <label>Full Name</label>
+                <input name="full_name" required placeholder="Learner full name">
+            </div>
+
+            <div>
+                <label>Phone</label>
+                <input name="phone" placeholder="Learner or parent phone number">
+            </div>
+
+            <div>
+                <label>Grade</label>
+                <select name="grade">
+                    <option value="">Select Grade</option>
+                    <option value="G8">Grade 8</option>
+                    <option value="G9">Grade 9</option>
+                    <option value="G10">Grade 10</option>
+                    <option value="G11">Grade 11</option>
+                    <option value="G12">Grade 12</option>
+                    <option value="G13">Grade 13</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Issue Type</label>
+                <select name="issue_type" required>
+                    <option value="">Select Issue Type</option>
+                    {''.join(
+                        f"<option value='{escape(i)}'>{escape(i)}</option>"
+                        for i in ISSUE_TYPES
+                    )}
+                </select>
+            </div>
+
+            <div>
+                <label>Status</label>
+                <select name="followup_status">
+                    {''.join(
+                        f"<option value='{escape(st)}' {'selected' if st == 'OPEN' else ''}>{escape(st)}</option>"
+                        for st in FOLLOWUP_STATUSES
+                    )}
+                </select>
+            </div>
+
+            <div>
+                <label>Captured By</label>
+                <input value="{escape(captured_by_name)}" readonly>
+                <input type="hidden" name="captured_by" value="{escape(captured_by_name)}">
+            </div>
+
+            <div>
+                <label>Payment Date</label>
+                <input type="date" name="payment_date">
+            </div>
+
+            <div>
+                <label>Date Communicated</label>
+                <input type="date" name="date_communicated" value="{today}">
+            </div>
+
+            <div class="duty-add-wide">
+                <label>Subjects</label>
+
+                <div class="duty-add-subject-box">
+                    {subject_checkboxes}
+                </div>
+
+                <div class="mini muted" style="margin-top:6px">
+                    Tick one or more subjects linked to this follow-up.
+                </div>
+            </div>
+
+            <div class="duty-add-wide">
+                <label>Notes</label>
+                <textarea name="notes"
+                          rows="4"
+                          placeholder="Write the first follow-up note here..."></textarea>
+            </div>
+
+            <div class="duty-add-wide duty-add-actions">
+                <a class="btn secondary" href="{url_for('duty_admin_followups')}">
+                    Cancel
+                </a>
+
+                <button class="btn success">
+                    Save Follow-Up
+                </button>
+            </div>
+
+        </form>
+    </section>
+    """
+
+    return page("Log New Follow-Up", body)
 
 
+@app.post('/duty-admin/followups/create')
+def duty_admin_followup_create():
+
+    r = require_duty_admin()
+    if r:
+        return r
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    grade = request.form.get("grade", "").strip()
+    issue_type = request.form.get("issue_type", "").strip()
+    followup_status = request.form.get("followup_status", "OPEN").strip() or "OPEN"
+    payment_date = request.form.get("payment_date", "").strip()
+    date_communicated = request.form.get("date_communicated", "").strip()
+    notes = request.form.get("notes", "").strip()
+
+    captured_by = session.get("duty_admin_name", "Duty Admin")
+
+    if not full_name:
+        return page("Missing Name", card_msg("Please enter the learner full name."))
+
+    if not issue_type:
+        return page("Missing Issue Type", card_msg("Please select an issue type."))
+
+    subjects = request.form.getlist("subjects")
+
+    clean_subjects = []
+    seen_subjects = set()
+
+    for sub in subjects:
+        sub = sub.strip()
+        key = sub.lower()
+
+        if sub and key not in seen_subjects:
+            clean_subjects.append(sub)
+            seen_subjects.add(key)
+
+    subjects_text = ", ".join(clean_subjects)
+
+    now = now_utc_iso()
+
+    # Add note stamp so it is clear who logged the first note
+    if notes:
+        notes = f"[{now[:16].replace('T', ' ')}] {captured_by}: {notes}"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO followups(
+            full_name,
+            phone,
+            grade,
+            subjects,
+            issue_type,
+            followup_status,
+            payment_date,
+            date_communicated,
+            notes,
+            captured_by,
+            updated_by,
+            updated_at,
+            created_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        full_name,
+        phone,
+        grade,
+        subjects_text,
+        issue_type,
+        followup_status,
+        payment_date,
+        date_communicated,
+        notes,
+        captured_by,
+        captured_by,
+        now,
+        now
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("duty_admin_followups"))
 
 
 # --- Admin: Analytics dashboard ---
