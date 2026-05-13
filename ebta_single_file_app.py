@@ -21863,7 +21863,8 @@ def aqm_attendance():
 @app.get('/aqm/tutors')
 def aqm_tutors():
     r = require_aqm()
-    if r: return r
+    if r:
+        return r
 
     month = request.args.get("month") or get_setting("current_month")
 
@@ -21884,18 +21885,71 @@ def aqm_tutors():
         SELECT 
             t.id,
             t.full_name,
+
             COUNT(twt.id) AS reports_count,
-            SUM(CASE WHEN twt.session_held = 1 THEN 1 ELSE 0 END) AS sessions_held,
-            SUM(CASE WHEN twt.recording_posted = 1 THEN 1 ELSE 0 END) AS recordings_posted,
-            SUM(CASE WHEN twt.posted_within_24h = 1 THEN 1 ELSE 0 END) AS posted_within_24h,
-            ROUND(AVG(twt.manager_rating), 1) AS avg_manager_rating
+
+            SUM(
+                CASE 
+                    WHEN twt.session_held = 1 
+                    THEN 1 
+                    ELSE 0 
+                END
+            ) AS sessions_held,
+
+            SUM(
+                CASE 
+                    WHEN twt.posted_within_24h = 1 
+                    THEN 1 
+                    ELSE 0 
+                END
+            ) AS posted_within_24h,
+
+            ROUND(AVG(twt.manager_rating), 1) AS avg_manager_rating,
+
+            (
+                SELECT COUNT(*)
+                FROM materials m
+                WHERE m.tutor_id = t.id
+                  AND substr(m.month, 1, 7) = ?
+                  AND m.youtube_url IS NOT NULL
+                  AND TRIM(m.youtube_url) != ''
+                  AND IFNULL(m.is_assignment, 0) = 0
+                  AND IFNULL(m.kind, '') != 'assignment'
+            ) AS recordings_posted,
+
+            (
+                SELECT COUNT(*)
+                FROM materials m
+                WHERE m.tutor_id = t.id
+                  AND substr(m.month, 1, 7) = ?
+                  AND (
+                        m.file_path IS NOT NULL
+                        AND TRIM(m.file_path) != ''
+                  )
+                  AND IFNULL(m.is_assignment, 0) = 0
+                  AND IFNULL(m.kind, '') != 'assignment'
+            ) AS documents_uploaded,
+
+            (
+                SELECT COUNT(*)
+                FROM materials m
+                WHERE m.tutor_id = t.id
+                  AND substr(m.month, 1, 7) = ?
+                  AND (
+                        IFNULL(m.is_assignment, 0) = 1
+                        OR IFNULL(m.kind, '') = 'assignment'
+                  )
+            ) AS assignments_uploaded
+
         FROM tutors t
+
         LEFT JOIN tutor_weekly_tracker twt
             ON twt.tutor_id = t.id
-           AND substr(twt.session_date,1,7) = ?
+           AND substr(twt.session_date, 1, 7) = ?
+
         GROUP BY t.id
         ORDER BY t.full_name
-    """, (month,))
+    """, (month, month, month, month))
 
     all_records = cur.fetchall()
     conn.close()
@@ -21920,23 +21974,34 @@ def aqm_tutors():
         sessions_held = x["sessions_held"] or 0
         recordings_posted = x["recordings_posted"] or 0
         posted_within_24h = x["posted_within_24h"] or 0
+        documents_uploaded = x["documents_uploaded"] or 0
+        assignments_uploaded = x["assignments_uploaded"] or 0
         avg_rating = x["avg_manager_rating"] or "—"
 
-        if reports_count == 0:
-            status = "<span class='chip lapsed'>No reports</span>"
+        if recordings_posted > 0:
+            recording_chip = f"<span class='chip active'>{recordings_posted}</span>"
+        else:
+            recording_chip = f"<span class='chip lapsed'>{recordings_posted}</span>"
+
+        if reports_count == 0 and recordings_posted == 0:
+            status = "<span class='chip lapsed'>No activity</span>"
+        elif recordings_posted == 0:
+            status = "<span class='chip lapsed'>No recordings</span>"
         elif avg_rating != "—" and float(avg_rating) >= 4:
             status = "<span class='chip active'>Strong</span>"
         elif avg_rating != "—" and float(avg_rating) >= 3:
             status = "<span class='chip pending'>Monitor</span>"
         else:
-            status = "<span class='chip lapsed'>Needs Review</span>"
+            status = "<span class='chip pending'>Active Uploads</span>"
 
         rows += f"""
         <tr>
-            <td>{x['full_name']}</td>
+            <td>{escape(x['full_name'] or '—')}</td>
             <td>{reports_count}</td>
             <td>{sessions_held}</td>
-            <td>{recordings_posted}</td>
+            <td>{recording_chip}</td>
+            <td>{documents_uploaded}</td>
+            <td>{assignments_uploaded}</td>
             <td>{posted_within_24h}</td>
             <td>{avg_rating}</td>
             <td>{status}</td>
@@ -21952,7 +22017,7 @@ def aqm_tutors():
         if page_num > 1:
             prev_link = f"""
             <a class="btn mini secondary"
-               href="/aqm/tutors?month={month}&page={page_num - 1}">
+               href="/aqm/tutors?month={escape(month)}&page={page_num - 1}">
                 ← Previous
             </a>
             """
@@ -21960,7 +22025,7 @@ def aqm_tutors():
         if page_num < total_pages:
             next_link = f"""
             <a class="btn mini secondary"
-               href="/aqm/tutors?month={month}&page={page_num + 1}">
+               href="/aqm/tutors?month={escape(month)}&page={page_num + 1}">
                 Next →
             </a>
             """
@@ -21981,11 +22046,15 @@ def aqm_tutors():
 
         <form method="get" style="max-width:220px;margin-bottom:12px">
             <label>Month</label>
-            <input type="month" name="month" value="{month}" onchange="this.form.submit()">
+            <input type="month" name="month" value="{escape(month)}" onchange="this.form.submit()">
         </form>
 
         <div class="mini muted" style="margin-bottom:10px">
-            Showing {len(records)} of {total_records} tutor quality records for {month}.
+            Showing {len(records)} of {total_records} tutor quality records for {escape(month)}.
+        </div>
+
+        <div class="mini muted" style="margin-bottom:10px">
+            Recordings Posted is counted from tutor material uploads where a recording link was uploaded for the selected month.
         </div>
 
         <div class="scroll-x">
@@ -21993,16 +22062,19 @@ def aqm_tutors():
                 <thead>
                     <tr>
                         <th>Tutor</th>
-                        <th>Reports</th>
+                        <th>Tracker Reports</th>
                         <th>Sessions Held</th>
                         <th>Recordings Posted</th>
+                        <th>Documents</th>
+                        <th>Assignments</th>
                         <th>Within 24h</th>
                         <th>Avg Rating</th>
                         <th>Status</th>
                     </tr>
                 </thead>
+
                 <tbody>
-                    {rows or '<tr><td colspan="7">No tutor quality data found for this month.</td></tr>'}
+                    {rows or '<tr><td colspan="9">No tutor quality data found for this month.</td></tr>'}
                 </tbody>
             </table>
         </div>
