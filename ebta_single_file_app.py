@@ -20509,6 +20509,10 @@ def aqm_manual_marks():
 
     term_key = make_term_key(year, term_code)
 
+    # This controls which learners are considered active.
+    # AQM will only see learners with ACTIVE enrollments for the current EBTA month.
+    active_month = get_setting("current_month")
+
     grade_filter = request.args.get("grade", "").strip()
     search = request.args.get("search", "").strip()
 
@@ -20526,17 +20530,26 @@ def aqm_manual_marks():
     conn = get_db()
     cur = conn.cursor()
 
-    # Grade dropdown
+    # Grade dropdown should only show grades that have active learners.
     cur.execute("""
-        SELECT DISTINCT grade
-        FROM students
-        WHERE grade IS NOT NULL AND grade != ''
-        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER)
-    """)
+        SELECT DISTINCT st.grade
+        FROM students st
+        JOIN enrollments e ON e.student_id = st.id
+        WHERE st.grade IS NOT NULL
+          AND st.grade != ''
+          AND e.status = 'ACTIVE'
+          AND e.month LIKE ?
+        ORDER BY CAST(REPLACE(st.grade,'G','') AS INTEGER)
+    """, (active_month + "%",))
+
     grades = cur.fetchall()
 
-    where = []
-    params = []
+    where = [
+        "e.status = 'ACTIVE'",
+        "e.month LIKE ?"
+    ]
+
+    params = [active_month + "%"]
 
     if grade_filter:
         where.append("st.grade = ?")
@@ -20554,12 +20567,13 @@ def aqm_manual_marks():
         like = f"%{search}%"
         params += [like, like, like, like]
 
-    where_sql = "WHERE " + " AND ".join(where) if where else ""
+    where_sql = "WHERE " + " AND ".join(where)
 
-    # Count learners
+    # Count active learners only.
     cur.execute(f"""
-        SELECT COUNT(*) AS c
+        SELECT COUNT(DISTINCT st.id) AS c
         FROM students st
+        JOIN enrollments e ON e.student_id = st.id
         {where_sql}
     """, params)
 
@@ -20573,9 +20587,9 @@ def aqm_manual_marks():
     data_params = list(params)
     data_params.extend([per_page, offset])
 
-    # Learners for this page
+    # Learners for this page, active learners only.
     cur.execute(f"""
-        SELECT
+        SELECT DISTINCT
             st.id,
             st.full_name,
             st.grade,
@@ -20583,6 +20597,7 @@ def aqm_manual_marks():
             st.phone_whatsapp,
             st.guardian_phone
         FROM students st
+        JOIN enrollments e ON e.student_id = st.id
         {where_sql}
         ORDER BY CAST(REPLACE(st.grade,'G','') AS INTEGER), st.full_name
         LIMIT ? OFFSET ?
@@ -20590,12 +20605,13 @@ def aqm_manual_marks():
 
     learners = cur.fetchall()
 
-    # All subjects grouped by grade
+    # All subjects grouped by grade.
     cur.execute("""
         SELECT id, name, grade
         FROM subjects
         ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
     """)
+
     subject_rows = cur.fetchall()
 
     subjects_by_grade = {}
@@ -20627,19 +20643,29 @@ def aqm_manual_marks():
                 "note": m["note"] or ""
             }
 
-    # Stats for selected term
+    # Stats for selected term, but only for currently active learners.
     cur.execute("""
         SELECT COUNT(*) AS c
-        FROM aqm_student_marks
-        WHERE month=?
-    """, (term_key,))
+        FROM aqm_student_marks am
+        JOIN students st ON st.id = am.student_id
+        JOIN enrollments e ON e.student_id = st.id
+        WHERE am.month = ?
+          AND e.status = 'ACTIVE'
+          AND e.month LIKE ?
+    """, (term_key, active_month + "%"))
+
     total_marks = cur.fetchone()["c"] or 0
 
     cur.execute("""
-        SELECT ROUND(AVG(mark), 1) AS avg_mark
-        FROM aqm_student_marks
-        WHERE month=?
-    """, (term_key,))
+        SELECT ROUND(AVG(am.mark), 1) AS avg_mark
+        FROM aqm_student_marks am
+        JOIN students st ON st.id = am.student_id
+        JOIN enrollments e ON e.student_id = st.id
+        WHERE am.month = ?
+          AND e.status = 'ACTIVE'
+          AND e.month LIKE ?
+    """, (term_key, active_month + "%"))
+
     avg_mark = cur.fetchone()["avg_mark"] or 0
 
     conn.close()
@@ -20648,6 +20674,7 @@ def aqm_manual_marks():
 
     for g in grades:
         selected = "selected" if grade_filter == g["grade"] else ""
+
         grade_options += f"""
         <option value="{escape(g['grade'])}" {selected}>
             {grade_label(g['grade'])}
@@ -20658,6 +20685,7 @@ def aqm_manual_marks():
 
     for y in range(current_year - 1, current_year + 2):
         selected = "selected" if str(y) == str(year) else ""
+
         year_options += f"""
         <option value="{y}" {selected}>{y}</option>
         """
@@ -20666,6 +20694,7 @@ def aqm_manual_marks():
 
     for code, label in TERMS:
         selected = "selected" if term_code == code else ""
+
         term_options += f"""
         <option value="{code}" {selected}>{label}</option>
         """
@@ -20726,6 +20755,7 @@ def aqm_manual_marks():
             <summary class="aqm-mark-summary">
                 <div>
                     <strong>{escape(learner['full_name'])}</strong>
+
                     <div class="mini muted">
                         {grade_label(learner['grade'])} • {escape(learner['school'] or 'No school captured')}
                     </div>
@@ -20751,6 +20781,7 @@ def aqm_manual_marks():
                 <div class="aqm-form-head">
                     <div>
                         <h3>{escape(learner['full_name'])}</h3>
+
                         <p class="mini muted" style="margin:0">
                             Capture all report marks for {escape(term_label(term_key))}.
                         </p>
@@ -20848,6 +20879,7 @@ def aqm_manual_marks():
         if page_num > 1:
             prev_params = dict(query_base)
             prev_params["page"] = page_num - 1
+
             links.append(f"""
             <a class="btn mini secondary" href="/aqm/manual-marks?{urlencode(prev_params)}">
                 Previous
@@ -20861,6 +20893,7 @@ def aqm_manual_marks():
         if page_num < total_pages:
             next_params = dict(query_base)
             next_params["page"] = page_num + 1
+
             links.append(f"""
             <a class="btn mini secondary" href="/aqm/manual-marks?{urlencode(next_params)}">
                 Next
@@ -21040,13 +21073,13 @@ def aqm_manual_marks():
         <h2>Manual Academic Marks</h2>
 
         <p class="mini muted">
-            Capture marks from learner school reports by academic term, not by month.
-            Select the year and term, then open a learner and enter all subject marks.
+            Capture marks from learner school reports by academic term.
+            Only learners with active enrollments for the current EBTA month are shown.
         </p>
 
         <div class="aqm-mark-stats">
             <div class="aqm-mini-stat">
-                <div class="mini muted">Learners Found</div>
+                <div class="mini muted">Active Learners Found</div>
                 <div class="k">{total_learners}</div>
             </div>
 
@@ -21102,7 +21135,7 @@ def aqm_manual_marks():
         {pagination_html}
 
         <div class="aqm-mark-list">
-            {learner_cards or '<div class="empty">No learners found.</div>'}
+            {learner_cards or '<div class="empty">No active learners found.</div>'}
         </div>
 
         {pagination_html}
