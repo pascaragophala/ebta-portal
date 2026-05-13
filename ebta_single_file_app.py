@@ -1945,6 +1945,62 @@ def pretty_month_label(month_str: str) -> str:
     except Exception:
         return month_str
         
+        
+TERMS = [
+    ("T1", "Term 1"),
+    ("T2", "Term 2"),
+    ("T3", "Term 3"),
+    ("T4", "Term 4"),
+]
+
+
+def make_term_key(year, term_code):
+    """
+    Stores term marks in the existing aqm_student_marks.month column.
+    Example: 2026 + T1 = 2026-T1
+    """
+    year = str(year).strip()
+    term_code = str(term_code).strip().upper()
+
+    if term_code not in ["T1", "T2", "T3", "T4"]:
+        term_code = "T1"
+
+    if not year.isdigit():
+        year = str(datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).year)
+
+    return f"{year}-{term_code}"
+
+
+def split_term_key(term_key):
+    """
+    Converts 2026-T1 into year=2026 and term_code=T1.
+    """
+    try:
+        year, term_code = str(term_key).split("-", 1)
+        term_code = term_code.upper()
+        if term_code not in ["T1", "T2", "T3", "T4"]:
+            term_code = "T1"
+        return year, term_code
+    except Exception:
+        return str(datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).year), "T1"
+
+
+def term_label(term_key):
+    """
+    Converts 2026-T1 into 2026 Term 1.
+    """
+    year, term_code = split_term_key(term_key)
+
+    labels = {
+        "T1": "Term 1",
+        "T2": "Term 2",
+        "T3": "Term 3",
+        "T4": "Term 4",
+    }
+
+    return f"{year} {labels.get(term_code, 'Term 1')}"
+
+        
 def record_material_view(material_id, student_id):
     conn = get_db()
     cur = conn.cursor()
@@ -20435,10 +20491,26 @@ def aqm_reports():
     
 @app.get('/aqm/manual-marks')
 def aqm_manual_marks():
-    r = require_aqm()
-    if r: return r
 
-    month = request.args.get("month") or get_setting("current_month")
+    r = require_aqm()
+    if r:
+        return r
+
+    current_year = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).year
+
+    year = request.args.get("year", str(current_year)).strip()
+    term_code = request.args.get("term", "T1").strip().upper()
+
+    if term_code not in ["T1", "T2", "T3", "T4"]:
+        term_code = "T1"
+
+    if not year.isdigit():
+        year = str(current_year)
+
+    term_key = make_term_key(year, term_code)
+
+    grade_filter = request.args.get("grade", "").strip()
+    search = request.args.get("search", "").strip()
 
     try:
         page_num = int(request.args.get("page", 1))
@@ -20449,147 +20521,588 @@ def aqm_manual_marks():
         page_num = 1
 
     per_page = 10
+    offset = (page_num - 1) * per_page
 
     conn = get_db()
     cur = conn.cursor()
 
+    # Grade dropdown
     cur.execute("""
-        SELECT st.id AS student_id,
-               st.full_name,
-               st.grade,
-               s.id AS subject_id,
-               s.name AS subject_name,
-               am.mark,
-               am.note
-        FROM enrollments e
-        JOIN students st ON st.id = e.student_id
-        JOIN subjects s ON s.id = e.subject_id
-        LEFT JOIN aqm_student_marks am
-            ON am.student_id = st.id
-           AND am.subject_id = s.id
-           AND am.month = ?
-        WHERE e.month LIKE ?
-          AND e.status = 'ACTIVE'
-        ORDER BY st.full_name, s.name
-    """, (month, month + "%"))
+        SELECT DISTINCT grade
+        FROM students
+        WHERE grade IS NOT NULL AND grade != ''
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER)
+    """)
+    grades = cur.fetchall()
 
-    all_mark_rows = cur.fetchall()
-    conn.close()
+    where = []
+    params = []
 
-    total_marks = len(all_mark_rows)
-    total_pages = (total_marks + per_page - 1) // per_page
+    if grade_filter:
+        where.append("st.grade = ?")
+        params.append(grade_filter)
 
-    if total_pages == 0:
-        total_pages = 1
+    if search:
+        where.append("""
+            (
+                st.full_name LIKE ?
+                OR st.phone_whatsapp LIKE ?
+                OR st.guardian_phone LIKE ?
+                OR st.school LIKE ?
+            )
+        """)
+        like = f"%{search}%"
+        params += [like, like, like, like]
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    # Count learners
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM students st
+        {where_sql}
+    """, params)
+
+    total_learners = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total_learners + per_page - 1) // per_page)
 
     if page_num > total_pages:
         page_num = total_pages
+        offset = (page_num - 1) * per_page
 
-    start_index = (page_num - 1) * per_page
-    end_index = start_index + per_page
-    mark_rows = all_mark_rows[start_index:end_index]
+    data_params = list(params)
+    data_params.extend([per_page, offset])
 
-    rows = ""
+    # Learners for this page
+    cur.execute(f"""
+        SELECT
+            st.id,
+            st.full_name,
+            st.grade,
+            st.school,
+            st.phone_whatsapp,
+            st.guardian_phone
+        FROM students st
+        {where_sql}
+        ORDER BY CAST(REPLACE(st.grade,'G','') AS INTEGER), st.full_name
+        LIMIT ? OFFSET ?
+    """, data_params)
 
-    for m in mark_rows:
-        current_mark = "" if m["mark"] is None else m["mark"]
-        current_note = m["note"] or ""
+    learners = cur.fetchall()
 
-        rows += f"""
-        <tr>
-            <td>{m['full_name']}</td>
-            <td>{grade_label(m['grade'])}</td>
-            <td>{m['subject_name']}</td>
-            <td>
-                <form method="post"
-                      action="/aqm/manual-mark"
-                      style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+    # All subjects grouped by grade
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
+    """)
+    subject_rows = cur.fetchall()
 
-                    <input type="hidden" name="student_id" value="{m['student_id']}">
-                    <input type="hidden" name="subject_id" value="{m['subject_id']}">
-                    <input type="hidden" name="month" value="{month}">
+    subjects_by_grade = {}
 
+    for sub in subject_rows:
+        subjects_by_grade.setdefault(sub["grade"], []).append(sub)
+
+    learner_ids = [x["id"] for x in learners]
+
+    marks_lookup = {}
+
+    if learner_ids:
+        placeholders = ",".join("?" * len(learner_ids))
+
+        cur.execute(f"""
+            SELECT
+                am.student_id,
+                am.subject_id,
+                am.mark,
+                am.note
+            FROM aqm_student_marks am
+            WHERE am.month = ?
+              AND am.student_id IN ({placeholders})
+        """, [term_key] + learner_ids)
+
+        for m in cur.fetchall():
+            marks_lookup[(m["student_id"], m["subject_id"])] = {
+                "mark": m["mark"],
+                "note": m["note"] or ""
+            }
+
+    # Stats for selected term
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM aqm_student_marks
+        WHERE month=?
+    """, (term_key,))
+    total_marks = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT ROUND(AVG(mark), 1) AS avg_mark
+        FROM aqm_student_marks
+        WHERE month=?
+    """, (term_key,))
+    avg_mark = cur.fetchone()["avg_mark"] or 0
+
+    conn.close()
+
+    grade_options = '<option value="">All Grades</option>'
+
+    for g in grades:
+        selected = "selected" if grade_filter == g["grade"] else ""
+        grade_options += f"""
+        <option value="{escape(g['grade'])}" {selected}>
+            {grade_label(g['grade'])}
+        </option>
+        """
+
+    year_options = ""
+
+    for y in range(current_year - 1, current_year + 2):
+        selected = "selected" if str(y) == str(year) else ""
+        year_options += f"""
+        <option value="{y}" {selected}>{y}</option>
+        """
+
+    term_options = ""
+
+    for code, label in TERMS:
+        selected = "selected" if term_code == code else ""
+        term_options += f"""
+        <option value="{code}" {selected}>{label}</option>
+        """
+
+    learner_cards = ""
+
+    for learner in learners:
+
+        learner_subjects = subjects_by_grade.get(learner["grade"], [])
+
+        subject_inputs = ""
+
+        for sub in learner_subjects:
+            existing = marks_lookup.get((learner["id"], sub["id"]), {})
+            mark_value = existing.get("mark", "")
+            note_value = existing.get("note", "")
+
+            subject_inputs += f"""
+            <div class="aqm-subject-mark-row">
+
+                <input type="hidden" name="subject_ids" value="{sub['id']}">
+
+                <div>
+                    <div class="aqm-subject-name">{escape(sub['name'])}</div>
+                    <div class="mini muted">{grade_label(sub['grade'])}</div>
+                </div>
+
+                <div>
+                    <label>Mark %</label>
                     <input type="number"
-                           name="mark"
+                           name="mark_{sub['id']}"
                            min="0"
                            max="100"
-                           value="{current_mark}"
-                           placeholder="0-100"
-                           required
-                           style="width:100px">
+                           value="{escape(str(mark_value)) if mark_value != '' else ''}"
+                           placeholder="0-100">
+                </div>
 
-                    <input name="note"
-                           value="{current_note}"
-                           placeholder="Optional note"
-                           style="min-width:180px">
+                <div>
+                    <label>Note</label>
+                    <input name="note_{sub['id']}"
+                           value="{escape(note_value)}"
+                           placeholder="Optional note">
+                </div>
 
-                    <button class="btn mini success">Save</button>
-                </form>
-            </td>
-        </tr>
+            </div>
+            """
+
+        if not subject_inputs:
+            subject_inputs = """
+            <div class="empty">
+                No subjects found for this learner grade.
+            </div>
+            """
+
+        learner_cards += f"""
+        <details class="aqm-mark-card">
+
+            <summary class="aqm-mark-summary">
+                <div>
+                    <strong>{escape(learner['full_name'])}</strong>
+                    <div class="mini muted">
+                        {grade_label(learner['grade'])} • {escape(learner['school'] or 'No school captured')}
+                    </div>
+                </div>
+
+                <div class="aqm-mark-summary-meta">
+                    <span class="chip">{len(learner_subjects)} subject(s)</span>
+                    <span class="chip active">{escape(term_label(term_key))}</span>
+                    <span class="mini muted">{escape(learner['phone_whatsapp'] or '')}</span>
+                </div>
+            </summary>
+
+            <form method="post"
+                  action="{url_for('aqm_manual_marks_save_student')}"
+                  class="aqm-mark-form">
+
+                <input type="hidden" name="student_id" value="{learner['id']}">
+                <input type="hidden" name="year" value="{escape(str(year))}">
+                <input type="hidden" name="term" value="{escape(term_code)}">
+                <input type="hidden" name="term_key" value="{escape(term_key)}">
+                <input type="hidden" name="grade" value="{escape(learner['grade'])}">
+
+                <div class="aqm-form-head">
+                    <div>
+                        <h3>{escape(learner['full_name'])}</h3>
+                        <p class="mini muted" style="margin:0">
+                            Capture all report marks for {escape(term_label(term_key))}.
+                        </p>
+                    </div>
+
+                    <button class="btn success mini">
+                        Save All Marks
+                    </button>
+                </div>
+
+                <div class="aqm-subject-mark-list">
+                    {subject_inputs}
+                </div>
+
+                <div class="aqm-extra-box">
+                    <h4>Add extra subjects from report</h4>
+
+                    <p class="mini muted">
+                        Use this only if the report has a subject that is not listed above.
+                    </p>
+
+                    <div class="aqm-extra-grid">
+
+                        <div>
+                            <label>Extra Subject 1</label>
+                            <input name="extra_subject_1" placeholder="Example: Economics">
+                        </div>
+
+                        <div>
+                            <label>Mark %</label>
+                            <input type="number" name="extra_mark_1" min="0" max="100">
+                        </div>
+
+                        <div>
+                            <label>Note</label>
+                            <input name="extra_note_1" placeholder="Optional note">
+                        </div>
+
+                        <div>
+                            <label>Extra Subject 2</label>
+                            <input name="extra_subject_2" placeholder="Optional">
+                        </div>
+
+                        <div>
+                            <label>Mark %</label>
+                            <input type="number" name="extra_mark_2" min="0" max="100">
+                        </div>
+
+                        <div>
+                            <label>Note</label>
+                            <input name="extra_note_2" placeholder="Optional note">
+                        </div>
+
+                        <div>
+                            <label>Extra Subject 3</label>
+                            <input name="extra_subject_3" placeholder="Optional">
+                        </div>
+
+                        <div>
+                            <label>Mark %</label>
+                            <input type="number" name="extra_mark_3" min="0" max="100">
+                        </div>
+
+                        <div>
+                            <label>Note</label>
+                            <input name="extra_note_3" placeholder="Optional note">
+                        </div>
+
+                    </div>
+                </div>
+
+                <div class="aqm-form-actions">
+                    <button class="btn success">
+                        Save All Marks for This Learner
+                    </button>
+                </div>
+
+            </form>
+
+        </details>
         """
 
     pagination_html = ""
 
-    if total_marks > per_page:
-        prev_link = ""
-        next_link = ""
+    if total_pages > 1:
+        query_base = {
+            "year": year,
+            "term": term_code,
+            "grade": grade_filter,
+            "search": search
+        }
+
+        links = []
 
         if page_num > 1:
-            prev_link = f"""
-            <a class="btn mini secondary" href="/aqm/manual-marks?month={month}&page={page_num - 1}">
-                ← Previous
+            prev_params = dict(query_base)
+            prev_params["page"] = page_num - 1
+            links.append(f"""
+            <a class="btn mini secondary" href="/aqm/manual-marks?{urlencode(prev_params)}">
+                Previous
             </a>
-            """
+            """)
+
+        links.append(f"""
+        <span class="chip">Page {page_num} / {total_pages}</span>
+        """)
 
         if page_num < total_pages:
-            next_link = f"""
-            <a class="btn mini secondary" href="/aqm/manual-marks?month={month}&page={page_num + 1}">
-                Next →
+            next_params = dict(query_base)
+            next_params["page"] = page_num + 1
+            links.append(f"""
+            <a class="btn mini secondary" href="/aqm/manual-marks?{urlencode(next_params)}">
+                Next
             </a>
-            """
+            """)
 
         pagination_html = f"""
-        <div class="toolbar" style="margin-top:12px;align-items:center">
-            {prev_link}
-            <span class="chip">Page {page_num} of {total_pages}</span>
-            {next_link}
+        <div class="toolbar" style="justify-content:center;margin:12px 0">
+            {''.join(links)}
         </div>
         """
 
     body = f"""
     {aqm_nav()}
 
+    <style>
+        .aqm-filter-box {{
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:16px;
+            padding:12px;
+            margin:12px 0;
+        }}
+
+        .aqm-filter-box form {{
+            display:grid;
+            grid-template-columns:140px 160px 1fr 180px auto;
+            gap:10px;
+            align-items:end;
+        }}
+
+        .aqm-mark-stats {{
+            display:grid;
+            grid-template-columns:repeat(3, minmax(0, 1fr));
+            gap:10px;
+            margin:12px 0;
+        }}
+
+        .aqm-mini-stat {{
+            background:#ffffff;
+            border:1px solid var(--border);
+            border-radius:14px;
+            padding:12px;
+        }}
+
+        .aqm-mini-stat .k {{
+            font-size:22px;
+            font-weight:900;
+            color:#065f46;
+        }}
+
+        .aqm-mark-list {{
+            display:grid;
+            gap:10px;
+            margin-top:12px;
+        }}
+
+        .aqm-mark-card {{
+            background:#fff;
+            border:1px solid var(--border);
+            border-left:5px solid #1b5e20;
+            border-radius:16px;
+            overflow:hidden;
+            box-shadow:var(--shadow-sm);
+        }}
+
+        .aqm-mark-summary {{
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:12px;
+            padding:12px;
+            cursor:pointer;
+            list-style:none;
+        }}
+
+        .aqm-mark-summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .aqm-mark-summary:hover {{
+            background:#f8fafc;
+        }}
+
+        .aqm-mark-summary-meta {{
+            display:flex;
+            align-items:center;
+            gap:8px;
+            flex-wrap:wrap;
+        }}
+
+        .aqm-mark-form {{
+            border-top:1px solid var(--border);
+            padding:12px;
+            background:#ffffff;
+        }}
+
+        .aqm-form-head {{
+            display:flex;
+            justify-content:space-between;
+            gap:12px;
+            align-items:center;
+            flex-wrap:wrap;
+            margin-bottom:12px;
+        }}
+
+        .aqm-subject-mark-list {{
+            display:grid;
+            gap:8px;
+        }}
+
+        .aqm-subject-mark-row {{
+            display:grid;
+            grid-template-columns:1.2fr 140px 1fr;
+            gap:10px;
+            align-items:end;
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:12px;
+            padding:10px;
+        }}
+
+        .aqm-subject-name {{
+            font-weight:800;
+            color:#0f172a;
+        }}
+
+        .aqm-extra-box {{
+            margin-top:14px;
+            background:#fff7ed;
+            border:1px solid #fed7aa;
+            border-radius:14px;
+            padding:12px;
+        }}
+
+        .aqm-extra-grid {{
+            display:grid;
+            grid-template-columns:1.2fr 140px 1fr;
+            gap:10px;
+            align-items:end;
+        }}
+
+        .aqm-form-actions {{
+            display:flex;
+            justify-content:flex-end;
+            margin-top:14px;
+        }}
+
+        @media(max-width:950px) {{
+            .aqm-filter-box form {{
+                grid-template-columns:1fr 1fr;
+            }}
+
+            .aqm-mark-stats {{
+                grid-template-columns:1fr;
+            }}
+
+            .aqm-subject-mark-row,
+            .aqm-extra-grid {{
+                grid-template-columns:1fr;
+            }}
+        }}
+
+        @media(max-width:600px) {{
+            .aqm-filter-box form {{
+                grid-template-columns:1fr;
+            }}
+
+            .aqm-form-actions .btn {{
+                width:100%;
+                justify-content:center;
+            }}
+        }}
+    </style>
+
     <div class="card">
         <h2>Manual Academic Marks</h2>
 
-        <form method="get" style="max-width:220px;margin-bottom:12px">
-            <label>Month</label>
-            <input type="month" name="month" value="{month}" onchange="this.form.submit()">
-        </form>
-
         <p class="mini muted">
-            Capture marks from school reports or offline academic checks.
+            Capture marks from learner school reports by academic term, not by month.
+            Select the year and term, then open a learner and enter all subject marks.
         </p>
 
-        <div class="mini muted" style="margin-bottom:10px">
-            Showing {len(mark_rows)} of {total_marks} manual mark records for {month}.
+        <div class="aqm-mark-stats">
+            <div class="aqm-mini-stat">
+                <div class="mini muted">Learners Found</div>
+                <div class="k">{total_learners}</div>
+            </div>
+
+            <div class="aqm-mini-stat">
+                <div class="mini muted">Marks Captured for {escape(term_label(term_key))}</div>
+                <div class="k">{total_marks}</div>
+            </div>
+
+            <div class="aqm-mini-stat">
+                <div class="mini muted">Average Mark for {escape(term_label(term_key))}</div>
+                <div class="k">{avg_mark}%</div>
+            </div>
         </div>
 
-        <div class="scroll-x">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Learner</th>
-                        <th>Grade</th>
-                        <th>Subject</th>
-                        <th>Capture Mark</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows or '<tr><td colspan="4">No active learners found for this month.</td></tr>'}
-                </tbody>
-            </table>
+        <div class="aqm-filter-box">
+            <form method="get">
+
+                <div>
+                    <label>Year</label>
+                    <select name="year">
+                        {year_options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Term</label>
+                    <select name="term">
+                        {term_options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Search learner</label>
+                    <input name="search"
+                           value="{escape(search)}"
+                           placeholder="Search name, phone, guardian or school">
+                </div>
+
+                <div>
+                    <label>Grade</label>
+                    <select name="grade">
+                        {grade_options}
+                    </select>
+                </div>
+
+                <button class="btn mini">
+                    Filter
+                </button>
+
+            </form>
+        </div>
+
+        {pagination_html}
+
+        <div class="aqm-mark-list">
+            {learner_cards or '<div class="empty">No learners found.</div>'}
         </div>
 
         {pagination_html}
@@ -20601,19 +21114,40 @@ def aqm_manual_marks():
 
 @app.post('/aqm/manual-mark')
 def aqm_manual_mark():
+
     r = require_aqm()
-    if r: return r
+    if r:
+        return r
 
     student_id = request.form.get("student_id")
     subject_id = request.form.get("subject_id")
-    month = request.form.get("month")
+
+    year = request.form.get("year", "").strip()
+    term_code = request.form.get("term", "T1").strip().upper()
+    term_key = request.form.get("term_key", "").strip()
+
+    # Backward compatibility: old forms may still send month
+    old_month = request.form.get("month", "").strip()
+
+    if not term_key:
+        if year:
+            term_key = make_term_key(year, term_code)
+        elif old_month:
+            term_key = old_month
+        else:
+            current_year = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).year
+            term_key = make_term_key(current_year, "T1")
+
     mark = request.form.get("mark")
     note = request.form.get("note", "").strip()
 
-    if not student_id or not subject_id or not month or mark is None:
+    if not student_id or not subject_id or not term_key or mark is None:
         return page("Invalid", card_msg("Missing mark details."))
 
-    mark = int(mark)
+    try:
+        mark = int(mark)
+    except:
+        return page("Invalid mark", card_msg("Mark must be a number between 0 and 100."))
 
     if mark < 0 or mark > 100:
         return page("Invalid mark", card_msg("Mark must be between 0 and 100."))
@@ -20622,20 +21156,210 @@ def aqm_manual_mark():
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO aqm_student_marks(student_id, subject_id, month, mark, note, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO aqm_student_marks(student_id, subject_id, month, mark, source, note, created_at)
+        VALUES (?, ?, ?, ?, 'manual', ?, ?)
         ON CONFLICT(student_id, subject_id, month)
         DO UPDATE SET
             mark=excluded.mark,
+            source='manual',
             note=excluded.note,
             created_at=excluded.created_at
-    """, (student_id, subject_id, month, mark, note, now_utc_iso()))
+    """, (
+        student_id,
+        subject_id,
+        term_key,
+        mark,
+        note,
+        now_utc_iso()
+    ))
 
     conn.commit()
     conn.close()
 
-    return redirect(url_for("aqm_manual_marks", month=month))
+    year_back, term_back = split_term_key(term_key)
+
+    return redirect(url_for("aqm_manual_marks", year=year_back, term=term_back))
     
+    
+
+@app.post('/aqm/manual-marks/save-student')
+def aqm_manual_marks_save_student():
+
+    r = require_aqm()
+    if r:
+        return r
+
+    student_id = request.form.get("student_id")
+    year = request.form.get("year", "").strip()
+    term_code = request.form.get("term", "T1").strip().upper()
+    term_key = request.form.get("term_key", "").strip()
+    grade = request.form.get("grade", "").strip()
+
+    if term_code not in ["T1", "T2", "T3", "T4"]:
+        term_code = "T1"
+
+    if not year.isdigit():
+        year = str(datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).year)
+
+    if not term_key:
+        term_key = make_term_key(year, term_code)
+
+    if not student_id or not term_key:
+        return page("Invalid", card_msg("Missing learner or term details."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Confirm student exists
+    cur.execute("""
+        SELECT id, grade
+        FROM students
+        WHERE id=?
+        LIMIT 1
+    """, (student_id,))
+
+    student = cur.fetchone()
+
+    if not student:
+        conn.close()
+        return page("Invalid learner", card_msg("The selected learner could not be found."))
+
+    if not grade:
+        grade = student["grade"]
+
+    saved_count = 0
+
+    subject_ids = request.form.getlist("subject_ids")
+
+    for subject_id in subject_ids:
+        subject_id = str(subject_id).strip()
+        mark_raw = request.form.get(f"mark_{subject_id}", "").strip()
+        note = request.form.get(f"note_{subject_id}", "").strip()
+
+        # Skip blank marks so AQM only captures what is on the report.
+        if mark_raw == "":
+            continue
+
+        try:
+            mark = int(mark_raw)
+        except:
+            conn.close()
+            return page("Invalid mark", card_msg("Marks must be whole numbers between 0 and 100."))
+
+        if mark < 0 or mark > 100:
+            conn.close()
+            return page("Invalid mark", card_msg("Marks must be between 0 and 100."))
+
+        cur.execute("""
+            INSERT INTO aqm_student_marks(
+                student_id,
+                subject_id,
+                month,
+                mark,
+                source,
+                note,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, 'manual', ?, ?)
+            ON CONFLICT(student_id, subject_id, month)
+            DO UPDATE SET
+                mark=excluded.mark,
+                source='manual',
+                note=excluded.note,
+                created_at=excluded.created_at
+        """, (
+            student_id,
+            subject_id,
+            term_key,
+            mark,
+            note,
+            now_utc_iso()
+        ))
+
+        saved_count += 1
+
+    # Extra subjects that appear on the report but are not listed in EBTA subjects
+    for i in range(1, 4):
+        subject_name = request.form.get(f"extra_subject_{i}", "").strip()
+        mark_raw = request.form.get(f"extra_mark_{i}", "").strip()
+        note = request.form.get(f"extra_note_{i}", "").strip()
+
+        if not subject_name and not mark_raw:
+            continue
+
+        if not subject_name or not mark_raw:
+            conn.close()
+            return page(
+                "Incomplete extra subject",
+                card_msg("Please enter both the extra subject name and mark.")
+            )
+
+        try:
+            mark = int(mark_raw)
+        except:
+            conn.close()
+            return page("Invalid mark", card_msg("Extra subject marks must be whole numbers between 0 and 100."))
+
+        if mark < 0 or mark > 100:
+            conn.close()
+            return page("Invalid mark", card_msg("Extra subject marks must be between 0 and 100."))
+
+        cur.execute("""
+            INSERT OR IGNORE INTO subjects(name, grade)
+            VALUES (?, ?)
+        """, (subject_name, grade))
+
+        cur.execute("""
+            SELECT id
+            FROM subjects
+            WHERE name=? AND grade=?
+            LIMIT 1
+        """, (subject_name, grade))
+
+        subject = cur.fetchone()
+
+        if not subject:
+            conn.close()
+            return page("Subject error", card_msg("Could not create or find the extra subject."))
+
+        subject_id = subject["id"]
+
+        cur.execute("""
+            INSERT INTO aqm_student_marks(
+                student_id,
+                subject_id,
+                month,
+                mark,
+                source,
+                note,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, 'manual', ?, ?)
+            ON CONFLICT(student_id, subject_id, month)
+            DO UPDATE SET
+                mark=excluded.mark,
+                source='manual',
+                note=excluded.note,
+                created_at=excluded.created_at
+        """, (
+            student_id,
+            subject_id,
+            term_key,
+            mark,
+            note,
+            now_utc_iso()
+        ))
+
+        saved_count += 1
+
+    conn.commit()
+    conn.close()
+
+    return redirect(request.referrer or url_for(
+        "aqm_manual_marks",
+        year=year,
+        term=term_code
+    ))
     
     
 @app.get('/aqm/learners')
