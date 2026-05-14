@@ -30428,38 +30428,17 @@ def duty_admin_enrollments():
 def duty_admin_students():
 
     r = require_duty_admin()
-    if r:
-        return r
+    if r: return r
 
     q = request.args.get("q", "").strip()
     grade = request.args.get("grade", "").strip()
-    subject_id = request.args.get("subject_id", "").strip()
-
+    
     page_num = max(1, int(request.args.get("page", 1)))
     limit = 30
     offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
-
-    # Get all subjects for the subject filter dropdown
-    cur.execute("""
-        SELECT id, name, grade
-        FROM subjects
-        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
-    """)
-    subjects = cur.fetchall()
-
-    subject_options = '<option value="">All Subjects</option>'
-
-    for sub in subjects:
-        selected = "selected" if subject_id == str(sub["id"]) else ""
-
-        subject_options += f"""
-        <option value="{sub['id']}" {selected}>
-            {grade_label(sub['grade'])} - {escape(sub['name'])}
-        </option>
-        """
 
     where = []
     params = []
@@ -30468,37 +30447,26 @@ def duty_admin_students():
         search = f"%{q}%"
         where.append("""
             (
-                s.full_name LIKE ?
-                OR s.phone_whatsapp LIKE ?
-                OR s.guardian_phone LIKE ?
-                OR s.guardian_name LIKE ?
-                OR s.email LIKE ?
-                OR s.school LIKE ?
-                OR s.province LIKE ?
+                full_name LIKE ?
+                OR phone_whatsapp LIKE ?
+                OR guardian_phone LIKE ?
+                OR guardian_name LIKE ?
+                OR email LIKE ?
+                OR school LIKE ?
+                OR province LIKE ?
             )
         """)
         params += [search, search, search, search, search, search, search]
 
     if grade:
-        where.append("s.grade = ?")
+        where.append("grade = ?")
         params.append(grade)
-
-    if subject_id:
-        where.append("""
-            EXISTS (
-                SELECT 1
-                FROM enrollments e
-                WHERE e.student_id = s.id
-                  AND e.subject_id = ?
-            )
-        """)
-        params.append(subject_id)
 
     where_sql = "WHERE " + " AND ".join(where) if where else ""
 
     cur.execute(f"""
-        SELECT COUNT(DISTINCT s.id) AS c
-        FROM students s
+        SELECT COUNT(*) AS c
+        FROM students
         {where_sql}
     """, params)
 
@@ -30509,104 +30477,36 @@ def duty_admin_students():
     data_params.extend([limit, offset])
 
     cur.execute(f"""
-        SELECT DISTINCT
-            s.*
-        FROM students s
+        SELECT *
+        FROM students
         {where_sql}
-        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.full_name
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), full_name
         LIMIT ? OFFSET ?
     """, data_params)
 
     rows = cur.fetchall()
-
-    student_ids = [str(s["id"]) for s in rows]
-
-    subject_lookup = {}
-
-    if student_ids:
-        placeholders = ",".join("?" * len(student_ids))
-
-        cur.execute(f"""
-            SELECT
-                e.student_id,
-                sub.name AS subject_name,
-                sub.grade AS subject_grade,
-                e.status,
-                e.month
-            FROM enrollments e
-            JOIN subjects sub ON sub.id = e.subject_id
-            WHERE e.student_id IN ({placeholders})
-            ORDER BY e.month DESC,
-                     CAST(REPLACE(sub.grade,'G','') AS INTEGER),
-                     sub.name
-        """, student_ids)
-
-        for row in cur.fetchall():
-            sid = row["student_id"]
-
-            chip_class = "pending"
-
-            if row["status"] == "ACTIVE":
-                chip_class = "active"
-            elif row["status"] == "LAPSED":
-                chip_class = "lapsed"
-
-            subject_lookup.setdefault(sid, []).append(
-                f"""
-                <span class="chip {chip_class}" title="{escape(row['month'] or '')}">
-                    {grade_label(row['subject_grade'])} {escape(row['subject_name'])}
-                </span>
-                """
-            )
-
     conn.close()
 
     trs = ""
 
     for s in rows:
-        student_subjects = subject_lookup.get(s["id"], [])
-
-        subjects_html = "".join(student_subjects[:6])
-
-        if len(student_subjects) > 6:
-            subjects_html += f"""
-            <span class="chip">
-                +{len(student_subjects) - 6} more
-            </span>
-            """
-
-        if not subjects_html:
-            subjects_html = "<span class='mini muted'>No subjects found</span>"
-
         trs += f"""
         <tr>
             <td>
                 <strong>{escape(s['full_name'])}</strong>
                 <div class="mini muted">PIN: {escape(s['pin'] or '—')}</div>
             </td>
-
             <td>{grade_label(s['grade'])}</td>
-
-            <td style="min-width:260px">
-                <div style="display:flex;gap:5px;flex-wrap:wrap">
-                    {subjects_html}
-                </div>
-            </td>
-
             <td>{escape(s['phone_whatsapp'] or '—')}</td>
-
             <td>
                 {escape(s['guardian_name'] or '—')}
                 <div class="mini muted">{escape(s['guardian_phone'] or '—')}</div>
             </td>
-
             <td>{escape(s['email'] or '—')}</td>
-
             <td>
                 {escape(s['school'] or '—')}
                 <div class="mini muted">{escape(s['province'] or '—')}</div>
             </td>
-
             <td>{escape((s['created_at'] or '')[:16].replace('T',' '))}</td>
         </tr>
         """
@@ -30618,8 +30518,7 @@ def duty_admin_students():
         <h1>Students</h1>
 
         <p class="muted">
-            View learner details captured on the portal. You can filter learners by grade or enrolled subject.
-            Editing and deletion are restricted.
+            View learner details captured on the portal. Editing and deletion are restricted.
         </p>
 
         <form method="get" class="toolbar">
@@ -30635,26 +30534,10 @@ def duty_admin_students():
                 )}
             </select>
 
-            <select name="subject_id">
-                {subject_options}
-            </select>
-
             <button class="btn mini">Search</button>
-
-            <a class="btn mini secondary" href="{url_for('duty_admin_students')}">
-                Clear
-            </a>
         </form>
-
-        <div class="mini muted" style="margin:8px 0">
-            Showing {len(rows)} of {total} student record(s).
-        </div>
-
-        {pagination_controls("/duty-admin/students", page_num, total_pages, {
-            "q": q,
-            "grade": grade,
-            "subject_id": subject_id
-        })}
+        
+        {pagination_controls("/duty-admin/students", page_num, total_pages, {"q": q, "grade": grade})}
 
         <div class="scroll-x">
             <table>
@@ -30662,7 +30545,6 @@ def duty_admin_students():
                     <tr>
                         <th>Student</th>
                         <th>Grade</th>
-                        <th>Subjects</th>
                         <th>Phone</th>
                         <th>Guardian</th>
                         <th>Email</th>
@@ -30670,18 +30552,13 @@ def duty_admin_students():
                         <th>Created</th>
                     </tr>
                 </thead>
-
                 <tbody>
-                    {trs or "<tr><td colspan='8'>No students found.</td></tr>"}
+                    {trs or "<tr><td colspan='7'>No students found.</td></tr>"}
                 </tbody>
             </table>
         </div>
-
-        {pagination_controls("/duty-admin/students", page_num, total_pages, {
-            "q": q,
-            "grade": grade,
-            "subject_id": subject_id
-        })}
+        
+        {pagination_controls("/duty-admin/students", page_num, total_pages, {"q": q, "grade": grade})}
     </section>
     """
 
