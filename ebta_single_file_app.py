@@ -17105,7 +17105,7 @@ def admin_followups():
     if current_page < 1:
         current_page = 1
 
-    per_page = 25
+    per_page = 15
 
     conn = get_db()
     cur = conn.cursor()
