@@ -17087,72 +17087,30 @@ def admin_followups():
     if r:
         return r
 
-    conn = get_db()
-    cur = conn.cursor()
-
     # ================= SEARCH =================
     q = request.args.get("q", "").strip()
 
     # ================= FILTERS =================
-    f_grade = request.args.get("grade", "")
-    f_subject = request.args.get("subject", "")
-    f_status = request.args.get("status", "")
-    f_issue = request.args.get("issue", "")
+    f_grade = request.args.get("grade", "").strip()
+    f_subject = request.args.get("subject", "").strip()
+    f_status = request.args.get("status", "").strip()
+    f_issue = request.args.get("issue", "").strip()
 
     # ================= PAGINATION =================
-    current_page = int(request.args.get("page", 1))
-    per_page = 10
-    offset = (current_page - 1) * per_page
+    try:
+        current_page = int(request.args.get("page", 1))
+    except:
+        current_page = 1
 
-    where = []
-    params = []
+    if current_page < 1:
+        current_page = 1
 
-    if q:
-        search = f"%{q}%"
-        where.append("""(
-            full_name LIKE ?
-            OR phone LIKE ?
-            OR subjects LIKE ?
-            OR notes LIKE ?
-        )""")
-        params += [search, search, search, search]
+    per_page = 25
 
-    if f_grade:
-        where.append("grade=?")
-        params.append(f_grade)
+    conn = get_db()
+    cur = conn.cursor()
 
-    if f_subject:
-        where.append("subjects LIKE ?")
-        params.append(f"%{f_subject}%")
-
-    if f_status:
-        where.append("followup_status=?")
-        params.append(f_status)
-
-    if f_issue:
-        where.append("issue_type=?")
-        params.append(f_issue)
-
-    where_sql = ""
-    if where:
-        where_sql = "WHERE " + " AND ".join(where)
-
-    # ===== COUNT TOTAL =====
-    cur.execute(f"SELECT COUNT(*) as c FROM followups {where_sql}", params)
-    total_rows = cur.fetchone()["c"]
-    total_pages = max(1, (total_rows + per_page - 1) // per_page)
-
-    # ===== MAIN QUERY =====
-    cur.execute(f"""
-        SELECT * FROM followups
-        {where_sql}
-        ORDER BY created_at DESC
-        LIMIT ? OFFSET ?
-    """, params + [per_page, offset])
-
-    rows = cur.fetchall()
-
-    ISSUE_TYPES = [
+    ISSUE_TYPES_LOCAL = [
         "Missing R50 Registration Fee",
         "Payment Missing",
         "Fake Upload",
@@ -17161,16 +17119,103 @@ def admin_followups():
         "Other"
     ]
 
+    # Subjects for filter and editable rows
     cur.execute("SELECT DISTINCT name FROM subjects ORDER BY name")
     subjects = [row["name"] for row in cur.fetchall()]
 
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                full_name LIKE ?
+                OR phone LIKE ?
+                OR subjects LIKE ?
+                OR notes LIKE ?
+                OR issue_type LIKE ?
+                OR captured_by LIKE ?
+                OR updated_by LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search, search, search]
+
+    if f_grade:
+        where.append("grade = ?")
+        params.append(f_grade)
+
+    if f_subject:
+        where.append("subjects LIKE ?")
+        params.append(f"%{f_subject}%")
+
+    if f_status:
+        where.append("followup_status = ?")
+        params.append(f_status)
+
+    if f_issue:
+        where.append("issue_type = ?")
+        params.append(f_issue)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    # ================= COUNT TOTAL =================
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM followups
+        {where_sql}
+    """, params)
+
+    total_rows = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total_rows + per_page - 1) // per_page)
+
+    if current_page > total_pages:
+        current_page = total_pages
+
+    offset = (current_page - 1) * per_page
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    # ================= MAIN QUERY =================
+    cur.execute(f"""
+        SELECT *
+        FROM followups
+        {where_sql}
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
     conn.close()
+
+    query_params = {
+        "q": q,
+        "grade": f_grade,
+        "subject": f_subject,
+        "status": f_status,
+        "issue": f_issue
+    }
+
+    top_pagination = pagination_controls(
+        "/admin/followups",
+        current_page,
+        total_pages,
+        query_params
+    )
+
+    bottom_pagination = pagination_controls(
+        "/admin/followups",
+        current_page,
+        total_pages,
+        query_params
+    )
 
     trs = []
 
     for row in rows:
-
         row_class = ""
+
         if row["followup_status"] == "OPEN":
             row_class = "follow-open"
         elif row["followup_status"] == "IN PROGRESS":
@@ -17181,19 +17226,23 @@ def admin_followups():
             row_class = "follow-paid"
 
         overdue_class = ""
+
         if row["payment_date"] and row["followup_status"] == "OPEN":
             try:
                 pay_date = datetime.datetime.strptime(
                     row["payment_date"], "%Y-%m-%d"
                 ).date()
+
                 if pay_date < datetime.date.today():
                     overdue_class = "overdue"
             except:
                 pass
 
         wa_link = ""
+
         if row["phone"]:
             phone = normalize_phone(row["phone"])
+
             if phone:
                 wa_link = f"""
                 <a class="btn mini success"
@@ -17202,14 +17251,18 @@ def admin_followups():
                    WA
                 </a>
                 """
-        
-        subjects_list = [s.strip() for s in (row["subjects"] or "").split(",") if s.strip()]
+
+        subjects_list = [
+            s.strip()
+            for s in (row["subjects"] or "").split(",")
+            if s.strip()
+        ]
+
         subjects_set = set(subjects_list)
 
         subject_chips = "".join(
             f"""
-            <span class='chip subject-chip'
-                  onclick="window.location='?subject={escape(s)}'">
+            <span class="chip subject-chip">
                 {escape(s)}
             </span>
             """
@@ -17235,7 +17288,8 @@ def admin_followups():
                 {subject_chips}
             </div>
 
-            <select name="subjects"
+            <select form="followup_form_{row['id']}"
+                    name="subjects"
                     multiple
                     size="4"
                     style="min-width:220px">
@@ -17248,214 +17302,265 @@ def admin_followups():
 
         </div>
         """
-        
+
+        form_id = f"followup_form_{row['id']}"
+
+        delete_button = ""
+
+        if is_high_admin():
+            delete_button = f"""
+            <form method="post"
+                  action="{url_for('admin_followup_delete', fid=row['id'])}"
+                  onsubmit="return confirm('Delete this follow-up?');"
+                  style="display:inline;">
+                <button type="submit" class="btn mini danger">
+                    Delete
+                </button>
+            </form>
+            """
+
         trs.append(f"""
         <tr class="{row_class} {overdue_class}">
-        <form method="post" action="{url_for('admin_followup_update', fid=row['id'])}">
 
-        <td><input name="full_name" value="{escape(row['full_name'])}"></td>
+            <td>
+                <form id="{form_id}"
+                      method="post"
+                      action="{url_for('admin_followup_update', fid=row['id'])}">
+                </form>
 
-        <td>
-        <input name="phone" value="{escape(row['phone'] or '')}">
-        {wa_link}
-        </td>
+                <input form="{form_id}"
+                       name="full_name"
+                       value="{escape(row['full_name'] or '')}">
+            </td>
 
-        <td>
-        <select name="grade">
-        <option value="">Select</option>
-        {''.join(
-        f"<option value='{g}' {'selected' if row['grade']==g else ''}>{grade_label(g)}</option>"
-        for g in ["G8","G9","G10","G11","G12","G13"]
-        )}
-        </select>
-        </td>
+            <td>
+                <input form="{form_id}"
+                       name="phone"
+                       value="{escape(row['phone'] or '')}">
+                {wa_link}
+            </td>
 
-        <td style="max-width:250px; flex-wrap:wrap;">
-            {subjects_html}
-        </td>
+            <td>
+                <select form="{form_id}" name="grade">
+                    <option value="">Select</option>
+                    {''.join(
+                        f"<option value='{g}' {'selected' if row['grade']==g else ''}>{grade_label(g)}</option>"
+                        for g in ["G8","G9","G10","G11","G12","G13"]
+                    )}
+                </select>
+            </td>
 
-        <td>
-        <select name="issue_type">
-        <option value="">Select</option>
-        {''.join(
-        f"<option value='{i}' {'selected' if row['issue_type']==i else ''}>{i}</option>"
-        for i in ISSUE_TYPES
-        )}
-        </select>
-        </td>
+            <td style="max-width:260px">
+                {subjects_html}
+            </td>
 
-        <td>
-        <select name="followup_status">
-        <option value="OPEN" {'selected' if row['followup_status']=="OPEN" else ""}>OPEN</option>
-        <option value="IN PROGRESS" {'selected' if row['followup_status']=="IN PROGRESS" else ""}>IN PROGRESS</option>
-        <option value="AWAITING POP" {'selected' if row['followup_status']=="AWAITING POP" else ""}>AWAITING POP</option>
-        <option value="RESOLVED" {'selected' if row['followup_status']=="RESOLVED" else ""}>RESOLVED</option>
-        <option value="DECLINED" {'selected' if row['followup_status']=="DECLINED" else ""}>DECLINED</option>
-        </select>
-        </td>
+            <td>
+                <select form="{form_id}" name="issue_type">
+                    <option value="">Select</option>
+                    {''.join(
+                        f"<option value='{i}' {'selected' if row['issue_type']==i else ''}>{i}</option>"
+                        for i in ISSUE_TYPES_LOCAL
+                    )}
+                </select>
+            </td>
 
-        <td>
-        <select name="captured_by">
-        <option value="Admin" {'selected' if row['captured_by']=="Admin" else ""}>Admin</option>
-        <option value="Admission COD" {'selected' if row['captured_by']=="Admission COD" else ""}>Admission COD</option>
-        <option value="Leadership" {'selected' if row['captured_by']=="Leadership" else ""}>Leadership</option>
-        </select>
-        </td>
+            <td>
+                <select form="{form_id}" name="followup_status">
+                    <option value="OPEN" {'selected' if row['followup_status']=="OPEN" else ""}>OPEN</option>
+                    <option value="IN PROGRESS" {'selected' if row['followup_status']=="IN PROGRESS" else ""}>IN PROGRESS</option>
+                    <option value="AWAITING POP" {'selected' if row['followup_status']=="AWAITING POP" else ""}>AWAITING POP</option>
+                    <option value="RESOLVED" {'selected' if row['followup_status']=="RESOLVED" else ""}>RESOLVED</option>
+                    <option value="DECLINED" {'selected' if row['followup_status']=="DECLINED" else ""}>DECLINED</option>
+                </select>
+            </td>
 
-        <td>
-        <select name="updated_by">
-        <option value="">Select</option>
-        <option value="Admin" {'selected' if row['updated_by']=="Admin" else ""}>Admin</option>
-        <option value="Admission COD" {'selected' if row['updated_by']=="Admission COD" else ""}>Admission COD</option>
-        <option value="Leadership" {'selected' if row['updated_by']=="Leadership" else ""}>Leadership</option>
-        </select>
-        </td>
+            <td>
+                <select form="{form_id}" name="captured_by">
+                    <option value="Admin" {'selected' if row['captured_by']=="Admin" else ""}>Admin</option>
+                    <option value="Admission COD" {'selected' if row['captured_by']=="Admission COD" else ""}>Admission COD</option>
+                    <option value="Leadership" {'selected' if row['captured_by']=="Leadership" else ""}>Leadership</option>
+                </select>
+            </td>
 
-        <td><input type="date" name="payment_date" value="{row['payment_date'] or ''}"></td>
+            <td>
+                <select form="{form_id}" name="updated_by">
+                    <option value="">Select</option>
+                    <option value="Admin" {'selected' if row['updated_by']=="Admin" else ""}>Admin</option>
+                    <option value="Admission COD" {'selected' if row['updated_by']=="Admission COD" else ""}>Admission COD</option>
+                    <option value="Leadership" {'selected' if row['updated_by']=="Leadership" else ""}>Leadership</option>
+                </select>
+            </td>
 
-        <td><input type="date" name="date_communicated" value="{row['date_communicated'] or ''}"></td>
+            <td>
+                <input form="{form_id}"
+                       type="date"
+                       name="payment_date"
+                       value="{escape(row['payment_date'] or '')}">
+            </td>
 
-        <td style="min-width:260px">
+            <td>
+                <input form="{form_id}"
+                       type="date"
+                       name="date_communicated"
+                       value="{escape(row['date_communicated'] or '')}">
+            </td>
 
-            <div style="
-                background:#f8fafc;
-                border:1px solid #e2e8f0;
-                border-radius:10px;
-                padding:8px;
-                max-height:120px;
-                overflow:auto;
-                margin-bottom:8px;
-                white-space:pre-wrap;
-                font-size:12px;
-                line-height:1.5;
-            ">{escape(row['notes'] or 'No notes yet.')}</div>
+            <td style="min-width:260px">
 
-            <textarea name="new_note"
-                      rows="2"
-                      placeholder="Add a new note. Previous notes will be preserved."></textarea>
+                <div style="
+                    background:#f8fafc;
+                    border:1px solid #e2e8f0;
+                    border-radius:10px;
+                    padding:8px;
+                    max-height:120px;
+                    overflow:auto;
+                    margin-bottom:8px;
+                    white-space:pre-wrap;
+                    font-size:12px;
+                    line-height:1.5;
+                ">{escape(row['notes'] or 'No notes yet.')}</div>
 
-        </td>
+                <textarea form="{form_id}"
+                          name="new_note"
+                          rows="2"
+                          placeholder="Add a new note. Previous notes will be preserved."></textarea>
 
-        <td style="display:flex;gap:6px">
+            </td>
 
-            <!-- SAVE FORM BUTTON -->
-            <button class="btn mini success">Save</button>
+            <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    <button form="{form_id}" class="btn mini success">
+                        Save
+                    </button>
 
-        </form>
+                    {delete_button}
+                </div>
+            </td>
 
-        <!-- DELETE FORM (separate form) -->
-        {"" if not is_high_admin() else f'''
-        <form method="post"
-              action="{url_for('admin_followup_delete', fid=row['id'])}"
-              onsubmit="return confirm('Delete this follow-up?');"
-              style="display:inline;">
-            <button type="submit" class="btn mini danger">Delete</button>
-        </form>
-        '''}
-
-        </td>
-
-        </form>
         </tr>
         """)
+
+    status_options = "".join(
+        f"""
+        <option value="{st}" {'selected' if f_status == st else ''}>
+            {st}
+        </option>
+        """
+        for st in FOLLOWUP_STATUSES
+    )
+
+    issue_options = "".join(
+        f"""
+        <option value="{escape(i)}" {'selected' if f_issue == i else ''}>
+            {escape(i)}
+        </option>
+        """
+        for i in ISSUE_TYPES_LOCAL
+    )
 
     body = f"""
     {admin_nav()}
 
-    <section class='card'>
-    <h1>Follow-Up Tracker</h1>
+    <section class="card">
+        <h1>Follow-Up Tracker</h1>
 
-    <div class='toolbar'>
+        <p class="muted">
+            Showing {len(rows)} of {total_rows} follow-up record(s).
+        </p>
 
-    <form method="get" style="display:flex;gap:6px;flex-wrap:wrap">
+        <div class="toolbar">
 
-    <input type="text" name="q" value="{escape(q)}" placeholder="Search">
+            <form method="get" style="display:flex;gap:6px;flex-wrap:wrap">
 
-    <select name="grade">
-    <option value="">All Grades</option>
-    {''.join(
-    f"<option value='{g}' {'selected' if f_grade==g else ''}>{grade_label(g)}</option>"
-    for g in ["G8","G9","G10","G11","G12","G13"]
-    )}
-    </select>
+                <input type="text"
+                       name="q"
+                       value="{escape(q)}"
+                       placeholder="Search name, phone, subject, issue or notes">
 
-    <select name="subject">
-    <option value="">All Subjects</option>
-    {''.join(
-    f"<option value='{escape(s)}' {'selected' if f_subject==s else ''}>{escape(s)}</option>"
-    for s in subjects
-    )}
-    </select>
+                <select name="grade">
+                    <option value="">All Grades</option>
+                    {''.join(
+                        f"<option value='{g}' {'selected' if f_grade==g else ''}>{grade_label(g)}</option>"
+                        for g in ["G8","G9","G10","G11","G12","G13"]
+                    )}
+                </select>
 
-    <select name="status">
-    <option value="">All Status</option>
-    <option value="OPEN">OPEN</option>
-    <option value="IN PROGRESS">IN PROGRESS</option>
-    <option value="AWAITING POP">AWAITING POP</option>
-    <option value="RESOLVED">RESOLVED</option>
-    <option value="DECLINED">DECLINED</option>
-    </select>
+                <select name="subject">
+                    <option value="">All Subjects</option>
+                    {''.join(
+                        f"<option value='{escape(s)}' {'selected' if f_subject==s else ''}>{escape(s)}</option>"
+                        for s in subjects
+                    )}
+                </select>
 
-    <button class="btn mini">Filter</button>
+                <select name="status">
+                    <option value="">All Statuses</option>
+                    {status_options}
+                </select>
 
-    </form>
+                <select name="issue">
+                    <option value="">All Issues</option>
+                    {issue_options}
+                </select>
 
-    <a class="btn success mini" href="{url_for('admin_followup_add')}">Add New</a>
+                <button class="btn mini">Filter</button>
 
-    <a class="btn secondary mini" href="{url_for('export_followups')}">Export Excel</a>
+                <a class="btn mini secondary" href="{url_for('admin_followups')}">
+                    Clear
+                </a>
 
-    </div>
+            </form>
 
-    <div class="scroll-x">
+            <a class="btn success mini" href="{url_for('admin_followup_add')}">
+                Add New
+            </a>
 
-    <table class="followups-table">
+            <a class="btn secondary mini" href="{url_for('export_followups')}">
+                Export Excel
+            </a>
 
-    <thead>
+        </div>
 
-    <tr>
+        {top_pagination}
 
-    <th>Name</th>
-    <th>Phone</th>
-    <th>Grade</th>
-    <th>Subjects</th>
-    <th>Issue</th>
-    <th>Status</th>
-    <th>Captured</th>
-    <th>Updated</th>
-    <th>Payment</th>
-    <th>Communicated</th>
-    <th>Notes</th>
-    <th>Save</th>
+        <div class="scroll-x">
 
-    </tr>
+            <table class="followups-table">
 
-    </thead>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Phone</th>
+                        <th>Grade</th>
+                        <th>Subjects</th>
+                        <th>Issue</th>
+                        <th>Status</th>
+                        <th>Captured</th>
+                        <th>Updated</th>
+                        <th>Payment</th>
+                        <th>Communicated</th>
+                        <th>Notes</th>
+                        <th>Save</th>
+                    </tr>
+                </thead>
 
-    <tbody>
+                <tbody>
+                    {''.join(trs) or "<tr><td colspan='12'>No follow-ups found.</td></tr>"}
+                </tbody>
 
-    {''.join(trs) or "<tr><td colspan='12'>No followups yet.</td></tr>"}
+            </table>
 
-    </tbody>
+        </div>
 
-    </table>
-
-    </div>
-
-    <div class="toolbar" style="justify-content:center;margin-top:10px">
-
-    {f"<a class='btn mini secondary' href='?page={current_page-1}&q={q}&grade={f_grade}&subject={f_subject}&status={f_status}'>Prev</a>" if current_page>1 else ""}
-
-    <span class="chip">Page {current_page} / {total_pages}</span>
-
-    {f"<a class='btn mini secondary' href='?page={current_page+1}&q={q}&grade={f_grade}&subject={f_subject}&status={f_status}'>Next</a>" if current_page<total_pages else ""}
-
-    </div>
+        {bottom_pagination}
 
     </section>
     """
 
     return page("Followups", body)
-    
+  
+
+  
 @app.get('/admin/followups/add')
 def admin_followup_add():
     r = require_admin()
@@ -17589,7 +17694,7 @@ def admin_followup_create():
     conn.commit()
     conn.close()
 
-    return redirect(url_for('admin_followups'))
+    return redirect(request.referrer or url_for('admin_followups'))
     
 
 @app.post('/admin/followups/update/<int:fid>')
@@ -29821,6 +29926,7 @@ def duty_admin_nav():
         <a class="btn secondary" href="{url_for('duty_admin_groups')}">Groups</a>
         <a class="btn secondary" href="{url_for('duty_admin_sessions')}">Sessions</a>
         <a class="btn secondary" href="{url_for('duty_admin_inbox')}">Inbox</a>
+
         <a class="btn secondary" href="{url_for('duty_admin_reports')}">Student Reports</a>
         <a class="btn secondary" href="{url_for('duty_admin_followups')}">Follow-Ups</a>
         <a class="btn danger" href="{url_for('duty_admin_logout')}">Logout</a>
