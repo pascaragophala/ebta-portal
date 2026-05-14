@@ -30285,7 +30285,7 @@ def duty_admin_enrollments():
     grade = request.args.get("grade", "").strip()
     
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 30
+    limit = 15
     offset = (page_num - 1) * limit
 
     conn = get_db()
@@ -30483,7 +30483,7 @@ def duty_admin_students():
     grade = request.args.get("grade", "").strip()
     
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 30
+    limit = 15
     offset = (page_num - 1) * limit
 
     conn = get_db()
@@ -30624,7 +30624,7 @@ def duty_admin_groups():
     month = get_admin_active_month()
 
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 30
+    limit = 15
     offset = (page_num - 1) * limit
 
     conn = get_db()
@@ -30733,7 +30733,7 @@ def duty_admin_sessions():
     if r: return r
     
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 30
+    limit = 15
     offset = (page_num - 1) * limit
 
     conn = get_db()
@@ -31901,7 +31901,7 @@ def duty_admin_reports():
     term = request.args.get("term", "").strip()
     
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 30
+    limit = 15
     offset = (page_num - 1) * limit
 
     conn = get_db()
@@ -32091,7 +32091,7 @@ def duty_admin_followups():
     grade = request.args.get("grade", "").strip()
 
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 20
+    limit = 15
     offset = (page_num - 1) * limit
 
     conn = get_db()
@@ -33588,7 +33588,7 @@ def admission_enrollments():
     grade = request.args.get("grade", "").strip()
 
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 30
+    limit = 15
     offset = (page_num - 1) * limit
 
     conn = get_db()
@@ -33849,7 +33849,7 @@ def admission_students():
     grade = request.args.get("grade", "").strip()
 
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 30
+    limit = 15
     offset = (page_num - 1) * limit
 
     conn = get_db()
@@ -33997,7 +33997,7 @@ def admission_groups():
     month = get_admin_active_month()
 
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 30
+    limit = 15
     offset = (page_num - 1) * limit
 
     conn = get_db()
@@ -34105,7 +34105,7 @@ def admission_sessions():
         return r
 
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 30
+    limit = 15
     offset = (page_num - 1) * limit
 
     conn = get_db()
@@ -34626,7 +34626,7 @@ def admission_followups():
     grade = request.args.get("grade", "").strip()
 
     page_num = max(1, int(request.args.get("page", 1)))
-    limit = 20
+    limit = 15
     offset = (page_num - 1) * limit
 
     conn = get_db()
