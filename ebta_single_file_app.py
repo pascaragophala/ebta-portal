@@ -29821,7 +29821,6 @@ def duty_admin_nav():
         <a class="btn secondary" href="{url_for('duty_admin_groups')}">Groups</a>
         <a class="btn secondary" href="{url_for('duty_admin_sessions')}">Sessions</a>
         <a class="btn secondary" href="{url_for('duty_admin_inbox')}">Inbox</a>
-        <a class="btn secondary" href="{url_for('duty_admin_direct_messages')}">Direct Messages</a>
         <a class="btn secondary" href="{url_for('duty_admin_reports')}">Student Reports</a>
         <a class="btn secondary" href="{url_for('duty_admin_followups')}">Follow-Ups</a>
         <a class="btn danger" href="{url_for('duty_admin_logout')}">Logout</a>
