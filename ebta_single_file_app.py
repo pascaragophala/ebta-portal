@@ -20159,6 +20159,35 @@ def admin_delete_academic_quality_manager(aqm_id):
     return redirect(url_for("admin_academic_quality_managers"))
     
     
+def short_file_name(file_name, max_len=24):
+    """
+    Shortens long file names for display only.
+    It does not rename or change the actual uploaded file.
+    """
+    if not file_name:
+        return "—"
+
+    file_name = str(file_name).strip()
+
+    if len(file_name) <= max_len:
+        return file_name
+
+    if "." in file_name:
+        name_part, ext = file_name.rsplit(".", 1)
+        ext = "." + ext
+    else:
+        name_part = file_name
+        ext = ""
+
+    allowed_name_len = max_len - len(ext) - 3
+
+    if allowed_name_len < 8:
+        allowed_name_len = 8
+
+    return name_part[:allowed_name_len] + "..." + ext    
+    
+    
+    
 @app.get('/aqm/reports')
 def aqm_reports():
     r = require_aqm()
@@ -20330,6 +20359,15 @@ def aqm_reports():
             </div>
             """
 
+
+        file_name = r0["file_name"] or "—"
+        short_name = short_file_name(file_name, 24)
+
+        file_ext = "FILE"
+
+        if file_name and "." in file_name:
+            file_ext = file_name.rsplit(".", 1)[1].upper()
+        
         rows += f"""
         <tr>
             <td>{r0['full_name']}</td>
@@ -20339,7 +20377,18 @@ def aqm_reports():
             <td style="min-width:120px">{guardian_phone_html}</td>
             <td>{r0['school'] or '—'}</td>
             <td>{r0['term'] or '—'}</td>
-            <td>{r0['file_name']}</td>
+            <td style="max-width:220px">
+                <div style="display:flex;align-items:center;gap:6px;max-width:220px">
+                    <span class="chip" style="font-size:10px;padding:3px 7px">
+                        {escape(file_ext)}
+                    </span>
+
+                    <span title="{escape(file_name)}"
+                          style="display:inline-block;max-width:155px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                        {escape(short_name)}
+                    </span>
+                </div>
+            </td>
             <td>{r0['upload_date'][:16].replace('T',' ')}</td>
             <td style="display:flex;gap:6px;flex-wrap:wrap">
                 <a class="btn mini success"
@@ -20365,7 +20414,7 @@ def aqm_reports():
         if page_num > 1:
             prev_link = f"""
             <a class="btn mini secondary"
-               href="/aqm/reports?month={month}&grade={grade_filter}&search={search}&term={term_filter}&page={page_num - 1}"
+               href="/aqm/reports?month={month}&grade={grade_filter}&search={search}&term={term_filter}&page={page_num - 1}">
                 ← Previous
             </a>
             """
@@ -20373,7 +20422,7 @@ def aqm_reports():
         if page_num < total_pages:
             next_link = f"""
             <a class="btn mini secondary"
-               href="/aqm/reports?month={month}&grade={grade_filter}&search={search}&term={term_filter}&page={page_num + 1}"
+               href="/aqm/reports?month={month}&grade={grade_filter}&search={search}&term={term_filter}&page={page_num + 1}">
                 Next →
             </a>
             """
