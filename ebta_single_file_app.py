@@ -860,6 +860,58 @@ def init_db():
         updated_at TEXT
     );
     """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS discount_coupons(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        code TEXT NOT NULL UNIQUE,
+
+        target_student_id INTEGER,
+        owner_student_id INTEGER,
+
+        discount_percent INTEGER NOT NULL,
+
+        applies_to TEXT NOT NULL DEFAULT 'ALL',
+        subject_id INTEGER,
+
+        source TEXT NOT NULL DEFAULT 'MANUAL',
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+
+        max_uses INTEGER NOT NULL DEFAULT 1,
+        used_count INTEGER NOT NULL DEFAULT 0,
+
+        created_by_role TEXT,
+        created_by_id INTEGER,
+
+        created_at TEXT NOT NULL,
+        used_at TEXT,
+
+        notes TEXT,
+
+        FOREIGN KEY(target_student_id) REFERENCES students(id) ON DELETE SET NULL,
+        FOREIGN KEY(owner_student_id) REFERENCES students(id) ON DELETE SET NULL,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS referral_uses(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        referrer_student_id INTEGER NOT NULL,
+        referred_student_id INTEGER NOT NULL,
+
+        referral_code TEXT NOT NULL,
+        enrollment_month TEXT,
+        created_at TEXT NOT NULL,
+
+        UNIQUE(referrer_student_id, referred_student_id),
+
+        FOREIGN KEY(referrer_student_id) REFERENCES students(id) ON DELETE CASCADE,
+        FOREIGN KEY(referred_student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
 
     
     ensure_column(conn, "students", "guardian_name", "TEXT")
@@ -888,6 +940,15 @@ def init_db():
     ensure_column(conn, "students", "profile_picture_uploaded_at", "TEXT")
     ensure_column(conn, "tutor_applications", "reliable_internet", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "tutor_applications", "device_access", "INTEGER NOT NULL DEFAULT 0")
+    
+    ensure_column(conn, "students", "referral_code", "TEXT")
+    ensure_column(conn, "students", "referral_points", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "students", "referral_total_count", "INTEGER NOT NULL DEFAULT 0")
+
+    ensure_column(conn, "enrollments", "coupon_code", "TEXT")
+    ensure_column(conn, "enrollments", "coupon_discount_amount", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "enrollments", "coupon_type", "TEXT")
+    ensure_column(conn, "enrollments", "referral_code_used", "TEXT")
     
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_tracker
@@ -950,6 +1011,11 @@ def init_db():
     
     cur.execute("CREATE INDEX IF NOT EXISTS idx_admission_coordinators_phone ON admission_coordinators(phone)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_admission_coordinators_active ON admission_coordinators(is_active)")
+    
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_students_referral_code ON students(referral_code)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_discount_coupons_code ON discount_coupons(code)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_discount_coupons_target ON discount_coupons(target_student_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_referral_uses_referrer ON referral_uses(referrer_student_id)")
 
 
     cur.execute("""
@@ -1368,6 +1434,443 @@ def set_setting(key, value):
     conn.close()
 
 def grade_label(g): return g.replace("G","Grade ")
+
+def fee_for_grade(g):
+    """
+    EBTA subject fee based on grade.
+    Adjust these amounts here if prices change later.
+    """
+    if g == "G13":
+        return 350
+    if g == "G12":
+        return 250
+    return 200
+
+
+def generate_short_code(prefix="EBTA", size=6):
+    """
+    Generates a short readable code.
+    Example: D50-K7P9QW
+    """
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return prefix + "-" + "".join(secrets.choice(alphabet) for _ in range(size))
+
+
+def ensure_student_referral_code(conn, student_id):
+    """
+    Every student must have one permanent referral code.
+    """
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT referral_code
+        FROM students
+        WHERE id=?
+        LIMIT 1
+    """, (student_id,))
+
+    row = cur.fetchone()
+
+    if row and row["referral_code"]:
+        return row["referral_code"]
+
+    while True:
+        code = generate_short_code("REF", 6)
+
+        cur.execute("""
+            SELECT id
+            FROM students
+            WHERE referral_code=?
+            LIMIT 1
+        """, (code,))
+
+        if not cur.fetchone():
+            break
+
+    cur.execute("""
+        UPDATE students
+        SET referral_code=?
+        WHERE id=?
+    """, (code, student_id))
+
+    return code
+
+
+def ensure_all_student_referral_codes(conn):
+    """
+    Creates referral codes for older students who existed before this feature.
+    """
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id
+        FROM students
+        WHERE referral_code IS NULL
+           OR TRIM(referral_code) = ''
+    """)
+
+    rows = cur.fetchall()
+
+    for r in rows:
+        ensure_student_referral_code(conn, r["id"])
+
+
+def get_subject_fee_map(conn, subject_ids):
+    """
+    Returns fee per selected subject.
+    Example: {'1': 200, '2': 250}
+    """
+    cur = conn.cursor()
+
+    if not subject_ids:
+        return {}
+
+    placeholders = ",".join("?" * len(subject_ids))
+
+    cur.execute(f"""
+        SELECT id, grade
+        FROM subjects
+        WHERE id IN ({placeholders})
+    """, subject_ids)
+
+    fee_map = {}
+
+    for row in cur.fetchall():
+        fee_map[str(row["id"])] = fee_for_grade(row["grade"])
+
+    return fee_map
+
+
+def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subtotal):
+    """
+    Validates coupon/referral code during registration.
+
+    Returns:
+    {
+        valid: True/False,
+        message: "...",
+        code_type: MANUAL | REFERRAL_REWARD | REFERRAL_ONLY | NONE | INVALID,
+        discount_amount: number,
+        coupon_id: id or None,
+        referral_owner_id: student_id or None
+    }
+    """
+
+    code = (code or "").strip().upper()
+
+    if not code:
+        return {
+            "valid": True,
+            "message": "",
+            "code_type": "NONE",
+            "discount_amount": 0,
+            "coupon_id": None,
+            "referral_owner_id": None
+        }
+
+    cur = conn.cursor()
+
+    # 1. Check discount coupon first
+    cur.execute("""
+        SELECT *
+        FROM discount_coupons
+        WHERE UPPER(code)=?
+          AND status='ACTIVE'
+          AND used_count < max_uses
+        LIMIT 1
+    """, (code,))
+
+    coupon = cur.fetchone()
+
+    if coupon:
+        target_student_id = coupon["target_student_id"]
+
+        if target_student_id and int(target_student_id) != int(student_id):
+            return {
+                "valid": False,
+                "message": "This discount code belongs to another learner.",
+                "code_type": "INVALID",
+                "discount_amount": 0,
+                "coupon_id": None,
+                "referral_owner_id": None
+            }
+
+        discount_percent = int(coupon["discount_percent"] or 0)
+
+        if discount_percent not in [50, 100]:
+            return {
+                "valid": False,
+                "message": "Invalid discount percentage on this code.",
+                "code_type": "INVALID",
+                "discount_amount": 0,
+                "coupon_id": None,
+                "referral_owner_id": None
+            }
+
+        subject_ids_str = [str(x) for x in subject_ids]
+        fee_map = get_subject_fee_map(conn, subject_ids_str)
+
+        discount_base = subtotal
+
+        if coupon["applies_to"] == "SUBJECT":
+            subject_id = str(coupon["subject_id"] or "")
+
+            if subject_id not in subject_ids_str:
+                return {
+                    "valid": False,
+                    "message": "This discount code applies to a subject that was not selected.",
+                    "code_type": "INVALID",
+                    "discount_amount": 0,
+                    "coupon_id": None,
+                    "referral_owner_id": None
+                }
+
+            discount_base = fee_map.get(subject_id, 0)
+
+        elif coupon["applies_to"] == "ANY_SUBJECT":
+            # Referral reward codes apply to one selected subject only.
+            # If the learner selects many subjects, discount one subject amount.
+            if not fee_map:
+                return {
+                    "valid": False,
+                    "message": "No valid subject was selected for this reward code.",
+                    "code_type": "INVALID",
+                    "discount_amount": 0,
+                    "coupon_id": None,
+                    "referral_owner_id": None
+                }
+
+            discount_base = max(fee_map.values())
+
+        discount_amount = int(round(discount_base * (discount_percent / 100)))
+
+        return {
+            "valid": True,
+            "message": f"{discount_percent}% discount applied.",
+            "code_type": coupon["source"] or "MANUAL",
+            "discount_amount": discount_amount,
+            "coupon_id": coupon["id"],
+            "referral_owner_id": None
+        }
+
+    # 2. Check referral code
+    cur.execute("""
+        SELECT id, full_name
+        FROM students
+        WHERE UPPER(referral_code)=?
+        LIMIT 1
+    """, (code,))
+
+    referrer = cur.fetchone()
+
+    if referrer:
+        if int(referrer["id"]) == int(student_id):
+            return {
+                "valid": False,
+                "message": "You cannot use your own referral code.",
+                "code_type": "INVALID",
+                "discount_amount": 0,
+                "coupon_id": None,
+                "referral_owner_id": None
+            }
+
+        return {
+            "valid": True,
+            "message": "Referral code accepted. It does not discount this enrollment.",
+            "code_type": "REFERRAL_ONLY",
+            "discount_amount": 0,
+            "coupon_id": None,
+            "referral_owner_id": referrer["id"]
+        }
+
+    return {
+        "valid": False,
+        "message": "Invalid coupon or referral code.",
+        "code_type": "INVALID",
+        "discount_amount": 0,
+        "coupon_id": None,
+        "referral_owner_id": None
+    }
+
+
+def award_referral_point_and_rewards(conn, referrer_student_id, referred_student_id, referral_code, month):
+    """
+    Adds one referral point to the owner of the referral code.
+
+    Rules:
+    - Same referred learner can only count once for the same referrer.
+    - At 5 points, generate 50% reward code.
+    - At 10 points, generate 100% reward code and reset current points to 0.
+    - Lifetime total continues increasing.
+    """
+
+    if not referrer_student_id or not referred_student_id:
+        return
+
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            INSERT INTO referral_uses(
+                referrer_student_id,
+                referred_student_id,
+                referral_code,
+                enrollment_month,
+                created_at
+            )
+            VALUES(?,?,?,?,?)
+        """, (
+            referrer_student_id,
+            referred_student_id,
+            referral_code,
+            month,
+            now_utc_iso()
+        ))
+    except sqlite3.IntegrityError:
+        # Already counted before
+        return
+
+    cur.execute("""
+        UPDATE students
+        SET referral_points = COALESCE(referral_points, 0) + 1,
+            referral_total_count = COALESCE(referral_total_count, 0) + 1
+        WHERE id=?
+    """, (referrer_student_id,))
+
+    cur.execute("""
+        SELECT referral_points
+        FROM students
+        WHERE id=?
+    """, (referrer_student_id,))
+
+    row = cur.fetchone()
+    points = int(row["referral_points"] or 0) if row else 0
+
+    # 5 points reward
+    if points == 5:
+        cur.execute("""
+            SELECT id
+            FROM discount_coupons
+            WHERE owner_student_id=?
+              AND source='REFERRAL_REWARD'
+              AND discount_percent=50
+              AND status='ACTIVE'
+            LIMIT 1
+        """, (referrer_student_id,))
+
+        if not cur.fetchone():
+            while True:
+                code = generate_short_code("R50", 6)
+
+                cur.execute("SELECT id FROM discount_coupons WHERE code=?", (code,))
+                if not cur.fetchone():
+                    break
+
+            cur.execute("""
+                INSERT INTO discount_coupons(
+                    code,
+                    target_student_id,
+                    owner_student_id,
+                    discount_percent,
+                    applies_to,
+                    subject_id,
+                    source,
+                    status,
+                    max_uses,
+                    used_count,
+                    created_by_role,
+                    created_by_id,
+                    created_at,
+                    notes
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                code,
+                referrer_student_id,
+                referrer_student_id,
+                50,
+                "ANY_SUBJECT",
+                None,
+                "REFERRAL_REWARD",
+                "ACTIVE",
+                1,
+                0,
+                "system",
+                None,
+                now_utc_iso(),
+                "Auto-generated referral reward at 5 points."
+            ))
+
+    # 10 points reward
+    if points >= 10:
+        while True:
+            code = generate_short_code("R100", 6)
+
+            cur.execute("SELECT id FROM discount_coupons WHERE code=?", (code,))
+            if not cur.fetchone():
+                break
+
+        cur.execute("""
+            INSERT INTO discount_coupons(
+                code,
+                target_student_id,
+                owner_student_id,
+                discount_percent,
+                applies_to,
+                subject_id,
+                source,
+                status,
+                max_uses,
+                used_count,
+                created_by_role,
+                created_by_id,
+                created_at,
+                notes
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            code,
+            referrer_student_id,
+            referrer_student_id,
+            100,
+            "ANY_SUBJECT",
+            None,
+            "REFERRAL_REWARD",
+            "ACTIVE",
+            1,
+            0,
+            "system",
+            None,
+            now_utc_iso(),
+            "Auto-generated referral reward at 10 points."
+        ))
+
+        cur.execute("""
+            UPDATE students
+            SET referral_points=0
+            WHERE id=?
+        """, (referrer_student_id,))
+
+
+def mark_coupon_used(conn, coupon_id):
+    """
+    Marks a discount coupon as used after successful enrollment.
+    """
+    if not coupon_id:
+        return
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE discount_coupons
+        SET used_count = used_count + 1,
+            status = CASE
+                WHEN used_count + 1 >= max_uses THEN 'USED'
+                ELSE status
+            END,
+            used_at = ?
+        WHERE id=?
+    """, (now_utc_iso(), coupon_id))
 
 
 def pagination_controls(base_path, page_num, total_pages, query_params=None):
@@ -4232,7 +4735,14 @@ def home():
         <div class="card soft" id="payment-anchor">
 
             <label>Payment details</label>
-
+            <div>
+                <label>Coupon / Referral Code Optional</label>
+                <input name="coupon_code"
+                       placeholder="Enter discount or referral code if you have one">
+                <div class="mini muted">
+                    Leave this blank if you do not have a code.
+                </div>
+            </div>
             <div class="mini">
                 Please pay your monthly EBTA fees via EFT using the details below, then tick the box to confirm payment and upload your Proof of Payment.
             </div>
@@ -5133,6 +5643,8 @@ def register():
     pops = request.files.getlist('pop')
     province = request.form.get('province')
     school = request.form.get('school')
+    
+    coupon_code = request.form.get("coupon_code", "").strip().upper()
 
     amount_paid = request.form.get('amount_paid', '').strip()
 
@@ -5151,10 +5663,6 @@ def register():
 
     if not is_valid_pin(pin):
         return page("Error", card_msg("PIN must be exactly 5 digits."))
-
-    pops = [f for f in pops if f and f.filename]
-    if len(pops) < 1 or len(pops) > 2:
-        return page("Error", card_msg("Upload 1 or 2 Proof of Payment files."))
 
     conn = get_db()
     ensure_registration_table(conn)
@@ -5220,15 +5728,6 @@ def register():
 
         sid = cur.lastrowid
 
-    # Save PoP files
-    saved_paths = []
-    ts = int(datetime.datetime.now().timestamp())
-    for idx, pop in enumerate(pops, start=1):
-        safe = f"{ts}_{secrets.token_hex(8)}_{idx}_{secure_name(pop.filename)}"
-        dest = UPLOAD_DIR / safe
-        pop.save(dest)
-        saved_paths.append(f"/uploads/{safe}")
-
     # Annual registration (optional)
     try:
         year = datetime.date.today().strftime('%Y')
@@ -5246,48 +5745,86 @@ def register():
     cur.execute("SELECT subject_id FROM enrollments WHERE student_id=? AND month=?", (sid, month))
     existing = {str(x['subject_id']) for x in cur.fetchall()}
     
-    # Recalculate total server-side
+    
+    # ================= SERVER-SIDE FEE CALCULATION =================
     cur.execute(
         "SELECT grade FROM subjects WHERE id=?",
         (subject_ids[0],)
     )
+
     row = cur.fetchone()
+
     if not row:
         conn.close()
         return page("Error", card_msg("Invalid subject selection."))
 
-    grade = row['grade']
-
-    def fee_for_grade(g):
-        if g == 'G13':
-            return 350
-        if g == 'G12':
-            return 250
-        return 200
-
+    grade = row["grade"]
 
     per = fee_for_grade(grade)
     count = len(subject_ids)
     subtotal = per * count
 
-    # Discount rules
+    # Existing EBTA bulk discount rule
     if count >= 3:
-        if grade == 'G13':
-            discount = int(round(subtotal * 0.10))  # 10% for G13 (3+ subjects)
+        if grade == "G13":
+            bulk_discount = int(round(subtotal * 0.10))
         else:
-            discount = int(round(subtotal * 0.05))  # 5% for others (3+ subjects)
+            bulk_discount = int(round(subtotal * 0.05))
     else:
-        discount = 0
+        bulk_discount = 0
 
-    total_due = subtotal - discount
+    coupon_result = validate_discount_or_referral_code(
+        conn,
+        coupon_code,
+        sid,
+        subject_ids,
+        subtotal
+    )
 
+    if not coupon_result["valid"]:
+        conn.close()
+        return page("Invalid Code", card_msg(coupon_result["message"]))
+
+    coupon_discount = coupon_result["discount_amount"]
+
+    total_discount = bulk_discount + coupon_discount
+
+    if total_discount > subtotal:
+        total_discount = subtotal
+
+    total_due = subtotal - total_discount
 
     if amount_paid != total_due:
         conn.close()
         return page(
             "Payment error",
-            card_msg(f"You need to pay R{total_due} to enroll for this month.")
+            card_msg(
+                f"You need to pay R{total_due}. "
+                f"Subtotal: R{subtotal}, Discount: R{total_discount}."
+            )
         )
+        
+    # ================= PROOF OF PAYMENT VALIDATION =================
+
+    pops = [f for f in pops if f and f.filename]
+
+    if total_due > 0:
+        if len(pops) < 1 or len(pops) > 2:
+            conn.close()
+            return page("Error", card_msg("Upload 1 or 2 Proof of Payment files."))
+    else:
+        # If the student has a 100% discount and pays R0, no PoP is required.
+        pops = []
+
+    # Save PoP files only after the final amount has been validated.
+    saved_paths = []
+    ts = int(datetime.datetime.now().timestamp())
+
+    for idx, pop in enumerate(pops, start=1):
+        safe = f"{ts}_{secrets.token_hex(8)}_{idx}_{secure_name(pop.filename)}"
+        dest = UPLOAD_DIR / safe
+        pop.save(dest)
+        saved_paths.append(f"/uploads/{safe}")
 
 
     created = []
@@ -5297,6 +5834,8 @@ def register():
             continue
 
         token = secrets.token_urlsafe(16)
+        
+        first_pop = saved_paths[0] if saved_paths else None
 
         # 1️⃣ Insert enrollment FIRST
         cur.execute("""
@@ -5309,18 +5848,27 @@ def register():
             payment_ref,
             pop_url,
             amount_paid,
+            coupon_code,
+            coupon_discount_amount,
+            coupon_type,
+            referral_code_used,
             status_token,
             created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             sid,
             subid,
             month,
-            'PENDING',
-            'EFT',
-            None,              # temporary, updated below
-            saved_paths[0],
+            "PENDING",
+            "EFT",
+            None,
+            first_pop,
             amount_paid,
+            coupon_code if coupon_code else None,
+            coupon_discount,
+            coupon_result["code_type"],
+            coupon_code if coupon_result["code_type"] == "REFERRAL_ONLY" else None,
             token,
             now_utc_iso()
         ))
@@ -5364,6 +5912,18 @@ def register():
             )
 
         created.append((eid, token))
+        
+    if created:
+        mark_coupon_used(conn, coupon_result.get("coupon_id"))
+
+        if coupon_result.get("code_type") == "REFERRAL_ONLY":
+            award_referral_point_and_rewards(
+                conn,
+                coupon_result.get("referral_owner_id"),
+                sid,
+                coupon_code,
+                month
+            )
 
     conn.commit()
     conn.close()
@@ -6588,6 +7148,146 @@ def student_home():
     </script>
     """
 
+    # ================= STUDENT REFERRAL SECTION =================
+
+    ensure_student_referral_code(conn, sid)
+    conn.commit()
+
+    cur.execute("""
+        SELECT
+            referral_code,
+            COALESCE(referral_points, 0) AS referral_points,
+            COALESCE(referral_total_count, 0) AS referral_total_count
+        FROM students
+        WHERE id=?
+        LIMIT 1
+    """, (sid,))
+
+    referral_row = cur.fetchone()
+
+    cur.execute("""
+        SELECT
+            code,
+            discount_percent,
+            status,
+            used_count,
+            max_uses,
+            created_at
+        FROM discount_coupons
+        WHERE target_student_id=?
+          AND source='REFERRAL_REWARD'
+        ORDER BY created_at DESC
+        LIMIT 5
+    """, (sid,))
+
+    reward_codes = cur.fetchall()
+
+    reward_html = ""
+
+    for rc in reward_codes:
+
+        reward_status_class = "active"
+
+        if rc["status"] != "ACTIVE":
+            reward_status_class = "lapsed"
+
+        reward_html += f"""
+        <div class="card soft" style="padding:10px;margin-top:8px">
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">
+
+                <div>
+                    <strong>{rc['discount_percent']}% Discount Reward</strong>
+
+                    <div class="mini muted">
+                        Use this code when enrolling to receive your referral reward.
+                    </div>
+                </div>
+
+                <div>
+                    <span class="chip" style="font-size:15px;letter-spacing:1px">
+                        {escape(rc['code'])}
+                    </span>
+
+                    <span class="chip {reward_status_class}">
+                        {escape(rc['status'])}
+                    </span>
+                </div>
+
+            </div>
+
+            <div class="mini muted" style="margin-top:6px">
+                Usage: {rc['used_count']} / {rc['max_uses']}
+            </div>
+        </div>
+        """
+
+    if not reward_html:
+        reward_html = """
+        <div class="mini muted">
+            No reward discount codes generated yet.
+        </div>
+        """
+
+    referral_code = referral_row["referral_code"] if referral_row else "—"
+    referral_points = referral_row["referral_points"] if referral_row else 0
+    referral_total_count = referral_row["referral_total_count"] if referral_row else 0
+
+    referral_section = f"""
+    <div class="card soft" style="border-left:5px solid #f59e0b;margin-bottom:14px">
+
+        <h2>My Referral Code</h2>
+
+        <p class="muted">
+            Share this code with new learners. When they enroll using your code,
+            you earn referral points.
+        </p>
+
+        <div style="
+            display:flex;
+            justify-content:space-between;
+            gap:12px;
+            align-items:center;
+            flex-wrap:wrap;
+            margin:12px 0;
+        ">
+
+            <div>
+                <div class="mini muted">Your Referral Code</div>
+
+                <span class="chip" style="
+                    font-size:18px;
+                    padding:10px 14px;
+                    letter-spacing:1px;
+                    font-weight:800;
+                ">
+                    {escape(referral_code)}
+                </span>
+            </div>
+
+            <div class="toolbar" style="gap:8px;flex-wrap:wrap">
+                <span class="chip active">
+                    Current Points: {referral_points} / 10
+                </span>
+
+                <span class="chip">
+                    Total Referrals: {referral_total_count}
+                </span>
+            </div>
+
+        </div>
+
+        <div class="mini muted" style="margin-bottom:10px">
+            At 5 referral points, you can receive a 50% discount reward.
+            At 10 referral points, you can receive a 100% discount reward.
+        </div>
+
+        <h3 style="margin-top:12px">My Reward Codes</h3>
+
+        {reward_html}
+
+    </div>
+    """
+    
     conn.close()
 
     # Enrollment list UI
@@ -6696,6 +7396,7 @@ def student_home():
 
             {month_selector}
             {profile_section}
+            {referral_section}
 
         <h2>Your Enrollments</h2>
         {enr_html}
@@ -10779,6 +11480,7 @@ def admin_nav():
             f"<a class='btn secondary' href='{url_for('admin_social_media_reports')}'>Social Media Reports</a>",
             f"<a class='btn secondary' href='{url_for('admin_duty_admins')}'>Duty Admins</a>",
             f"<a class='btn secondary' href='{url_for('admin_admission_coordinators')}'>Admission Coordinators</a>",
+            f"<a class='btn secondary' href='{url_for('admin_discounts_control')}'>Discount Control</a>",
             f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
             f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
             f"<a class='btn secondary' href='{url_for('admin_awards_student_export')}'>Awards Export</a>",
@@ -10854,6 +11556,7 @@ def admin_home():
     <a class="btn secondary" href="{url_for('admin_social_media_reports')}">Social Media Reports</a>
     <a class="btn secondary" href="{url_for('admin_duty_admins')}">Duty Admins</a>
     <a class="btn secondary" href="{url_for('admin_admission_coordinators')}">Admission Coordinators</a>
+    <a class="btn secondary" href="{url_for('admin_discounts_control')}">Discount Control</a>
     <a class='btn secondary' href='{url_for('admin_reports')}'>Student Reports</a>
     <a class='btn secondary' href='{url_for('admin_awards_student_export')}'>Awards Export</a>
 
@@ -10948,10 +11651,24 @@ def admin_enrollments():
 
     cur.execute(f"""
         SELECT 
-            e.id, e.student_id, e.status, e.amount_paid,
-            e.pop_url, e.status_token,
+            e.id,
+            e.student_id,
+            e.status,
+            e.amount_paid,
+            e.pop_url,
+            e.status_token,
+
+            e.coupon_code,
+            e.coupon_discount_amount,
+            e.coupon_type,
+            e.referral_code_used,
+
             strftime('%Y-%m-%d %H:%M', datetime(e.created_at, '+2 hours')) AS created_at,
-            st.full_name, st.phone_whatsapp, st.grade,
+
+            st.full_name,
+            st.phone_whatsapp,
+            st.grade,
+
             sub.name AS subject_name
         FROM enrollments e
         JOIN students st ON st.id = e.student_id
@@ -10995,6 +11712,33 @@ def admin_enrollments():
             f"<a class='links' target='_blank' href='{p}'>PoP</a>"
             for p in files
         ) or "—"
+        
+        coupon_html = "<span class='mini muted'>No code used</span>"
+
+        if r["coupon_code"]:
+            coupon_discount_amount = float(r["coupon_discount_amount"] or 0)
+
+            coupon_type_label = r["coupon_type"] or "—"
+
+            if coupon_type_label == "REFERRAL_ONLY":
+                coupon_type_label = "Referral Code"
+            elif coupon_type_label == "REFERRAL_REWARD":
+                coupon_type_label = "Referral Reward"
+            elif coupon_type_label == "MANUAL":
+                coupon_type_label = "Manual Discount"
+
+            coupon_html = f"""
+            <div>
+                <span class="chip" style="letter-spacing:1px">
+                    {escape(r['coupon_code'])}
+                </span>
+
+                <div class="mini muted" style="margin-top:4px">
+                    Type: {escape(coupon_type_label)}<br>
+                    Discount: R{coupon_discount_amount:,.2f}
+                </div>
+            </div>
+            """
 
         actions = f"""
 
@@ -11048,9 +11792,9 @@ def admin_enrollments():
             <td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>
             <td><span class='mini muted'>{history}</span></td>
             <td><span class='mini'>{r['created_at']}</span></td>
+            <td>{coupon_html}</td>
             <td>{pop_html}</td>
             <td><strong>R{r['amount_paid']}</strong></td>
-
             <td style="white-space:nowrap">
                 {actions}
             </td>
@@ -11203,6 +11947,7 @@ def admin_enrollments():
                         <th>Status</th>
                         <th>History</th>
                         <th>Timestamp</th>
+                        <th>Coupon / Referral</th>
                         <th>PoP</th>
                         <th>Amount paid</th>
                         <th>Actions</th>
@@ -11213,7 +11958,7 @@ def admin_enrollments():
 
                 <tbody>
 
-                    {''.join(trs) or "<tr><td colspan='10'>No enrollments.</td></tr>"}
+                    {''.join(trs) or "<tr><td colspan='11'>No enrollments.</td></tr>"}
 
                 </tbody>
 
@@ -33390,6 +34135,7 @@ def admission_nav():
         <a class="btn secondary" href="{url_for('admission_groups')}">Groups</a>
         <a class="btn secondary" href="{url_for('admission_sessions')}">Sessions</a>
         <a class="btn secondary" href="{url_for('admission_inbox')}">Inbox</a>
+        <a class="btn secondary" href="{url_for('admission_discounts')}">Discounts & Referrals</a>
         <a class="btn danger" href="{url_for('admission_logout')}">Logout</a>
     </nav>
     """
@@ -34041,6 +34787,11 @@ def admission_enrollments():
             e.pop_url,
             e.amount_paid,
             e.created_at,
+            
+            e.coupon_code,
+            e.coupon_discount_amount,
+            e.coupon_type,
+            e.referral_code_used,
 
             s.full_name,
             s.phone_whatsapp,
@@ -34095,10 +34846,39 @@ def admission_enrollments():
         </div>
         """
 
+
         if row["pop_url"]:
             pop_link = f"<a target='_blank' href='{escape(row['pop_url'])}'>PoP</a>"
 
         amount = row["amount_paid"] if row["amount_paid"] not in [None, ""] else "—"
+        
+        
+        coupon_html = "<span class='mini muted'>No code used</span>"
+
+        if row["coupon_code"]:
+            coupon_discount_amount = float(row["coupon_discount_amount"] or 0)
+
+            coupon_type_label = row["coupon_type"] or "—"
+
+            if coupon_type_label == "REFERRAL_ONLY":
+                coupon_type_label = "Referral Code"
+            elif coupon_type_label == "REFERRAL_REWARD":
+                coupon_type_label = "Referral Reward"
+            elif coupon_type_label == "MANUAL":
+                coupon_type_label = "Manual Discount"
+
+            coupon_html = f"""
+            <div>
+                <span class="chip" style="letter-spacing:1px">
+                    {escape(row['coupon_code'])}
+                </span>
+
+                <div class="mini muted" style="margin-top:4px">
+                    Type: {escape(coupon_type_label)}<br>
+                    Discount: R{coupon_discount_amount:,.2f}
+                </div>
+            </div>
+            """        
 
         status_class = "pending"
 
@@ -34151,6 +34931,8 @@ def admission_enrollments():
             </td>
 
             <td>{history_html}</td>
+
+            <td>{coupon_html}</td>
 
             <td>{pop_link}</td>
 
@@ -34214,6 +34996,7 @@ def admission_enrollments():
                         <th>Subject</th>
                         <th>Status</th>
                         <th>History</th>
+                        <th>Coupon / Referral</th>
                         <th>PoP</th>
                         <th>Amount</th>
                         <th>Contact Details</th>
@@ -34223,7 +35006,7 @@ def admission_enrollments():
                 </thead>
 
                 <tbody>
-                    {trs or "<tr><td colspan='10'>No enrollments found.</td></tr>"}
+                    {trs or "<tr><td colspan='11'>No enrollments found.</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -35910,6 +36693,531 @@ def admission_followup_create():
     conn.close()
 
     return redirect(url_for("admission_followups"))    
+
+
+
+# -------------------DISCOUNTS ------------------------------
+
+@app.get('/admin/discounts-control')
+def admin_discounts_control():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can control discount settings."))
+
+    locked = get_setting("discounts_locked", "1")
+
+    status_html = (
+        "<span class='chip lapsed'>Locked</span>"
+        if locked == "1"
+        else "<span class='chip active'>Unlocked</span>"
+    )
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Discount & Referral Control</h1>
+
+        <p class="muted">
+            Control whether Admission Coordinators can create discount codes.
+            When locked, they can still view referral codes and existing discounts, but cannot create new codes.
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20">
+            <h2>Current Status</h2>
+
+            <p>{status_html}</p>
+
+            <form method="post" action="{url_for('admin_discounts_toggle')}">
+                <button class="btn {'success' if locked == '1' else 'danger'}">
+                    {'Unlock Discount Management' if locked == '1' else 'Lock Discount Management'}
+                </button>
+            </form>
+        </div>
+    </section>
+    """
+
+    return page("Discount Control", body)
+
+
+@app.post('/admin/discounts-control/toggle')
+def admin_discounts_toggle():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can update discount settings."))
+
+    current = get_setting("discounts_locked", "1")
+    new_value = "0" if current == "1" else "1"
+
+    set_setting("discounts_locked", new_value)
+
+    return redirect(url_for("admin_discounts_control"))
+
+
+@app.get('/admission/discounts')
+def admission_discounts():
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    locked = get_setting("discounts_locked", "1")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    ensure_all_student_referral_codes(conn)
+    conn.commit()
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR s.guardian_phone LIKE ?
+                OR s.referral_code LIKE ?
+            )
+        """)
+        params += [search, search, search, search]
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    cur.execute(f"""
+        SELECT
+            s.id,
+            s.full_name,
+            s.phone_whatsapp,
+            s.grade,
+            s.referral_code,
+            COALESCE(s.referral_points,0) AS referral_points,
+            COALESCE(s.referral_total_count,0) AS referral_total_count
+        FROM students s
+        {where_sql}
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.full_name
+        LIMIT 150
+    """, params)
+
+    students = cur.fetchall()
+
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
+    """)
+
+    subjects = cur.fetchall()
+
+    cur.execute("""
+        SELECT
+            dc.*,
+            s.full_name AS target_name,
+            owner.full_name AS owner_name,
+            sub.name AS subject_name,
+            sub.grade AS subject_grade
+        FROM discount_coupons dc
+        LEFT JOIN students s ON s.id = dc.target_student_id
+        LEFT JOIN students owner ON owner.id = dc.owner_student_id
+        LEFT JOIN subjects sub ON sub.id = dc.subject_id
+        ORDER BY dc.created_at DESC
+        LIMIT 150
+    """)
+
+    coupons = cur.fetchall()
+    conn.close()
+
+    student_options = "".join(
+        f"""
+        <option value="{s['id']}">
+            {escape(s['full_name'])} - {grade_label(s['grade'])} - {escape(s['phone_whatsapp'] or '')}
+        </option>
+        """
+        for s in students
+    )
+
+    subject_options = """
+    <option value="">All selected subjects</option>
+    """ + "".join(
+        f"""
+        <option value="{sub['id']}">
+            {grade_label(sub['grade'])} - {escape(sub['name'])}
+        </option>
+        """
+        for sub in subjects
+    )
+
+    create_form = ""
+
+    if locked == "1":
+        create_form = """
+        <div class="card soft" style="border-left:5px solid #ef4444">
+            <h2>Discount Creation Locked</h2>
+            <p class="muted">
+                High admin has locked discount creation. You can view existing codes and referral information only.
+            </p>
+        </div>
+        """
+    else:
+        create_form = f"""
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>Create Student Discount Code</h2>
+
+            <form method="post"
+                  action="{url_for('admission_discount_create')}"
+                  class="grid"
+                  style="grid-template-columns:1fr 1fr 1fr;gap:10px">
+
+                <div>
+                    <label>Student</label>
+                    <select name="student_id" required>
+                        {student_options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Discount</label>
+                    <select name="discount_percent" required>
+                        <option value="50">50% Discount</option>
+                        <option value="100">100% Discount</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Applies To</label>
+                    <select name="subject_id">
+                        {subject_options}
+                    </select>
+                    <div class="mini muted">
+                        Leave blank if discount applies to all selected subjects.
+                    </div>
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <label>Notes Optional</label>
+                    <input name="notes" placeholder="Reason for discount or approval note">
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <button class="btn success">
+                        Generate Discount Code
+                    </button>
+                </div>
+
+            </form>
+        </div>
+        """
+
+    student_rows = ""
+
+    for s in students:
+        student_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(s['full_name'])}</strong>
+                <div class="mini muted">{grade_label(s['grade'])}</div>
+            </td>
+
+            <td>{escape(s['phone_whatsapp'] or '—')}</td>
+
+            <td>
+                <span class="chip">{escape(s['referral_code'] or '—')}</span>
+            </td>
+
+            <td>{s['referral_points']} / 10</td>
+
+            <td>{s['referral_total_count']}</td>
+        </tr>
+        """
+
+    coupon_rows = ""
+
+    for c in coupons:
+
+        if c["applies_to"] == "SUBJECT" and c["subject_name"]:
+            applies_to = f"{grade_label(c['subject_grade'])} {escape(c['subject_name'])}"
+        else:
+            applies_to = "All selected subjects"
+
+        status_class = "active" if c["status"] == "ACTIVE" else "lapsed"
+
+        sms_button = ""
+
+        if c["target_student_id"] and c["status"] == "ACTIVE":
+            sms_button = f"""
+            <form method="post"
+                  action="{url_for('admission_discount_sms', coupon_id=c['id'])}"
+                  style="display:inline">
+                <button class="btn mini secondary">Send Code via SMS</button>
+            </form>
+            """
+
+        coupon_rows += f"""
+        <tr>
+            <td>
+                <span class="chip">{escape(c['code'])}</span>
+            </td>
+
+            <td>{escape(c['target_name'] or c['owner_name'] or '—')}</td>
+
+            <td>{c['discount_percent']}%</td>
+
+            <td>{applies_to}</td>
+
+            <td>{escape(c['source'])}</td>
+
+            <td>
+                <span class="chip {status_class}">
+                    {escape(c['status'])}
+                </span>
+            </td>
+
+            <td>{c['used_count']} / {c['max_uses']}</td>
+
+            <td>{sms_button}</td>
+        </tr>
+        """
+
+    body = f"""
+    {admission_nav()}
+
+    <section class="card">
+        <h1>Discounts & Referrals</h1>
+
+        <p class="muted">
+            Manage student discount codes and monitor referral points.
+        </p>
+
+        {create_form}
+
+        <form method="get" class="toolbar">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search student, phone or referral code">
+
+            <button class="btn mini">Search</button>
+
+            <a class="btn mini secondary" href="{url_for('admission_discounts')}">
+                Clear
+            </a>
+        </form>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Student Referral Codes</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Student</th>
+                            <th>Phone</th>
+                            <th>Referral Code</th>
+                            <th>Current Points</th>
+                            <th>Total Referrals</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {student_rows or "<tr><td colspan='5'>No students found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Discount Codes</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Code</th>
+                            <th>Student</th>
+                            <th>Discount</th>
+                            <th>Applies To</th>
+                            <th>Source</th>
+                            <th>Status</th>
+                            <th>Usage</th>
+                            <th>SMS</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {coupon_rows or "<tr><td colspan='8'>No discount codes found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("Admission Discounts", body)
+    
+    
+@app.post('/admission/discounts/create')
+def admission_discount_create():
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    if get_setting("discounts_locked", "1") == "1":
+        return page("Locked", card_msg("Discount creation is currently locked by high admin."))
+
+    student_id = request.form.get("student_id")
+    discount_percent = request.form.get("discount_percent")
+    subject_id = request.form.get("subject_id", "").strip()
+    notes = request.form.get("notes", "").strip()
+
+    try:
+        discount_percent = int(discount_percent)
+    except:
+        return page("Invalid", card_msg("Invalid discount percentage."))
+
+    if discount_percent not in [50, 100]:
+        return page("Invalid", card_msg("Discount must be 50% or 100%."))
+
+    applies_to = "SUBJECT" if subject_id else "ALL"
+    subject_id_value = int(subject_id) if subject_id else None
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT id FROM students WHERE id=?", (student_id,))
+    student = cur.fetchone()
+
+    if not student:
+        conn.close()
+        return page("Invalid", card_msg("Student not found."))
+
+    while True:
+        code = generate_short_code(f"D{discount_percent}", 6)
+
+        cur.execute("SELECT id FROM discount_coupons WHERE code=?", (code,))
+
+        if not cur.fetchone():
+            break
+
+    cur.execute("""
+        INSERT INTO discount_coupons(
+            code,
+            target_student_id,
+            owner_student_id,
+            discount_percent,
+            applies_to,
+            subject_id,
+            source,
+            status,
+            max_uses,
+            used_count,
+            created_by_role,
+            created_by_id,
+            created_at,
+            notes
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        code,
+        student_id,
+        None,
+        discount_percent,
+        applies_to,
+        subject_id_value,
+        "MANUAL",
+        "ACTIVE",
+        1,
+        0,
+        "admission",
+        session.get("admission_coordinator_id"),
+        now_utc_iso(),
+        notes
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "Discount Code Created",
+        f"""
+        {admission_nav()}
+
+        <section class="card">
+            <h1>Discount Code Created</h1>
+
+            <p>
+                <b>Code:</b>
+                <span class="chip" style="font-size:20px;padding:10px 14px;letter-spacing:1px">
+                    {escape(code)}
+                </span>
+            </p>
+
+            <p class="muted">
+                Share this code privately with the learner. They can use it during enrollment.
+            </p>
+
+            <a class="btn" href="{url_for('admission_discounts')}">Back to Discounts</a>
+        </section>
+        """
+    )
+    
+    
+@app.post('/admission/discounts/<int:coupon_id>/sms')
+def admission_discount_sms(coupon_id):
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            dc.code,
+            dc.discount_percent,
+            dc.applies_to,
+            s.full_name,
+            s.phone_whatsapp
+        FROM discount_coupons dc
+        JOIN students s ON s.id = dc.target_student_id
+        WHERE dc.id=?
+          AND dc.status='ACTIVE'
+        LIMIT 1
+    """, (coupon_id,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return page("Not found", card_msg("Active discount code not found."))
+
+    first_name = (row["full_name"] or "Learner").split()[0]
+    discount = row["discount_percent"]
+    code = row["code"]
+
+    sms_body = (
+        f"EBTA: Hi {first_name}, your {discount}% discount code is {code}. "
+        f"Use it on the enrollment form. This code can only be used once."
+    )
+
+    try:
+        send_sms_notification(row["phone_whatsapp"], sms_body)
+    except Exception as e:
+        print("Discount SMS error:", e)
+        return page("SMS Error", card_msg("Could not send SMS. Please check SMS setup."))
+
+    return redirect(url_for("admission_discounts"))
 
 
 # --- Admin: Analytics dashboard ---
