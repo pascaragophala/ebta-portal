@@ -970,7 +970,6 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_email ON students(email)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_students_school ON students(school)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_subjects_tutor ON tutor_subjects(tutor_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_subjects_tutor ON tutor_subjects(tutor_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_followups_name ON followups(full_name)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_followups_status ON followups(followup_status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_material_views_material ON material_views(material_id)")
