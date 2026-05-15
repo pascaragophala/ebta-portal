@@ -36760,6 +36760,7 @@ def admission_discounts():
         return r
 
     q = request.args.get("q", "").strip()
+    grade_filter = request.args.get("grade", "").strip()
     locked = get_setting("discounts_locked", "1")
 
     try:
@@ -36790,21 +36791,46 @@ def admission_discounts():
     ensure_all_student_referral_codes(conn)
     conn.commit()
 
-    # ================= STUDENT SEARCH FILTER =================
+    # ================= STUDENT SEARCH + GRADE FILTER =================
     where = []
     params = []
 
     if q:
         search = f"%{q}%"
+
         where.append("""
             (
                 s.full_name LIKE ?
                 OR s.phone_whatsapp LIKE ?
                 OR s.guardian_phone LIKE ?
+                OR IFNULL(s.guardian_name, '') LIKE ?
+                OR IFNULL(s.email, '') LIKE ?
+                OR IFNULL(s.school, '') LIKE ?
+                OR IFNULL(s.province, '') LIKE ?
+                OR s.grade LIKE ?
                 OR s.referral_code LIKE ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM enrollments e
+                    JOIN subjects sub ON sub.id = e.subject_id
+                    WHERE e.student_id = s.id
+                      AND (
+                            sub.name LIKE ?
+                            OR sub.grade LIKE ?
+                            OR REPLACE(sub.grade, 'G', 'Grade ') LIKE ?
+                      )
+                )
             )
         """)
-        params += [search, search, search, search]
+
+        params += [
+            search, search, search, search, search, search,
+            search, search, search, search, search, search
+        ]
+
+    if grade_filter:
+        where.append("s.grade = ?")
+        params.append(grade_filter)
 
     where_sql = "WHERE " + " AND ".join(where) if where else ""
 
@@ -36867,24 +36893,73 @@ def admission_discounts():
 
     subjects = cur.fetchall()
 
-    # ================= COUPON SEARCH FILTER =================
+    # ================= COUPON SEARCH + GRADE FILTER =================
     coupon_where = []
     coupon_params = []
 
     if q:
         search = f"%{q}%"
+
         coupon_where.append("""
             (
                 dc.code LIKE ?
-                OR s.full_name LIKE ?
-                OR owner.full_name LIKE ?
-                OR s.phone_whatsapp LIKE ?
-                OR owner.phone_whatsapp LIKE ?
                 OR dc.source LIKE ?
                 OR dc.status LIKE ?
+                OR dc.applies_to LIKE ?
+                OR CAST(dc.discount_percent AS TEXT) LIKE ?
+
+                OR s.full_name LIKE ?
+                OR owner.full_name LIKE ?
+
+                OR s.phone_whatsapp LIKE ?
+                OR owner.phone_whatsapp LIKE ?
+
+                OR IFNULL(s.guardian_phone, '') LIKE ?
+                OR IFNULL(owner.guardian_phone, '') LIKE ?
+
+                OR IFNULL(s.email, '') LIKE ?
+                OR IFNULL(owner.email, '') LIKE ?
+
+                OR IFNULL(s.school, '') LIKE ?
+                OR IFNULL(owner.school, '') LIKE ?
+
+                OR IFNULL(s.province, '') LIKE ?
+                OR IFNULL(owner.province, '') LIKE ?
+
+                OR s.grade LIKE ?
+                OR owner.grade LIKE ?
+
+                OR s.referral_code LIKE ?
+                OR owner.referral_code LIKE ?
+
+                OR sub.name LIKE ?
+                OR sub.grade LIKE ?
+                OR REPLACE(sub.grade, 'G', 'Grade ') LIKE ?
             )
         """)
-        coupon_params += [search, search, search, search, search, search, search]
+
+        coupon_params += [
+            search, search, search, search, search,
+            search, search,
+            search, search,
+            search, search,
+            search, search,
+            search, search,
+            search, search,
+            search, search,
+            search, search,
+            search, search, search
+        ]
+
+    if grade_filter:
+        coupon_where.append("""
+            (
+                s.grade = ?
+                OR owner.grade = ?
+                OR sub.grade = ?
+            )
+        """)
+        coupon_params += [grade_filter, grade_filter, grade_filter]
 
     coupon_where_sql = "WHERE " + " AND ".join(coupon_where) if coupon_where else ""
 
@@ -37090,6 +37165,7 @@ def admission_discounts():
         def make_link(label, target_page):
             params = {
                 "q": q,
+                "grade": grade_filter,
                 "students_page": students_page,
                 "coupons_page": coupons_page
             }
@@ -37143,6 +37219,15 @@ def admission_discounts():
         total_coupon_pages
     )
 
+    grade_options = "".join(
+        f"""
+        <option value="{g}" {'selected' if grade_filter == g else ''}>
+            {grade_label(g)}
+        </option>
+        """
+        for g in ["G8", "G9", "G10", "G11", "G12", "G13"]
+    )
+
     body = f"""
     {admission_nav()}
 
@@ -37158,7 +37243,12 @@ def admission_discounts():
         <form method="get" class="toolbar">
             <input name="q"
                    value="{escape(q)}"
-                   placeholder="Search student, phone, referral code, coupon code or status">
+                   placeholder="Search name, surname, phone, school, subject, grade, referral code, coupon code or status">
+
+            <select name="grade">
+                <option value="">All Grades</option>
+                {grade_options}
+            </select>
 
             <button class="btn mini">Search</button>
 
