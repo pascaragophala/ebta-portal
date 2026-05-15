@@ -36762,12 +36762,35 @@ def admission_discounts():
     q = request.args.get("q", "").strip()
     locked = get_setting("discounts_locked", "1")
 
+    try:
+        students_page = int(request.args.get("students_page", 1))
+    except:
+        students_page = 1
+
+    try:
+        coupons_page = int(request.args.get("coupons_page", 1))
+    except:
+        coupons_page = 1
+
+    if students_page < 1:
+        students_page = 1
+
+    if coupons_page < 1:
+        coupons_page = 1
+
+    students_per_page = 10
+    coupons_per_page = 10
+
+    students_offset = (students_page - 1) * students_per_page
+    coupons_offset = (coupons_page - 1) * coupons_per_page
+
     conn = get_db()
     cur = conn.cursor()
 
     ensure_all_student_referral_codes(conn)
     conn.commit()
 
+    # ================= STUDENT SEARCH FILTER =================
     where = []
     params = []
 
@@ -36785,6 +36808,24 @@ def admission_discounts():
 
     where_sql = "WHERE " + " AND ".join(where) if where else ""
 
+    # ================= STUDENT COUNT =================
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM students s
+        {where_sql}
+    """, params)
+
+    total_students = cur.fetchone()["c"] or 0
+    total_student_pages = max(1, (total_students + students_per_page - 1) // students_per_page)
+
+    if students_page > total_student_pages:
+        students_page = total_student_pages
+        students_offset = (students_page - 1) * students_per_page
+
+    # ================= DISPLAY STUDENTS =================
+    student_params = list(params)
+    student_params.extend([students_per_page, students_offset])
+
     cur.execute(f"""
         SELECT
             s.id,
@@ -36797,11 +36838,27 @@ def admission_discounts():
         FROM students s
         {where_sql}
         ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.full_name
-        LIMIT 150
-    """, params)
+        LIMIT ? OFFSET ?
+    """, student_params)
 
     students = cur.fetchall()
 
+    # ================= STUDENTS FOR CREATE FORM =================
+    # This is separate from the paginated table so the dropdown still has enough students.
+    cur.execute("""
+        SELECT
+            id,
+            full_name,
+            phone_whatsapp,
+            grade
+        FROM students
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), full_name
+        LIMIT 500
+    """)
+
+    form_students = cur.fetchall()
+
+    # ================= SUBJECTS FOR CREATE FORM =================
     cur.execute("""
         SELECT id, name, grade
         FROM subjects
@@ -36810,7 +36867,49 @@ def admission_discounts():
 
     subjects = cur.fetchall()
 
-    cur.execute("""
+    # ================= COUPON SEARCH FILTER =================
+    coupon_where = []
+    coupon_params = []
+
+    if q:
+        search = f"%{q}%"
+        coupon_where.append("""
+            (
+                dc.code LIKE ?
+                OR s.full_name LIKE ?
+                OR owner.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR owner.phone_whatsapp LIKE ?
+                OR dc.source LIKE ?
+                OR dc.status LIKE ?
+            )
+        """)
+        coupon_params += [search, search, search, search, search, search, search]
+
+    coupon_where_sql = "WHERE " + " AND ".join(coupon_where) if coupon_where else ""
+
+    # ================= COUPON COUNT =================
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM discount_coupons dc
+        LEFT JOIN students s ON s.id = dc.target_student_id
+        LEFT JOIN students owner ON owner.id = dc.owner_student_id
+        LEFT JOIN subjects sub ON sub.id = dc.subject_id
+        {coupon_where_sql}
+    """, coupon_params)
+
+    total_coupons = cur.fetchone()["c"] or 0
+    total_coupon_pages = max(1, (total_coupons + coupons_per_page - 1) // coupons_per_page)
+
+    if coupons_page > total_coupon_pages:
+        coupons_page = total_coupon_pages
+        coupons_offset = (coupons_page - 1) * coupons_per_page
+
+    # ================= DISPLAY COUPONS =================
+    coupon_data_params = list(coupon_params)
+    coupon_data_params.extend([coupons_per_page, coupons_offset])
+
+    cur.execute(f"""
         SELECT
             dc.*,
             s.full_name AS target_name,
@@ -36821,9 +36920,10 @@ def admission_discounts():
         LEFT JOIN students s ON s.id = dc.target_student_id
         LEFT JOIN students owner ON owner.id = dc.owner_student_id
         LEFT JOIN subjects sub ON sub.id = dc.subject_id
+        {coupon_where_sql}
         ORDER BY dc.created_at DESC
-        LIMIT 150
-    """)
+        LIMIT ? OFFSET ?
+    """, coupon_data_params)
 
     coupons = cur.fetchall()
     conn.close()
@@ -36834,7 +36934,7 @@ def admission_discounts():
             {escape(s['full_name'])} - {grade_label(s['grade'])} - {escape(s['phone_whatsapp'] or '')}
         </option>
         """
-        for s in students
+        for s in form_students
     )
 
     subject_options = """
@@ -36937,6 +37037,8 @@ def admission_discounts():
 
         if c["applies_to"] == "SUBJECT" and c["subject_name"]:
             applies_to = f"{grade_label(c['subject_grade'])} {escape(c['subject_name'])}"
+        elif c["applies_to"] == "ANY_SUBJECT":
+            applies_to = "Any one selected subject"
         else:
             applies_to = "All selected subjects"
 
@@ -36979,6 +37081,68 @@ def admission_discounts():
         </tr>
         """
 
+    def admission_discounts_pagination(which, current_page, total_pages):
+        if total_pages <= 1:
+            return ""
+
+        links = []
+
+        def make_link(label, target_page):
+            params = {
+                "q": q,
+                "students_page": students_page,
+                "coupons_page": coupons_page
+            }
+
+            if which == "students":
+                params["students_page"] = target_page
+            else:
+                params["coupons_page"] = target_page
+
+            clean_params = {
+                k: v for k, v in params.items()
+                if v not in [None, ""]
+            }
+
+            return f"""
+            <a class="btn mini secondary"
+               href="{url_for('admission_discounts')}?{urlencode(clean_params)}">
+                {label}
+            </a>
+            """
+
+        if current_page > 1:
+            links.append(make_link("First", 1))
+            links.append(make_link("Prev", current_page - 1))
+
+        links.append(f"""
+        <span class="chip">
+            Page {current_page} / {total_pages}
+        </span>
+        """)
+
+        if current_page < total_pages:
+            links.append(make_link("Next", current_page + 1))
+            links.append(make_link("Last", total_pages))
+
+        return f"""
+        <div class="toolbar" style="justify-content:center;margin:12px 0;gap:6px;flex-wrap:wrap">
+            {''.join(links)}
+        </div>
+        """
+
+    students_pagination = admission_discounts_pagination(
+        "students",
+        students_page,
+        total_student_pages
+    )
+
+    coupons_pagination = admission_discounts_pagination(
+        "coupons",
+        coupons_page,
+        total_coupon_pages
+    )
+
     body = f"""
     {admission_nav()}
 
@@ -36994,7 +37158,7 @@ def admission_discounts():
         <form method="get" class="toolbar">
             <input name="q"
                    value="{escape(q)}"
-                   placeholder="Search student, phone or referral code">
+                   placeholder="Search student, phone, referral code, coupon code or status">
 
             <button class="btn mini">Search</button>
 
@@ -37005,6 +37169,12 @@ def admission_discounts():
 
         <div class="card soft" style="margin-top:14px">
             <h2>Student Referral Codes</h2>
+
+            <div class="mini muted" style="margin-bottom:8px">
+                Showing {len(students)} of {total_students} student referral record(s).
+            </div>
+
+            {students_pagination}
 
             <div class="scroll-x">
                 <table>
@@ -37023,10 +37193,18 @@ def admission_discounts():
                     </tbody>
                 </table>
             </div>
+
+            {students_pagination}
         </div>
 
         <div class="card soft" style="margin-top:14px">
             <h2>Discount Codes</h2>
+
+            <div class="mini muted" style="margin-bottom:8px">
+                Showing {len(coupons)} of {total_coupons} discount code record(s).
+            </div>
+
+            {coupons_pagination}
 
             <div class="scroll-x">
                 <table>
@@ -37048,6 +37226,8 @@ def admission_discounts():
                     </tbody>
                 </table>
             </div>
+
+            {coupons_pagination}
         </div>
     </section>
     """
