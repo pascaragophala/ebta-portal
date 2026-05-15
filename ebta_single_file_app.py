@@ -26047,13 +26047,40 @@ def treasurer_records_add():
 def treasurer_payments():
 
     r = require_treasurer()
-    if r: return r
+    if r:
+        return r
 
     month = request.args.get("month") or get_setting("current_month")
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 10
+    offset = (page_num - 1) * per_page
 
     conn = get_db()
     cur = conn.cursor()
 
+    # Count records for pagination
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM finance_payment_schedule
+        WHERE month=?
+    """, (month,))
+
+    total_records = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total_records + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    # Fetch only 10 records per page
     cur.execute("""
         SELECT *
         FROM finance_payment_schedule
@@ -26063,82 +26090,353 @@ def treasurer_payments():
                 WHEN 'PENDING' THEN 1
                 WHEN 'APPROVED' THEN 2
                 WHEN 'PAID' THEN 3
-                ELSE 4
+                WHEN 'CANCELLED' THEN 4
+                ELSE 5
             END,
-            due_date ASC
-    """, (month,))
+            due_date ASC,
+            created_at DESC
+        LIMIT ? OFFSET ?
+    """, (month, per_page, offset))
 
     payments = cur.fetchall()
     conn.close()
 
-    rows = ""
+    payment_cards = ""
 
     for p in payments:
-        proof_btn = "—"
+
+        proof_btn = "<span class='mini muted'>No proof uploaded</span>"
+
         if p["proof_file_path"] and os.path.exists(p["proof_file_path"]):
             proof_btn = f"""
-            <a class="btn mini" target="_blank" href="/treasurer/payment/{p['id']}/proof">
+            <a class="btn mini secondary"
+               target="_blank"
+               href="/treasurer/payment/{p['id']}/proof">
                 View Proof
             </a>
             """
 
-        rows += f"""
-        <tr>
-            <td>
-                {escape(p['payee_name'])}
-                <div class="mini muted">{escape(p['payee_role'] or '')}</div>
-            </td>
-            <td>{escape(p['category'])}</td>
-            <td>R{float(p['amount'] or 0):,.2f}</td>
-            <td>{escape(p['due_date'] or '—')}</td>
-            <td>{escape(p['paid_date'] or '—')}</td>
-            <td><span class="chip">{escape(p['status'])}</span></td>
-            <td>{proof_btn}</td>
-            <td>
+        status_value = p["status"] or "PENDING"
+
+        status_class = "pending"
+
+        if status_value == "PAID":
+            status_class = "active"
+        elif status_value == "APPROVED":
+            status_class = "pending"
+        elif status_value == "CANCELLED":
+            status_class = "lapsed"
+
+        amount = float(p["amount"] or 0)
+        due_date = p["due_date"] or "—"
+        paid_date = p["paid_date"] or "—"
+        payment_reference = p["payment_reference"] or ""
+
+        payment_cards += f"""
+        <details class="treasurer-payment-card">
+
+            <summary class="treasurer-payment-summary">
+
+                <div class="payment-payee">
+                    <strong>{escape(p['payee_name'] or '—')}</strong>
+                    <span class="mini muted">{escape(p['payee_role'] or 'No role captured')}</span>
+                </div>
+
+                <div class="payment-meta">
+                    <span>{escape(p['category'] or '—')}</span>
+                    <span>R{amount:,.2f}</span>
+                    <span>Due: {escape(due_date)}</span>
+                </div>
+
+                <div class="payment-status">
+                    <span class="chip {status_class}">
+                        {escape(status_value)}
+                    </span>
+                </div>
+
+            </summary>
+
+            <div class="payment-details">
+
+                <div class="payment-info-grid">
+
+                    <div>
+                        <div class="mini muted">Payee</div>
+                        <strong>{escape(p['payee_name'] or '—')}</strong>
+                    </div>
+
+                    <div>
+                        <div class="mini muted">Role</div>
+                        <strong>{escape(p['payee_role'] or '—')}</strong>
+                    </div>
+
+                    <div>
+                        <div class="mini muted">Category</div>
+                        <strong>{escape(p['category'] or '—')}</strong>
+                    </div>
+
+                    <div>
+                        <div class="mini muted">Amount</div>
+                        <strong>R{amount:,.2f}</strong>
+                    </div>
+
+                    <div>
+                        <div class="mini muted">Due Date</div>
+                        <strong>{escape(due_date)}</strong>
+                    </div>
+
+                    <div>
+                        <div class="mini muted">Paid Date</div>
+                        <strong>{escape(paid_date)}</strong>
+                    </div>
+
+                    <div>
+                        <div class="mini muted">Proof</div>
+                        {proof_btn}
+                    </div>
+
+                </div>
+
                 <form method="post"
                       action="/treasurer/payment/{p['id']}/update"
                       enctype="multipart/form-data"
-                      class="grid"
-                      style="gap:6px">
+                      class="payment-update-form">
 
-                    <select name="status">
-                        {''.join([f"<option value='{s}' {'selected' if p['status']==s else ''}>{s}</option>" for s in ['PENDING','APPROVED','PAID','CANCELLED']])}
-                    </select>
+                    <div>
+                        <label>Status</label>
+                        <select name="status">
+                            {''.join([
+                                f"<option value='{s}' {'selected' if status_value==s else ''}>{s}</option>"
+                                for s in ['PENDING','APPROVED','PAID','CANCELLED']
+                            ])}
+                        </select>
+                    </div>
 
-                    <input type="date" name="paid_date" value="{p['paid_date'] or ''}">
-                    <input name="payment_reference" placeholder="Payment reference" value="{escape(p['payment_reference'] or '')}">
-                    <input type="file" name="proof" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx">
+                    <div>
+                        <label>Paid Date</label>
+                        <input type="date"
+                               name="paid_date"
+                               value="{escape(p['paid_date'] or '')}">
+                    </div>
 
-                    <button class="btn mini success">Update</button>
+                    <div>
+                        <label>Payment Reference</label>
+                        <input name="payment_reference"
+                               placeholder="Payment reference"
+                               value="{escape(payment_reference)}">
+                    </div>
+
+                    <div>
+                        <label>Proof of Payment</label>
+                        <input type="file"
+                               name="proof"
+                               accept=".pdf,.png,.jpg,.jpeg,.doc,.docx">
+                    </div>
+
+                    <div style="display:flex;align-items:end">
+                        <button class="btn success">
+                            Update Payment
+                        </button>
+                    </div>
+
                 </form>
-            </td>
-        </tr>
+
+            </div>
+
+        </details>
         """
+
+    pagination_html = pagination_controls(
+        "/treasurer/payments",
+        page_num,
+        total_pages,
+        {"month": month}
+    )
 
     body = f"""
     {treasurer_nav()}
+
+    <style>
+        .payment-add-card {{
+            border-left:5px solid #1b5e20;
+            margin-bottom:14px;
+        }}
+
+        .payment-add-form {{
+            display:grid;
+            grid-template-columns:1fr 1fr 1fr;
+            gap:10px;
+        }}
+
+        .treasurer-payment-list {{
+            display:grid;
+            gap:10px;
+            margin-top:12px;
+        }}
+
+        .treasurer-payment-card {{
+            background:#fff;
+            border:1px solid var(--border);
+            border-left:5px solid #1b5e20;
+            border-radius:16px;
+            overflow:hidden;
+            box-shadow:var(--shadow-sm);
+        }}
+
+        .treasurer-payment-summary {{
+            display:grid;
+            grid-template-columns:1.4fr 2fr auto;
+            gap:12px;
+            align-items:center;
+            padding:12px;
+            cursor:pointer;
+            list-style:none;
+        }}
+
+        .treasurer-payment-summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .treasurer-payment-summary:hover {{
+            background:#f8fafc;
+        }}
+
+        .payment-payee {{
+            display:grid;
+            gap:3px;
+            min-width:0;
+        }}
+
+        .payment-payee strong {{
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }}
+
+        .payment-meta {{
+            display:grid;
+            grid-template-columns:1fr 110px 130px;
+            gap:8px;
+            font-size:13px;
+            color:#334155;
+        }}
+
+        .payment-meta span {{
+            background:#f8fafc;
+            border:1px solid #e2e8f0;
+            border-radius:999px;
+            padding:6px 9px;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }}
+
+        .payment-status {{
+            display:flex;
+            justify-content:flex-end;
+        }}
+
+        .payment-details {{
+            border-top:1px solid var(--border);
+            background:#f8fafc;
+            padding:12px;
+        }}
+
+        .payment-info-grid {{
+            display:grid;
+            grid-template-columns:repeat(4, minmax(0, 1fr));
+            gap:10px;
+            margin-bottom:12px;
+        }}
+
+        .payment-info-grid > div {{
+            background:#fff;
+            border:1px solid var(--border);
+            border-radius:12px;
+            padding:10px;
+            min-width:0;
+        }}
+
+        .payment-info-grid strong {{
+            display:block;
+            margin-top:3px;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }}
+
+        .payment-update-form {{
+            display:grid;
+            grid-template-columns:1fr 1fr 1.2fr 1.2fr auto;
+            gap:10px;
+            align-items:end;
+            background:#fff;
+            border:1px solid var(--border);
+            border-radius:14px;
+            padding:12px;
+        }}
+
+        @media(max-width:1000px) {{
+            .payment-add-form {{
+                grid-template-columns:1fr 1fr;
+            }}
+
+            .treasurer-payment-summary {{
+                grid-template-columns:1fr;
+            }}
+
+            .payment-status {{
+                justify-content:flex-start;
+            }}
+
+            .payment-meta {{
+                grid-template-columns:1fr 1fr;
+            }}
+
+            .payment-info-grid {{
+                grid-template-columns:1fr 1fr;
+            }}
+
+            .payment-update-form {{
+                grid-template-columns:1fr 1fr;
+            }}
+        }}
+
+        @media(max-width:650px) {{
+            .payment-add-form,
+            .payment-meta,
+            .payment-info-grid,
+            .payment-update-form {{
+                grid-template-columns:1fr;
+            }}
+
+            .payment-update-form button {{
+                width:100%;
+                justify-content:center;
+            }}
+        }}
+    </style>
 
     <section class="card">
         <h1>Payment Schedule</h1>
 
         <p class="muted">
-            Use this section to track tutor stipends, management salaries, supplier payments, software costs, and other monthly payments.
+            Track tutor stipends, management salaries, supplier payments, software costs, and other monthly payments.
         </p>
 
         <form method="get" class="toolbar">
-            <input type="month" name="month" value="{month}">
+            <input type="month" name="month" value="{escape(month)}">
             <button class="btn mini">View Month</button>
         </form>
 
-        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+        <div class="card soft payment-add-card">
             <h2>Add Payment</h2>
 
             <form method="post"
                   action="/treasurer/payments/add"
-                  class="grid"
-                  style="grid-template-columns:1fr 1fr 1fr;gap:10px">
+                  class="payment-add-form">
 
-                <input type="hidden" name="month" value="{month}">
+                <input type="hidden" name="month" value="{escape(month)}">
 
                 <div>
                     <label>Payee Name</label>
@@ -26176,28 +26474,22 @@ def treasurer_payments():
                 <div style="display:flex;align-items:end">
                     <button class="btn success">Add Payment</button>
                 </div>
+
             </form>
         </div>
 
-        <div class="scroll-x">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Payee</th>
-                        <th>Category</th>
-                        <th>Amount</th>
-                        <th>Due Date</th>
-                        <th>Paid Date</th>
-                        <th>Status</th>
-                        <th>Proof</th>
-                        <th>Update</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows or "<tr><td colspan='8'>No scheduled payments for this month.</td></tr>"}
-                </tbody>
-            </table>
+        <div class="mini muted" style="margin-bottom:8px">
+            Showing {len(payments)} of {total_records} scheduled payment record(s) for {escape(month)}.
         </div>
+
+        {pagination_html}
+
+        <div class="treasurer-payment-list">
+            {payment_cards or "<div class='empty'>No scheduled payments for this month.</div>"}
+        </div>
+
+        {pagination_html}
+
     </section>
     """
 
@@ -26327,7 +26619,7 @@ def treasurer_payment_update(pid):
     conn.commit()
     conn.close()
 
-    return redirect(url_for("treasurer_payments", month=payment["month"]))
+    return redirect(request.referrer or url_for("treasurer_payments", month=payment["month"]))
     
     
 @app.get('/treasurer/payment/<int:pid>/proof')
