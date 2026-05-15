@@ -34578,15 +34578,6 @@ def admission_home():
             {stat("Inbox", str(inbox_count))}
             {stat("Open Follow-Ups", str(open_followups))}
         </div>
-
-        <div class="toolbar" style="margin-top:16px">
-            <a class="btn secondary" href="{url_for('admission_enrollments')}">Manage Enrollments</a>
-            <a class="btn secondary" href="{url_for('admission_students')}">Students</a>
-            <a class="btn secondary" href="{url_for('admission_followups')}">Follow-Ups</a>
-            <a class="btn secondary" href="{url_for('admission_groups')}">Groups</a>
-            <a class="btn secondary" href="{url_for('admission_sessions')}">Sessions</a>
-            <a class="btn secondary" href="{url_for('admission_inbox')}">Inbox</a>
-        </div>
     </section>
     """
 
