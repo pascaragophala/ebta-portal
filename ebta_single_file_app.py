@@ -17850,6 +17850,7 @@ def admin_followups():
         current_page = 1
 
     per_page = 10
+    offset = (current_page - 1) * per_page
 
     conn = get_db()
     cur = conn.cursor()
@@ -17863,8 +17864,12 @@ def admin_followups():
         "Other"
     ]
 
-    # Subjects for filter and editable rows
-    cur.execute("SELECT DISTINCT name FROM subjects ORDER BY name")
+    # Subjects for filters and checkbox list
+    cur.execute("""
+        SELECT DISTINCT name
+        FROM subjects
+        ORDER BY name
+    """)
     subjects = [row["name"] for row in cur.fetchall()]
 
     where = []
@@ -17881,9 +17886,14 @@ def admin_followups():
                 OR issue_type LIKE ?
                 OR captured_by LIKE ?
                 OR updated_by LIKE ?
+                OR grade LIKE ?
+                OR followup_status LIKE ?
             )
         """)
-        params += [search, search, search, search, search, search, search]
+        params += [
+            search, search, search, search, search,
+            search, search, search, search
+        ]
 
     if f_grade:
         where.append("grade = ?")
@@ -17903,7 +17913,7 @@ def admin_followups():
 
     where_sql = "WHERE " + " AND ".join(where) if where else ""
 
-    # ================= COUNT TOTAL =================
+    # ================= COUNT =================
     cur.execute(f"""
         SELECT COUNT(*) AS c
         FROM followups
@@ -17915,13 +17925,12 @@ def admin_followups():
 
     if current_page > total_pages:
         current_page = total_pages
-
-    offset = (current_page - 1) * per_page
+        offset = (current_page - 1) * per_page
 
     data_params = list(params)
     data_params.extend([per_page, offset])
 
-    # ================= MAIN QUERY =================
+    # ================= MAIN DATA =================
     cur.execute(f"""
         SELECT *
         FROM followups
@@ -17941,248 +17950,260 @@ def admin_followups():
         "issue": f_issue
     }
 
-    top_pagination = pagination_controls(
+    pagination_html = pagination_controls(
         "/admin/followups",
         current_page,
         total_pages,
         query_params
     )
 
-    bottom_pagination = pagination_controls(
-        "/admin/followups",
-        current_page,
-        total_pages,
-        query_params
-    )
+    compact_rows = ""
 
-    trs = []
+    for f in rows:
 
-    for row in rows:
-        row_class = ""
+        current_subjects = [
+            x.strip()
+            for x in (f["subjects"] or "").split(",")
+            if x.strip()
+        ]
 
-        if row["followup_status"] == "OPEN":
-            row_class = "follow-open"
-        elif row["followup_status"] == "IN PROGRESS":
-            row_class = "follow-progress"
-        elif row["followup_status"] == "AWAITING POP":
-            row_class = "follow-awaiting"
-        elif row["followup_status"] == "RESOLVED":
-            row_class = "follow-paid"
+        current_subjects_lower = set(x.lower() for x in current_subjects)
 
-        overdue_class = ""
+        subject_summary = ", ".join(current_subjects) if current_subjects else "No subjects"
 
-        if row["payment_date"] and row["followup_status"] == "OPEN":
+        subject_checkboxes = "".join(
+            f"""
+            <label class="compact-subject-pill {'selected' if s.lower() in current_subjects_lower else ''}">
+                <input type="checkbox"
+                       name="subjects"
+                       value="{escape(s)}"
+                       {'checked' if s.lower() in current_subjects_lower else ''}>
+                <span>{escape(s)}</span>
+            </label>
+            """
+            for s in subjects
+        )
+
+        if not subject_checkboxes:
+            subject_checkboxes = "<div class='mini muted'>No subjects available.</div>"
+
+        notes_display = escape(f["notes"] or "No notes yet.")
+
+        status_value = f["followup_status"] or "OPEN"
+
+        status_class = "pending"
+
+        if status_value == "RESOLVED":
+            status_class = "active"
+        elif status_value == "DECLINED":
+            status_class = "lapsed"
+        elif status_value == "AWAITING POP":
+            status_class = "warn"
+        elif status_value == "IN PROGRESS":
+            status_class = "pending"
+
+        payment_date = f["payment_date"] or "—"
+        communicated_date = f["date_communicated"] or "—"
+        issue_type = f["issue_type"] or "—"
+        student_grade = grade_label(f["grade"]) if f["grade"] else "—"
+
+        overdue_badge = ""
+
+        if f["payment_date"] and status_value == "OPEN":
             try:
                 pay_date = datetime.datetime.strptime(
-                    row["payment_date"], "%Y-%m-%d"
+                    f["payment_date"], "%Y-%m-%d"
                 ).date()
 
                 if pay_date < datetime.date.today():
-                    overdue_class = "overdue"
+                    overdue_badge = "<span class='chip lapsed'>Overdue</span>"
             except:
                 pass
 
         wa_link = ""
 
-        if row["phone"]:
-            phone = normalize_phone(row["phone"])
+        if f["phone"]:
+            phone = normalize_phone(f["phone"])
 
             if phone:
                 wa_link = f"""
                 <a class="btn mini success"
                    target="_blank"
                    href="https://wa.me/{phone.replace('+','')}">
-                   WA
+                    WhatsApp
                 </a>
                 """
-
-        subjects_list = [
-            s.strip()
-            for s in (row["subjects"] or "").split(",")
-            if s.strip()
-        ]
-
-        subjects_set = set(subjects_list)
-
-        subject_chips = "".join(
-            f"""
-            <span class="chip subject-chip">
-                {escape(s)}
-            </span>
-            """
-            for s in subjects_list
-        )
-
-        if not subject_chips:
-            subject_chips = "<span class='mini muted'>No subjects captured</span>"
-
-        subject_options = "".join(
-            f"""
-            <option value="{escape(s)}" {'selected' if s in subjects_set else ''}>
-                {escape(s)}
-            </option>
-            """
-            for s in subjects
-        )
-
-        subjects_html = f"""
-        <div style="display:grid;gap:6px;min-width:220px">
-
-            <div style="display:flex;flex-wrap:wrap;gap:4px">
-                {subject_chips}
-            </div>
-
-            <select form="followup_form_{row['id']}"
-                    name="subjects"
-                    multiple
-                    size="4"
-                    style="min-width:220px">
-                {subject_options}
-            </select>
-
-            <div class="mini muted">
-                Hold Ctrl to select more than one subject.
-            </div>
-
-        </div>
-        """
-
-        form_id = f"followup_form_{row['id']}"
 
         delete_button = ""
 
         if is_high_admin():
             delete_button = f"""
             <form method="post"
-                  action="{url_for('admin_followup_delete', fid=row['id'])}"
+                  action="{url_for('admin_followup_delete', fid=f['id'])}"
                   onsubmit="return confirm('Delete this follow-up?');"
-                  style="display:inline;">
-                <button type="submit" class="btn mini danger">
+                  style="display:inline">
+                <button class="btn mini danger">
                     Delete
                 </button>
             </form>
             """
 
-        trs.append(f"""
-        <tr class="{row_class} {overdue_class}">
+        compact_rows += f"""
+        <details class="compact-follow-item">
 
-            <td>
-                <form id="{form_id}"
-                      method="post"
-                      action="{url_for('admin_followup_update', fid=row['id'])}">
-                </form>
+            <summary class="compact-follow-summary">
 
-                <input form="{form_id}"
-                       name="full_name"
-                       value="{escape(row['full_name'] or '')}">
-            </td>
+                <div class="compact-student">
+                    <strong>{escape(f['full_name'] or 'Unnamed learner')}</strong>
+                    <span class="mini muted">
+                        ID: {f['id']} | {escape(f['phone'] or 'No phone')}
+                    </span>
+                </div>
 
-            <td>
-                <input form="{form_id}"
-                       name="phone"
-                       value="{escape(row['phone'] or '')}">
-                {wa_link}
-            </td>
+                <div class="compact-meta">
+                    <span>{escape(student_grade)}</span>
+                    <span>{escape(issue_type)}</span>
+                    <span>Pay: {escape(payment_date)}</span>
+                    <span>Comms: {escape(communicated_date)}</span>
+                </div>
 
-            <td>
-                <select form="{form_id}" name="grade">
-                    <option value="">Select</option>
-                    {''.join(
-                        f"<option value='{g}' {'selected' if row['grade']==g else ''}>{grade_label(g)}</option>"
-                        for g in ["G8","G9","G10","G11","G12","G13"]
-                    )}
-                </select>
-            </td>
+                <div class="compact-status">
+                    <span class="chip {status_class}">
+                        {escape(status_value)}
+                    </span>
+                    {overdue_badge}
+                </div>
 
-            <td style="max-width:260px">
-                {subjects_html}
-            </td>
+            </summary>
 
-            <td>
-                <select form="{form_id}" name="issue_type">
-                    <option value="">Select</option>
-                    {''.join(
-                        f"<option value='{i}' {'selected' if row['issue_type']==i else ''}>{i}</option>"
-                        for i in ISSUE_TYPES_LOCAL
-                    )}
-                </select>
-            </td>
+            <form method="post"
+                  action="{url_for('admin_followup_update', fid=f['id'])}">
 
-            <td>
-                <select form="{form_id}" name="followup_status">
-                    <option value="OPEN" {'selected' if row['followup_status']=="OPEN" else ""}>OPEN</option>
-                    <option value="IN PROGRESS" {'selected' if row['followup_status']=="IN PROGRESS" else ""}>IN PROGRESS</option>
-                    <option value="AWAITING POP" {'selected' if row['followup_status']=="AWAITING POP" else ""}>AWAITING POP</option>
-                    <option value="RESOLVED" {'selected' if row['followup_status']=="RESOLVED" else ""}>RESOLVED</option>
-                    <option value="DECLINED" {'selected' if row['followup_status']=="DECLINED" else ""}>DECLINED</option>
-                </select>
-            </td>
+                <div class="compact-edit-grid">
 
-            <td>
-                <select form="{form_id}" name="captured_by">
-                    <option value="Admin" {'selected' if row['captured_by']=="Admin" else ""}>Admin</option>
-                    <option value="Admission COD" {'selected' if row['captured_by']=="Admission COD" else ""}>Admission COD</option>
-                    <option value="Leadership" {'selected' if row['captured_by']=="Leadership" else ""}>Leadership</option>
-                </select>
-            </td>
+                    <div>
+                        <label>Name</label>
+                        <input name="full_name"
+                               value="{escape(f['full_name'] or '')}"
+                               placeholder="Student full name">
+                    </div>
 
-            <td>
-                <select form="{form_id}" name="updated_by">
-                    <option value="">Select</option>
-                    <option value="Admin" {'selected' if row['updated_by']=="Admin" else ""}>Admin</option>
-                    <option value="Admission COD" {'selected' if row['updated_by']=="Admission COD" else ""}>Admission COD</option>
-                    <option value="Leadership" {'selected' if row['updated_by']=="Leadership" else ""}>Leadership</option>
-                </select>
-            </td>
+                    <div>
+                        <label>Phone</label>
+                        <input name="phone"
+                               value="{escape(f['phone'] or '')}"
+                               placeholder="Phone number">
 
-            <td>
-                <input form="{form_id}"
-                       type="date"
-                       name="payment_date"
-                       value="{escape(row['payment_date'] or '')}">
-            </td>
+                        <div style="margin-top:6px">
+                            {wa_link}
+                        </div>
+                    </div>
 
-            <td>
-                <input form="{form_id}"
-                       type="date"
-                       name="date_communicated"
-                       value="{escape(row['date_communicated'] or '')}">
-            </td>
+                    <div>
+                        <label>Grade</label>
+                        <select name="grade">
+                            <option value="">Select Grade</option>
+                            {''.join(
+                                f"<option value='{g}' {'selected' if f['grade']==g else ''}>{grade_label(g)}</option>"
+                                for g in ["G8","G9","G10","G11","G12","G13"]
+                            )}
+                        </select>
+                    </div>
 
-            <td style="min-width:260px">
+                    <div>
+                        <label>Issue Type</label>
+                        <select name="issue_type">
+                            <option value="">Select Issue</option>
+                            {''.join(
+                                f"<option value='{i}' {'selected' if f['issue_type']==i else ''}>{i}</option>"
+                                for i in ISSUE_TYPES_LOCAL
+                            )}
+                        </select>
+                    </div>
 
-                <div style="
-                    background:#f8fafc;
-                    border:1px solid #e2e8f0;
-                    border-radius:10px;
-                    padding:8px;
-                    max-height:120px;
-                    overflow:auto;
-                    margin-bottom:8px;
-                    white-space:pre-wrap;
-                    font-size:12px;
-                    line-height:1.5;
-                ">{escape(row['notes'] or 'No notes yet.')}</div>
+                    <div>
+                        <label>Status</label>
+                        <select name="followup_status">
+                            {''.join(
+                                f"<option value='{st}' {'selected' if status_value==st else ''}>{st}</option>"
+                                for st in FOLLOWUP_STATUSES
+                            )}
+                        </select>
+                    </div>
 
-                <textarea form="{form_id}"
-                          name="new_note"
-                          rows="2"
-                          placeholder="Add a new note. Previous notes will be preserved."></textarea>
+                    <div>
+                        <label>Captured By</label>
+                        <select name="captured_by">
+                            <option value="Admin" {'selected' if f['captured_by']=="Admin" else ""}>Admin</option>
+                            <option value="Admission COD" {'selected' if f['captured_by']=="Admission COD" else ""}>Admission COD</option>
+                            <option value="Leadership" {'selected' if f['captured_by']=="Leadership" else ""}>Leadership</option>
+                        </select>
+                    </div>
 
-            </td>
+                    <div>
+                        <label>Updated By</label>
+                        <select name="updated_by">
+                            <option value="">Select</option>
+                            <option value="Admin" {'selected' if f['updated_by']=="Admin" else ""}>Admin</option>
+                            <option value="Admission COD" {'selected' if f['updated_by']=="Admission COD" else ""}>Admission COD</option>
+                            <option value="Leadership" {'selected' if f['updated_by']=="Leadership" else ""}>Leadership</option>
+                        </select>
+                    </div>
 
-            <td>
-                <div style="display:flex;gap:6px;flex-wrap:wrap">
-                    <button form="{form_id}" class="btn mini success">
-                        Save
+                    <div>
+                        <label>Payment Date</label>
+                        <input type="date"
+                               name="payment_date"
+                               value="{escape(f['payment_date'] or '')}">
+                    </div>
+
+                    <div>
+                        <label>Date Communicated</label>
+                        <input type="date"
+                               name="date_communicated"
+                               value="{escape(f['date_communicated'] or '')}">
+                    </div>
+
+                    <div class="compact-wide">
+                        <label>Subjects</label>
+
+                        <div class="mini muted" style="margin-bottom:6px">
+                            Current: {escape(subject_summary)}
+                        </div>
+
+                        <div class="compact-subject-box">
+                            {subject_checkboxes}
+                        </div>
+                    </div>
+
+                    <div class="compact-wide">
+                        <label>Previous Notes</label>
+                        <div class="compact-notes-box">
+                            {notes_display}
+                        </div>
+                    </div>
+
+                    <div class="compact-wide">
+                        <label>Add New Note</label>
+                        <textarea name="new_note"
+                                  rows="2"
+                                  placeholder="Add a new note. Previous notes will be preserved."></textarea>
+                    </div>
+
+                </div>
+
+                <div class="compact-actions">
+                    <button class="btn mini success">
+                        Save Follow-Up
                     </button>
 
                     {delete_button}
                 </div>
-            </td>
 
-        </tr>
-        """)
+            </form>
+
+        </details>
+        """
 
     status_options = "".join(
         f"""
@@ -18205,98 +18226,309 @@ def admin_followups():
     body = f"""
     {admin_nav()}
 
+    <style>
+        .compact-follow-header {{
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:12px;
+            flex-wrap:wrap;
+            margin-bottom:12px;
+        }}
+
+        .compact-filter-box {{
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:16px;
+            padding:12px;
+            margin:12px 0;
+        }}
+
+        .compact-filter-box form {{
+            display:grid;
+            grid-template-columns:2fr 1fr 1fr 1fr 1fr auto auto;
+            gap:10px;
+            align-items:end;
+        }}
+
+        .compact-follow-list {{
+            display:grid;
+            gap:8px;
+            margin-top:12px;
+        }}
+
+        .compact-follow-item {{
+            background:#ffffff;
+            border:1px solid var(--border);
+            border-left:5px solid #1b5e20;
+            border-radius:14px;
+            box-shadow:var(--shadow-sm);
+            overflow:hidden;
+        }}
+
+        .compact-follow-item[open] {{
+            border-left-color:#16a34a;
+        }}
+
+        .compact-follow-summary {{
+            display:grid;
+            grid-template-columns:1.3fr 2.2fr auto;
+            gap:12px;
+            align-items:center;
+            padding:10px 12px;
+            cursor:pointer;
+            list-style:none;
+        }}
+
+        .compact-follow-summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .compact-follow-summary:hover {{
+            background:#f8fafc;
+        }}
+
+        .compact-student {{
+            display:grid;
+            gap:2px;
+            min-width:0;
+        }}
+
+        .compact-student strong {{
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }}
+
+        .compact-meta {{
+            display:grid;
+            grid-template-columns:repeat(4, minmax(0, 1fr));
+            gap:6px;
+            font-size:12px;
+            color:#475569;
+        }}
+
+        .compact-meta span {{
+            background:#f8fafc;
+            border:1px solid #e2e8f0;
+            border-radius:999px;
+            padding:5px 8px;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }}
+
+        .compact-status {{
+            display:flex;
+            justify-content:flex-end;
+            align-items:center;
+            gap:6px;
+            flex-wrap:wrap;
+        }}
+
+        .compact-edit-grid {{
+            display:grid;
+            grid-template-columns:repeat(4, minmax(0, 1fr));
+            gap:10px;
+            padding:12px;
+            border-top:1px solid var(--border);
+            background:#ffffff;
+        }}
+
+        .compact-wide {{
+            grid-column:1 / -1;
+        }}
+
+        .compact-subject-box {{
+            display:flex;
+            flex-wrap:wrap;
+            gap:6px;
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:12px;
+            padding:8px;
+            max-height:100px;
+            overflow:auto;
+        }}
+
+        .compact-subject-pill {{
+            display:inline-flex;
+            align-items:center;
+            gap:5px;
+            border:1px solid #cbd5e1;
+            background:#fff;
+            border-radius:999px;
+            padding:5px 8px;
+            font-size:12px;
+            cursor:pointer;
+        }}
+
+        .compact-subject-pill.selected {{
+            border-color:#16a34a;
+            background:#dcfce7;
+            color:#14532d;
+            font-weight:700;
+        }}
+
+        .compact-subject-pill input {{
+            margin:0;
+        }}
+
+        .compact-notes-box {{
+            background:#f8fafc;
+            border:1px solid var(--border);
+            border-radius:12px;
+            padding:8px;
+            max-height:95px;
+            overflow:auto;
+            white-space:pre-wrap;
+            font-size:12px;
+            line-height:1.45;
+        }}
+
+        .compact-actions {{
+            display:flex;
+            justify-content:flex-end;
+            gap:8px;
+            flex-wrap:wrap;
+            padding:0 12px 12px;
+        }}
+
+        @media(max-width:1200px) {{
+            .compact-filter-box form {{
+                grid-template-columns:1fr 1fr 1fr;
+            }}
+        }}
+
+        @media(max-width:1000px) {{
+            .compact-follow-summary {{
+                grid-template-columns:1fr;
+            }}
+
+            .compact-meta {{
+                grid-template-columns:1fr 1fr;
+            }}
+
+            .compact-status {{
+                justify-content:flex-start;
+            }}
+
+            .compact-edit-grid {{
+                grid-template-columns:1fr 1fr;
+            }}
+        }}
+
+        @media(max-width:650px) {{
+            .compact-edit-grid {{
+                grid-template-columns:1fr;
+            }}
+
+            .compact-filter-box form {{
+                grid-template-columns:1fr;
+            }}
+
+            .compact-meta {{
+                grid-template-columns:1fr;
+            }}
+        }}
+    </style>
+
     <section class="card">
-        <h1>Follow-Up Tracker</h1>
 
-        <p class="muted">
-            Showing {len(rows)} of {total_rows} follow-up record(s).
-        </p>
+        <div class="compact-follow-header">
+            <div>
+                <h1>Follow-Up Tracker</h1>
+                <p class="muted" style="margin:0">
+                    Compact view. Click a record to open and update its details.
+                </p>
+            </div>
 
-        <div class="toolbar">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <span class="chip">
+                    {total_rows} record(s)
+                </span>
 
-            <form method="get" style="display:flex;gap:6px;flex-wrap:wrap">
+                <a class="btn success mini" href="{url_for('admin_followup_add')}">
+                    Add New
+                </a>
 
-                <input type="text"
-                       name="q"
-                       value="{escape(q)}"
-                       placeholder="Search name, phone, subject, issue or notes">
+                <a class="btn secondary mini" href="{url_for('export_followups')}">
+                    Export Excel
+                </a>
+            </div>
+        </div>
 
-                <select name="grade">
-                    <option value="">All Grades</option>
-                    {''.join(
-                        f"<option value='{g}' {'selected' if f_grade==g else ''}>{grade_label(g)}</option>"
-                        for g in ["G8","G9","G10","G11","G12","G13"]
-                    )}
-                </select>
+        <div class="compact-filter-box">
+            <form method="get">
 
-                <select name="subject">
-                    <option value="">All Subjects</option>
-                    {''.join(
-                        f"<option value='{escape(s)}' {'selected' if f_subject==s else ''}>{escape(s)}</option>"
-                        for s in subjects
-                    )}
-                </select>
+                <div>
+                    <label>Search</label>
+                    <input type="text"
+                           name="q"
+                           value="{escape(q)}"
+                           placeholder="Search name, phone, subject, issue, notes or status">
+                </div>
 
-                <select name="status">
-                    <option value="">All Statuses</option>
-                    {status_options}
-                </select>
+                <div>
+                    <label>Grade</label>
+                    <select name="grade">
+                        <option value="">All Grades</option>
+                        {''.join(
+                            f"<option value='{g}' {'selected' if f_grade==g else ''}>{grade_label(g)}</option>"
+                            for g in ["G8","G9","G10","G11","G12","G13"]
+                        )}
+                    </select>
+                </div>
 
-                <select name="issue">
-                    <option value="">All Issues</option>
-                    {issue_options}
-                </select>
+                <div>
+                    <label>Subject</label>
+                    <select name="subject">
+                        <option value="">All Subjects</option>
+                        {''.join(
+                            f"<option value='{escape(s)}' {'selected' if f_subject==s else ''}>{escape(s)}</option>"
+                            for s in subjects
+                        )}
+                    </select>
+                </div>
 
-                <button class="btn mini">Filter</button>
+                <div>
+                    <label>Status</label>
+                    <select name="status">
+                        <option value="">All Statuses</option>
+                        {status_options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Issue</label>
+                    <select name="issue">
+                        <option value="">All Issues</option>
+                        {issue_options}
+                    </select>
+                </div>
+
+                <button class="btn mini">
+                    Filter
+                </button>
 
                 <a class="btn mini secondary" href="{url_for('admin_followups')}">
                     Clear
                 </a>
 
             </form>
-
-            <a class="btn success mini" href="{url_for('admin_followup_add')}">
-                Add New
-            </a>
-
-            <a class="btn secondary mini" href="{url_for('export_followups')}">
-                Export Excel
-            </a>
-
         </div>
 
-        {top_pagination}
-
-        <div class="scroll-x">
-
-            <table class="followups-table">
-
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Phone</th>
-                        <th>Grade</th>
-                        <th>Subjects</th>
-                        <th>Issue</th>
-                        <th>Status</th>
-                        <th>Captured</th>
-                        <th>Updated</th>
-                        <th>Payment</th>
-                        <th>Communicated</th>
-                        <th>Notes</th>
-                        <th>Save</th>
-                    </tr>
-                </thead>
-
-                <tbody>
-                    {''.join(trs) or "<tr><td colspan='12'>No follow-ups found.</td></tr>"}
-                </tbody>
-
-            </table>
-
+        <div class="mini muted" style="margin-bottom:8px">
+            Showing {len(rows)} of {total_rows} follow-up record(s).
         </div>
 
-        {bottom_pagination}
+        {pagination_html}
+
+        <div class="compact-follow-list">
+            {compact_rows or "<div class='empty'>No follow-ups found.</div>"}
+        </div>
+
+        {pagination_html}
 
     </section>
     """
@@ -18536,7 +18768,7 @@ def admin_followup_update(fid):
     conn.commit()
     conn.close()
 
-    return redirect(url_for('admin_followups'))
+    return redirect(request.referrer or url_for('admin_followups'))
    
 
 @app.get("/admin/followups/export")
@@ -31399,14 +31631,6 @@ def duty_admin_home():
             {stat("Inbox", str(inbox_count))}
             {stat("Direct Msgs", str(dm_unread))}
             {stat("Open Follow-Ups", str(open_followups))}
-        </div>
-
-        <div class="toolbar" style="margin-top:16px">
-            <a class="btn secondary" href="{url_for('duty_admin_enrollments')}">View Enrollments</a>
-            <a class="btn secondary" href="{url_for('duty_admin_students')}">Students</a>
-            <a class="btn secondary" href="{url_for('duty_admin_followups')}">Follow-Ups</a>
-            <a class="btn secondary" href="{url_for('duty_admin_direct_messages')}">Direct Messages</a>
-            <a class="btn secondary" href="{url_for('duty_admin_reports')}">Student Reports</a>
         </div>
     </section>
     """
