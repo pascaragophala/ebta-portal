@@ -2439,6 +2439,25 @@ def enrollment_exists(conn, student_id, subject_id, month):
         (student_id, subject_id, month)
     )
     return cur.fetchone() is not None
+    
+    
+    
+def is_first_time_student(conn, student_id):
+    """
+    Returns True if the student has no previous enrollment records.
+    This is used to make referral points count for new students only.
+    """
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM enrollments
+        WHERE student_id=?
+    """, (student_id,))
+
+    row = cur.fetchone()
+
+    return (row["c"] or 0) == 0
 
 
 def pretty_month_label(month_str: str) -> str:
@@ -5826,8 +5845,10 @@ def register():
         dest = UPLOAD_DIR / safe
         pop.save(dest)
         saved_paths.append(f"/uploads/{safe}")
+        
 
-
+    is_new_referral_student = is_first_time_student(conn, sid)
+    
     created = []
 
     for subid in subject_ids:
@@ -5918,6 +5939,14 @@ def register():
         mark_coupon_used(conn, coupon_result.get("coupon_id"))
 
         if coupon_result.get("code_type") == "REFERRAL_ONLY":
+            if not is_new_referral_student:
+                conn.rollback()
+                conn.close()
+                return page(
+                    "Referral Code Not Allowed",
+                    card_msg("Referral codes can only be used by new EBTA learners.")
+                )
+
             award_referral_point_and_rewards(
                 conn,
                 coupon_result.get("referral_owner_id"),
@@ -7239,8 +7268,8 @@ def student_home():
         <h2>My Referral Code</h2>
 
         <p class="muted">
-            Share this code with new learners. When they enroll using your code,
-            you earn referral points.
+            Share this code with new EBTA learners. Referral points are only awarded
+            when a learner enrolls with EBTA for the first time.
         </p>
 
         <div style="
