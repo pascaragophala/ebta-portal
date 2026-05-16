@@ -31674,7 +31674,7 @@ def duty_admin_enrollments():
     r = require_duty_admin()
     if r: return r
 
-    month = get_admin_active_month()
+    month = request.args.get("month", "").strip() or get_admin_active_month()
 
     q = request.args.get("q", "").strip()
     status = request.args.get("status", "").strip()
@@ -31814,11 +31814,17 @@ def duty_admin_enrollments():
         <h1>Enrollments View</h1>
 
         <p class="muted">
-            View enrollment information for the current month.
+            View enrollment information for the selected month.
             This page does not allow approval, SMS sending, lapsing, or pending changes.
         </p>
 
         <form method="get" class="toolbar">
+
+            <input type="month"
+                   name="month"
+                   value="{escape(month)}"
+                   title="Filter by enrollment month">
+
             <input name="q"
                    value="{escape(q)}"
                    placeholder="Search student, phone, subject or email">
@@ -31842,7 +31848,11 @@ def duty_admin_enrollments():
         </form>
         
         
-        {pagination_controls("/duty-admin/enrollments", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
+        <div class="mini muted" style="margin:10px 0">
+            Showing enrollments for: <b>{pretty_month_label(month)}</b>
+        </div>
+        
+        {pagination_controls("/duty-admin/enrollments", page_num, total_pages, {"month": month, "q": q, "grade": grade, "status": status})}
         <div class="scroll-x">
             <table>
                 <thead>
@@ -31863,12 +31873,13 @@ def duty_admin_enrollments():
                 </tbody>
             </table>
         </div>
-        {pagination_controls("/duty-admin/enrollments", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
+        {pagination_controls("/duty-admin/enrollments", page_num, total_pages, {"month": month, "q": q, "grade": grade, "status": status})}
     </section>
     """
 
     return page("Duty Admin Enrollments", body)
     
+
 @app.get('/duty-admin/students')
 def duty_admin_students():
 
@@ -31877,6 +31888,7 @@ def duty_admin_students():
 
     q = request.args.get("q", "").strip()
     grade = request.args.get("grade", "").strip()
+    month = request.args.get("month", "").strip() or get_admin_active_month()
     
     page_num = max(1, int(request.args.get("page", 1)))
     limit = 15
@@ -31885,33 +31897,40 @@ def duty_admin_students():
     conn = get_db()
     cur = conn.cursor()
 
-    where = []
-    params = []
+    where = ["e.month = ?"]
+    params = [month]
 
     if q:
         search = f"%{q}%"
         where.append("""
             (
-                full_name LIKE ?
-                OR phone_whatsapp LIKE ?
-                OR guardian_phone LIKE ?
-                OR guardian_name LIKE ?
-                OR email LIKE ?
-                OR school LIKE ?
-                OR province LIKE ?
+                s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR s.guardian_phone LIKE ?
+                OR IFNULL(s.guardian_name, '') LIKE ?
+                OR IFNULL(s.email, '') LIKE ?
+                OR IFNULL(s.school, '') LIKE ?
+                OR IFNULL(s.province, '') LIKE ?
+                OR sub.name LIKE ?
+                OR e.status LIKE ?
             )
         """)
-        params += [search, search, search, search, search, search, search]
+        params += [
+            search, search, search, search, search,
+            search, search, search, search
+        ]
 
     if grade:
-        where.append("grade = ?")
+        where.append("s.grade = ?")
         params.append(grade)
 
-    where_sql = "WHERE " + " AND ".join(where) if where else ""
+    where_sql = "WHERE " + " AND ".join(where)
 
     cur.execute(f"""
-        SELECT COUNT(*) AS c
-        FROM students
+        SELECT COUNT(DISTINCT s.id) AS c
+        FROM students s
+        JOIN enrollments e ON e.student_id = s.id
+        JOIN subjects sub ON sub.id = e.subject_id
         {where_sql}
     """, params)
 
@@ -31922,10 +31941,16 @@ def duty_admin_students():
     data_params.extend([limit, offset])
 
     cur.execute(f"""
-        SELECT *
-        FROM students
+        SELECT
+            s.*,
+            GROUP_CONCAT(DISTINCT sub.name) AS enrolled_subjects,
+            GROUP_CONCAT(DISTINCT e.status) AS enrollment_statuses
+        FROM students s
+        JOIN enrollments e ON e.student_id = s.id
+        JOIN subjects sub ON sub.id = e.subject_id
         {where_sql}
-        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), full_name
+        GROUP BY s.id
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.full_name
         LIMIT ? OFFSET ?
     """, data_params)
 
@@ -31952,6 +31977,14 @@ def duty_admin_students():
                 {escape(s['school'] or '—')}
                 <div class="mini muted">{escape(s['province'] or '—')}</div>
             </td>
+
+            <td>
+                {escape(s['enrolled_subjects'] or '—')}
+                <div class="mini muted">
+                    Status: {escape(s['enrollment_statuses'] or '—')}
+                </div>
+            </td>
+
             <td>{escape((s['created_at'] or '')[:16].replace('T',' '))}</td>
         </tr>
         """
@@ -31994,11 +32027,12 @@ def duty_admin_students():
                         <th>Guardian</th>
                         <th>Email</th>
                         <th>School / Province</th>
+                        <th>Subjects This Month</th>
                         <th>Created</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {trs or "<tr><td colspan='7'>No students found.</td></tr>"}
+                    {trs or "<tr><td colspan='8'>No students found.</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -35378,9 +35412,15 @@ def admission_students():
         </p>
 
         <form method="get" class="toolbar">
+
+            <input type="month"
+                   name="month"
+                   value="{escape(month)}"
+                   title="Filter students by enrollment month">
+
             <input name="q"
                    value="{escape(q)}"
-                   placeholder="Search name, phone, guardian, email, school or province">
+                   placeholder="Search name, phone, guardian, email, school, province, subject or status">
 
             <select name="grade">
                 <option value="">All Grades</option>
@@ -35392,8 +35432,12 @@ def admission_students():
 
             <button class="btn mini">Search</button>
         </form>
+        
+        <div class="mini muted" style="margin:10px 0">
+            Showing students enrolled for: <b>{pretty_month_label(month)}</b>
+        </div>
 
-        {pagination_controls("/admission/students", page_num, total_pages, {"q": q, "grade": grade})}
+        {pagination_controls("/duty-admin/students", page_num, total_pages, {"month": month, "q": q, "grade": grade})}
 
         <div class="scroll-x">
             <table>
@@ -35415,7 +35459,7 @@ def admission_students():
             </table>
         </div>
 
-        {pagination_controls("/admission/students", page_num, total_pages, {"q": q, "grade": grade})}
+        {pagination_controls("/duty-admin/students", page_num, total_pages, {"month": month, "q": q, "grade": grade})}
     </section>
     """
 
