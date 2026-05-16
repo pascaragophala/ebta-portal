@@ -36963,12 +36963,19 @@ def admin_discounts_control():
     if not is_high_admin():
         return page("Access Denied", card_msg("Only high admin can control discount settings."))
 
-    locked = get_setting("discounts_locked", "1")
+    create_locked = get_setting("discounts_locked", "1")
+    delete_locked = get_setting("discounts_delete_locked", "1")
 
-    status_html = (
-        "<span class='chip lapsed'>Locked</span>"
-        if locked == "1"
-        else "<span class='chip active'>Unlocked</span>"
+    create_status_html = (
+        "<span class='chip lapsed'>Creation Locked</span>"
+        if create_locked == "1"
+        else "<span class='chip active'>Creation Unlocked</span>"
+    )
+
+    delete_status_html = (
+        "<span class='chip lapsed'>Delete Locked</span>"
+        if delete_locked == "1"
+        else "<span class='chip active'>Delete Unlocked</span>"
     )
 
     body = f"""
@@ -36978,20 +36985,43 @@ def admin_discounts_control():
         <h1>Discount & Referral Control</h1>
 
         <p class="muted">
-            Control whether Admission Coordinators can create discount codes.
-            When locked, they can still view referral codes and existing discounts, but cannot create new codes.
+            Control what Admission Coordinators can do on the discount and referral page.
         </p>
 
-        <div class="card soft" style="border-left:5px solid #1b5e20">
-            <h2>Current Status</h2>
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:14px">
 
-            <p>{status_html}</p>
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <h2>Discount Creation</h2>
 
-            <form method="post" action="{url_for('admin_discounts_toggle')}">
-                <button class="btn {'success' if locked == '1' else 'danger'}">
-                    {'Unlock Discount Management' if locked == '1' else 'Lock Discount Management'}
-                </button>
-            </form>
+                <p>{create_status_html}</p>
+
+                <p class="muted">
+                    When locked, Admission Coordinators can view discount codes but cannot create new ones.
+                </p>
+
+                <form method="post" action="{url_for('admin_discounts_toggle')}">
+                    <button class="btn {'success' if create_locked == '1' else 'danger'}">
+                        {'Unlock Discount Creation' if create_locked == '1' else 'Lock Discount Creation'}
+                    </button>
+                </form>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #ef4444">
+                <h2>Discount Deletion</h2>
+
+                <p>{delete_status_html}</p>
+
+                <p class="muted">
+                    When locked, Admission Coordinators cannot delete discount codes.
+                </p>
+
+                <form method="post" action="{url_for('admin_discounts_delete_toggle')}">
+                    <button class="btn {'success' if delete_locked == '1' else 'danger'}">
+                        {'Unlock Discount Deletion' if delete_locked == '1' else 'Lock Discount Deletion'}
+                    </button>
+                </form>
+            </div>
+
         </div>
     </section>
     """
@@ -37017,6 +37047,24 @@ def admin_discounts_toggle():
     return redirect(url_for("admin_discounts_control"))
 
 
+@app.post('/admin/discounts-control/delete-toggle')
+def admin_discounts_delete_toggle():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can update discount delete settings."))
+
+    current = get_setting("discounts_delete_locked", "1")
+    new_value = "0" if current == "1" else "1"
+
+    set_setting("discounts_delete_locked", new_value)
+
+    return redirect(url_for("admin_discounts_control"))
+
+
 @app.get('/admission/discounts')
 def admission_discounts():
 
@@ -37027,6 +37075,7 @@ def admission_discounts():
     q = request.args.get("q", "").strip()
     grade_filter = request.args.get("grade", "").strip()
     locked = get_setting("discounts_locked", "1")
+    delete_locked = get_setting("discounts_delete_locked", "1")
 
     try:
         students_page = int(request.args.get("students_page", 1))
@@ -37408,6 +37457,26 @@ def admission_discounts():
                 <button class="btn mini secondary">Send Code via SMS</button>
             </form>
             """
+            
+        delete_button = ""
+
+        if delete_locked == "0":
+            delete_button = f"""
+            <form method="post"
+                  action="{url_for('admission_discount_delete', coupon_id=c['id'])}"
+                  style="display:inline"
+                  onsubmit="return confirm('Delete this discount code? This cannot be undone.');">
+                <button class="btn mini danger">
+                    Delete
+                </button>
+            </form>
+            """
+        else:
+            delete_button = """
+            <span class="mini muted">
+                Delete locked
+            </span>
+            """
 
         coupon_rows += f"""
         <tr>
@@ -37431,7 +37500,12 @@ def admission_discounts():
 
             <td>{c['used_count']} / {c['max_uses']}</td>
 
-            <td>{sms_button}</td>
+            <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    {sms_button}
+                    {delete_button}
+                </div>
+            </td>
         </tr>
         """
 
@@ -37516,6 +37590,11 @@ def admission_discounts():
         <p class="muted">
             Manage student discount codes and monitor referral points.
         </p>
+        
+        <div class="mini muted" style="margin-bottom:10px">
+            Delete access:
+            {"Unlocked" if delete_locked == "0" else "Locked by High Admin"}
+        </div>
 
         {create_form}
 
@@ -37586,7 +37665,7 @@ def admission_discounts():
                             <th>Source</th>
                             <th>Status</th>
                             <th>Usage</th>
-                            <th>SMS</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
 
@@ -37793,6 +37872,53 @@ def admission_discount_sms(coupon_id):
 
     return redirect(url_for("admission_discounts"))
 
+
+@app.post('/admission/discounts/<int:coupon_id>/delete')
+def admission_discount_delete(coupon_id):
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    if get_setting("discounts_delete_locked", "1") == "1":
+        return page(
+            "Delete Locked",
+            card_msg("Deleting discount codes is currently locked by high admin.")
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, code, used_count, status
+        FROM discount_coupons
+        WHERE id=?
+        LIMIT 1
+    """, (coupon_id,))
+
+    coupon = cur.fetchone()
+
+    if not coupon:
+        conn.close()
+        return page("Not Found", card_msg("Discount code not found."))
+
+    if int(coupon["used_count"] or 0) > 0:
+        conn.close()
+        return page(
+            "Cannot Delete Used Code",
+            card_msg("This discount code has already been used, so it cannot be deleted. It can remain as a record.")
+        )
+
+    cur.execute("""
+        DELETE FROM discount_coupons
+        WHERE id=?
+          AND used_count=0
+    """, (coupon_id,))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(request.referrer or url_for("admission_discounts"))
 
 # --- Admin: Analytics dashboard ---
 
