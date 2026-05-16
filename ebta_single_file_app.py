@@ -34969,7 +34969,7 @@ def admission_enrollments():
     if r:
         return r
 
-    month = get_admin_active_month()
+    month = request.args.get("month", "").strip() or get_admin_active_month()
 
     q = request.args.get("q", "").strip()
     status = request.args.get("status", "").strip()
@@ -35208,6 +35208,12 @@ def admission_enrollments():
         </p>
 
         <form method="get" class="toolbar">
+
+            <input type="month"
+                   name="month"
+                   value="{escape(month)}"
+                   title="Filter by enrollment month">
+
             <input name="q"
                    value="{escape(q)}"
                    placeholder="Search student, phone, subject or email">
@@ -35229,8 +35235,12 @@ def admission_enrollments():
 
             <button class="btn mini">Filter</button>
         </form>
-
-        {pagination_controls("/admission/enrollments", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
+        
+        <div class="mini muted" style="margin:10px 0">
+            Showing enrollments for: <b>{pretty_month_label(month)}</b>
+        </div>
+        
+        {pagination_controls("/admission/enrollments", page_num, total_pages, {"month": month, "q": q, "grade": grade, "status": status})}
 
         <div class="scroll-x">
             <table>
@@ -35256,7 +35266,7 @@ def admission_enrollments():
             </table>
         </div>
 
-        {pagination_controls("/admission/enrollments", page_num, total_pages, {"q": q, "grade": grade, "status": status})}
+        {pagination_controls("/admission/enrollments", page_num, total_pages, {"month": month, "q": q, "grade": grade, "status": status})}
     </section>
     """
 
