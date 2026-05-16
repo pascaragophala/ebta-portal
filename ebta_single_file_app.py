@@ -1698,8 +1698,8 @@ def award_referral_point_and_rewards(conn, referrer_student_id, referred_student
 
     Rules:
     - Same referred learner can only count once for the same referrer.
-    - At 5 points, generate 50% reward code.
-    - At 10 points, generate 100% reward code and reset current points to 0.
+    - At 3 points, generate 50% reward code.
+    - At 5 points, generate 100% reward code and reset current points to 0.
     - Lifetime total continues increasing.
     """
 
@@ -1745,8 +1745,8 @@ def award_referral_point_and_rewards(conn, referrer_student_id, referred_student
     row = cur.fetchone()
     points = int(row["referral_points"] or 0) if row else 0
 
-    # 5 points reward
-    if points == 5:
+    # 3 points reward = 50% discount
+    if points == 3:
         cur.execute("""
             SELECT id
             FROM discount_coupons
@@ -1762,6 +1762,7 @@ def award_referral_point_and_rewards(conn, referrer_student_id, referred_student
                 code = generate_short_code("R50", 6)
 
                 cur.execute("SELECT id FROM discount_coupons WHERE code=?", (code,))
+
                 if not cur.fetchone():
                     break
 
@@ -1797,15 +1798,16 @@ def award_referral_point_and_rewards(conn, referrer_student_id, referred_student
                 "system",
                 None,
                 now_utc_iso(),
-                "Auto-generated referral reward at 5 points."
+                "Auto-generated referral reward at 3 points."
             ))
 
-    # 10 points reward
-    if points >= 10:
+    # 5 points reward = 100% discount, then reset cycle points
+    if points >= 5:
         while True:
             code = generate_short_code("R100", 6)
 
             cur.execute("SELECT id FROM discount_coupons WHERE code=?", (code,))
+
             if not cur.fetchone():
                 break
 
@@ -1841,7 +1843,7 @@ def award_referral_point_and_rewards(conn, referrer_student_id, referred_student
             "system",
             None,
             now_utc_iso(),
-            "Auto-generated referral reward at 10 points."
+            "Auto-generated referral reward at 5 points."
         ))
 
         cur.execute("""
@@ -7265,7 +7267,7 @@ def student_home():
 
             <div class="toolbar" style="gap:8px;flex-wrap:wrap">
                 <span class="chip active">
-                    Current Points: {referral_points} / 10
+                    Current Points: {referral_points} / 5
                 </span>
 
                 <span class="chip">
@@ -7276,8 +7278,8 @@ def student_home():
         </div>
 
         <div class="mini muted" style="margin-bottom:10px">
-            At 5 referral points, you can receive a 50% discount reward.
-            At 10 referral points, you can receive a 100% discount reward.
+            At 3 referral points, you can receive a 50% discount reward.
+            At 5 referral points, you can receive a 100% discount reward.
         </div>
 
         <h3 style="margin-top:12px">My Reward Codes</h3>
@@ -37324,7 +37326,7 @@ def admission_discounts():
                 <span class="chip">{escape(s['referral_code'] or '—')}</span>
             </td>
 
-            <td>{s['referral_points']} / 10</td>
+            <td>{s['referral_points']} / 5</td>
 
             <td>{s['referral_total_count']}</td>
         </tr>
