@@ -37134,7 +37134,7 @@ def admission_discounts():
             grade
         FROM students
         ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), full_name
-        LIMIT 500
+        LIMIT 2000
     """)
 
     form_students = cur.fetchall()
@@ -37260,8 +37260,8 @@ def admission_discounts():
 
     student_options = "".join(
         f"""
-        <option value="{s['id']}">
-            {escape(s['full_name'])} - {grade_label(s['grade'])} - {escape(s['phone_whatsapp'] or '')}
+        <option value="{escape(s['full_name'])} - {grade_label(s['grade'])} - {escape(s['phone_whatsapp'] or '')}"
+                data-id="{s['id']}">
         </option>
         """
         for s in form_students
@@ -37301,9 +37301,23 @@ def admission_discounts():
 
                 <div>
                     <label>Student</label>
-                    <select name="student_id" required>
+
+                    <input list="student_discount_list"
+                           id="student_discount_search"
+                           placeholder="Type learner name, surname, grade or phone"
+                           required>
+
+                    <input type="hidden"
+                           name="student_id"
+                           id="student_discount_id">
+
+                    <datalist id="student_discount_list">
                         {student_options}
-                    </select>
+                    </datalist>
+
+                    <div class="mini muted">
+                        Start typing to find the learner, then select the correct option.
+                    </div>
                 </div>
 
                 <div>
@@ -37574,6 +37588,41 @@ def admission_discounts():
 
             {coupons_pagination}
         </div>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function () {{
+                const searchInput = document.getElementById("student_discount_search");
+                const hiddenInput = document.getElementById("student_discount_id");
+                const options = document.querySelectorAll("#student_discount_list option");
+
+                if (!searchInput || !hiddenInput) {{
+                    return;
+                }}
+
+                searchInput.addEventListener("input", function () {{
+                    hiddenInput.value = "";
+
+                    options.forEach(function (option) {{
+                        if (option.value === searchInput.value) {{
+                            hiddenInput.value = option.dataset.id || "";
+                        }}
+                    }});
+                }});
+
+                const form = searchInput.closest("form");
+
+                if (form) {{
+                    form.addEventListener("submit", function (event) {{
+                        if (!hiddenInput.value) {{
+                            event.preventDefault();
+                            alert("Please select a learner from the search list before generating a discount code.");
+                            searchInput.focus();
+                        }}
+                    }});
+                }}
+            }});
+        </script>
+        
     </section>
     """
 
