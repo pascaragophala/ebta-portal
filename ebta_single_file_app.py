@@ -36954,6 +36954,7 @@ def admission_followup_create():
 # -------------------DISCOUNTS ------------------------------
 
 @app.get('/admin/discounts-control')
+@require_high_admin
 def admin_discounts_control():
 
     r = require_admin()
@@ -37030,6 +37031,7 @@ def admin_discounts_control():
 
 
 @app.post('/admin/discounts-control/toggle')
+@require_high_admin
 def admin_discounts_toggle():
 
     r = require_admin()
@@ -37048,6 +37050,7 @@ def admin_discounts_toggle():
 
 
 @app.post('/admin/discounts-control/delete-toggle')
+@require_high_admin
 def admin_discounts_delete_toggle():
 
     r = require_admin()
