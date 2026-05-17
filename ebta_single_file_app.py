@@ -38262,8 +38262,17 @@ def admin_parents_notifications():
             </a>
         </form>
 
-        <div class="mini muted" style="margin:10px 0">
-            Showing {len(rows)} of {total} parent contact record(s).
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0">
+
+            <div class="mini muted">
+                Showing {len(rows)} of {total} parent contact record(s).
+            </div>
+
+            <a class="btn mini success"
+               href="{url_for('admin_parents_notifications_export')}?{urlencode({'q': q, 'grade': grade})}">
+                Export Parents Excel
+            </a>
+
         </div>
 
         {pagination_controls("/admin/parents-notifications", page_num, total_pages, {"q": q, "grade": grade})}
@@ -38293,7 +38302,216 @@ def admin_parents_notifications():
 
     return page("Parents Notifications", body)
 
+@app.get('/admin/parents-notifications/export')
+def admin_parents_notifications_export():
 
+    r = require_admin()
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+
+    parent_group_name = "EBTA Parents Notifications"
+    parent_group_link = "https://chat.whatsapp.com/DZYMvnEl9jpEyvzxqbgwV6"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    where = [
+        "guardian_phone IS NOT NULL",
+        "TRIM(guardian_phone) != ''"
+    ]
+
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                full_name LIKE ?
+                OR guardian_name LIKE ?
+                OR guardian_phone LIKE ?
+                OR phone_whatsapp LIKE ?
+                OR email LIKE ?
+                OR school LIKE ?
+                OR province LIKE ?
+            )
+        """)
+        params += [
+            search, search, search, search,
+            search, search, search
+        ]
+
+    if grade:
+        where.append("grade = ?")
+        params.append(grade)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT
+            guardian_name,
+            guardian_phone,
+            GROUP_CONCAT(DISTINCT full_name) AS learner_names,
+            GROUP_CONCAT(DISTINCT grade) AS grades,
+            GROUP_CONCAT(DISTINCT school) AS schools,
+            GROUP_CONCAT(DISTINCT province) AS provinces,
+            GROUP_CONCAT(DISTINCT phone_whatsapp) AS learner_whatsapp_numbers,
+            GROUP_CONCAT(DISTINCT email) AS learner_emails,
+            COUNT(*) AS learner_count
+        FROM students
+        {where_sql}
+        GROUP BY guardian_phone
+        ORDER BY guardian_name, guardian_phone
+    """, params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Parents Notifications"
+
+    # ================= TITLE =================
+    ws.merge_cells("A1:K1")
+    ws["A1"] = "EBTA Parents Notifications Export"
+    ws["A1"].font = Font(bold=True, size=16, color="FFFFFF")
+    ws["A1"].fill = PatternFill("solid", fgColor="1B5E20")
+    ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+
+    ws.merge_cells("A2:K2")
+    ws["A2"] = f"Group: {parent_group_name} | Link: {parent_group_link}"
+    ws["A2"].font = Font(italic=True, color="374151")
+    ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
+
+    ws.merge_cells("A3:K3")
+    ws["A3"] = f"Generated: {datetime.datetime.now(ZoneInfo('Africa/Johannesburg')).strftime('%d %b %Y, %H:%M')}"
+    ws["A3"].font = Font(italic=True, color="6B7280")
+    ws["A3"].alignment = Alignment(horizontal="center", vertical="center")
+
+    # ================= HEADERS =================
+    headers = [
+        "Parent / Guardian Name",
+        "Original Guardian Phone",
+        "WhatsApp Number",
+        "Learner Name(s)",
+        "Grade(s)",
+        "School(s)",
+        "Province(s)",
+        "Learner WhatsApp Number(s)",
+        "Learner Email(s)",
+        "Learner Count",
+        "Parents Group Link"
+    ]
+
+    header_row = 5
+
+    for col_num, header in enumerate(headers, start=1):
+        cell = ws.cell(row=header_row, column=col_num)
+        cell.value = header
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="2563EB")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    # ================= DATA =================
+    row_num = 6
+
+    for p in rows:
+        parent_name = p["guardian_name"] or "Parent/Guardian"
+        parent_phone = p["guardian_phone"] or ""
+        wa_number = whatsapp_number(parent_phone)
+
+        ws.cell(row=row_num, column=1).value = parent_name
+        ws.cell(row=row_num, column=2).value = parent_phone
+        ws.cell(row=row_num, column=3).value = wa_number
+        ws.cell(row=row_num, column=4).value = p["learner_names"] or "—"
+        ws.cell(row=row_num, column=5).value = p["grades"] or "—"
+        ws.cell(row=row_num, column=6).value = p["schools"] or "—"
+        ws.cell(row=row_num, column=7).value = p["provinces"] or "—"
+        ws.cell(row=row_num, column=8).value = p["learner_whatsapp_numbers"] or "—"
+        ws.cell(row=row_num, column=9).value = p["learner_emails"] or "—"
+        ws.cell(row=row_num, column=10).value = p["learner_count"] or 0
+        ws.cell(row=row_num, column=11).value = parent_group_link
+
+        row_num += 1
+
+    # ================= STYLING =================
+    thin = Side(style="thin", color="D1D5DB")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    for row in ws.iter_rows(min_row=5, max_row=max(5, row_num - 1), min_col=1, max_col=11):
+        for cell in row:
+            cell.border = border
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+    column_widths = {
+        "A": 26,
+        "B": 20,
+        "C": 18,
+        "D": 35,
+        "E": 16,
+        "F": 30,
+        "G": 22,
+        "H": 28,
+        "I": 30,
+        "J": 14,
+        "K": 48,
+    }
+
+    for col_letter, width in column_widths.items():
+        ws.column_dimensions[col_letter].width = width
+
+    ws.freeze_panes = "A6"
+    ws.auto_filter.ref = f"A5:K{max(5, row_num - 1)}"
+
+    for i in range(1, row_num):
+        ws.row_dimensions[i].height = 24
+
+    # ================= SUMMARY SHEET =================
+    summary = wb.create_sheet("Summary")
+
+    summary["A1"] = "EBTA Parents Notifications Summary"
+    summary["A1"].font = Font(bold=True, size=15, color="FFFFFF")
+    summary["A1"].fill = PatternFill("solid", fgColor="1B5E20")
+
+    summary["A3"] = "Total Parent Contacts"
+    summary["B3"] = len(rows)
+
+    summary["A4"] = "Group Name"
+    summary["B4"] = parent_group_name
+
+    summary["A5"] = "Group Link"
+    summary["B5"] = parent_group_link
+
+    summary["A6"] = "Search Filter"
+    summary["B6"] = q or "All"
+
+    summary["A7"] = "Grade Filter"
+    summary["B7"] = grade_label(grade) if grade else "All Grades"
+
+    for cell in ["A3", "A4", "A5", "A6", "A7"]:
+        summary[cell].font = Font(bold=True)
+
+    summary.column_dimensions["A"].width = 28
+    summary.column_dimensions["B"].width = 60
+
+    # ================= RESPONSE =================
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f"EBTA_Parents_Notifications_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+
+    response = make_response(output.read())
+    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+    response.headers["Content-Type"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    return response
 
 # --- Admin: Analytics dashboard ---
 
