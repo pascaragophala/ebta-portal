@@ -38240,10 +38240,10 @@ def admin_parents_notifications():
         current_month_enrollments = p["current_month_enrollments"] or 0
 
         if first_month == month:
-            parent_status = "New Parent"
+            parent_status_label = "New Parent"
             parent_status_html = "<span class='chip active'>New Parent</span>"
         else:
-            parent_status = "Returning Parent"
+            parent_status_label = "Returning Parent"
             parent_status_html = "<span class='chip pending'>Returning Parent</span>"
 
         month_badge = ""
@@ -38403,7 +38403,7 @@ def admin_parents_notifications():
             </div>
 
             <a class="btn mini success"
-               href="{url_for('admin_parents_notifications_export')}?{urlencode({'q': q, 'grade': grade, 'month': month, 'view': view, 'parent_status': parent_status})}"
+               href="{url_for('admin_parents_notifications_export')}?{urlencode({'q': q, 'grade': grade, 'month': month, 'view': view, 'parent_status': parent_status})}">
                 Export Parents Excel
             </a>
 
