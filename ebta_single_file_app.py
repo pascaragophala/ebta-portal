@@ -38406,6 +38406,11 @@ def admin_parents_notifications():
                href="{url_for('admin_parents_notifications_export')}?{urlencode({'q': q, 'grade': grade, 'month': month, 'view': view, 'parent_status': parent_status})}">
                 Export Parents Excel
             </a>
+            
+            <a class="btn mini success"
+               href="{url_for('admin_parents_notifications_bulk_whatsapp')}?{urlencode({'q': q, 'grade': grade, 'month': month, 'view': view, 'parent_status': parent_status})}">
+                Send WhatsApp Invite to All
+            </a>
 
         </div>
 
@@ -38436,6 +38441,268 @@ def admin_parents_notifications():
     """
 
     return page("Parents Notifications", body)
+
+
+@app.get('/admin/parents-notifications/bulk-whatsapp')
+def admin_parents_notifications_bulk_whatsapp():
+
+    r = require_admin()
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+    month = request.args.get("month", "").strip() or get_admin_active_month()
+    view = request.args.get("view", "all").strip()
+    parent_status = request.args.get("parent_status", "").strip()
+
+    if view not in ["all", "current"]:
+        view = "all"
+
+    if parent_status not in ["", "new", "returning"]:
+        parent_status = ""
+
+    parent_group_name = "EBTA Parents Notifications"
+    parent_group_link = "https://chat.whatsapp.com/DZYMvnEl9jpEyvzxqbgwV6"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    from_sql = "FROM students s"
+
+    where = [
+        "s.guardian_phone IS NOT NULL",
+        "TRIM(s.guardian_phone) != ''"
+    ]
+
+    params = []
+
+    if view == "current":
+        from_sql += """
+            JOIN enrollments ecur
+                ON ecur.student_id = s.id
+               AND ecur.month = ?
+        """
+        params.append(month)
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                s.full_name LIKE ?
+                OR s.guardian_name LIKE ?
+                OR s.guardian_phone LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR s.email LIKE ?
+                OR s.school LIKE ?
+                OR s.province LIKE ?
+            )
+        """)
+        params += [
+            search, search, search, search,
+            search, search, search
+        ]
+
+    if grade:
+        where.append("s.grade = ?")
+        params.append(grade)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    having_sql = ""
+
+    if parent_status == "new":
+        having_sql = """
+            HAVING first_enrollment_month = ?
+        """
+    elif parent_status == "returning":
+        having_sql = """
+            HAVING first_enrollment_month IS NOT NULL
+               AND first_enrollment_month != ?
+        """
+
+    data_params = list(params)
+
+    if parent_status in ["new", "returning"]:
+        data_params.append(month)
+
+    cur.execute(f"""
+        SELECT
+            COALESCE(NULLIF(MIN(s.guardian_name), ''), 'Parent/Guardian') AS guardian_name,
+            s.guardian_phone,
+
+            GROUP_CONCAT(DISTINCT s.full_name) AS learner_names,
+            GROUP_CONCAT(DISTINCT s.grade) AS grades,
+            COUNT(DISTINCT s.id) AS learner_count,
+
+            (
+                SELECT MIN(e2.month)
+                FROM students s2
+                JOIN enrollments e2 ON e2.student_id = s2.id
+                WHERE s2.guardian_phone = s.guardian_phone
+            ) AS first_enrollment_month
+
+        {from_sql}
+        {where_sql}
+        GROUP BY s.guardian_phone
+        {having_sql}
+        ORDER BY guardian_name, s.guardian_phone
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    links = []
+    cards = ""
+
+    for p in rows:
+        parent_name = p["guardian_name"] or "Parent/Guardian"
+        parent_phone = p["guardian_phone"] or ""
+        learner_names = p["learner_names"] or "Learner"
+        grades = p["grades"] or "—"
+        first_month = p["first_enrollment_month"] or ""
+
+        wa_number = whatsapp_number(parent_phone)
+
+        if not wa_number:
+            continue
+
+        message = (
+            f"Good day {parent_name},\n\n"
+            f"You are kindly invited to join the EBTA Parents Notifications WhatsApp group.\n\n"
+            f"Group name: {parent_group_name}\n"
+            f"Group link: {parent_group_link}\n\n"
+            f"This group will be used to share important EBTA updates, learner notices, schedules, reminders, and parent-related communication.\n\n"
+            f"Kind regards,\n"
+            f"EBTA Admin Team"
+        )
+
+        wa_link = f"https://wa.me/{wa_number}?{urlencode({'text': message})}"
+        links.append(wa_link)
+
+        if first_month == month:
+            status_html = "<span class='chip active'>New Parent</span>"
+        else:
+            status_html = "<span class='chip pending'>Returning Parent</span>"
+
+        cards += f"""
+        <div class="card soft" style="margin-bottom:8px;border-left:4px solid #25D366">
+            <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap">
+
+                <div>
+                    <strong>{escape(parent_name)}</strong>
+                    <div class="mini muted">
+                        Phone: {escape(parent_phone)} | WhatsApp: {escape(wa_number)}
+                    </div>
+                    <div class="mini muted">
+                        Learner(s): {escape(learner_names)} | Grade(s): {escape(grades)}
+                    </div>
+                    <div style="margin-top:5px">
+                        {status_html}
+                    </div>
+                </div>
+
+                <a class="btn mini success"
+                   target="_blank"
+                   href="{wa_link}">
+                    Open WhatsApp
+                </a>
+
+            </div>
+        </div>
+        """
+
+    links_json = json.dumps(links)
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Bulk WhatsApp Parent Invites</h1>
+
+        <p class="muted">
+            This page opens WhatsApp chats with the parent invite message already prepared.
+            You still need to press Send inside WhatsApp for each parent.
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #25D366;margin-bottom:14px">
+            <h2>Selected Filters</h2>
+
+            <p class="muted">
+                Month: <b>{pretty_month_label(month)}</b><br>
+                View: <b>{'Current Month Parents Only' if view == 'current' else 'All Parents'}</b><br>
+                Parent Status:
+                <b>{
+                    'New Parents' if parent_status == 'new'
+                    else 'Returning Parents' if parent_status == 'returning'
+                    else 'All Statuses'
+                }</b><br>
+                Grade: <b>{grade_label(grade) if grade else 'All Grades'}</b><br>
+                Search: <b>{escape(q or 'All')}</b>
+            </p>
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+            <span class="chip">
+                {len(links)} valid WhatsApp contact(s)
+            </span>
+
+            <button type="button"
+                    class="btn success"
+                    onclick="openWhatsAppBatch(0, 20)">
+                Open First 20 WhatsApp Chats
+            </button>
+
+            <button type="button"
+                    class="btn secondary"
+                    onclick="openWhatsAppBatch(20, 40)">
+                Open Next 20
+            </button>
+
+            <button type="button"
+                    class="btn secondary"
+                    onclick="openWhatsAppBatch(40, 60)">
+                Open Next 20
+            </button>
+
+            <a class="btn secondary"
+               href="{url_for('admin_parents_notifications')}?{urlencode({'q': q, 'grade': grade, 'month': month, 'view': view, 'parent_status': parent_status})}">
+                Back to Parents Page
+            </a>
+        </div>
+
+        <div class="mini muted" style="margin-bottom:12px">
+            If your browser blocks pop-ups, allow pop-ups for this site, or use the individual Open WhatsApp buttons below.
+        </div>
+
+        {cards or "<div class='empty'>No valid WhatsApp parent contacts found for these filters.</div>"}
+
+        <script>
+            const whatsappLinks = {links_json};
+
+            function openWhatsAppBatch(start, end) {{
+                const selectedLinks = whatsappLinks.slice(start, end);
+
+                if (selectedLinks.length === 0) {{
+                    alert("No WhatsApp contacts found in this batch.");
+                    return;
+                }}
+
+                if (!confirm("This will open " + selectedLinks.length + " WhatsApp chats. Continue?")) {{
+                    return;
+                }}
+
+                selectedLinks.forEach(function(link, index) {{
+                    setTimeout(function() {{
+                        window.open(link, "_blank");
+                    }}, index * 700);
+                }});
+            }}
+        </script>
+    </section>
+    """
+
+    return page("Bulk WhatsApp Parent Invites", body)
 
 
 @app.get('/admin/parents-notifications/export')
