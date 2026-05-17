@@ -37996,7 +37996,9 @@ def admission_discount_sms(coupon_id):
 
     sms_body = (
         f"EBTA: Hi {first_name}, your {discount}% discount code is {code}. "
-        f"Use it on the enrollment form. This code can only be used once."
+        f"When enrolling on the EBTA Portal, enter this code in the Coupon / Referral Code section. "
+        f"It applies to one selected subject only, meaning one subject will receive {discount}% off. "
+        f"This code can only be used once."
     )
 
     try:
