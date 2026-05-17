@@ -38071,6 +38071,10 @@ def admin_parents_notifications():
     grade = request.args.get("grade", "").strip()
     month = request.args.get("month", "").strip() or get_admin_active_month()
     view = request.args.get("view", "all").strip()
+    parent_status = request.args.get("parent_status", "").strip()
+
+    if parent_status not in ["", "new", "returning"]:
+        parent_status = ""
 
     if view not in ["all", "current"]:
         view = "all"
@@ -38131,17 +38135,42 @@ def admin_parents_notifications():
         params.append(grade)
 
     where_sql = "WHERE " + " AND ".join(where)
+    
+    having_sql = ""
+
+    if parent_status == "new":
+        having_sql = """
+            HAVING first_enrollment_month = ?
+        """
+    elif parent_status == "returning":
+        having_sql = """
+            HAVING first_enrollment_month IS NOT NULL
+               AND first_enrollment_month != ?
+        """
 
     # ================= COUNT PARENTS =================
+    count_params = list(params)
+
+    if parent_status in ["new", "returning"]:
+        count_params.append(month)
+
     cur.execute(f"""
         SELECT COUNT(*) AS c
         FROM (
-            SELECT s.guardian_phone
+            SELECT
+                s.guardian_phone,
+                (
+                    SELECT MIN(e2.month)
+                    FROM students s2
+                    JOIN enrollments e2 ON e2.student_id = s2.id
+                    WHERE s2.guardian_phone = s.guardian_phone
+                ) AS first_enrollment_month
             {from_sql}
             {where_sql}
             GROUP BY s.guardian_phone
+            {having_sql}
         ) x
-    """, params)
+    """, count_params)
 
     total = cur.fetchone()["c"] or 0
     total_pages = max(1, (total + limit - 1) // limit)
@@ -38154,6 +38183,13 @@ def admin_parents_notifications():
     data_params.extend([limit, offset])
 
     # ================= MAIN DATA =================
+    main_params = [month] + list(params)
+
+    if parent_status in ["new", "returning"]:
+        main_params.append(month)
+
+    main_params.extend([limit, offset])
+
     cur.execute(f"""
         SELECT
             COALESCE(NULLIF(MIN(s.guardian_name), ''), 'Parent/Guardian') AS guardian_name,
@@ -38183,9 +38219,10 @@ def admin_parents_notifications():
         {from_sql}
         {where_sql}
         GROUP BY s.guardian_phone
+        {having_sql}
         ORDER BY guardian_name, s.guardian_phone
         LIMIT ? OFFSET ?
-    """, [month] + data_params)
+    """, main_params)
 
     rows = cur.fetchall()
     conn.close()
@@ -38289,6 +38326,12 @@ def admin_parents_notifications():
         <option value="all" {'selected' if view == 'all' else ''}>All Parents</option>
         <option value="current" {'selected' if view == 'current' else ''}>Current Month Parents Only</option>
     """
+    
+    parent_status_options = f"""
+        <option value="" {'selected' if parent_status == '' else ''}>All Statuses</option>
+        <option value="new" {'selected' if parent_status == 'new' else ''}>New Parents</option>
+        <option value="returning" {'selected' if parent_status == 'returning' else ''}>Returning Parents</option>
+    """
 
     body = f"""
     {admin_nav()}
@@ -38323,6 +38366,10 @@ def admin_parents_notifications():
             <select name="view">
                 {view_options}
             </select>
+            
+            <select name="parent_status">
+                {parent_status_options}
+            </select>
 
             <input name="q"
                    value="{escape(q)}"
@@ -38356,13 +38403,13 @@ def admin_parents_notifications():
             </div>
 
             <a class="btn mini success"
-               href="{url_for('admin_parents_notifications_export')}?{urlencode({'q': q, 'grade': grade, 'month': month, 'view': view})}">
+               href="{url_for('admin_parents_notifications_export')}?{urlencode({'q': q, 'grade': grade, 'month': month, 'view': view, 'parent_status': parent_status})}"
                 Export Parents Excel
             </a>
 
         </div>
 
-        {pagination_controls("/admin/parents-notifications", page_num, total_pages, {"q": q, "grade": grade, "month": month, "view": view})}
+        {pagination_controls("/admin/parents-notifications", page_num, total_pages, {"q": q, "grade": grade, "month": month, "view": view, "parent_status": parent_status})}
 
         <div class="scroll-x">
             <table>
@@ -38384,7 +38431,7 @@ def admin_parents_notifications():
             </table>
         </div>
 
-        {pagination_controls("/admin/parents-notifications", page_num, total_pages, {"q": q, "grade": grade, "month": month, "view": view})}
+        {pagination_controls("/admin/parents-notifications", page_num, total_pages, {"q": q, "grade": grade, "month": month, "view": view, "parent_status": parent_status})}
     </section>
     """
 
@@ -38403,9 +38450,13 @@ def admin_parents_notifications_export():
     grade = request.args.get("grade", "").strip()
     month = request.args.get("month", "").strip() or get_admin_active_month()
     view = request.args.get("view", "all").strip()
+    parent_status = request.args.get("parent_status", "").strip()
 
     if view not in ["all", "current"]:
         view = "all"
+
+    if parent_status not in ["", "new", "returning"]:
+        parent_status = ""
 
     parent_group_name = "EBTA Parents Notifications"
     parent_group_link = "https://chat.whatsapp.com/DZYMvnEl9jpEyvzxqbgwV6"
@@ -38456,6 +38507,24 @@ def admin_parents_notifications_export():
 
     where_sql = "WHERE " + " AND ".join(where)
 
+    # ================= NEW / RETURNING FILTER =================
+    having_sql = ""
+
+    if parent_status == "new":
+        having_sql = """
+            HAVING first_enrollment_month = ?
+        """
+    elif parent_status == "returning":
+        having_sql = """
+            HAVING first_enrollment_month IS NOT NULL
+               AND first_enrollment_month != ?
+        """
+
+    export_params = [month] + list(params)
+
+    if parent_status in ["new", "returning"]:
+        export_params.append(month)
+
     # ================= DATA QUERY =================
     cur.execute(f"""
         SELECT
@@ -38488,8 +38557,9 @@ def admin_parents_notifications_export():
         {from_sql}
         {where_sql}
         GROUP BY s.guardian_phone
+        {having_sql}
         ORDER BY guardian_name, s.guardian_phone
-    """, [month] + params)
+    """, export_params)
 
     rows = cur.fetchall()
     conn.close()
@@ -38553,6 +38623,8 @@ def admin_parents_notifications_export():
 
     # ================= DATA =================
     row_num = 6
+    new_count = 0
+    returning_count = 0
 
     for p in rows:
         parent_name = p["guardian_name"] or "Parent/Guardian"
@@ -38563,14 +38635,16 @@ def admin_parents_notifications_export():
         selected_month_enrollments = p["selected_month_enrollments"] or 0
 
         if first_month == month:
-            parent_status = "New Parent"
+            parent_status_label = "New Parent"
+            new_count += 1
         else:
-            parent_status = "Returning Parent"
+            parent_status_label = "Returning Parent"
+            returning_count += 1
 
         ws.cell(row=row_num, column=1).value = parent_name
         ws.cell(row=row_num, column=2).value = parent_phone
         ws.cell(row=row_num, column=3).value = wa_number
-        ws.cell(row=row_num, column=4).value = parent_status
+        ws.cell(row=row_num, column=4).value = parent_status_label
         ws.cell(row=row_num, column=5).value = first_month or "—"
         ws.cell(row=row_num, column=6).value = selected_month_enrollments
         ws.cell(row=row_num, column=7).value = p["learner_names"] or "—"
@@ -38652,24 +38726,22 @@ def admin_parents_notifications_export():
     summary["A9"] = "View"
     summary["B9"] = "Current Month Parents Only" if view == "current" else "All Parents"
 
-    new_count = 0
-    returning_count = 0
+    summary["A10"] = "Parent Status Filter"
 
-    for p in rows:
-        first_month = p["first_enrollment_month"] or ""
+    if parent_status == "new":
+        summary["B10"] = "New Parents"
+    elif parent_status == "returning":
+        summary["B10"] = "Returning Parents"
+    else:
+        summary["B10"] = "All Statuses"
 
-        if first_month == month:
-            new_count += 1
-        else:
-            returning_count += 1
+    summary["A11"] = "New Parents"
+    summary["B11"] = new_count
 
-    summary["A10"] = "New Parents"
-    summary["B10"] = new_count
+    summary["A12"] = "Returning Parents"
+    summary["B12"] = returning_count
 
-    summary["A11"] = "Returning Parents"
-    summary["B11"] = returning_count
-
-    for cell in ["A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10", "A11"]:
+    for cell in ["A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10", "A11", "A12"]:
         summary[cell].font = Font(bold=True)
 
     summary.column_dimensions["A"].width = 30
@@ -38683,9 +38755,16 @@ def admin_parents_notifications_export():
     safe_month = month.replace("-", "_")
     view_label = "Current_Month" if view == "current" else "All_Parents"
 
+    if parent_status == "new":
+        status_label = "New_Parents"
+    elif parent_status == "returning":
+        status_label = "Returning_Parents"
+    else:
+        status_label = "All_Statuses"
+
     filename = (
         f"EBTA_Parents_Notifications_"
-        f"{safe_month}_{view_label}_"
+        f"{safe_month}_{view_label}_{status_label}_"
         f"{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
     )
 
