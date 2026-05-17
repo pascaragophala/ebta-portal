@@ -38303,6 +38303,7 @@ def admin_parents_notifications():
     return page("Parents Notifications", body)
 
 @app.get('/admin/parents-notifications/export')
+@require_high_admin
 def admin_parents_notifications_export():
 
     r = require_admin()
