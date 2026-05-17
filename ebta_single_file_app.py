@@ -7197,17 +7197,30 @@ def student_home():
 
     cur.execute("""
         SELECT
-            code,
-            discount_percent,
-            status,
-            used_count,
-            max_uses,
-            created_at
-        FROM discount_coupons
-        WHERE target_student_id=?
-          AND source='REFERRAL_REWARD'
-        ORDER BY created_at DESC
-        LIMIT 5
+            dc.code,
+            dc.discount_percent,
+            dc.status,
+            dc.used_count,
+            dc.max_uses,
+            dc.created_at,
+            dc.source,
+            dc.applies_to,
+            sub.name AS subject_name,
+            sub.grade AS subject_grade
+        FROM discount_coupons dc
+        LEFT JOIN subjects sub ON sub.id = dc.subject_id
+        WHERE dc.target_student_id=?
+          AND dc.status='ACTIVE'
+          AND dc.used_count < dc.max_uses
+          AND dc.source IN ('MANUAL', 'REFERRAL_REWARD')
+        ORDER BY
+            CASE
+                WHEN dc.source='MANUAL' THEN 1
+                WHEN dc.source='REFERRAL_REWARD' THEN 2
+                ELSE 3
+            END,
+            dc.created_at DESC
+        LIMIT 10
     """, (sid,))
 
     reward_codes = cur.fetchall()
@@ -7221,19 +7234,54 @@ def student_home():
         if rc["status"] != "ACTIVE":
             reward_status_class = "lapsed"
 
-        reward_html += f"""
-        <div class="card soft" style="padding:10px;margin-top:8px">
-            <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">
+        if rc["source"] == "MANUAL":
+            discount_title = "Admission Discount Code"
+            discount_note = "This discount was issued to you by EBTA Admissions. Use it when enrolling."
+        elif rc["source"] == "REFERRAL_REWARD":
+            discount_title = "Referral Reward Code"
+            discount_note = "Use this code when enrolling to receive your referral reward."
+        else:
+            discount_title = "Discount Code"
+            discount_note = "Use this code when enrolling."
 
-                <div>
-                    <strong>{rc['discount_percent']}% Discount Reward</strong>
+        if rc["applies_to"] == "SUBJECT" and rc["subject_name"]:
+            applies_to = f"{grade_label(rc['subject_grade'])} - {escape(rc['subject_name'])}"
+        elif rc["applies_to"] == "ANY_SUBJECT":
+            applies_to = "Any one selected subject"
+        else:
+            applies_to = "All selected subjects"
+
+        reward_html += f"""
+        <div class="card soft" style="padding:10px;margin-top:8px;border-left:4px solid #1b5e20">
+
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                gap:10px;
+                align-items:center;
+                flex-wrap:wrap;
+            ">
+
+                <div style="min-width:220px">
+                    <strong>{discount_title}</strong>
 
                     <div class="mini muted">
-                        Use this code when enrolling to receive your referral reward.
+                        {discount_note}
+                    </div>
+
+                    <div class="mini muted" style="margin-top:5px">
+                        Discount: <b>{rc['discount_percent']}%</b><br>
+                        Applies to: <b>{applies_to}</b>
                     </div>
                 </div>
 
-                <div>
+                <div style="
+                    display:flex;
+                    gap:6px;
+                    align-items:center;
+                    justify-content:flex-end;
+                    flex-wrap:wrap;
+                ">
                     <span class="chip" style="font-size:15px;letter-spacing:1px">
                         {escape(rc['code'])}
                     </span>
@@ -7245,18 +7293,20 @@ def student_home():
 
             </div>
 
-            <div class="mini muted" style="margin-top:6px">
+            <div class="mini muted" style="margin-top:8px">
                 Usage: {rc['used_count']} / {rc['max_uses']}
             </div>
+
         </div>
         """
 
     if not reward_html:
         reward_html = """
         <div class="mini muted">
-            No reward discount codes generated yet.
+            No available discount codes yet.
         </div>
         """
+        
 
     referral_code = referral_row["referral_code"] if referral_row else "—"
     referral_points = referral_row["referral_points"] if referral_row else 0
@@ -7309,9 +7359,10 @@ def student_home():
         <div class="mini muted" style="margin-bottom:10px">
             At 3 referral points, you can receive a 50% discount reward.
             At 5 referral points, you can receive a 100% discount reward.
+            Any discount code issued by EBTA Admissions will also appear below.
         </div>
 
-        <h3 style="margin-top:12px">My Reward Codes</h3>
+        <h3 style="margin-top:12px">My Available Discount Codes</h3>
 
         {reward_html}
 
