@@ -35316,55 +35316,80 @@ def admission_students():
 
     q = request.args.get("q", "").strip()
     grade = request.args.get("grade", "").strip()
+    month = request.args.get("month", "").strip() or get_admin_active_month()
 
-    page_num = max(1, int(request.args.get("page", 1)))
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
     limit = 15
     offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
 
-    where = []
-    params = []
+    where = ["e.month = ?"]
+    params = [month]
 
     if q:
         search = f"%{q}%"
         where.append("""
             (
-                full_name LIKE ?
-                OR phone_whatsapp LIKE ?
-                OR guardian_phone LIKE ?
-                OR guardian_name LIKE ?
-                OR email LIKE ?
-                OR school LIKE ?
-                OR province LIKE ?
+                s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR s.guardian_phone LIKE ?
+                OR IFNULL(s.guardian_name, '') LIKE ?
+                OR IFNULL(s.email, '') LIKE ?
+                OR IFNULL(s.school, '') LIKE ?
+                OR IFNULL(s.province, '') LIKE ?
+                OR sub.name LIKE ?
+                OR e.status LIKE ?
             )
         """)
-        params += [search, search, search, search, search, search, search]
+        params += [
+            search, search, search, search, search,
+            search, search, search, search
+        ]
 
     if grade:
-        where.append("grade = ?")
+        where.append("s.grade = ?")
         params.append(grade)
 
-    where_sql = "WHERE " + " AND ".join(where) if where else ""
+    where_sql = "WHERE " + " AND ".join(where)
 
     cur.execute(f"""
-        SELECT COUNT(*) AS c
-        FROM students
+        SELECT COUNT(DISTINCT s.id) AS c
+        FROM students s
+        JOIN enrollments e ON e.student_id = s.id
+        JOIN subjects sub ON sub.id = e.subject_id
         {where_sql}
     """, params)
 
     total = cur.fetchone()["c"] or 0
     total_pages = max(1, (total + limit - 1) // limit)
 
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * limit
+
     data_params = list(params)
     data_params.extend([limit, offset])
 
     cur.execute(f"""
-        SELECT *
-        FROM students
+        SELECT
+            s.*,
+            GROUP_CONCAT(DISTINCT sub.name) AS enrolled_subjects,
+            GROUP_CONCAT(DISTINCT e.status) AS enrollment_statuses
+        FROM students s
+        JOIN enrollments e ON e.student_id = s.id
+        JOIN subjects sub ON sub.id = e.subject_id
         {where_sql}
-        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), full_name
+        GROUP BY s.id
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.full_name
         LIMIT ? OFFSET ?
     """, data_params)
 
@@ -35395,6 +35420,13 @@ def admission_students():
             <td>
                 {escape(s['school'] or '—')}
                 <div class="mini muted">{escape(s['province'] or '—')}</div>
+            </td>
+
+            <td>
+                {escape(s['enrolled_subjects'] or '—')}
+                <div class="mini muted">
+                    Status: {escape(s['enrollment_statuses'] or '—')}
+                </div>
             </td>
 
             <td>{escape((s['created_at'] or '')[:16].replace('T',' '))}</td>
@@ -35431,13 +35463,17 @@ def admission_students():
             </select>
 
             <button class="btn mini">Search</button>
+
+            <a class="btn mini secondary" href="{url_for('admission_students')}">
+                Clear
+            </a>
         </form>
         
         <div class="mini muted" style="margin:10px 0">
             Showing students enrolled for: <b>{pretty_month_label(month)}</b>
         </div>
 
-        {pagination_controls("/duty-admin/students", page_num, total_pages, {"month": month, "q": q, "grade": grade})}
+        {pagination_controls("/admission/students", page_num, total_pages, {"month": month, "q": q, "grade": grade})}
 
         <div class="scroll-x">
             <table>
@@ -35449,17 +35485,18 @@ def admission_students():
                         <th>Guardian</th>
                         <th>Email</th>
                         <th>School / Province</th>
+                        <th>Subjects This Month</th>
                         <th>Created</th>
                     </tr>
                 </thead>
 
                 <tbody>
-                    {trs or "<tr><td colspan='7'>No students found.</td></tr>"}
+                    {trs or "<tr><td colspan='8'>No students found.</td></tr>"}
                 </tbody>
             </table>
         </div>
 
-        {pagination_controls("/duty-admin/students", page_num, total_pages, {"month": month, "q": q, "grade": grade})}
+        {pagination_controls("/admission/students", page_num, total_pages, {"month": month, "q": q, "grade": grade})}
     </section>
     """
 
