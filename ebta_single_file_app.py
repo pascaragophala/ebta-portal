@@ -38087,7 +38087,7 @@ def admin_parents_notifications():
     if page_num < 1:
         page_num = 1
 
-    limit = 20
+    limit = 15
     offset = (page_num - 1) * limit
 
     parent_group_name = "EBTA Parents Notifications"
