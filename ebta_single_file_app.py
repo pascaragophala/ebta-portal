@@ -37254,10 +37254,86 @@ def admin_discounts_control():
             </div>
 
         </div>
+
+        <div class="card soft" style="border-left:5px solid #f59e0b;margin-top:14px">
+            <h2>Old Discount SMS Status</h2>
+
+            <p class="muted">
+                Use this only once if older Admission Coordinator discount codes were already sent by SMS before SMS tracking was added.
+                This will mark old unsent manual discount codes as SMS Sent, so Admission Coordinators do not send them again by mistake.
+            </p>
+
+            <form method="post"
+                  action="{url_for('admin_mark_old_discount_sms_sent')}"
+                  onsubmit="return confirm('Mark old Admission Coordinator discount codes as SMS Sent? This should only be done if those SMS messages were already sent.');">
+                <button class="btn warn">
+                    Mark Old Discount Codes as SMS Sent
+                </button>
+            </form>
+        </div>
     </section>
     """
 
     return page("Discount Control", body)
+    
+
+@app.post('/admin/discounts-control/mark-old-sms-sent')
+@require_high_admin
+def admin_mark_old_discount_sms_sent():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can update old discount SMS records."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    now = now_utc_iso()
+
+    cur.execute("""
+        UPDATE discount_coupons
+        SET sms_sent=1,
+            sms_sent_at=COALESCE(sms_sent_at, ?),
+            sms_sent_by_role='admin_backfill',
+            sms_sent_by_id=NULL,
+            sms_last_error=NULL
+        WHERE source='MANUAL'
+          AND target_student_id IS NOT NULL
+          AND COALESCE(sms_sent, 0) = 0
+    """, (now,))
+
+    updated = cur.rowcount or 0
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "Old Discount SMS Status Updated",
+        f"""
+        {admin_nav()}
+
+        <section class="card">
+            <h1>Old Discount SMS Status Updated</h1>
+
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <p>
+                    <b>{updated}</b> old Admission Coordinator discount code(s) were marked as SMS Sent.
+                </p>
+
+                <p class="muted">
+                    These codes will now show as SMS Sent on the Admission Coordinator discount page.
+                </p>
+            </div>
+
+            <a class="btn" href="{url_for('admin_discounts_control')}">
+                Back to Discount Control
+            </a>
+        </section>
+        """
+    )
 
 
 @app.post('/admin/discounts-control/toggle')
@@ -37704,13 +37780,22 @@ def admission_discounts():
         sms_button = ""
 
         if c["target_student_id"] and c["status"] == "ACTIVE":
-            sms_button = f"""
-            <form method="post"
-                  action="{url_for('admission_discount_sms', coupon_id=c['id'])}"
-                  style="display:inline">
-                <button class="btn mini secondary">Send Code via SMS</button>
-            </form>
-            """
+
+            if int(c["sms_sent"] or 0) == 1:
+                sms_button = """
+                <span class="mini muted">
+                    SMS already sent
+                </span>
+                """
+            else:
+                sms_button = f"""
+                <form method="post"
+                      action="{url_for('admission_discount_sms', coupon_id=c['id'])}"
+                      style="display:inline"
+                      onsubmit="return confirm('Send this discount code by SMS?');">
+                    <button class="btn mini secondary">Send SMS</button>
+                </form>
+                """
             
         delete_button = ""
 
@@ -38083,6 +38168,7 @@ def admission_discount_sms(coupon_id):
             dc.code,
             dc.discount_percent,
             dc.applies_to,
+            dc.sms_sent,
             s.full_name,
             s.phone_whatsapp
         FROM discount_coupons dc
@@ -38097,6 +38183,13 @@ def admission_discount_sms(coupon_id):
     if not row:
         conn.close()
         return page("Not found", card_msg("Active discount code not found."))
+        
+    if int(row["sms_sent"] or 0) == 1:
+        conn.close()
+        return page(
+            "SMS Already Sent",
+            card_msg("This discount code SMS was already sent, so it cannot be sent again from the Admission Coordinator portal.")
+        )
 
     sms_body = build_discount_sms_body(
         row["full_name"],
