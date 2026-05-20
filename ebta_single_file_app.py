@@ -950,6 +950,13 @@ def init_db():
     ensure_column(conn, "enrollments", "coupon_type", "TEXT")
     ensure_column(conn, "enrollments", "referral_code_used", "TEXT")
     
+    
+    ensure_column(conn, "discount_coupons", "sms_sent", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "discount_coupons", "sms_sent_at", "TEXT")
+    ensure_column(conn, "discount_coupons", "sms_sent_by_role", "TEXT")
+    ensure_column(conn, "discount_coupons", "sms_sent_by_id", "INTEGER")
+    ensure_column(conn, "discount_coupons", "sms_last_error", "TEXT")
+    
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_tracker
     ON tutor_weekly_tracker(tutor_id, session_date);
@@ -37672,6 +37679,27 @@ def admission_discounts():
             applies_to = "All selected subjects"
 
         status_class = "active" if c["status"] == "ACTIVE" else "lapsed"
+        
+        sms_status_html = ""
+
+        if int(c["sms_sent"] or 0) == 1:
+            sms_status_html = f"""
+            <span class="chip active">SMS Sent</span>
+            <div class="mini muted">
+                {escape((c["sms_sent_at"] or "")[:16].replace("T", " "))}
+            </div>
+            """
+        else:
+            sms_status_html = """
+            <span class="chip lapsed">SMS Not Sent</span>
+            """
+
+            if c["sms_last_error"]:
+                sms_status_html += f"""
+                <div class="mini muted" style="color:#b91c1c">
+                    Last error: {escape(c["sms_last_error"])}
+                </div>
+                """
 
         sms_button = ""
 
@@ -37725,6 +37753,8 @@ def admission_discounts():
             </td>
 
             <td>{c['used_count']} / {c['max_uses']}</td>
+
+            <td>{sms_status_html}</td>
 
             <td>
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -37821,6 +37851,16 @@ def admission_discounts():
             Delete access:
             {"Unlocked" if delete_locked == "0" else "Locked by High Admin"}
         </div>
+        
+        <div class="toolbar" style="margin-bottom:12px">
+            <form method="post"
+                  action="{url_for('admission_discount_sms_all')}"
+                  onsubmit="return confirm('Send SMS to all active, unused discount codes that have not been sent yet?');">
+                <button class="btn success">
+                    Send SMS to All Unsent Discount Codes
+                </button>
+            </form>
+        </div>
 
         {create_form}
 
@@ -37866,12 +37906,13 @@ def admission_discounts():
                             <th>Source</th>
                             <th>Status</th>
                             <th>Usage</th>
+                            <th>SMS Status</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
 
                     <tbody>
-                        {coupon_rows or "<tr><td colspan='8'>No discount codes found.</td></tr>"}
+                        {coupon_rows or "<tr><td colspan='9'>No discount codes found.</td></tr>"}
                     </tbody>
                 </table>
             </div>
@@ -38038,6 +38079,7 @@ def admission_discount_sms(coupon_id):
 
     cur.execute("""
         SELECT
+            dc.id,
             dc.code,
             dc.discount_percent,
             dc.applies_to,
@@ -38051,29 +38093,154 @@ def admission_discount_sms(coupon_id):
     """, (coupon_id,))
 
     row = cur.fetchone()
-    conn.close()
 
     if not row:
+        conn.close()
         return page("Not found", card_msg("Active discount code not found."))
 
-    first_name = (row["full_name"] or "Learner").split()[0]
-    discount = row["discount_percent"]
-    code = row["code"]
-
-    sms_body = (
-        f"EBTA: Hi {first_name}, your {discount}% discount code is {code}. "
-        f"When enrolling on the EBTA Portal, enter this code in the Coupon / Referral Code section. "
-        f"It applies to one selected subject only, meaning one subject will receive {discount}% off. "
-        f"This code can only be used once."
+    sms_body = build_discount_sms_body(
+        row["full_name"],
+        row["discount_percent"],
+        row["code"],
+        row["applies_to"]
     )
 
     try:
         send_sms_notification(row["phone_whatsapp"], sms_body)
+
+        cur.execute("""
+            UPDATE discount_coupons
+            SET sms_sent=1,
+                sms_sent_at=?,
+                sms_sent_by_role='admission',
+                sms_sent_by_id=?,
+                sms_last_error=NULL
+            WHERE id=?
+        """, (
+            now_utc_iso(),
+            session.get("admission_coordinator_id"),
+            coupon_id
+        ))
+
+        conn.commit()
+        conn.close()
+
     except Exception as e:
         print("Discount SMS error:", e)
+
+        cur.execute("""
+            UPDATE discount_coupons
+            SET sms_last_error=?
+            WHERE id=?
+        """, (str(e)[:300], coupon_id))
+
+        conn.commit()
+        conn.close()
+
         return page("SMS Error", card_msg("Could not send SMS. Please check SMS setup."))
 
-    return redirect(url_for("admission_discounts"))
+    return redirect(request.referrer or url_for("admission_discounts"))
+
+
+@app.post('/admission/discounts/sms-all')
+def admission_discount_sms_all():
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            dc.id,
+            dc.code,
+            dc.discount_percent,
+            dc.applies_to,
+            s.full_name,
+            s.phone_whatsapp
+        FROM discount_coupons dc
+        JOIN students s ON s.id = dc.target_student_id
+        WHERE dc.status='ACTIVE'
+          AND dc.used_count < dc.max_uses
+          AND COALESCE(dc.sms_sent, 0) = 0
+          AND s.phone_whatsapp IS NOT NULL
+          AND TRIM(s.phone_whatsapp) != ''
+        ORDER BY dc.created_at DESC
+    """)
+
+    rows = cur.fetchall()
+
+    sent_count = 0
+    failed_count = 0
+
+    for row in rows:
+        sms_body = build_discount_sms_body(
+            row["full_name"],
+            row["discount_percent"],
+            row["code"],
+            row["applies_to"]
+        )
+
+        try:
+            send_sms_notification(row["phone_whatsapp"], sms_body)
+
+            cur.execute("""
+                UPDATE discount_coupons
+                SET sms_sent=1,
+                    sms_sent_at=?,
+                    sms_sent_by_role='admission',
+                    sms_sent_by_id=?,
+                    sms_last_error=NULL
+                WHERE id=?
+            """, (
+                now_utc_iso(),
+                session.get("admission_coordinator_id"),
+                row["id"]
+            ))
+
+            sent_count += 1
+
+        except Exception as e:
+            print("Bulk discount SMS error:", e)
+
+            cur.execute("""
+                UPDATE discount_coupons
+                SET sms_last_error=?
+                WHERE id=?
+            """, (
+                str(e)[:300],
+                row["id"]
+            ))
+
+            failed_count += 1
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "Bulk Discount SMS Complete",
+        f"""
+        {admission_nav()}
+
+        <section class="card">
+            <h1>Bulk Discount SMS Complete</h1>
+
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <p><b>Sent successfully:</b> {sent_count}</p>
+                <p><b>Failed:</b> {failed_count}</p>
+                <p class="muted">
+                    Only active, unused, and not-yet-sent discount codes were included.
+                </p>
+            </div>
+
+            <a class="btn" href="{url_for('admission_discounts')}">
+                Back to Discount Codes
+            </a>
+        </section>
+        """
+    )
 
 
 @app.post('/admission/discounts/<int:coupon_id>/delete')
@@ -38359,6 +38526,21 @@ def admission_referrals():
     """
 
     return page("Admission Referrals", body)    
+    
+    
+def build_discount_sms_body(full_name, discount, code, applies_to="ALL"):
+    first_name = (full_name or "Learner").split()[0]
+
+    if applies_to == "SUBJECT":
+        applies_text = "This discount applies to the selected subject linked to the code."
+    else:
+        applies_text = "This discount applies to one selected subject only."
+
+    return (
+        f"EBTA: Hi {first_name}, your {discount}% discount code is {code}. "
+        f"When enrolling on the EBTA Portal, enter this code in the Coupon / Referral Code section. "
+        f"{applies_text} This code can only be used once."
+    )    
     
     
 @app.get('/admin/parents-notifications')
