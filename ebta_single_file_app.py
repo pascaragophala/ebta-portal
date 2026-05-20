@@ -35369,7 +35369,11 @@ def admission_students():
 
     q = request.args.get("q", "").strip()
     grade = request.args.get("grade", "").strip()
-    month = request.args.get("month", "").strip() or get_admin_active_month()
+
+    # Important:
+    # Leave month empty by default so the page shows ALL students.
+    # Only filter by month when the Admission Coordinator selects a month.
+    month = request.args.get("month", "").strip()
 
     try:
         page_num = int(request.args.get("page", 1))
@@ -35379,17 +35383,31 @@ def admission_students():
     if page_num < 1:
         page_num = 1
 
-    limit = 15
+    limit = 20
     offset = (page_num - 1) * limit
 
     conn = get_db()
     cur = conn.cursor()
 
-    where = ["e.month = ?"]
-    params = [month]
+    where = []
+    params = []
 
+    # ================= MONTH FILTER =================
+    if month:
+        where.append("""
+            EXISTS (
+                SELECT 1
+                FROM enrollments e
+                WHERE e.student_id = s.id
+                  AND e.month = ?
+            )
+        """)
+        params.append(month)
+
+    # ================= SEARCH FILTER =================
     if q:
         search = f"%{q}%"
+
         where.append("""
             (
                 s.full_name LIKE ?
@@ -35399,12 +35417,25 @@ def admission_students():
                 OR IFNULL(s.email, '') LIKE ?
                 OR IFNULL(s.school, '') LIKE ?
                 OR IFNULL(s.province, '') LIKE ?
-                OR sub.name LIKE ?
-                OR e.status LIKE ?
+                OR s.grade LIKE ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM enrollments e2
+                    JOIN subjects sub2 ON sub2.id = e2.subject_id
+                    WHERE e2.student_id = s.id
+                      AND (
+                            sub2.name LIKE ?
+                            OR sub2.grade LIKE ?
+                            OR e2.status LIKE ?
+                            OR e2.month LIKE ?
+                      )
+                )
             )
         """)
+
         params += [
-            search, search, search, search, search,
+            search, search, search, search,
+            search, search, search, search,
             search, search, search, search
         ]
 
@@ -35412,13 +35443,12 @@ def admission_students():
         where.append("s.grade = ?")
         params.append(grade)
 
-    where_sql = "WHERE " + " AND ".join(where)
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
 
+    # ================= COUNT =================
     cur.execute(f"""
-        SELECT COUNT(DISTINCT s.id) AS c
+        SELECT COUNT(*) AS c
         FROM students s
-        JOIN enrollments e ON e.student_id = s.id
-        JOIN subjects sub ON sub.id = e.subject_id
         {where_sql}
     """, params)
 
@@ -35429,19 +35459,63 @@ def admission_students():
         page_num = total_pages
         offset = (page_num - 1) * limit
 
-    data_params = list(params)
+    # ================= SUBJECT / STATUS SUBQUERIES =================
+    # If month is selected, show subjects/statuses for that month only.
+    # If no month is selected, show all known enrolled subjects/statuses.
+    if month:
+        subjects_sql = """
+            (
+                SELECT GROUP_CONCAT(DISTINCT sub.name)
+                FROM enrollments e3
+                JOIN subjects sub ON sub.id = e3.subject_id
+                WHERE e3.student_id = s.id
+                  AND e3.month = ?
+            ) AS enrolled_subjects
+        """
+
+        statuses_sql = """
+            (
+                SELECT GROUP_CONCAT(DISTINCT e4.status)
+                FROM enrollments e4
+                WHERE e4.student_id = s.id
+                  AND e4.month = ?
+            ) AS enrollment_statuses
+        """
+
+        select_params = [month, month]
+
+    else:
+        subjects_sql = """
+            (
+                SELECT GROUP_CONCAT(DISTINCT sub.name)
+                FROM enrollments e3
+                JOIN subjects sub ON sub.id = e3.subject_id
+                WHERE e3.student_id = s.id
+            ) AS enrolled_subjects
+        """
+
+        statuses_sql = """
+            (
+                SELECT GROUP_CONCAT(DISTINCT e4.status)
+                FROM enrollments e4
+                WHERE e4.student_id = s.id
+            ) AS enrollment_statuses
+        """
+
+        select_params = []
+
+    data_params = list(select_params)
+    data_params.extend(params)
     data_params.extend([limit, offset])
 
+    # ================= MAIN DATA =================
     cur.execute(f"""
         SELECT
             s.*,
-            GROUP_CONCAT(DISTINCT sub.name) AS enrolled_subjects,
-            GROUP_CONCAT(DISTINCT e.status) AS enrollment_statuses
+            {subjects_sql},
+            {statuses_sql}
         FROM students s
-        JOIN enrollments e ON e.student_id = s.id
-        JOIN subjects sub ON sub.id = e.subject_id
         {where_sql}
-        GROUP BY s.id
         ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.full_name
         LIMIT ? OFFSET ?
     """, data_params)
@@ -35452,6 +35526,8 @@ def admission_students():
     trs = ""
 
     for s in rows:
+        subject_label = "Subjects This Month" if month else "All Enrolled Subjects"
+
         trs += f"""
         <tr>
             <td>
@@ -35486,6 +35562,13 @@ def admission_students():
         </tr>
         """
 
+    if month:
+        showing_label = f"Showing students enrolled for: <b>{pretty_month_label(month)}</b>"
+        subject_heading = "Subjects This Month"
+    else:
+        showing_label = "Showing <b>all students</b>. Select a month only if you want to filter by enrollment month."
+        subject_heading = "All Enrolled Subjects"
+
     body = f"""
     {admission_nav()}
 
@@ -35493,7 +35576,8 @@ def admission_students():
         <h1>Students</h1>
 
         <p class="muted">
-            View learner details captured on the portal. Editing and deletion are restricted on this page.
+            View learner details captured on the portal. By default, this page shows all students.
+            Use the month filter only when you want to view students enrolled in a specific month.
         </p>
 
         <form method="get" class="toolbar">
@@ -35505,7 +35589,7 @@ def admission_students():
 
             <input name="q"
                    value="{escape(q)}"
-                   placeholder="Search name, phone, guardian, email, school, province, subject or status">
+                   placeholder="Search name, phone, guardian, email, school, province, subject, status or month">
 
             <select name="grade">
                 <option value="">All Grades</option>
@@ -35523,7 +35607,11 @@ def admission_students():
         </form>
         
         <div class="mini muted" style="margin:10px 0">
-            Showing students enrolled for: <b>{pretty_month_label(month)}</b>
+            {showing_label}
+        </div>
+
+        <div class="mini muted" style="margin-bottom:10px">
+            Showing {len(rows)} of {total} student record(s).
         </div>
 
         {pagination_controls("/admission/students", page_num, total_pages, {"month": month, "q": q, "grade": grade})}
@@ -35538,7 +35626,7 @@ def admission_students():
                         <th>Guardian</th>
                         <th>Email</th>
                         <th>School / Province</th>
-                        <th>Subjects This Month</th>
+                        <th>{subject_heading}</th>
                         <th>Created</th>
                     </tr>
                 </thead>
