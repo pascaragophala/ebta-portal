@@ -34476,7 +34476,8 @@ def admission_nav():
         <a class="btn secondary" href="{url_for('admission_groups')}">Groups</a>
         <a class="btn secondary" href="{url_for('admission_sessions')}">Sessions</a>
         <a class="btn secondary" href="{url_for('admission_inbox')}">Inbox</a>
-        <a class="btn secondary" href="{url_for('admission_discounts')}">Discounts & Referrals</a>
+        <a class="btn secondary" href="{url_for('admission_discounts')}">Discount Codes</a>
+        <a class="btn secondary" href="{url_for('admission_referrals')}">Referrals</a>
         <a class="btn danger" href="{url_for('admission_logout')}">Logout</a>
     </nav>
     """
@@ -37810,10 +37811,10 @@ def admission_discounts():
     {admission_nav()}
 
     <section class="card">
-        <h1>Discounts & Referrals</h1>
+        <h1>Discount Codes</h1>
 
         <p class="muted">
-            Manage student discount codes and monitor referral points.
+            Manage manually generated student discount codes and referral reward discount codes.
         </p>
         
         <div class="mini muted" style="margin-bottom:10px">
@@ -37838,37 +37839,12 @@ def admission_discounts():
             <a class="btn mini secondary" href="{url_for('admission_discounts')}">
                 Clear
             </a>
+            
+            <a class="btn mini secondary" href="{url_for('admission_referrals')}">
+                View Referral Codes
+            </a>
+            
         </form>
-
-        <div class="card soft" style="margin-top:14px">
-            <h2>Student Referral Codes</h2>
-
-            <div class="mini muted" style="margin-bottom:8px">
-                Showing {len(students)} of {total_students} student referral record(s).
-            </div>
-
-            {students_pagination}
-
-            <div class="scroll-x">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Student</th>
-                            <th>Phone</th>
-                            <th>Referral Code</th>
-                            <th>Current Points</th>
-                            <th>Total Referrals</th>
-                        </tr>
-                    </thead>
-
-                    <tbody>
-                        {student_rows or "<tr><td colspan='5'>No students found.</td></tr>"}
-                    </tbody>
-                </table>
-            </div>
-
-            {students_pagination}
-        </div>
 
         <div class="card soft" style="margin-top:14px">
             <h2>Discount Codes</h2>
@@ -38146,6 +38122,243 @@ def admission_discount_delete(coupon_id):
     conn.close()
 
     return redirect(request.referrer or url_for("admission_discounts"))
+    
+    
+@app.get('/admission/referrals')
+def admission_referrals():
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    grade_filter = request.args.get("grade", "").strip()
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    ensure_all_student_referral_codes(conn)
+    conn.commit()
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+
+        where.append("""
+            (
+                s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR s.guardian_phone LIKE ?
+                OR IFNULL(s.guardian_name, '') LIKE ?
+                OR IFNULL(s.email, '') LIKE ?
+                OR IFNULL(s.school, '') LIKE ?
+                OR IFNULL(s.province, '') LIKE ?
+                OR s.grade LIKE ?
+                OR s.referral_code LIKE ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM enrollments e
+                    JOIN subjects sub ON sub.id = e.subject_id
+                    WHERE e.student_id = s.id
+                      AND (
+                            sub.name LIKE ?
+                            OR sub.grade LIKE ?
+                            OR e.month LIKE ?
+                            OR e.status LIKE ?
+                      )
+                )
+            )
+        """)
+
+        params += [
+            search, search, search, search, search,
+            search, search, search, search,
+            search, search, search, search
+        ]
+
+    if grade_filter:
+        where.append("s.grade = ?")
+        params.append(grade_filter)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM students s
+        {where_sql}
+    """, params)
+
+    total_students = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total_students + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT
+            s.id,
+            s.full_name,
+            s.phone_whatsapp,
+            s.guardian_name,
+            s.guardian_phone,
+            s.grade,
+            s.school,
+            s.province,
+            s.referral_code,
+            COALESCE(s.referral_points,0) AS referral_points,
+            COALESCE(s.referral_total_count,0) AS referral_total_count
+        FROM students s
+        {where_sql}
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.full_name
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    students = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for s in students:
+        points = int(s["referral_points"] or 0)
+
+        if points >= 5:
+            points_status = "<span class='chip active'>100% Reward Ready</span>"
+        elif points >= 3:
+            points_status = "<span class='chip pending'>50% Reward Ready</span>"
+        else:
+            points_status = "<span class='chip'>In Progress</span>"
+
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(s['full_name'] or 'Unnamed learner')}</strong>
+                <div class="mini muted">
+                    {grade_label(s['grade']) if s['grade'] else '—'}
+                </div>
+            </td>
+
+            <td>
+                {escape(s['phone_whatsapp'] or '—')}
+                <div class="mini muted">
+                    Guardian: {escape(s['guardian_name'] or '—')} | {escape(s['guardian_phone'] or '—')}
+                </div>
+            </td>
+
+            <td>
+                <span class="chip" style="letter-spacing:1px">
+                    {escape(s['referral_code'] or '—')}
+                </span>
+            </td>
+
+            <td>
+                {points} / 5
+                <div class="mini muted">
+                    3 points = 50% | 5 points = 100%
+                </div>
+            </td>
+
+            <td>{s['referral_total_count'] or 0}</td>
+
+            <td>{points_status}</td>
+
+            <td>
+                {escape(s['school'] or '—')}
+                <div class="mini muted">
+                    {escape(s['province'] or '—')}
+                </div>
+            </td>
+        </tr>
+        """
+
+    grade_options = "".join(
+        f"""
+        <option value="{g}" {'selected' if grade_filter == g else ''}>
+            {grade_label(g)}
+        </option>
+        """
+        for g in ["G8", "G9", "G10", "G11", "G12", "G13"]
+    )
+
+    body = f"""
+    {admission_nav()}
+
+    <section class="card">
+        <h1>Student Referral Codes</h1>
+
+        <p class="muted">
+            View student referral codes, referral points, and reward progress.
+            Referral points are awarded only when new learners use a valid referral code.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search name, phone, school, subject, grade, referral code or status">
+
+            <select name="grade">
+                <option value="">All Grades</option>
+                {grade_options}
+            </select>
+
+            <button class="btn mini">Search</button>
+
+            <a class="btn mini secondary" href="{url_for('admission_referrals')}">
+                Clear
+            </a>
+
+            <a class="btn mini success" href="{url_for('admission_discounts')}">
+                Go to Discount Codes
+            </a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(students)} of {total_students} referral record(s).
+        </div>
+
+        {pagination_controls("/admission/referrals", page_num, total_pages, {"q": q, "grade": grade_filter})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Contact</th>
+                        <th>Referral Code</th>
+                        <th>Current Points</th>
+                        <th>Total Referrals</th>
+                        <th>Reward Status</th>
+                        <th>School / Province</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {rows or "<tr><td colspan='7'>No referral records found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/admission/referrals", page_num, total_pages, {"q": q, "grade": grade_filter})}
+    </section>
+    """
+
+    return page("Admission Referrals", body)    
     
     
 @app.get('/admin/parents-notifications')
