@@ -31282,6 +31282,7 @@ def duty_admin_nav():
         <a class="btn secondary" href="{url_for('duty_admin_home')}">Dashboard</a>
         <a class="btn secondary" href="{url_for('duty_admin_enrollments')}">Enrollments</a>
         <a class="btn secondary" href="{url_for('duty_admin_students')}">Students</a>
+        <a class="btn secondary" href="{url_for('duty_admin_parents_notifications')}">Parents Info</a>
         <a class="btn secondary" href="{url_for('duty_admin_groups')}">Groups</a>
         <a class="btn secondary" href="{url_for('duty_admin_sessions')}">Sessions</a>
         <!-- <a class="btn secondary" href="{url_for('duty_admin_inbox')}">Inbox</a> -->
@@ -34479,6 +34480,7 @@ def admission_nav():
         <a class="btn secondary" href="{url_for('admission_home')}">Dashboard</a>
         <a class="btn secondary" href="{url_for('admission_enrollments')}">Enrollments</a>
         <a class="btn secondary" href="{url_for('admission_students')}">Students</a>
+        <a class="btn secondary" href="{url_for('admission_parents_notifications')}">Parents Info</a>
         <a class="btn secondary" href="{url_for('admission_followups')}">Follow-Ups</a>
         <a class="btn secondary" href="{url_for('admission_groups')}">Groups</a>
         <a class="btn secondary" href="{url_for('admission_sessions')}">Sessions</a>
@@ -39351,6 +39353,390 @@ def admin_parents_notifications_export():
     return response
 
 
+def parent_information_page(portal_title, nav_html, base_path, clear_endpoint, require_label=""):
+
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+    month = request.args.get("month", "").strip() or get_admin_active_month()
+    view = request.args.get("view", "all").strip()
+    parent_status = request.args.get("parent_status", "").strip()
+
+    if parent_status not in ["", "new", "returning"]:
+        parent_status = ""
+
+    if view not in ["all", "current"]:
+        view = "all"
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    limit = 15
+    offset = (page_num - 1) * limit
+
+    parent_group_name = "EBTA Parents Notifications"
+    parent_group_link = "https://chat.whatsapp.com/DZYMvnEl9jpEyvzxqbgwV6"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    from_sql = "FROM students s"
+
+    where = [
+        "s.guardian_phone IS NOT NULL",
+        "TRIM(s.guardian_phone) != ''"
+    ]
+
+    params = []
+
+    if view == "current":
+        from_sql += """
+            JOIN enrollments ecur
+                ON ecur.student_id = s.id
+               AND ecur.month = ?
+        """
+        params.append(month)
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                s.full_name LIKE ?
+                OR s.guardian_name LIKE ?
+                OR s.guardian_phone LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR s.email LIKE ?
+                OR s.school LIKE ?
+                OR s.province LIKE ?
+            )
+        """)
+        params += [
+            search, search, search, search,
+            search, search, search
+        ]
+
+    if grade:
+        where.append("s.grade = ?")
+        params.append(grade)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    having_sql = ""
+
+    if parent_status == "new":
+        having_sql = """
+            HAVING first_enrollment_month = ?
+        """
+    elif parent_status == "returning":
+        having_sql = """
+            HAVING first_enrollment_month IS NOT NULL
+               AND first_enrollment_month != ?
+        """
+
+    count_params = list(params)
+
+    if parent_status in ["new", "returning"]:
+        count_params.append(month)
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM (
+            SELECT
+                s.guardian_phone,
+                (
+                    SELECT MIN(e2.month)
+                    FROM students s2
+                    JOIN enrollments e2 ON e2.student_id = s2.id
+                    WHERE s2.guardian_phone = s.guardian_phone
+                ) AS first_enrollment_month
+            {from_sql}
+            {where_sql}
+            GROUP BY s.guardian_phone
+            {having_sql}
+        ) x
+    """, count_params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * limit
+
+    main_params = [month] + list(params)
+
+    if parent_status in ["new", "returning"]:
+        main_params.append(month)
+
+    main_params.extend([limit, offset])
+
+    cur.execute(f"""
+        SELECT
+            COALESCE(NULLIF(MIN(s.guardian_name), ''), 'Parent/Guardian') AS guardian_name,
+            s.guardian_phone,
+
+            GROUP_CONCAT(DISTINCT s.full_name) AS learner_names,
+            GROUP_CONCAT(DISTINCT s.grade) AS grades,
+            GROUP_CONCAT(DISTINCT s.school) AS schools,
+            GROUP_CONCAT(DISTINCT s.province) AS provinces,
+            COUNT(DISTINCT s.id) AS learner_count,
+
+            (
+                SELECT MIN(e2.month)
+                FROM students s2
+                JOIN enrollments e2 ON e2.student_id = s2.id
+                WHERE s2.guardian_phone = s.guardian_phone
+            ) AS first_enrollment_month,
+
+            (
+                SELECT COUNT(DISTINCT e3.id)
+                FROM students s3
+                JOIN enrollments e3 ON e3.student_id = s3.id
+                WHERE s3.guardian_phone = s.guardian_phone
+                  AND e3.month = ?
+            ) AS current_month_enrollments
+
+        {from_sql}
+        {where_sql}
+        GROUP BY s.guardian_phone
+        {having_sql}
+        ORDER BY guardian_name, s.guardian_phone
+        LIMIT ? OFFSET ?
+    """, main_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for p in rows:
+        parent_name = p["guardian_name"] or "Parent/Guardian"
+        parent_phone = p["guardian_phone"] or ""
+        learner_names = p["learner_names"] or "Learner"
+        grades = p["grades"] or "—"
+        schools = p["schools"] or "—"
+        provinces = p["provinces"] or "—"
+        first_month = p["first_enrollment_month"] or ""
+        current_month_enrollments = p["current_month_enrollments"] or 0
+
+        if first_month == month:
+            parent_status_html = "<span class='chip active'>New Parent</span>"
+        else:
+            parent_status_html = "<span class='chip pending'>Returning Parent</span>"
+
+        if current_month_enrollments:
+            month_badge = f"""
+            <div class="mini muted" style="margin-top:4px">
+                {current_month_enrollments} enrollment(s) in {escape(month)}
+            </div>
+            """
+        else:
+            month_badge = f"""
+            <div class="mini muted" style="margin-top:4px">
+                No enrollment in {escape(month)}
+            </div>
+            """
+
+        wa_number = whatsapp_number(parent_phone)
+
+        message = (
+            f"Good day {parent_name},\n\n"
+            f"You are kindly invited to join the EBTA Parents Notifications WhatsApp group.\n\n"
+            f"Group name: {parent_group_name}\n"
+            f"Group link: {parent_group_link}\n\n"
+            f"This group will be used to share important EBTA updates, learner notices, schedules, reminders, and parent-related communication.\n\n"
+            f"Kind regards,\n"
+            f"EBTA Team"
+        )
+
+        if wa_number:
+            wa_link = f"https://wa.me/{wa_number}?{urlencode({'text': message})}"
+            action_btn = f"""
+            <a class="btn mini success"
+               target="_blank"
+               href="{wa_link}">
+                Send WhatsApp Invite
+            </a>
+            """
+        else:
+            action_btn = "<span class='mini muted'>Invalid number</span>"
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(parent_name)}</strong>
+                <div class="mini muted">
+                    Learner(s): {escape(learner_names)}
+                </div>
+            </td>
+
+            <td>
+                {parent_status_html}
+                <div class="mini muted" style="margin-top:4px">
+                    First month: {escape(first_month or '—')}
+                </div>
+                {month_badge}
+            </td>
+
+            <td>
+                {escape(parent_phone)}
+                <div class="mini muted">
+                    WhatsApp: {escape(wa_number or '—')}
+                </div>
+            </td>
+
+            <td>{escape(grades)}</td>
+
+            <td>
+                {escape(schools)}
+                <div class="mini muted">{escape(provinces)}</div>
+            </td>
+
+            <td>{p['learner_count']}</td>
+
+            <td>{action_btn}</td>
+        </tr>
+        """
+
+    view_options = f"""
+        <option value="all" {'selected' if view == 'all' else ''}>All Parents</option>
+        <option value="current" {'selected' if view == 'current' else ''}>Current Month Parents Only</option>
+    """
+
+    parent_status_options = f"""
+        <option value="" {'selected' if parent_status == '' else ''}>All Statuses</option>
+        <option value="new" {'selected' if parent_status == 'new' else ''}>New Parents</option>
+        <option value="returning" {'selected' if parent_status == 'returning' else ''}>Returning Parents</option>
+    """
+
+    body = f"""
+    {nav_html}
+
+    <section class="card">
+        <h1>{escape(portal_title)} Parents Information</h1>
+
+        <p class="muted">
+            View parent or guardian contact details, check whether they are new or returning,
+            and send them the EBTA Parents Notifications WhatsApp group invite.
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #25D366;margin-bottom:14px">
+            <h2>Group Details</h2>
+
+            <p>
+                <strong>Group Name:</strong> {escape(parent_group_name)}<br>
+                <strong>Group Link:</strong>
+                <a class="links" target="_blank" href="{parent_group_link}">
+                    {parent_group_link}
+                </a>
+            </p>
+        </div>
+
+        <form method="get" class="toolbar">
+
+            <input type="month"
+                   name="month"
+                   value="{escape(month)}"
+                   title="Select month">
+
+            <select name="view">
+                {view_options}
+            </select>
+
+            <select name="parent_status">
+                {parent_status_options}
+            </select>
+
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search parent, learner, phone, school or province">
+
+            <select name="grade">
+                <option value="">All Grades</option>
+                {''.join(
+                    f"<option value='{g}' {'selected' if grade==g else ''}>{grade_label(g)}</option>"
+                    for g in ["G8","G9","G10","G11","G12","G13"]
+                )}
+            </select>
+
+            <button class="btn mini">Search</button>
+
+            <a class="btn mini secondary" href="{url_for(clear_endpoint)}">
+                Clear
+            </a>
+
+            <a class="btn mini success"
+               href="{url_for(clear_endpoint)}?{urlencode({'month': get_admin_active_month(), 'view': 'current'})}">
+                Current Month Parents
+            </a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} parent contact record(s)
+            for <b>{pretty_month_label(month)}</b>.
+        </div>
+
+        {pagination_controls(base_path, page_num, total_pages, {"q": q, "grade": grade, "month": month, "view": view, "parent_status": parent_status})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Parent / Learner</th>
+                        <th>Status</th>
+                        <th>WhatsApp Number</th>
+                        <th>Grade(s)</th>
+                        <th>School / Province</th>
+                        <th>Learners</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No parent contacts found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls(base_path, page_num, total_pages, {"q": q, "grade": grade, "month": month, "view": view, "parent_status": parent_status})}
+    </section>
+    """
+
+    return page(f"{portal_title} Parents Information", body)
+
+
+@app.get('/duty-admin/parents-notifications')
+def duty_admin_parents_notifications():
+
+    r = require_duty_admin()
+    if r:
+        return r
+
+    return parent_information_page(
+        portal_title="Duty Admin",
+        nav_html=duty_admin_nav(),
+        base_path="/duty-admin/parents-notifications",
+        clear_endpoint="duty_admin_parents_notifications"
+    )
+    
+    
+@app.get('/admission/parents-notifications')
+def admission_parents_notifications():
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    return parent_information_page(
+        portal_title="Admission Coordinator",
+        nav_html=admission_nav(),
+        base_path="/admission/parents-notifications",
+        clear_endpoint="admission_parents_notifications"
+    )
 
 # --- Admin: Analytics dashboard ---
 
