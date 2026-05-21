@@ -150,6 +150,13 @@ def init_db():
         UNIQUE(name,grade)
     );
     """)
+    
+    
+    cur.execute("""
+        UPDATE subjects
+        SET name = 'Afrikaans FAL'
+        WHERE name = 'Afrikaans'
+    """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS groups(
