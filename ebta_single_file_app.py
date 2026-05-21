@@ -12337,55 +12337,249 @@ def admin_logout():
 
 
 def admin_nav():
-    links = []
+
+    def nav_link(label, endpoint, fallback="#"):
+        return f"""
+        <a href="{safe_url(endpoint, fallback)}">
+            {escape(label)}
+        </a>
+        """
+
+    sections = []
 
     # Always visible to all admins
-    links.append(f"<a class='btn secondary' href='{url_for('admin_home')}'>Dashboard</a>")
-    links.append(f"<a class='btn secondary' href='{url_for('admin_enrollments')}'>Enrollments</a>")
-    links.append(f"<a class='btn secondary' href='{url_for('admin_students')}'>Students</a>")
-    links.append(f"<a class='btn secondary' href='{url_for('admin_followups')}'>Follow-Ups</a>")
-    links.append(f"<a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct Msgs</a>")
-    links.append(f"<a class='btn secondary' href='{url_for('admin_parents_notifications')}'>Parents Information</a>")
+    sections.append((
+        "Core",
+        [
+            ("Dashboard", "admin_home", "/admin"),
+            ("Enrollments", "admin_enrollments", "/admin/enrollments"),
+            ("Students", "admin_students", "/admin/students"),
+            ("Follow-Ups", "admin_followups", "/admin/followups"),
+            ("Direct Messages", "admin_direct_messages", "/admin/direct-messages"),
+            ("Parents Information", "admin_parents_notifications", "/admin/parents-notifications"),
+        ],
+        True
+    ))
 
-    # Only HIGH admin can see these
     if is_high_admin():
-        links.extend([
-            f"<a class='btn secondary' href='{url_for('admin_tutors')}'>Tutors</a>",
-            f"<a class='btn secondary' href='{url_for('admin_tutor_referrals')}'>Tutor Referrals</a>",
-            f"<a class='btn secondary' href='{url_for('admin_groups')}'>Groups</a>",
-            f"<a class='btn secondary' href='{url_for('admin_sessions')}'>Sessions</a>",
-            f"<a class='btn secondary' href='{url_for('admin_messages')}'>Inbox</a>",
-            f"<a class='btn secondary' href='{url_for('admin_analytics')}'>Analytics</a>",
-            f"<a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>",
-            f"<a class='btn secondary' href='{url_for('admin_uploads_control')}'>Uploads Control</a>",
-            f"<a class='btn secondary' href='{url_for('admin_materials')}'>Unlock Uploads</a>",
-            f"<a class='btn secondary' href='{url_for('admin_tutor_tracker')}'>Tutor Tracker</a>",
-            f"<a class='btn secondary' href='{url_for('admin_tutor_operations')}'>Tutor-operations</a>",
-            f"<a class='btn secondary' href='{url_for('admin_academic_quality_managers')}'>AQ_Manager</a>",
-            f"<a class='btn secondary' href='{url_for('admin_applications')}'>Tutor Applications</a>",
-            f"<a class='btn secondary' href='{url_for('admin_application_settings')}'>Application Settings</a>",
-            f"<a class='btn secondary' href='{url_for('admin_management_roles')}'>Management Roles</a>",
-            f"<a class='btn secondary' href='{url_for('admin_management_applications')}'>Management Applications</a>",
-            f"<a class='btn secondary' href='{url_for('admin_treasurers')}'>Treasurers</a>",
-            f"<a class='btn secondary' href='{url_for('admin_finance_overview')}'>Finance Overview</a>",
-            f"<a class='btn secondary' href='{url_for('admin_secretaries')}'>Secretaries</a>",
-            f"<a class='btn secondary' href='{url_for('admin_secretary_logs')}'>Secretary Logs</a>",
-            f"<a class='btn secondary' href='{url_for('admin_secretary_minutes')}'>Secretary Minutes</a>",
-            f"<a class='btn secondary' href='{url_for('admin_social_media_managers')}'>Social Media Managers</a>",
-            f"<a class='btn secondary' href='{url_for('admin_social_media_content_logs')}'>Social Media Logs</a>",
-            f"<a class='btn secondary' href='{url_for('admin_social_media_reports')}'>Social Media Reports</a>",
-            f"<a class='btn secondary' href='{url_for('admin_duty_admins')}'>Duty Admins</a>",
-            f"<a class='btn secondary' href='{url_for('admin_admission_coordinators')}'>Admission Coordinators</a>",
-            f"<a class='btn secondary' href='{url_for('admin_discounts_control')}'>Discount Control</a>",
-            f"<a class='btn secondary' href='{url_for('admin_sms_dashboard')}'>SMS Dashboard</a>",
-            f"<a class='btn secondary' href='{url_for('admin_process_sms')}'>Processed SMS</a>",
-            f"<a class='btn secondary' href='{url_for('admin_awards_student_export')}'>Awards Export</a>",
 
+        sections.extend([
+
+            (
+                "Tutors & Academic",
+                [
+                    ("Tutors", "admin_tutors", "/admin/tutors"),
+                    ("Tutor Referrals", "admin_tutor_referrals", "/admin/tutor-referrals"),
+                    ("Tutor Tracker", "admin_tutor_tracker", "/admin/tutor-tracker"),
+                    ("Tutor Operations", "admin_tutor_operations", "/admin/tutor-operations"),
+                    ("Tutor Applications", "admin_applications", "/admin/applications"),
+                    ("Application Settings", "admin_application_settings", "/admin/application-settings"),
+                    ("AQ Manager", "admin_academic_quality_managers", "/admin/academic-quality-managers"),
+                    ("Student Reports", "admin_reports", "/admin/reports"),
+                ],
+                False
+            ),
+
+            (
+                "Classes & Learning",
+                [
+                    ("Groups", "admin_groups", "/admin/groups"),
+                    ("Sessions", "admin_sessions", "/admin/sessions"),
+                    ("Inbox", "admin_messages", "/admin/messages"),
+                    ("Uploads Control", "admin_uploads_control", "/admin/uploads-control"),
+                    ("Unlock Uploads", "admin_materials", "/admin/materials"),
+                    ("Analytics", "admin_analytics", "/admin/analytics"),
+                ],
+                False
+            ),
+
+            (
+                "Finance & Management",
+                [
+                    ("Treasurers", "admin_treasurers", "/admin/treasurers"),
+                    ("Finance Overview", "admin_finance_overview", "/admin/finance-overview"),
+                    ("Management Roles", "admin_management_roles", "/admin/management-roles"),
+                    ("Management Applications", "admin_management_applications", "/admin/management-applications"),
+                    ("Duty Admins", "admin_duty_admins", "/admin/duty-admins"),
+                    ("Admission Coordinators", "admin_admission_coordinators", "/admin/admission-coordinators"),
+                    ("Discount Control", "admin_discounts_control", "/admin/discounts-control"),
+                ],
+                False
+            ),
+
+            (
+                "Secretary & Media",
+                [
+                    ("Secretaries", "admin_secretaries", "/admin/secretaries"),
+                    ("Secretary Logs", "admin_secretary_logs", "/admin/secretary/logs"),
+                    ("Secretary Minutes", "admin_secretary_minutes", "/admin/secretary/minutes"),
+                    ("Social Media Managers", "admin_social_media_managers", "/admin/social-media/managers"),
+                    ("Social Media Logs", "admin_social_media_content_logs", "/admin/social-media/logs"),
+                    ("Social Media Reports", "admin_social_media_reports", "/admin/social-media/reports"),
+                ],
+                False
+            ),
+
+            (
+                "System & Exports",
+                [
+                    ("Settings", "admin_settings", "/admin/settings"),
+                    ("SMS Dashboard", "admin_sms_dashboard", "/admin/sms-dashboard"),
+                    ("Processed SMS", "admin_process_sms", "/admin/process-sms"),
+                    ("Awards Export", "admin_awards_student_export", "/admin/awards-export"),
+                ],
+                False
+            ),
         ])
 
+    groups_html = ""
+
+    for title, items, opened in sections:
+        links_html = "".join([
+            nav_link(label, endpoint, fallback)
+            for label, endpoint, fallback in items
+        ])
+
+        open_attr = "open" if opened else ""
+
+        groups_html += f"""
+        <details class="admin-nav-group" {open_attr}>
+            <summary>{escape(title)}</summary>
+
+            <div class="admin-nav-links">
+                {links_html}
+            </div>
+        </details>
+        """
+
     return f"""
-    <nav class="admin-nav">
-        {''.join(links)}
+    <style>
+        .admin-nav-modern {{
+            background:#ffffff;
+            border:1px solid #dbe4ef;
+            border-radius:18px;
+            padding:14px;
+            box-shadow:0 4px 14px rgba(0,0,0,.06);
+            margin:12px 0 18px;
+        }}
+
+        .admin-nav-modern-header {{
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:12px;
+            flex-wrap:wrap;
+            margin-bottom:10px;
+        }}
+
+        .admin-nav-modern-header h2 {{
+            margin:0;
+            font-size:18px;
+        }}
+
+        .admin-nav-modern-header .hint {{
+            font-size:12px;
+            color:#64748b;
+        }}
+
+        .admin-nav-grid {{
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+            gap:10px;
+        }}
+
+        .admin-nav-group {{
+            border:1px solid #dbe4ef;
+            border-radius:14px;
+            background:#f8fafc;
+            overflow:hidden;
+        }}
+
+        .admin-nav-group summary {{
+            cursor:pointer;
+            padding:12px 14px;
+            font-weight:800;
+            color:#0f172a;
+            list-style:none;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+        }}
+
+        .admin-nav-group summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .admin-nav-group summary::after {{
+            content:"Open";
+            font-size:11px;
+            color:#1b5e20;
+            border:1px solid rgba(27,94,32,.25);
+            padding:3px 8px;
+            border-radius:999px;
+            background:#eef6ee;
+        }}
+
+        .admin-nav-group[open] summary::after {{
+            content:"Close";
+        }}
+
+        .admin-nav-links {{
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+            padding:0 12px 12px;
+        }}
+
+        .admin-nav-links a {{
+            text-decoration:none;
+            color:#1b5e20;
+            background:#ffffff;
+            border:1px solid rgba(27,94,32,.35);
+            border-radius:999px;
+            padding:8px 11px;
+            font-size:13px;
+            font-weight:700;
+            box-shadow:0 2px 6px rgba(0,0,0,.04);
+            transition:.15s ease;
+            white-space:nowrap;
+        }}
+
+        .admin-nav-links a:hover {{
+            background:#1b5e20;
+            color:#ffffff;
+            transform:translateY(-1px);
+        }}
+
+        @media(max-width:768px) {{
+            .admin-nav-grid {{
+                grid-template-columns:1fr;
+            }}
+
+            .admin-nav-links a {{
+                width:100%;
+                border-radius:12px;
+            }}
+        }}
+    </style>
+
+    <nav class="admin-nav-modern">
+        <div class="admin-nav-modern-header">
+            <div>
+                <h2>Admin Navigation</h2>
+                <div class="hint">
+                    Open a section to access more admin tools.
+                </div>
+            </div>
+
+            <span class="chip active">
+                {session.get('admin_role', 'Admin')}
+            </span>
+        </div>
+
+        <div class="admin-nav-grid">
+            {groups_html}
+        </div>
     </nav>
     """
 
@@ -12422,43 +12616,8 @@ def admin_home():
     {stat('Active', str(counts.get('ACTIVE',0)))}
     {stat('Admin inbox', str(msg_count))}{stat('Direct msgs (unread)', str(dm_unread))}
     </div>
-    <div class='toolbar'>
-    <a class='btn secondary' href='{url_for('admin_enrollments')}'>Manage enrollments</a>
-    <a class='btn secondary' href='{url_for('admin_students')}'>Students</a>
-    <a class='btn secondary' href='{url_for('admin_followups')}'>Follow-Ups</a>
-    <a class='btn secondary' href='{url_for('admin_tutors')}'>Tutors</a>
-    <a class='btn secondary' href='{url_for('admin_tutor_referrals')}'>Tutor Referrals</a>
-    <a class='btn secondary' href='{url_for('admin_groups')}'>Group links</a>
-    <a class='btn secondary' href='{url_for('admin_sessions')}'>Sessions & QR</a>
-    <a class='btn secondary' href='{url_for('admin_messages')}'>Inbox</a>
-    <a class='btn secondary' href='{url_for('admin_direct_messages')}'>Direct messages</a>
-    <a class='btn secondary' href='{url_for('admin_analytics')}'>Analytics</a>
-    <a class='btn secondary' href='{url_for('admin_settings')}'>Settings</a>
-    <a class="btn secondary" href="{url_for('admin_uploads_control')}">Uploads Control</a>
-    <a class="btn secondary" href="{url_for('admin_materials')}">Unlock Uploads</a>
-    <a class="btn secondary" href="{url_for('admin_tutor_tracker')}">Tutor Tracker</a>
-    <a class="btn secondary" href="{url_for('admin_tutor_operations')}">Tutor-operations</a>
-    <a class="btn secondary" href="{url_for('admin_applications')}">Tutor Applications</a>
-    <a class="btn secondary" href="{url_for('admin_application_settings')}">Application Settings</a>
-    <a class="btn secondary" href="{url_for('admin_management_roles')}">Management Roles</a>
-    <a class="btn secondary" href="{url_for('admin_management_applications')}">Management Applications</a>
-    <a class="btn secondary" href="{url_for('admin_treasurers')}">Treasurers</a>
-    <a class="btn secondary" href="{url_for('admin_finance_overview')}">Finance Overview</a>
-    <a class="btn secondary" href="{url_for('admin_academic_quality_managers')}">AQ_Manager</a>
-    <a class="btn secondary" href="{url_for('admin_secretaries')}">Secretaries</a>
-    <a class="btn secondary" href="{url_for('admin_secretary_logs')}">Secretary Logs</a>
-    <a class="btn secondary" href="{url_for('admin_secretary_minutes')}">Secretary Minutes</a>
-    <a class="btn secondary" href="{url_for('admin_social_media_managers')}">Social Media Managers</a>
-    <a class="btn secondary" href="{url_for('admin_social_media_content_logs')}">Social Media Logs</a>
-    <a class="btn secondary" href="{url_for('admin_social_media_reports')}">Social Media Reports</a>
-    <a class="btn secondary" href="{url_for('admin_duty_admins')}">Duty Admins</a>
-    <a class="btn secondary" href="{url_for('admin_admission_coordinators')}">Admission Coordinators</a>
-    <a class="btn secondary" href="{url_for('admin_discounts_control')}">Discount Control</a>
-    <a class='btn secondary' href='{url_for('admin_reports')}'>Student Reports</a>
-    <a class='btn secondary' href='{url_for('admin_awards_student_export')}'>Awards Export</a>
-    <a class='btn secondary' href='{url_for('admin_parents_notifications')}'>Parents Information</a>
-
-    </div></section>"""
+    {admin_nav()}
+    </section>"""
     return page("Admin", body)
 
 
