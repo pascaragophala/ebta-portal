@@ -27806,7 +27806,8 @@ def treasurer_nav():
 def treasurer_dashboard():
 
     r = require_treasurer()
-    if r: return r
+    if r:
+        return r
 
     month = request.args.get("month") or get_setting("current_month")
     tid = is_treasurer()
@@ -27814,13 +27815,15 @@ def treasurer_dashboard():
     conn = get_db()
     cur = conn.cursor()
 
+    # ================= BASIC TOTALS =================
+
     cur.execute("""
         SELECT COALESCE(SUM(amount),0) AS total
         FROM finance_records
         WHERE month=?
           AND record_type='INCOME'
     """, (month,))
-    total_income = cur.fetchone()["total"] or 0
+    total_income = float(cur.fetchone()["total"] or 0)
 
     cur.execute("""
         SELECT COALESCE(SUM(amount),0) AS total
@@ -27828,7 +27831,7 @@ def treasurer_dashboard():
         WHERE month=?
           AND record_type='EXPENSE'
     """, (month,))
-    total_expenses = cur.fetchone()["total"] or 0
+    total_expenses = float(cur.fetchone()["total"] or 0)
 
     cur.execute("""
         SELECT COALESCE(SUM(amount),0) AS total
@@ -27836,7 +27839,7 @@ def treasurer_dashboard():
         WHERE month=?
           AND status='PENDING'
     """, (month,))
-    pending_payments = cur.fetchone()["total"] or 0
+    pending_payments = float(cur.fetchone()["total"] or 0)
 
     cur.execute("""
         SELECT COALESCE(SUM(amount),0) AS total
@@ -27844,7 +27847,7 @@ def treasurer_dashboard():
         WHERE month=?
           AND status='PAID'
     """, (month,))
-    paid_payments = cur.fetchone()["total"] or 0
+    paid_payments = float(cur.fetchone()["total"] or 0)
 
     cur.execute("""
         SELECT COUNT(*) AS c
@@ -27854,9 +27857,183 @@ def treasurer_dashboard():
     """, (month,))
     pending_count = cur.fetchone()["c"] or 0
 
+    # ================= CATEGORY BREAKDOWN =================
+
+    cur.execute("""
+        SELECT category, COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=?
+          AND record_type='INCOME'
+        GROUP BY category
+        ORDER BY total DESC
+        LIMIT 8
+    """, (month,))
+    income_categories = cur.fetchall()
+
+    cur.execute("""
+        SELECT category, COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=?
+          AND record_type='EXPENSE'
+        GROUP BY category
+        ORDER BY total DESC
+        LIMIT 8
+    """, (month,))
+    expense_categories = cur.fetchall()
+
+    # ================= PAYMENT STATUS BREAKDOWN =================
+
+    cur.execute("""
+        SELECT status, COUNT(*) AS count, COALESCE(SUM(amount),0) AS total
+        FROM finance_payment_schedule
+        WHERE month=?
+        GROUP BY status
+        ORDER BY status
+    """, (month,))
+    payment_statuses = cur.fetchall()
+
+    # ================= RECENT FINANCE RECORDS =================
+
+    cur.execute("""
+        SELECT record_type, category, amount, payment_date, status
+        FROM finance_records
+        WHERE month=?
+        ORDER BY captured_at DESC
+        LIMIT 6
+    """, (month,))
+    recent_records = cur.fetchall()
+
     conn.close()
 
     net = total_income - total_expenses
+
+    total_movement = total_income + total_expenses
+    income_percent = 0
+    expense_percent = 0
+
+    if total_movement > 0:
+        income_percent = round((total_income / total_movement) * 100)
+        expense_percent = round((total_expenses / total_movement) * 100)
+
+    payment_total = pending_payments + paid_payments
+    paid_percent = 0
+    pending_percent = 0
+
+    if payment_total > 0:
+        paid_percent = round((paid_payments / payment_total) * 100)
+        pending_percent = round((pending_payments / payment_total) * 100)
+
+    net_status = "Positive" if net >= 0 else "Negative"
+    net_chip = "active" if net >= 0 else "lapsed"
+
+    # ================= VISUAL HELPERS =================
+
+    def progress_bar(label, amount, percent, chip_class="active"):
+        return f"""
+        <div style="margin-bottom:12px">
+            <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
+                <div>
+                    <strong>{escape(label)}</strong>
+                    <div class="mini muted">R{float(amount or 0):,.2f}</div>
+                </div>
+                <span class="chip {chip_class}">{percent}%</span>
+            </div>
+
+            <div style="
+                height:12px;
+                background:#edf2f7;
+                border-radius:999px;
+                overflow:hidden;
+                margin-top:6px;
+                border:1px solid #dbe4ef;
+            ">
+                <div style="
+                    height:100%;
+                    width:{max(0, min(100, int(percent or 0)))}%;
+                    background:#1b5e20;
+                    border-radius:999px;
+                "></div>
+            </div>
+        </div>
+        """
+
+    def category_rows(rows, total_amount):
+        html = ""
+
+        for r in rows:
+            amount = float(r["total"] or 0)
+            percent = round((amount / total_amount) * 100) if total_amount > 0 else 0
+
+            html += f"""
+            <div style="margin-bottom:10px">
+                <div style="display:flex;justify-content:space-between;gap:10px">
+                    <strong>{escape(r['category'] or 'Uncategorised')}</strong>
+                    <span>R{amount:,.2f}</span>
+                </div>
+
+                <div style="
+                    height:9px;
+                    background:#edf2f7;
+                    border-radius:999px;
+                    overflow:hidden;
+                    margin-top:5px;
+                    border:1px solid #dbe4ef;
+                ">
+                    <div style="
+                        height:100%;
+                        width:{max(0, min(100, percent))}%;
+                        background:#1b5e20;
+                        border-radius:999px;
+                    "></div>
+                </div>
+
+                <div class="mini muted">{percent}% of total</div>
+            </div>
+            """
+
+        return html or "<div class='empty'>No category data found for this month.</div>"
+
+    payment_status_html = ""
+
+    for p in payment_statuses:
+        status = p["status"] or "UNKNOWN"
+        count = p["count"] or 0
+        amount = float(p["total"] or 0)
+
+        chip_class = "active" if status == "PAID" else "pending" if status in ["PENDING", "APPROVED"] else "lapsed"
+
+        payment_status_html += f"""
+        <div class="card soft" style="margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
+                <div>
+                    <strong>{escape(status)}</strong>
+                    <div class="mini muted">{count} payment item(s)</div>
+                </div>
+
+                <span class="chip {chip_class}">
+                    R{amount:,.2f}
+                </span>
+            </div>
+        </div>
+        """
+
+    if not payment_status_html:
+        payment_status_html = "<div class='empty'>No scheduled payments found for this month.</div>"
+
+    recent_rows = ""
+
+    for rec in recent_records:
+        type_chip = "active" if rec["record_type"] == "INCOME" else "lapsed"
+
+        recent_rows += f"""
+        <tr>
+            <td><span class="chip {type_chip}">{escape(rec['record_type'])}</span></td>
+            <td>{escape(rec['category'] or '—')}</td>
+            <td>R{float(rec['amount'] or 0):,.2f}</td>
+            <td>{escape(rec['payment_date'] or '—')}</td>
+            <td>{escape(rec['status'] or '—')}</td>
+        </tr>
+        """
 
     body = f"""
     {treasurer_nav()}
@@ -27864,8 +28041,12 @@ def treasurer_dashboard():
     <section class="card">
         <h1>Treasurer Dashboard</h1>
 
+        <p class="muted">
+            Monthly financial overview with income, expenses, payment movement and category breakdowns.
+        </p>
+
         <form method="get" class="toolbar">
-            <input type="month" name="month" value="{month}">
+            <input type="month" name="month" value="{escape(month)}">
             <button class="btn mini">View Month</button>
         </form>
 
@@ -27876,6 +28057,78 @@ def treasurer_dashboard():
             {stat("Net", f"R{net:,.2f}")}
             {stat("Pending Payments", f"R{pending_payments:,.2f}")}
             {stat("Paid Payments", f"R{paid_payments:,.2f}")}
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <h2>Income vs Expenses</h2>
+
+                {progress_bar("Income", total_income, income_percent, "active")}
+                {progress_bar("Expenses", total_expenses, expense_percent, "lapsed")}
+
+                <div style="margin-top:10px">
+                    <span class="chip {net_chip}">
+                        Net Position: {net_status}
+                    </span>
+                    <div class="mini muted" style="margin-top:6px">
+                        Net amount: R{net:,.2f}
+                    </div>
+                </div>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #f59e0b">
+                <h2>Payment Progress</h2>
+
+                {progress_bar("Paid Payments", paid_payments, paid_percent, "active")}
+                {progress_bar("Pending Payments", pending_payments, pending_percent, "pending")}
+
+                <div class="mini muted" style="margin-top:8px">
+                    Pending payment items: {pending_count}
+                </div>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #3b82f6">
+                <h2>Payment Status Summary</h2>
+                {payment_status_html}
+            </div>
+
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft">
+                <h2>Income Categories</h2>
+                {category_rows(income_categories, total_income)}
+            </div>
+
+            <div class="card soft">
+                <h2>Expense Categories</h2>
+                {category_rows(expense_categories, total_expenses)}
+            </div>
+
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Recent Finance Records</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th>Category</th>
+                            <th>Amount</th>
+                            <th>Payment Date</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {recent_rows or "<tr><td colspan='5'>No finance records found for this month.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <div class="card soft" style="border-left:5px solid #f59e0b;margin-top:14px">
