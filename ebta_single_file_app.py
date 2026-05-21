@@ -4561,6 +4561,7 @@ def page(title, body_html, extra_head="", extra_js=""):
             links = [
                 ("Dashboard", "#dashboard"),
                 ("Upload Material", "#upload"),
+                ("Upload Library", url_for('tutor_uploads_library')),
                 ("Assignments", "#assignments"),
                 ("Messages", "#messages"),
                 ("Students", "#students"),
@@ -9888,7 +9889,7 @@ def tutor_home():
     subjects_options="".join([f"<option value='{r['subject_id']}'>{grade_label(r['grade'])} — {r['subject_name']}</option>" for r in subs]) or "<option value=''>No assigned subjects</option>"
 
     upload_block=f"""
-    <div class='card' style="border-left:5px solid #22c55e">
+    <div id="upload" class='card' style="border-left:5px solid #22c55e">
 
         <h2 style="margin-bottom:6px">
             Upload Teaching Material
@@ -10007,179 +10008,88 @@ def tutor_home():
     </div>
     """
 
-    # Your uploads (delete within 24h)
+    # ================= TUTOR UPLOAD SUMMARY =================
+
     cur.execute("""
-        SELECT m.*, s.name AS subject_name, s.grade
-        FROM materials m 
-        JOIN subjects s ON s.id=m.subject_id
-        WHERE m.tutor_id=?
-          AND m.month LIKE ?
-        ORDER BY m.created_at DESC
-        LIMIT 200
-    """,(tid, month + "%"))
-    mymats=cur.fetchall()
-    def can_delete(ts, admin_unlocked):
-        if admin_unlocked == 1:
-            return True
+        SELECT
+            COUNT(*) AS total_uploads,
 
-        try:
-            created = datetime.datetime.fromisoformat(ts)
-            return (
-                datetime.datetime.now(datetime.timezone.utc) - created
-            ) <= datetime.timedelta(hours=24)
-        except Exception:
-            return False
+            SUM(CASE
+                WHEN is_assignment = 1 OR kind = 'assignment'
+                THEN 1 ELSE 0
+            END) AS assignment_count,
 
-        
-    assign_rows = []
-    record_rows = []
-    doc_rows = []
+            SUM(CASE
+                WHEN youtube_url IS NOT NULL AND TRIM(youtube_url) != ''
+                THEN 1 ELSE 0
+            END) AS recording_count,
 
-    for m in mymats:
+            SUM(CASE
+                WHEN (youtube_url IS NULL OR TRIM(youtube_url) = '')
+                 AND COALESCE(is_assignment, 0) = 0
+                 AND kind != 'assignment'
+                THEN 1 ELSE 0
+            END) AS document_count
+        FROM materials
+        WHERE tutor_id=?
+          AND month LIKE ?
+    """, (tid, month + "%"))
 
-        when = m['created_at'][:16].replace('T', ' ')
+    upload_stats = cur.fetchone()
 
-        is_assignment = (m['is_assignment'] == 1 or m['kind'] == 'assignment')
-        is_recording = bool(m['youtube_url'])
+    total_uploads = upload_stats["total_uploads"] or 0
+    assignment_count = upload_stats["assignment_count"] or 0
+    recording_count = upload_stats["recording_count"] or 0
+    document_count = upload_stats["document_count"] or 0
 
-        # link
-        link = "—"
-        if m['file_path']:
-            link = f"<a class='links' target='_blank' href='{m['file_path']}'>Download</a>"
-        elif m['youtube_url']:
-            link = f"<a class='links' target='_blank' href='{m['youtube_url']}'>Watch</a>"
+    uploads_html = f"""
+    <div class="card" style="border-left:5px solid #2563eb">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+            <div>
+                <h2 style="margin-bottom:4px">Your Upload Library</h2>
+                <p class="muted">
+                    View and manage your uploaded assignments, recordings, and documents for {pretty_month_label(month)}.
+                </p>
+            </div>
 
-        # icon
-        if is_assignment:
-            icon = "📝 "
-        elif is_recording:
-            icon = "🎥 "
-        else:
-            icon = "📄 "
-
-        # delete button
-        if can_delete(m['created_at'], m['admin_unlocked']):
-            action = f"""
-            <form method="post"
-                  action="{url_for('tutor_delete_material', mid=m['id'])}"
-                  style="display:inline"
-                  onsubmit="return confirm('Delete this upload?')">
-                <button class="btn danger mini">Delete</button>
-            </form>
-            """
-        else:
-            action = "<span class='muted mini'>Locked</span>"
-        
-        views_btn = f"""
-        <a class="btn mini secondary"
-           href="/tutor/material/{m['id']}/views">
-            Views
-        </a>
-        """
-        
-        cur.execute("""
-            SELECT COUNT(DISTINCT student_id) AS c
-            FROM material_views
-            WHERE material_id = ?
-        """, (m["id"],))
-
-        viewed_total = cur.fetchone()["c"] or 0
-
-        row = f"""
-        <tr>
-            <td>{grade_label(m['grade'])} — {m['subject_name']}</td>
-            <td>{icon}{m['title']}</td>
-            <td>{link}</td>
-            <td>{viewed_total}</td>
-            <td>{when}</td>
-            <td>
-                {views_btn}
-                {action}
-            </td>
-        </tr>
-        """
-
-        if is_assignment:
-            assign_rows.append(row)
-        elif is_recording:
-            record_rows.append(row)
-        else:
-            doc_rows.append(row)
-
-    uploads_html = ""
-
-    if assign_rows:
-
-        uploads_html += f"""
-        <h3 style="margin-top:10px">📝 Assignments</h3>
-        <div class="scroll-x">
-        <table>
-        <thead>
-            <tr>
-                <th>Subject</th>
-                <th>Title</th>
-                <th>File</th>
-                <th>Views</th>
-                <th>Uploaded</th>
-                <th>Action</th>
-            </tr>
-        </thead>
-        <tbody>
-            {''.join(assign_rows)}
-        </tbody>
-        </table>
+            <a class="btn success" href="{url_for('tutor_uploads_library')}">
+                Open Upload Library
+            </a>
         </div>
-        """
 
-    if record_rows:
-
-        uploads_html += f"""
-        <h3 style="margin-top:20px;color:#2563eb">🎥 Recordings</h3>
-        <div class="scroll-x">
-        <table>
-        <thead>
-            <tr>
-                <th>Subject</th>
-                <th>Recording</th>
-                <th>Watch</th>
-                <th>Views</th>
-                <th>Uploaded</th>
-                <th>Action</th>
-            </tr>
-        </thead>
-        <tbody>
-            {''.join(record_rows)}
-        </tbody>
-        </table>
+        <div class="stats" style="margin-top:14px">
+            {stat("Total Uploads", total_uploads)}
+            {stat("Assignments", assignment_count)}
+            {stat("Recordings", recording_count)}
+            {stat("Documents", document_count)}
         </div>
-        """
 
-    if doc_rows:
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:14px">
 
-        uploads_html += f"""
-        <h3 style="margin-top:20px;color:#16a34a">📄 Documents</h3>
-        <div class="scroll-x">
-        <table>
-        <thead>
-            <tr>
-                <th>Subject</th>
-                <th>Document</th>
-                <th>File</th>
-                <th>Views</th>
-                <th>Uploaded</th>
-                <th>Action</th>
-            </tr>
-        </thead>
-        <tbody>
-            {''.join(doc_rows)}
-        </tbody>
-        </table>
+            <a class="card soft" href="{url_for('tutor_uploads_library')}?kind=assignments" style="text-decoration:none;color:inherit;border-left:5px solid #f59e0b">
+                <h3>Assignments</h3>
+                <p class="muted">View uploaded assignments and tasks.</p>
+                <span class="chip">{assignment_count} item(s)</span>
+            </a>
+
+            <a class="card soft" href="{url_for('tutor_uploads_library')}?kind=recordings" style="text-decoration:none;color:inherit;border-left:5px solid #2563eb">
+                <h3>Recordings</h3>
+                <p class="muted">View class recordings and video links.</p>
+                <span class="chip">{recording_count} item(s)</span>
+            </a>
+
+            <a class="card soft" href="{url_for('tutor_uploads_library')}?kind=documents" style="text-decoration:none;color:inherit;border-left:5px solid #16a34a">
+                <h3>Documents</h3>
+                <p class="muted">View notes, worksheets, PDFs, and resources.</p>
+                <span class="chip">{document_count} item(s)</span>
+            </a>
+
         </div>
-        """
-
-    if not uploads_html:
-        uploads_html = "<div class='empty'>No uploads yet.</div>"
-
+    </div>
+    """
+    
+   
+   
     # Assignments you posted (manage submissions)
     cur.execute("""
         SELECT m.id, m.title, m.due_date, m.max_points,
@@ -10916,7 +10826,7 @@ def tutor_home():
 
     {upload_block}
 
-    <div class='card'><h2>Your uploads</h2>{uploads_html}</div>
+    {uploads_html}
 
     <div class='card'><h2>Your assignments</h2>
         <div class="scroll-x"><table><thead><tr><th>Subject</th><th>Title</th><th>Due</th><th>Total</th><th>Manage</th></tr></thead><tbody>{asg_rows}</tbody></table></div>
@@ -10933,6 +10843,278 @@ def tutor_home():
     """
     return page("Tutor Portal", body)
     
+
+@app.get('/tutor/uploads')
+def tutor_uploads_library():
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    month = get_active_month('tutor')
+
+    q = request.args.get("q", "").strip()
+    kind = request.args.get("kind", "all").strip()
+
+    if kind not in ["all", "assignments", "recordings", "documents"]:
+        kind = "all"
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 10
+    offset = (page_num - 1) * per_page
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    where = [
+        "m.tutor_id = ?",
+        "m.month LIKE ?"
+    ]
+
+    params = [tid, month + "%"]
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                m.title LIKE ?
+                OR s.name LIKE ?
+                OR s.grade LIKE ?
+                OR m.kind LIKE ?
+            )
+        """)
+        params += [search, search, search, search]
+
+    if kind == "assignments":
+        where.append("(m.is_assignment = 1 OR m.kind = 'assignment')")
+
+    elif kind == "recordings":
+        where.append("(m.youtube_url IS NOT NULL AND TRIM(m.youtube_url) != '')")
+
+    elif kind == "documents":
+        where.append("""
+            (
+                (m.youtube_url IS NULL OR TRIM(m.youtube_url) = '')
+                AND COALESCE(m.is_assignment, 0) = 0
+                AND m.kind != 'assignment'
+            )
+        """)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM materials m
+        JOIN subjects s ON s.id = m.subject_id
+        {where_sql}
+    """, params)
+
+    total_records = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total_records + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT
+            m.*,
+            s.name AS subject_name,
+            s.grade
+        FROM materials m
+        JOIN subjects s ON s.id = m.subject_id
+        {where_sql}
+        ORDER BY m.created_at DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+
+    def can_delete(ts, admin_unlocked):
+        if admin_unlocked == 1:
+            return True
+
+        try:
+            created = datetime.datetime.fromisoformat(ts)
+            now = datetime.datetime.now(created.tzinfo) if created.tzinfo else datetime.datetime.now()
+            return (now - created) <= datetime.timedelta(hours=24)
+        except Exception:
+            return False
+
+    trs = ""
+
+    for m in rows:
+        when = (m["created_at"] or "")[:16].replace("T", " ")
+
+        is_assignment = (m["is_assignment"] == 1 or m["kind"] == "assignment")
+        is_recording = bool(m["youtube_url"])
+
+        if is_assignment:
+            type_chip = "<span class='chip pending'>Assignment</span>"
+            icon = "📝"
+        elif is_recording:
+            type_chip = "<span class='chip active'>Recording</span>"
+            icon = "🎥"
+        else:
+            type_chip = "<span class='chip'>Document</span>"
+            icon = "📄"
+
+        link = "—"
+
+        if m["file_path"]:
+            link = f"""
+            <a class="btn mini secondary" target="_blank" href="{m['file_path']}">
+                Download
+            </a>
+            """
+        elif m["youtube_url"]:
+            link = f"""
+            <a class="btn mini secondary" target="_blank" href="{m['youtube_url']}">
+                Watch
+            </a>
+            """
+
+        cur.execute("""
+            SELECT COUNT(DISTINCT student_id) AS c
+            FROM material_views
+            WHERE material_id = ?
+        """, (m["id"],))
+
+        viewed_total = cur.fetchone()["c"] or 0
+
+        views_btn = f"""
+        <a class="btn mini secondary"
+           href="/tutor/material/{m['id']}/views">
+            Views
+        </a>
+        """
+
+        if can_delete(m["created_at"], m["admin_unlocked"]):
+            action = f"""
+            <form method="post"
+                  action="{url_for('tutor_delete_material', mid=m['id'])}"
+                  style="display:inline"
+                  onsubmit="return confirm('Delete this upload?')">
+                <button class="btn danger mini">Delete</button>
+            </form>
+            """
+        else:
+            action = "<span class='muted mini'>Locked</span>"
+
+        trs += f"""
+        <tr>
+            <td>
+                {type_chip}
+                <div class="mini muted">{escape(m['kind'] or '—')}</div>
+            </td>
+
+            <td>
+                <strong>{icon} {escape(m['title'] or 'Untitled')}</strong>
+                <div class="mini muted">
+                    {grade_label(m['grade'])} — {escape(m['subject_name'])}
+                </div>
+            </td>
+
+            <td>{link}</td>
+
+            <td>
+                <span class="chip">{viewed_total}</span>
+            </td>
+
+            <td>{escape(when)}</td>
+
+            <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    {views_btn}
+                    {action}
+                </div>
+            </td>
+        </tr>
+        """
+
+    conn.close()
+
+    kind_options = f"""
+        <option value="all" {'selected' if kind == 'all' else ''}>All Uploads</option>
+        <option value="assignments" {'selected' if kind == 'assignments' else ''}>Assignments</option>
+        <option value="recordings" {'selected' if kind == 'recordings' else ''}>Recordings</option>
+        <option value="documents" {'selected' if kind == 'documents' else ''}>Documents</option>
+    """
+
+    body = f"""
+
+    <section class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+            <div>
+                <h1>Upload Library</h1>
+                <p class="muted">
+                    Manage your uploaded assignments, recordings, documents and resources for {pretty_month_label(month)}.
+                </p>
+            </div>
+
+            <a class="btn secondary" href="{url_for('tutor_home')}">
+                Back to Dashboard
+            </a>
+        </div>
+
+        <form method="get" class="toolbar" style="margin-top:14px">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search title, subject, grade or type">
+
+            <select name="kind">
+                {kind_options}
+            </select>
+
+            <button class="btn mini">Search</button>
+
+            <a class="btn mini secondary" href="{url_for('tutor_uploads_library')}">
+                Clear
+            </a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total_records} upload(s).
+        </div>
+
+        {pagination_controls("/tutor/uploads", page_num, total_pages, {"q": q, "kind": kind})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Upload</th>
+                        <th>File / Link</th>
+                        <th>Views</th>
+                        <th>Uploaded</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='6'>No uploads found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/tutor/uploads", page_num, total_pages, {"q": q, "kind": kind})}
+    </section>
+    """
+
+    return page("Tutor Upload Library", body)
+
 
 @app.get('/tutor/material/<int:mid>/views')
 def tutor_material_views(mid):
