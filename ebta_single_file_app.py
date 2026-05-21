@@ -1694,6 +1694,77 @@ def award_tutor_referral_reward(conn, tutor_id, referred_student_id, referral_co
         """, (tutor_id,))
 
 
+def recalculate_tutor_referral_totals(conn, tutor_id):
+    """
+    Recalculates tutor referral points and earnings after admin deletes a referral record.
+
+    Rules:
+    - 3 referrals in a cycle = R100
+    - 5 referrals in a cycle = R200
+    - After 5 referrals, current cycle points reset to 0
+    - Total referrals and total earnings are recalculated from existing referral records
+    """
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id
+        FROM tutor_referral_uses
+        WHERE tutor_id=?
+        ORDER BY created_at ASC, id ASC
+    """, (tutor_id,))
+
+    rows = cur.fetchall()
+
+    total_referrals = 0
+    current_cycle_points = 0
+    total_earnings = 0
+
+    for row in rows:
+        total_referrals += 1
+        current_cycle_points += 1
+
+        reward_amount = 0
+        reward_stage = "COUNTED"
+
+        if current_cycle_points == 3:
+            reward_amount = 100
+            reward_stage = "3_REFERRALS_R100"
+
+        elif current_cycle_points >= 5:
+            reward_amount = 200
+            reward_stage = "5_REFERRALS_R200"
+
+        total_earnings += reward_amount
+
+        cur.execute("""
+            UPDATE tutor_referral_uses
+            SET reward_amount=?,
+                reward_stage=?
+            WHERE id=?
+        """, (
+            reward_amount,
+            reward_stage,
+            row["id"]
+        ))
+
+        if current_cycle_points >= 5:
+            current_cycle_points = 0
+
+    cur.execute("""
+        UPDATE tutors
+        SET referral_points=?,
+            referral_total_count=?,
+            referral_earnings_total=?
+        WHERE id=?
+    """, (
+        current_cycle_points,
+        total_referrals,
+        total_earnings,
+        tutor_id
+    ))
+
+
 def ensure_all_student_referral_codes(conn):
     """
     Creates referral codes for older students who existed before this feature.
@@ -12079,6 +12150,7 @@ def admin_nav():
     if is_high_admin():
         links.extend([
             f"<a class='btn secondary' href='{url_for('admin_tutors')}'>Tutors</a>",
+            f"<a class='btn secondary' href='{url_for('admin_tutor_referrals')}'>Tutor Referrals</a>",
             f"<a class='btn secondary' href='{url_for('admin_groups')}'>Groups</a>",
             f"<a class='btn secondary' href='{url_for('admin_sessions')}'>Sessions</a>",
             f"<a class='btn secondary' href='{url_for('admin_messages')}'>Inbox</a>",
@@ -12154,6 +12226,7 @@ def admin_home():
     <a class='btn secondary' href='{url_for('admin_students')}'>Students</a>
     <a class='btn secondary' href='{url_for('admin_followups')}'>Follow-Ups</a>
     <a class='btn secondary' href='{url_for('admin_tutors')}'>Tutors</a>
+    <a class='btn secondary' href='{url_for('admin_tutor_referrals')}'>Tutor Referrals</a>
     <a class='btn secondary' href='{url_for('admin_groups')}'>Group links</a>
     <a class='btn secondary' href='{url_for('admin_sessions')}'>Sessions & QR</a>
     <a class='btn secondary' href='{url_for('admin_messages')}'>Inbox</a>
@@ -40674,6 +40747,328 @@ def admission_parents_notifications():
         base_path="/admission/parents-notifications",
         clear_endpoint="admission_parents_notifications"
     )
+    
+    
+@app.get('/admin/tutor-referrals')
+def admin_tutor_referrals():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can manage tutor referrals."))
+
+    q = request.args.get("q", "").strip()
+    month = request.args.get("month", "").strip()
+    tutor_id = request.args.get("tutor_id", "").strip()
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    limit = 15
+    offset = (page_num - 1) * limit
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                t.full_name LIKE ?
+                OR t.phone LIKE ?
+                OR t.referral_code LIKE ?
+                OR s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR s.guardian_phone LIKE ?
+                OR s.school LIKE ?
+                OR s.province LIKE ?
+                OR tru.referral_code LIKE ?
+                OR tru.reward_stage LIKE ?
+            )
+        """)
+        params += [
+            search, search, search, search, search,
+            search, search, search, search, search
+        ]
+
+    if month:
+        where.append("tru.enrollment_month = ?")
+        params.append(month)
+
+    if tutor_id:
+        where.append("t.id = ?")
+        params.append(tutor_id)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM tutor_referral_uses tru
+        JOIN tutors t ON t.id = tru.tutor_id
+        JOIN students s ON s.id = tru.referred_student_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * limit
+
+    data_params = list(params)
+    data_params.extend([limit, offset])
+
+    cur.execute(f"""
+        SELECT
+            tru.id,
+            tru.tutor_id,
+            tru.referred_student_id,
+            tru.referral_code,
+            tru.enrollment_month,
+            tru.reward_amount,
+            tru.reward_stage,
+            tru.created_at,
+
+            t.full_name AS tutor_name,
+            t.phone AS tutor_phone,
+            t.referral_code AS tutor_current_code,
+            COALESCE(t.referral_points, 0) AS tutor_points,
+            COALESCE(t.referral_total_count, 0) AS tutor_total_count,
+            COALESCE(t.referral_earnings_total, 0) AS tutor_total_earnings,
+
+            s.full_name AS student_name,
+            s.phone_whatsapp AS student_phone,
+            s.guardian_name,
+            s.guardian_phone,
+            s.grade,
+            s.school,
+            s.province
+        FROM tutor_referral_uses tru
+        JOIN tutors t ON t.id = tru.tutor_id
+        JOIN students s ON s.id = tru.referred_student_id
+        {where_sql}
+        ORDER BY tru.created_at DESC, tru.id DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT id, full_name, phone, referral_code
+        FROM tutors
+        ORDER BY full_name
+    """)
+
+    tutors = cur.fetchall()
+
+    conn.close()
+
+    tutor_options = ""
+
+    for t in tutors:
+        selected = "selected" if tutor_id and str(t["id"]) == str(tutor_id) else ""
+        tutor_options += f"""
+        <option value="{t['id']}" {selected}>
+            {escape(t['full_name'])} - {escape(t['referral_code'] or 'No code')}
+        </option>
+        """
+
+    trs = ""
+
+    for r in rows:
+        reward_html = "<span class='chip'>Counted</span>"
+
+        if float(r["reward_amount"] or 0) > 0:
+            reward_html = f"""
+            <span class="chip active">
+                Reward: R{int(r['reward_amount'])}
+            </span>
+            <div class="mini muted">
+                {escape(r['reward_stage'] or '—')}
+            </div>
+            """
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(r['tutor_name'] or 'Tutor')}</strong>
+                <div class="mini muted">
+                    Phone: {escape(r['tutor_phone'] or '—')}
+                </div>
+                <div class="mini muted">
+                    Code: {escape(r['tutor_current_code'] or r['referral_code'] or '—')}
+                </div>
+            </td>
+
+            <td>
+                <strong>{escape(r['student_name'] or 'Learner')}</strong>
+                <div class="mini muted">
+                    {grade_label(r['grade']) if r['grade'] else '—'} | {escape(r['student_phone'] or '—')}
+                </div>
+                <div class="mini muted">
+                    Guardian: {escape(r['guardian_name'] or '—')} | {escape(r['guardian_phone'] or '—')}
+                </div>
+            </td>
+
+            <td>
+                {escape(r['enrollment_month'] or '—')}
+                <div class="mini muted">
+                    Added: {escape((r['created_at'] or '')[:16].replace('T', ' '))}
+                </div>
+            </td>
+
+            <td>
+                {escape(r['school'] or '—')}
+                <div class="mini muted">
+                    {escape(r['province'] or '—')}
+                </div>
+            </td>
+
+            <td>
+                {reward_html}
+            </td>
+
+            <td>
+                <div class="mini muted">
+                    Current Points: {r['tutor_points'] or 0} / 5<br>
+                    Total Referrals: {r['tutor_total_count'] or 0}<br>
+                    Total Earned: R{float(r['tutor_total_earnings'] or 0):.2f}
+                </div>
+            </td>
+
+            <td>
+                <form method="post"
+                      action="{url_for('admin_delete_tutor_referral', referral_id=r['id'])}"
+                      onsubmit="return confirm('Remove this learner from the tutor referral list? This will recalculate the tutor points and earnings. The learner account will NOT be deleted.');">
+                    <button class="btn danger mini">
+                        Delete Referral
+                    </button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Tutor Referral Management</h1>
+
+        <p class="muted">
+            View learners who used tutor referral codes. High Admin can remove incorrect referral records.
+            This does not delete the learner account or enrollment, it only removes the tutor referral credit.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search tutor, learner, phone, school, province, code or reward">
+
+            <input type="month"
+                   name="month"
+                   value="{escape(month)}">
+
+            <select name="tutor_id">
+                <option value="">All Tutors</option>
+                {tutor_options}
+            </select>
+
+            <button class="btn mini">Search</button>
+
+            <a class="btn mini secondary" href="{url_for('admin_tutor_referrals')}">
+                Clear
+            </a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} tutor referral record(s).
+        </div>
+
+        {pagination_controls("/admin/tutor-referrals", page_num, total_pages, {"q": q, "month": month, "tutor_id": tutor_id})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Tutor</th>
+                        <th>Student Who Used Code</th>
+                        <th>Month</th>
+                        <th>School / Province</th>
+                        <th>Reward</th>
+                        <th>Tutor Totals</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No tutor referral records found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/admin/tutor-referrals", page_num, total_pages, {"q": q, "month": month, "tutor_id": tutor_id})}
+    </section>
+    """
+
+    return page("Tutor Referral Management", body)
+    
+    
+@app.post('/admin/tutor-referrals/<int:referral_id>/delete')
+def admin_delete_tutor_referral(referral_id):
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can delete tutor referral records."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            id,
+            tutor_id,
+            referred_student_id,
+            referral_code,
+            reward_amount
+        FROM tutor_referral_uses
+        WHERE id=?
+        LIMIT 1
+    """, (referral_id,))
+
+    row = cur.fetchone()
+
+    if not row:
+        conn.close()
+        return page("Not Found", card_msg("Tutor referral record not found."))
+
+    tutor_id = row["tutor_id"]
+
+    cur.execute("""
+        DELETE FROM tutor_referral_uses
+        WHERE id=?
+    """, (referral_id,))
+
+    recalculate_tutor_referral_totals(conn, tutor_id)
+
+    conn.commit()
+    conn.close()
+
+    return redirect(request.referrer or url_for("admin_tutor_referrals"))    
+    
 
 # --- Admin: Analytics dashboard ---
 
