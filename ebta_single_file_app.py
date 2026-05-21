@@ -31141,10 +31141,35 @@ def secretary_action_done(action_id):
 def admin_secretary_logs():
 
     r = require_admin()
-    if r: return r
+    if r:
+        return r
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 10
+    offset = (page_num - 1) * per_page
 
     conn = get_db()
     cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM secretary_communication_logs l
+        JOIN secretaries s ON s.id = l.secretary_id
+    """)
+
+    total_records = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total_records + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
 
     cur.execute("""
         SELECT 
@@ -31153,7 +31178,8 @@ def admin_secretary_logs():
         FROM secretary_communication_logs l
         JOIN secretaries s ON s.id = l.secretary_id
         ORDER BY l.created_at DESC
-    """)
+        LIMIT ? OFFSET ?
+    """, (per_page, offset))
 
     rows = cur.fetchall()
     conn.close()
@@ -31162,6 +31188,7 @@ def admin_secretary_logs():
 
     for log in rows:
         proof = "—"
+
         if log["proof_file_path"] and os.path.exists(log["proof_file_path"]):
             proof = f"""
             <a class="btn mini secondary" target="_blank" href="/admin/secretary/log/{log['id']}/proof">
@@ -31189,6 +31216,12 @@ def admin_secretary_logs():
     <section class="card">
         <h1>Secretary Communication Logs</h1>
 
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total_records} communication log(s).
+        </div>
+
+        {pagination_controls("/admin/secretary/logs", page_num, total_pages)}
+
         <div class="scroll-x">
             <table>
                 <thead>
@@ -31201,11 +31234,14 @@ def admin_secretary_logs():
                         <th>Proof</th>
                     </tr>
                 </thead>
+
                 <tbody>
                     {trs or "<tr><td colspan='6'>No communication logs yet.</td></tr>"}
                 </tbody>
             </table>
         </div>
+
+        {pagination_controls("/admin/secretary/logs", page_num, total_pages)}
     </section>
     """
 
@@ -31249,10 +31285,48 @@ def admin_secretary_log_proof(log_id):
 def admin_secretary_minutes():
 
     r = require_admin()
-    if r: return r
+    if r:
+        return r
+
+    try:
+        minutes_page = int(request.args.get("minutes_page", 1))
+    except:
+        minutes_page = 1
+
+    try:
+        actions_page = int(request.args.get("actions_page", 1))
+    except:
+        actions_page = 1
+
+    if minutes_page < 1:
+        minutes_page = 1
+
+    if actions_page < 1:
+        actions_page = 1
+
+    per_page = 10
+    minutes_offset = (minutes_page - 1) * per_page
+    actions_offset = (actions_page - 1) * per_page
 
     conn = get_db()
     cur = conn.cursor()
+
+    # ================= MEETING MINUTES COUNT =================
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM secretary_meeting_minutes m
+        JOIN secretaries s ON s.id = m.secretary_id
+    """)
+
+    total_minutes = cur.fetchone()["c"] or 0
+    total_minutes_pages = max(1, (total_minutes + per_page - 1) // per_page)
+
+    if minutes_page > total_minutes_pages:
+        minutes_page = total_minutes_pages
+        minutes_offset = (minutes_page - 1) * per_page
+
+    # ================= MEETING MINUTES DATA =================
 
     cur.execute("""
         SELECT 
@@ -31261,9 +31335,27 @@ def admin_secretary_minutes():
         FROM secretary_meeting_minutes m
         JOIN secretaries s ON s.id = m.secretary_id
         ORDER BY m.meeting_date DESC, m.created_at DESC
-    """)
+        LIMIT ? OFFSET ?
+    """, (per_page, minutes_offset))
 
     rows = cur.fetchall()
+
+    # ================= ACTION ITEMS COUNT =================
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM secretary_action_items a
+        JOIN secretaries s ON s.id = a.secretary_id
+    """)
+
+    total_actions = cur.fetchone()["c"] or 0
+    total_actions_pages = max(1, (total_actions + per_page - 1) // per_page)
+
+    if actions_page > total_actions_pages:
+        actions_page = total_actions_pages
+        actions_offset = (actions_page - 1) * per_page
+
+    # ================= ACTION ITEMS DATA =================
 
     cur.execute("""
         SELECT 
@@ -31279,7 +31371,8 @@ def admin_secretary_minutes():
                 ELSE 4
             END,
             a.deadline ASC
-    """)
+        LIMIT ? OFFSET ?
+    """, (per_page, actions_offset))
 
     actions = cur.fetchall()
     conn.close()
@@ -31320,6 +31413,48 @@ def admin_secretary_minutes():
         </tr>
         """
 
+    def admin_secretary_pager(section, current_page, total_pages):
+        if total_pages <= 1:
+            return ""
+
+        links = []
+
+        def make_link(label, target_page, css="secondary"):
+            params = {
+                "minutes_page": minutes_page,
+                "actions_page": actions_page
+            }
+
+            if section == "minutes":
+                params["minutes_page"] = target_page
+            else:
+                params["actions_page"] = target_page
+
+            return f"""
+            <a class="btn mini {css}" href="/admin/secretary/minutes?{urlencode(params)}">
+                {label}
+            </a>
+            """
+
+        if current_page > 1:
+            links.append(make_link("First", 1))
+            links.append(make_link("Prev", current_page - 1))
+
+        links.append(f"<span class='chip'>Page {current_page} / {total_pages}</span>")
+
+        if current_page < total_pages:
+            links.append(make_link("Next", current_page + 1))
+            links.append(make_link("Last", total_pages))
+
+        return f"""
+        <div class="toolbar" style="justify-content:center;margin:12px 0;gap:6px;flex-wrap:wrap">
+            {''.join(links)}
+        </div>
+        """
+
+    minutes_pagination = admin_secretary_pager("minutes", minutes_page, total_minutes_pages)
+    actions_pagination = admin_secretary_pager("actions", actions_page, total_actions_pages)
+
     body = f"""
     {admin_nav()}
 
@@ -31327,6 +31462,12 @@ def admin_secretary_minutes():
         <h1>Secretary Meeting Minutes</h1>
 
         <h2>Minutes Archive</h2>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total_minutes} meeting minute record(s).
+        </div>
+
+        {minutes_pagination}
 
         <div class="scroll-x">
             <table>
@@ -31338,13 +31479,22 @@ def admin_secretary_minutes():
                         <th>Status</th>
                     </tr>
                 </thead>
+
                 <tbody>
                     {minute_rows or "<tr><td colspan='4'>No meeting minutes yet.</td></tr>"}
                 </tbody>
             </table>
         </div>
 
-        <h2 style="margin-top:20px">Action Items</h2>
+        {minutes_pagination}
+
+        <h2 style="margin-top:24px">Action Items</h2>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(actions)} of {total_actions} action item(s).
+        </div>
+
+        {actions_pagination}
 
         <div class="scroll-x">
             <table>
@@ -31358,11 +31508,14 @@ def admin_secretary_minutes():
                         <th>Status</th>
                     </tr>
                 </thead>
+
                 <tbody>
                     {action_rows or "<tr><td colspan='6'>No action items yet.</td></tr>"}
                 </tbody>
             </table>
         </div>
+
+        {actions_pagination}
     </section>
     """
 
