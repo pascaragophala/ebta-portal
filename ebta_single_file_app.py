@@ -7603,8 +7603,6 @@ def student_home():
             <p class='muted' style="margin-bottom:6px">
                 Currently viewing: <b>{pretty_month_label(month)}</b>
             </p>
-
-            {profile_section}
             {month_selector}
             {referral_section}
 
