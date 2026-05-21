@@ -912,6 +912,28 @@ def init_db():
         FOREIGN KEY(referred_student_id) REFERENCES students(id) ON DELETE CASCADE
     );
     """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS tutor_referral_uses(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        tutor_id INTEGER NOT NULL,
+        referred_student_id INTEGER NOT NULL,
+
+        referral_code TEXT NOT NULL,
+        enrollment_month TEXT,
+
+        reward_amount REAL NOT NULL DEFAULT 0,
+        reward_stage TEXT,
+
+        created_at TEXT NOT NULL,
+
+        UNIQUE(tutor_id, referred_student_id),
+
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE,
+        FOREIGN KEY(referred_student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
 
     
     ensure_column(conn, "students", "guardian_name", "TEXT")
@@ -944,6 +966,11 @@ def init_db():
     ensure_column(conn, "students", "referral_code", "TEXT")
     ensure_column(conn, "students", "referral_points", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "students", "referral_total_count", "INTEGER NOT NULL DEFAULT 0")
+    
+    ensure_column(conn, "tutors", "referral_code", "TEXT")
+    ensure_column(conn, "tutors", "referral_points", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "tutors", "referral_total_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "tutors", "referral_earnings_total", "REAL NOT NULL DEFAULT 0")
 
     ensure_column(conn, "enrollments", "coupon_code", "TEXT")
     ensure_column(conn, "enrollments", "coupon_discount_amount", "REAL NOT NULL DEFAULT 0")
@@ -1022,6 +1049,10 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_discount_coupons_code ON discount_coupons(code)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_discount_coupons_target ON discount_coupons(target_student_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_referral_uses_referrer ON referral_uses(referrer_student_id)")
+    
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tutors_referral_code ON tutors(referral_code)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_referral_uses_tutor ON tutor_referral_uses(tutor_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_referral_uses_student ON tutor_referral_uses(referred_student_id)")
 
 
     cur.execute("""
@@ -1502,6 +1533,167 @@ def ensure_student_referral_code(conn, student_id):
     return code
 
 
+def ensure_tutor_referral_code(conn, tutor_id):
+    """
+    Every tutor gets one permanent referral code.
+    Example: TUT-7K9Q2M
+    """
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT referral_code
+        FROM tutors
+        WHERE id=?
+        LIMIT 1
+    """, (tutor_id,))
+
+    row = cur.fetchone()
+
+    if row and row["referral_code"]:
+        return row["referral_code"]
+
+    while True:
+        code = generate_short_code("TUT", 6)
+
+        cur.execute("""
+            SELECT id
+            FROM tutors
+            WHERE referral_code=?
+            LIMIT 1
+        """, (code,))
+
+        if not cur.fetchone():
+            break
+
+    cur.execute("""
+        UPDATE tutors
+        SET referral_code=?
+        WHERE id=?
+    """, (code, tutor_id))
+
+    return code
+
+
+def ensure_all_tutor_referral_codes(conn):
+    """
+    Creates referral codes for older tutors who existed before this feature.
+    """
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id
+        FROM tutors
+        WHERE referral_code IS NULL
+           OR TRIM(referral_code) = ''
+    """)
+
+    rows = cur.fetchall()
+
+    for r in rows:
+        ensure_tutor_referral_code(conn, r["id"])
+
+
+def award_tutor_referral_reward(conn, tutor_id, referred_student_id, referral_code, month):
+    """
+    Tutor referral reward rules:
+    - Only new students should be awarded before this function is called.
+    - Same referred student can only count once for the same tutor.
+    - 3 referrals = R100
+    - 5 referrals = R200
+    - At 5, cycle points reset to 0.
+    - Total referrals and total earnings stay cumulative.
+    """
+
+    if not tutor_id or not referred_student_id:
+        return
+
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            INSERT INTO tutor_referral_uses(
+                tutor_id,
+                referred_student_id,
+                referral_code,
+                enrollment_month,
+                reward_amount,
+                reward_stage,
+                created_at
+            )
+            VALUES(?,?,?,?,?,?,?)
+        """, (
+            tutor_id,
+            referred_student_id,
+            referral_code,
+            month,
+            0,
+            "COUNTED",
+            now_utc_iso()
+        ))
+
+    except sqlite3.IntegrityError:
+        # This learner was already counted for this tutor.
+        return
+
+    cur.execute("""
+        UPDATE tutors
+        SET referral_points = COALESCE(referral_points, 0) + 1,
+            referral_total_count = COALESCE(referral_total_count, 0) + 1
+        WHERE id=?
+    """, (tutor_id,))
+
+    cur.execute("""
+        SELECT referral_points
+        FROM tutors
+        WHERE id=?
+        LIMIT 1
+    """, (tutor_id,))
+
+    row = cur.fetchone()
+    points = int(row["referral_points"] or 0) if row else 0
+
+    reward_amount = 0
+    reward_stage = "COUNTED"
+
+    if points == 3:
+        reward_amount = 100
+        reward_stage = "3_REFERRALS_R100"
+
+    elif points >= 5:
+        reward_amount = 200
+        reward_stage = "5_REFERRALS_R200"
+
+    if reward_amount > 0:
+        cur.execute("""
+            UPDATE tutor_referral_uses
+            SET reward_amount=?,
+                reward_stage=?
+            WHERE tutor_id=?
+              AND referred_student_id=?
+        """, (
+            reward_amount,
+            reward_stage,
+            tutor_id,
+            referred_student_id
+        ))
+
+        cur.execute("""
+            UPDATE tutors
+            SET referral_earnings_total = COALESCE(referral_earnings_total, 0) + ?
+            WHERE id=?
+        """, (
+            reward_amount,
+            tutor_id
+        ))
+
+    if points >= 5:
+        cur.execute("""
+            UPDATE tutors
+            SET referral_points = 0
+            WHERE id=?
+        """, (tutor_id,))
+
+
 def ensure_all_student_referral_codes(conn):
     """
     Creates referral codes for older students who existed before this feature.
@@ -1571,7 +1763,8 @@ def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subt
             "code_type": "NONE",
             "discount_amount": 0,
             "coupon_id": None,
-            "referral_owner_id": None
+            "referral_owner_id": None,
+            "tutor_referrer_id": None
         }
 
     cur = conn.cursor()
@@ -1598,7 +1791,8 @@ def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subt
                 "code_type": "INVALID",
                 "discount_amount": 0,
                 "coupon_id": None,
-                "referral_owner_id": None
+                "referral_owner_id": None,
+                "tutor_referrer_id": None
             }
 
         discount_percent = int(coupon["discount_percent"] or 0)
@@ -1610,7 +1804,8 @@ def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subt
                 "code_type": "INVALID",
                 "discount_amount": 0,
                 "coupon_id": None,
-                "referral_owner_id": None
+                "referral_owner_id": None,
+                "tutor_referrer_id": None
             }
 
         subject_ids_str = [str(x) for x in subject_ids]
@@ -1628,7 +1823,8 @@ def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subt
                     "code_type": "INVALID",
                     "discount_amount": 0,
                     "coupon_id": None,
-                    "referral_owner_id": None
+                    "referral_owner_id": None,
+                    "tutor_referrer_id": None
                 }
 
             discount_base = fee_map.get(subject_id, 0)
@@ -1643,7 +1839,8 @@ def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subt
                     "code_type": "INVALID",
                     "discount_amount": 0,
                     "coupon_id": None,
-                    "referral_owner_id": None
+                    "referral_owner_id": None,
+                    "tutor_referrer_id": None
                 }
 
             discount_base = max(fee_map.values())
@@ -1656,10 +1853,11 @@ def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subt
             "code_type": coupon["source"] or "MANUAL",
             "discount_amount": discount_amount,
             "coupon_id": coupon["id"],
-            "referral_owner_id": None
+            "referral_owner_id": None,
+            "tutor_referrer_id": None
         }
 
-    # 2. Check referral code
+    # 2. Check student referral code
     cur.execute("""
         SELECT id, full_name
         FROM students
@@ -1677,16 +1875,39 @@ def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subt
                 "code_type": "INVALID",
                 "discount_amount": 0,
                 "coupon_id": None,
-                "referral_owner_id": None
+                "referral_owner_id": None,
+                "tutor_referrer_id": None
             }
 
         return {
             "valid": True,
-            "message": "Referral code accepted. It does not discount this enrollment.",
+            "message": "Student referral code accepted. It does not discount this enrollment.",
             "code_type": "REFERRAL_ONLY",
             "discount_amount": 0,
             "coupon_id": None,
-            "referral_owner_id": referrer["id"]
+            "referral_owner_id": referrer["id"],
+            "tutor_referrer_id": None
+        }
+
+    # 3. Check tutor referral code
+    cur.execute("""
+        SELECT id, full_name
+        FROM tutors
+        WHERE UPPER(referral_code)=?
+        LIMIT 1
+    """, (code,))
+
+    tutor_referrer = cur.fetchone()
+
+    if tutor_referrer:
+        return {
+            "valid": True,
+            "message": "Tutor referral code accepted. It does not discount this enrollment.",
+            "code_type": "TUTOR_REFERRAL",
+            "discount_amount": 0,
+            "coupon_id": None,
+            "referral_owner_id": None,
+            "tutor_referrer_id": tutor_referrer["id"]
         }
 
     return {
@@ -1695,9 +1916,9 @@ def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subt
         "code_type": "INVALID",
         "discount_amount": 0,
         "coupon_id": None,
-        "referral_owner_id": None
+        "referral_owner_id": None,
+        "tutor_referrer_id": None
     }
-
 
 def award_referral_point_and_rewards(conn, referrer_student_id, referred_student_id, referral_code, month):
     """
@@ -5960,6 +6181,17 @@ def register():
     is_new_referral_student = is_first_time_student(conn, sid)
     
     created = []
+    
+    # Check if this learner is completely new before this enrollment is created.
+    # Tutor referral rewards must only count new students.
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM enrollments
+        WHERE student_id=?
+    """, (sid,))
+
+    existing_enrollment_count = cur.fetchone()["c"] or 0
+    is_new_student_for_referral = existing_enrollment_count == 0
 
     for subid in subject_ids:
         if subid in existing:
@@ -6000,7 +6232,7 @@ def register():
             coupon_code if coupon_code else None,
             coupon_discount,
             coupon_result["code_type"],
-            coupon_code if coupon_result["code_type"] == "REFERRAL_ONLY" else None,
+            coupon_code if coupon_result["code_type"] in ["REFERRAL_ONLY", "TUTOR_REFERRAL"] else None,
             token,
             now_utc_iso()
         ))
@@ -6062,6 +6294,16 @@ def register():
                 coupon_result.get("referral_owner_id"),
                 sid,
                 coupon_code,
+                month
+            )
+        # Tutor referral reward
+        # This only counts if the learner is new to EBTA.
+        if is_new_student_for_referral and coupon_result.get("tutor_referrer_id"):
+            award_tutor_referral_reward(
+                conn,
+                coupon_result.get("tutor_referrer_id"),
+                sid,
+                coupon_code.strip().upper() if coupon_code else "",
                 month
             )
 
@@ -9222,6 +9464,177 @@ def tutor_home():
                 WHERE ts.tutor_id=? ORDER BY s.grade,s.name""",(tid,))
     subs=cur.fetchall()
     assigned_list=", ".join([f"{grade_label(r['grade'])} — {r['subject_name']}" for r in subs]) or "<span class='muted'>No subjects assigned yet.</span>"
+    
+    # ================= TUTOR REFERRAL SECTION =================
+
+    ensure_tutor_referral_code(conn, tid)
+    conn.commit()
+
+    cur.execute("""
+        SELECT
+            referral_code,
+            COALESCE(referral_points, 0) AS referral_points,
+            COALESCE(referral_total_count, 0) AS referral_total_count,
+            COALESCE(referral_earnings_total, 0) AS referral_earnings_total
+        FROM tutors
+        WHERE id=?
+        LIMIT 1
+    """, (tid,))
+
+    tutor_ref = cur.fetchone()
+
+    tutor_referral_code = tutor_ref["referral_code"] if tutor_ref else "—"
+    tutor_referral_points = int(tutor_ref["referral_points"] or 0) if tutor_ref else 0
+    tutor_referral_total = int(tutor_ref["referral_total_count"] or 0) if tutor_ref else 0
+    tutor_referral_earnings = float(tutor_ref["referral_earnings_total"] or 0) if tutor_ref else 0
+
+    next_reward_text = "Refer 3 new students to earn R100."
+
+    if tutor_referral_points >= 3:
+        next_reward_text = "You have reached 3 referrals. Refer 2 more new students to reach 5 and earn R200."
+    elif tutor_referral_points > 0:
+        next_reward_text = f"{3 - tutor_referral_points} more new referral(s) needed to earn R100."
+
+    cur.execute("""
+        SELECT
+            tru.id,
+            tru.referral_code,
+            tru.enrollment_month,
+            tru.reward_amount,
+            tru.reward_stage,
+            tru.created_at,
+            s.full_name AS student_name,
+            s.phone_whatsapp,
+            s.grade,
+            s.school,
+            s.province
+        FROM tutor_referral_uses tru
+        JOIN students s ON s.id = tru.referred_student_id
+        WHERE tru.tutor_id=?
+        ORDER BY tru.created_at DESC
+        LIMIT 30
+    """, (tid,))
+
+    tutor_referrals = cur.fetchall()
+
+    referral_rows = ""
+
+    for r in tutor_referrals:
+        reward_chip = "<span class='chip'>Counted</span>"
+
+        if float(r["reward_amount"] or 0) > 0:
+            reward_chip = f"<span class='chip active'>Reward: R{int(r['reward_amount'])}</span>"
+
+        referral_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(r['student_name'] or 'Learner')}</strong>
+                <div class="mini muted">
+                    {grade_label(r['grade']) if r['grade'] else '—'} | {escape(r['phone_whatsapp'] or '—')}
+                </div>
+            </td>
+
+            <td>
+                {escape(r['enrollment_month'] or '—')}
+                <div class="mini muted">
+                    {escape((r['created_at'] or '')[:16].replace('T',' '))}
+                </div>
+            </td>
+
+            <td>
+                {escape(r['school'] or '—')}
+                <div class="mini muted">
+                    {escape(r['province'] or '—')}
+                </div>
+            </td>
+
+            <td>{reward_chip}</td>
+        </tr>
+        """
+
+    tutor_referral_section = f"""
+    <div class="card soft" style="border-left:5px solid #f59e0b">
+
+        <h2>Tutor Referral Earnings</h2>
+
+        <p class="muted">
+            Share your tutor referral code with new EBTA learners.
+            Rewards are counted only when a new learner enrolls using your code.
+        </p>
+
+        <div style="
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:12px;
+            flex-wrap:wrap;
+            margin:14px 0;
+        ">
+
+            <div>
+                <div class="mini muted">Your Tutor Referral Code</div>
+
+                <span class="chip" style="
+                    font-size:18px;
+                    padding:10px 14px;
+                    letter-spacing:1px;
+                    font-weight:800;
+                ">
+                    {escape(tutor_referral_code)}
+                </span>
+            </div>
+
+            <div class="toolbar" style="gap:8px;flex-wrap:wrap">
+                <span class="chip active">
+                    Current Referrals: {tutor_referral_points} / 5
+                </span>
+
+                <span class="chip">
+                    Total Referrals: {tutor_referral_total}
+                </span>
+
+                <span class="chip active">
+                    Total Earned: R{tutor_referral_earnings:.2f}
+                </span>
+            </div>
+
+        </div>
+
+        <div class="card soft" style="border-left:4px solid #1b5e20;margin-bottom:12px">
+            <strong>Reward Rules</strong>
+
+            <div class="mini muted" style="margin-top:4px">
+                3 new student referrals = R100<br>
+                5 new student referrals = R200<br>
+                Returning students do not count.
+            </div>
+
+            <div class="mini muted" style="margin-top:8px">
+                {escape(next_reward_text)}
+            </div>
+        </div>
+
+        <h3>Students Who Used Your Code</h3>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Enrollment Month</th>
+                        <th>School / Province</th>
+                        <th>Reward</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {referral_rows or "<tr><td colspan='4'>No tutor referrals yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+    </div>
+    """
 
     # WhatsApp links for current month
     # WhatsApp group links (persistent, not month-based)
@@ -10402,7 +10815,8 @@ def tutor_home():
 
     </div>
 
-
+    {tutor_referral_section}
+    
     <div class='card'><h2>WhatsApp Group Links</h2>{groups_html}</div>
 
     <div class='card'><h2>Your sessions</h2>
