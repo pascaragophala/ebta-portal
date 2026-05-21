@@ -27892,6 +27892,29 @@ def treasurer_dashboard():
     """, (month,))
     payment_statuses = cur.fetchall()
 
+    # ================= DAILY MOVEMENT =================
+
+    cur.execute("""
+        SELECT
+            COALESCE(payment_date, substr(captured_at, 1, 10)) AS day,
+            record_type,
+            COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=?
+        GROUP BY day, record_type
+        ORDER BY day ASC
+    """, (month,))
+    daily_rows = cur.fetchall()
+
+    # ================= PAYMENT AMOUNT HISTOGRAM =================
+
+    cur.execute("""
+        SELECT amount
+        FROM finance_payment_schedule
+        WHERE month=?
+    """, (month,))
+    payment_amount_rows = cur.fetchall()
+
     # ================= RECENT FINANCE RECORDS =================
 
     cur.execute("""
@@ -27906,92 +27929,99 @@ def treasurer_dashboard():
     conn.close()
 
     net = total_income - total_expenses
-
-    total_movement = total_income + total_expenses
-    income_percent = 0
-    expense_percent = 0
-
-    if total_movement > 0:
-        income_percent = round((total_income / total_movement) * 100)
-        expense_percent = round((total_expenses / total_movement) * 100)
-
-    payment_total = pending_payments + paid_payments
-    paid_percent = 0
-    pending_percent = 0
-
-    if payment_total > 0:
-        paid_percent = round((paid_payments / payment_total) * 100)
-        pending_percent = round((pending_payments / payment_total) * 100)
-
     net_status = "Positive" if net >= 0 else "Negative"
     net_chip = "active" if net >= 0 else "lapsed"
 
-    # ================= VISUAL HELPERS =================
+    # ================= CHART DATA =================
 
-    def progress_bar(label, amount, percent, chip_class="active"):
-        return f"""
-        <div style="margin-bottom:12px">
-            <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
-                <div>
-                    <strong>{escape(label)}</strong>
-                    <div class="mini muted">R{float(amount or 0):,.2f}</div>
-                </div>
-                <span class="chip {chip_class}">{percent}%</span>
-            </div>
+    income_vs_expenses_data = {
+        "labels": ["Income", "Expenses"],
+        "values": [total_income, total_expenses]
+    }
 
-            <div style="
-                height:12px;
-                background:#edf2f7;
-                border-radius:999px;
-                overflow:hidden;
-                margin-top:6px;
-                border:1px solid #dbe4ef;
-            ">
-                <div style="
-                    height:100%;
-                    width:{max(0, min(100, int(percent or 0)))}%;
-                    background:#1b5e20;
-                    border-radius:999px;
-                "></div>
-            </div>
-        </div>
-        """
+    payment_status_chart = {
+        "labels": [p["status"] or "UNKNOWN" for p in payment_statuses],
+        "values": [float(p["total"] or 0) for p in payment_statuses],
+        "counts": [int(p["count"] or 0) for p in payment_statuses]
+    }
 
-    def category_rows(rows, total_amount):
-        html = ""
+    income_category_chart = {
+        "labels": [r["category"] or "Uncategorised" for r in income_categories],
+        "values": [float(r["total"] or 0) for r in income_categories]
+    }
 
-        for r in rows:
-            amount = float(r["total"] or 0)
-            percent = round((amount / total_amount) * 100) if total_amount > 0 else 0
+    expense_category_chart = {
+        "labels": [r["category"] or "Uncategorised" for r in expense_categories],
+        "values": [float(r["total"] or 0) for r in expense_categories]
+    }
 
-            html += f"""
-            <div style="margin-bottom:10px">
-                <div style="display:flex;justify-content:space-between;gap:10px">
-                    <strong>{escape(r['category'] or 'Uncategorised')}</strong>
-                    <span>R{amount:,.2f}</span>
-                </div>
+    # Build daily movement labels
+    daily_map = {}
 
-                <div style="
-                    height:9px;
-                    background:#edf2f7;
-                    border-radius:999px;
-                    overflow:hidden;
-                    margin-top:5px;
-                    border:1px solid #dbe4ef;
-                ">
-                    <div style="
-                        height:100%;
-                        width:{max(0, min(100, percent))}%;
-                        background:#1b5e20;
-                        border-radius:999px;
-                    "></div>
-                </div>
+    for r in daily_rows:
+        day = r["day"] or "Unknown"
 
-                <div class="mini muted">{percent}% of total</div>
-            </div>
-            """
+        if day not in daily_map:
+            daily_map[day] = {
+                "income": 0,
+                "expenses": 0
+            }
 
-        return html or "<div class='empty'>No category data found for this month.</div>"
+        if r["record_type"] == "INCOME":
+            daily_map[day]["income"] += float(r["total"] or 0)
+        else:
+            daily_map[day]["expenses"] += float(r["total"] or 0)
+
+    daily_labels = list(daily_map.keys())
+    daily_income_values = [daily_map[d]["income"] for d in daily_labels]
+    daily_expense_values = [daily_map[d]["expenses"] for d in daily_labels]
+
+    daily_chart = {
+        "labels": daily_labels,
+        "income": daily_income_values,
+        "expenses": daily_expense_values
+    }
+
+    # Histogram-style buckets for scheduled payments
+    buckets = {
+        "R0 - R500": 0,
+        "R501 - R1 000": 0,
+        "R1 001 - R2 500": 0,
+        "R2 501 - R5 000": 0,
+        "R5 001+": 0
+    }
+
+    for r in payment_amount_rows:
+        amount = float(r["amount"] or 0)
+
+        if amount <= 500:
+            buckets["R0 - R500"] += 1
+        elif amount <= 1000:
+            buckets["R501 - R1 000"] += 1
+        elif amount <= 2500:
+            buckets["R1 001 - R2 500"] += 1
+        elif amount <= 5000:
+            buckets["R2 501 - R5 000"] += 1
+        else:
+            buckets["R5 001+"] += 1
+
+    histogram_chart = {
+        "labels": list(buckets.keys()),
+        "values": list(buckets.values())
+    }
+
+    chart_payload = {
+        "incomeVsExpenses": income_vs_expenses_data,
+        "paymentStatus": payment_status_chart,
+        "incomeCategories": income_category_chart,
+        "expenseCategories": expense_category_chart,
+        "dailyMovement": daily_chart,
+        "paymentHistogram": histogram_chart
+    }
+
+    chart_json = json.dumps(chart_payload)
+
+    # ================= PAYMENT STATUS SUMMARY =================
 
     payment_status_html = ""
 
@@ -28020,6 +28050,8 @@ def treasurer_dashboard():
     if not payment_status_html:
         payment_status_html = "<div class='empty'>No scheduled payments found for this month.</div>"
 
+    # ================= RECENT TABLE =================
+
     recent_rows = ""
 
     for rec in recent_records:
@@ -28042,7 +28074,7 @@ def treasurer_dashboard():
         <h1>Treasurer Dashboard</h1>
 
         <p class="muted">
-            Monthly financial overview with income, expenses, payment movement and category breakdowns.
+            Monthly financial overview with visual reports for income, expenses, payments and finance movement.
         </p>
 
         <form method="get" class="toolbar">
@@ -28059,38 +28091,35 @@ def treasurer_dashboard():
             {stat("Paid Payments", f"R{paid_payments:,.2f}")}
         </div>
 
-        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:14px">
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-top:14px">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+                <div>
+                    <h2 style="margin-bottom:4px">Financial Health</h2>
+                    <p class="mini muted">
+                        A quick view of whether the selected month is in a positive or negative position.
+                    </p>
+                </div>
 
-            <div class="card soft" style="border-left:5px solid #1b5e20">
-                <h2>Income vs Expenses</h2>
+                <span class="chip {net_chip}" style="font-size:15px;padding:10px 14px">
+                    Net Position: {net_status}
+                </span>
+            </div>
+        </div>
 
-                {progress_bar("Income", total_income, income_percent, "active")}
-                {progress_bar("Expenses", total_expenses, expense_percent, "lapsed")}
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
 
-                <div style="margin-top:10px">
-                    <span class="chip {net_chip}">
-                        Net Position: {net_status}
-                    </span>
-                    <div class="mini muted" style="margin-top:6px">
-                        Net amount: R{net:,.2f}
-                    </div>
+            <div class="card soft">
+                <h2>Pie Chart: Income vs Expenses</h2>
+                <div style="height:280px">
+                    <canvas id="incomeExpensePie"></canvas>
                 </div>
             </div>
 
-            <div class="card soft" style="border-left:5px solid #f59e0b">
-                <h2>Payment Progress</h2>
-
-                {progress_bar("Paid Payments", paid_payments, paid_percent, "active")}
-                {progress_bar("Pending Payments", pending_payments, pending_percent, "pending")}
-
-                <div class="mini muted" style="margin-top:8px">
-                    Pending payment items: {pending_count}
+            <div class="card soft">
+                <h2>Doughnut Chart: Payment Status</h2>
+                <div style="height:280px">
+                    <canvas id="paymentStatusDoughnut"></canvas>
                 </div>
-            </div>
-
-            <div class="card soft" style="border-left:5px solid #3b82f6">
-                <h2>Payment Status Summary</h2>
-                {payment_status_html}
             </div>
 
         </div>
@@ -28098,13 +28127,60 @@ def treasurer_dashboard():
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
 
             <div class="card soft">
-                <h2>Income Categories</h2>
-                {category_rows(income_categories, total_income)}
+                <h2>Bar Graph: Income Categories</h2>
+                <div style="height:300px">
+                    <canvas id="incomeCategoryBar"></canvas>
+                </div>
             </div>
 
             <div class="card soft">
-                <h2>Expense Categories</h2>
-                {category_rows(expense_categories, total_expenses)}
+                <h2>Bar Graph: Expense Categories</h2>
+                <div style="height:300px">
+                    <canvas id="expenseCategoryBar"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft">
+                <h2>Line Chart: Daily Income vs Expenses</h2>
+                <p class="mini muted">
+                    This shows financial movement across the selected month.
+                </p>
+                <div style="height:320px">
+                    <canvas id="dailyMovementLine"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Histogram: Scheduled Payment Sizes</h2>
+                <p class="mini muted">
+                    This groups scheduled payments by amount range.
+                </p>
+                <div style="height:320px">
+                    <canvas id="paymentHistogram"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft" style="border-left:5px solid #3b82f6">
+                <h2>Payment Status Summary</h2>
+                {payment_status_html}
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #f59e0b">
+                <h2>Reminder</h2>
+                <p class="muted">
+                    Monthly financial report must be submitted to COO and CEO by the 5th of each month.
+                </p>
+                <p class="mini muted">
+                    Pending payment items: {pending_count}
+                </p>
             </div>
 
         </div>
@@ -28130,17 +28206,230 @@ def treasurer_dashboard():
                 </table>
             </div>
         </div>
-
-        <div class="card soft" style="border-left:5px solid #f59e0b;margin-top:14px">
-            <h2>Reminder</h2>
-            <p class="muted">
-                Monthly financial report must be submitted to COO and CEO by the 5th of each month.
-            </p>
-            <p class="mini muted">
-                Pending payment items: {pending_count}
-            </p>
-        </div>
     </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        const financeCharts = {chart_json};
+
+        function moneyLabel(value) {{
+            return "R" + Number(value || 0).toLocaleString("en-ZA", {{
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }});
+        }}
+
+        function noDataPlugin(message) {{
+            return {{
+                id: "noData_" + Math.random().toString(36).slice(2),
+                afterDraw(chart) {{
+                    const dataValues = chart.data.datasets.flatMap(ds => ds.data || []);
+                    const hasData = dataValues.some(v => Number(v) > 0);
+
+                    if (!hasData) {{
+                        const ctx = chart.ctx;
+                        const width = chart.width;
+                        const height = chart.height;
+
+                        ctx.save();
+                        ctx.textAlign = "center";
+                        ctx.textBaseline = "middle";
+                        ctx.font = "13px Arial";
+                        ctx.fillStyle = "#64748b";
+                        ctx.fillText(message || "No data available for this month", width / 2, height / 2);
+                        ctx.restore();
+                    }}
+                }}
+            }};
+        }}
+
+        const chartColors = [
+            "#1b5e20",
+            "#f59e0b",
+            "#3b82f6",
+            "#ef4444",
+            "#8b5cf6",
+            "#14b8a6",
+            "#64748b",
+            "#ec4899"
+        ];
+
+        const commonOptions = {{
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {{
+                legend: {{
+                    position: "bottom"
+                }},
+                tooltip: {{
+                    callbacks: {{
+                        label: function(context) {{
+                            const value = context.parsed.y ?? context.parsed ?? 0;
+                            return context.label + ": " + moneyLabel(value);
+                        }}
+                    }}
+                }}
+            }}
+        }};
+
+        new Chart(document.getElementById("incomeExpensePie"), {{
+            type: "pie",
+            data: {{
+                labels: financeCharts.incomeVsExpenses.labels,
+                datasets: [{{
+                    data: financeCharts.incomeVsExpenses.values,
+                    backgroundColor: chartColors
+                }}]
+            }},
+            options: commonOptions,
+            plugins: [noDataPlugin("No income or expense records yet")]
+        }});
+
+        new Chart(document.getElementById("paymentStatusDoughnut"), {{
+            type: "doughnut",
+            data: {{
+                labels: financeCharts.paymentStatus.labels,
+                datasets: [{{
+                    data: financeCharts.paymentStatus.values,
+                    backgroundColor: chartColors
+                }}]
+            }},
+            options: commonOptions,
+            plugins: [noDataPlugin("No payment schedule data yet")]
+        }});
+
+        new Chart(document.getElementById("incomeCategoryBar"), {{
+            type: "bar",
+            data: {{
+                labels: financeCharts.incomeCategories.labels,
+                datasets: [{{
+                    label: "Income",
+                    data: financeCharts.incomeCategories.values,
+                    backgroundColor: "#1b5e20",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            callback: function(value) {{
+                                return moneyLabel(value);
+                            }}
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No income categories yet")]
+        }});
+
+        new Chart(document.getElementById("expenseCategoryBar"), {{
+            type: "bar",
+            data: {{
+                labels: financeCharts.expenseCategories.labels,
+                datasets: [{{
+                    label: "Expenses",
+                    data: financeCharts.expenseCategories.values,
+                    backgroundColor: "#ef4444",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            callback: function(value) {{
+                                return moneyLabel(value);
+                            }}
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No expense categories yet")]
+        }});
+
+        new Chart(document.getElementById("dailyMovementLine"), {{
+            type: "line",
+            data: {{
+                labels: financeCharts.dailyMovement.labels,
+                datasets: [
+                    {{
+                        label: "Income",
+                        data: financeCharts.dailyMovement.income,
+                        borderColor: "#1b5e20",
+                        backgroundColor: "rgba(27,94,32,.12)",
+                        tension: 0.35,
+                        fill: true
+                    }},
+                    {{
+                        label: "Expenses",
+                        data: financeCharts.dailyMovement.expenses,
+                        borderColor: "#ef4444",
+                        backgroundColor: "rgba(239,68,68,.12)",
+                        tension: 0.35,
+                        fill: true
+                    }}
+                ]
+            }},
+            options: {{
+                ...commonOptions,
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            callback: function(value) {{
+                                return moneyLabel(value);
+                            }}
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No daily movement yet")]
+        }});
+
+        new Chart(document.getElementById("paymentHistogram"), {{
+            type: "bar",
+            data: {{
+                labels: financeCharts.paymentHistogram.labels,
+                datasets: [{{
+                    label: "Number of Payments",
+                    data: financeCharts.paymentHistogram.values,
+                    backgroundColor: "#3b82f6",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {{
+                    legend: {{
+                        display: false
+                    }},
+                    tooltip: {{
+                        callbacks: {{
+                            label: function(context) {{
+                                return context.parsed.y + " payment item(s)";
+                            }}
+                        }}
+                    }}
+                }},
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No scheduled payments yet")]
+        }});
+    </script>
     """
 
     return page("Treasurer Dashboard", body)
