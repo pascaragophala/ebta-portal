@@ -4139,6 +4139,59 @@ def page(title, body_html, extra_head="", extra_js=""):
         if is_student():
             sid = is_student()
             
+            cur.execute("""
+                SELECT full_name, grade, phone_whatsapp, profile_picture_path
+                FROM students
+                WHERE id=?
+                LIMIT 1
+            """, (sid,))
+
+            student_sidebar = cur.fetchone()
+
+            student_sidebar_photo = ""
+
+            if student_sidebar and student_sidebar["profile_picture_path"]:
+                student_sidebar_photo = f"""
+                <img src="/profile-picture/{sid}"
+                     style="
+                        width:56px;
+                        height:56px;
+                        border-radius:50%;
+                        object-fit:cover;
+                        border:3px solid #1b5e20;
+                     ">
+                """
+            else:
+                initials = "S"
+
+                if student_sidebar and student_sidebar["full_name"]:
+                    initials = "".join(
+                        x[0].upper()
+                        for x in student_sidebar["full_name"].split()[:2]
+                    )
+
+                student_sidebar_photo = f"""
+                <div style="
+                    width:56px;
+                    height:56px;
+                    border-radius:50%;
+                    background:#eef6ee;
+                    display:flex;
+                    align-items:center;
+                    justify-content:center;
+                    border:3px solid #1b5e20;
+                    font-weight:800;
+                    color:#1b5e20;
+                    font-size:16px;
+                ">
+                    {escape(initials or "S")}
+                </div>
+                """
+
+            student_sidebar_name = student_sidebar["full_name"] if student_sidebar else session.get("student_name", "Student")
+            student_sidebar_grade = grade_label(student_sidebar["grade"]) if student_sidebar and student_sidebar["grade"] else "Student"
+            student_sidebar_phone = student_sidebar["phone_whatsapp"] if student_sidebar and student_sidebar["phone_whatsapp"] else ""
+            
             month = get_active_month('student')
             
             cur.execute("SELECT COUNT(*) FROM enrollments WHERE student_id=? AND month=? AND status='ACTIVE'", (sid, month))
@@ -4158,6 +4211,7 @@ def page(title, body_html, extra_head="", extra_js=""):
             role_title, user_name = "Student", session.get('student_name','Student')
             links = [
                 ("Dashboard", "#dashboard"),
+                ("My Profile", url_for('student_profile_page'))
                 ("Status", "#status"),
                 ("Assignments", url_for('student_assignments')),
                 ("Learning Materials", url_for('student_materials')),
@@ -4338,14 +4392,63 @@ def page(title, body_html, extra_head="", extra_js=""):
             f"<a href='{href}'>{label}</a>"
             for (label, href) in links
         ])
+
+        profile_sidebar_html = ""
+
+        if role_title == "Student":
+            profile_sidebar_html = f"""
+            <div style="
+                display:flex;
+                gap:10px;
+                align-items:center;
+                margin-bottom:14px;
+                padding:10px;
+                border:1px solid #dbe4ef;
+                border-radius:14px;
+                background:#ffffff;
+            ">
+                {student_sidebar_photo}
+
+                <div style="min-width:0">
+                    <div style="
+                        font-weight:800;
+                        color:#111827;
+                        line-height:1.2;
+                        white-space:nowrap;
+                        overflow:hidden;
+                        text-overflow:ellipsis;
+                        max-width:150px;
+                    ">
+                        {escape(student_sidebar_name)}
+                    </div>
+
+                    <div class="mini muted">
+                        {escape(student_sidebar_grade)}
+                    </div>
+
+                    <a class="mini"
+                       href="{url_for('student_profile_page')}"
+                       style="color:#1b5e20;font-weight:700;text-decoration:none">
+                        View / Edit Profile
+                    </a>
+                </div>
+            </div>
+            """
+        else:
+            profile_sidebar_html = f"""
+            <div class='role'>{role_title}</div>
+            <div class='user'>{user_name}</div>
+            """
+
         sidebar_html = f"""
         <aside class='sidebar'>
-        <div class='role'>{role_title}</div>
-        <div class='user'>{user_name}</div>
-        
+            {profile_sidebar_html}
 
-<div class='side-links'>{links_html}</div>
-        {stats_grid}
+            <div class='side-links'>
+                {links_html}
+            </div>
+
+            {stats_grid}
         </aside>
         """
 
@@ -6545,7 +6648,11 @@ def student_home():
     """
     
     cur.execute("""
-        SELECT full_name, profile_picture_path
+        SELECT
+            full_name,
+            phone_whatsapp,
+            grade,
+            profile_picture_path
         FROM students
         WHERE id=?
     """, (sid,))
@@ -6557,42 +6664,57 @@ def student_home():
     if student_profile and student_profile["profile_picture_path"]:
         profile_pic_html = f"""
         <img src="/profile-picture/{sid}"
-             style="width:90px;height:90px;border-radius:50%;object-fit:cover;border:3px solid #1b5e20">
+             style="
+                width:56px;
+                height:56px;
+                border-radius:50%;
+                object-fit:cover;
+                border:3px solid #1b5e20;
+             ">
         """
     else:
-        profile_pic_html = """
-        <div style="width:90px;height:90px;border-radius:50%;background:#eef6ee;display:flex;align-items:center;justify-content:center;border:3px solid #1b5e20;font-weight:700;color:#1b5e20">
-            No Photo
+        initials = "".join([x[0].upper() for x in (student_profile["full_name"] or "Learner").split()[:2]]) if student_profile else "L"
+
+        profile_pic_html = f"""
+        <div style="
+            width:56px;
+            height:56px;
+            border-radius:50%;
+            background:#eef6ee;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            border:3px solid #1b5e20;
+            font-weight:800;
+            color:#1b5e20;
+        ">
+            {escape(initials or "L")}
         </div>
         """
 
     profile_section = f"""
     <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
-        <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
-            {profile_pic_html}
+        <div style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
 
-            <div style="flex:1">
-                <h2 style="margin-bottom:4px">Profile Picture</h2>
-                <div class="mini muted" style="margin-bottom:10px">
-                    Upload a clear picture of yourself. This may also be used for EBTA awards and learner recognition.
+            <div style="display:flex;gap:12px;align-items:center;min-width:230px">
+                {profile_pic_html}
+
+                <div>
+                    <div style="font-weight:700;font-size:16px">
+                        {escape(student_profile['full_name'] if student_profile else 'Learner')}
+                    </div>
+
+                    <div class="mini muted">
+                        {grade_label(student_profile['grade']) if student_profile else '—'}
+                        • {escape(student_profile['phone_whatsapp'] if student_profile else '—')}
+                    </div>
                 </div>
-
-                <form method="post"
-                      action="/student/upload-profile-picture"
-                      enctype="multipart/form-data"
-                      style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-
-                    <input type="file"
-                           name="profile_picture"
-                           accept=".png,.jpg,.jpeg,.webp,image/*"
-                           required
-                           style="max-width:280px">
-
-                    <button class="btn mini success">
-                        Upload Profile Picture
-                    </button>
-                </form>
             </div>
+
+            <a class="btn mini success" href="{url_for('student_profile_page')}">
+                View / Edit Profile
+            </a>
+
         </div>
     </div>
     """
@@ -7482,8 +7604,8 @@ def student_home():
                 Currently viewing: <b>{pretty_month_label(month)}</b>
             </p>
 
-            {month_selector}
             {profile_section}
+            {month_selector}
             {referral_section}
 
         <h2>Your Enrollments</h2>
@@ -23599,6 +23721,409 @@ def aqm_view_report(rid):
         as_attachment=False
     )
     
+    
+@app.get('/student/profile')
+def student_profile_page():
+
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            id,
+            full_name,
+            phone_whatsapp,
+            guardian_name,
+            guardian_phone,
+            email,
+            grade,
+            pin,
+            school,
+            province,
+            profile_picture_path,
+            profile_picture_uploaded_at,
+            referral_code,
+            referral_points,
+            referral_total_count,
+            created_at
+        FROM students
+        WHERE id=?
+    """, (sid,))
+
+    student = cur.fetchone()
+    conn.close()
+
+    if not student:
+        return redirect(url_for("student_login"))
+
+    if student["profile_picture_path"] and os.path.exists(student["profile_picture_path"]):
+        profile_pic_html = f"""
+        <img src="/profile-picture/{sid}"
+             style="
+                width:120px;
+                height:120px;
+                border-radius:50%;
+                object-fit:cover;
+                border:4px solid #1b5e20;
+                box-shadow:0 8px 20px rgba(0,0,0,.12);
+             ">
+        """
+    else:
+        initials = "".join([x[0].upper() for x in (student["full_name"] or "Learner").split()[:2]])
+        profile_pic_html = f"""
+        <div style="
+            width:120px;
+            height:120px;
+            border-radius:50%;
+            background:#eef6ee;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            border:4px solid #1b5e20;
+            font-weight:800;
+            color:#1b5e20;
+            font-size:28px;
+            box-shadow:0 8px 20px rgba(0,0,0,.12);
+        ">
+            {escape(initials or "L")}
+        </div>
+        """
+
+    uploaded_at = "Not uploaded yet"
+
+    if student["profile_picture_uploaded_at"]:
+        uploaded_at = (student["profile_picture_uploaded_at"] or "")[:16].replace("T", " ")
+
+    body = f"""
+    <section class="card">
+
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+            <div>
+                <a class="btn mini secondary" href="{url_for('student_home')}">
+                    ← Back to Dashboard
+                </a>
+            </div>
+
+            <div class="chip active">
+                {grade_label(student['grade'])}
+            </div>
+        </div>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap">
+
+                {profile_pic_html}
+
+                <div style="flex:1;min-width:240px">
+                    <h1 style="margin-bottom:4px">
+                        {escape(student['full_name'] or 'Learner Profile')}
+                    </h1>
+
+                    <div class="mini muted" style="margin-bottom:10px">
+                        Manage your EBTA profile details, contact number, PIN and profile picture.
+                    </div>
+
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <span class="chip">
+                            WhatsApp: {escape(student['phone_whatsapp'] or '—')}
+                        </span>
+
+                        <span class="chip">
+                            Referral: {escape(student['referral_code'] or '—')}
+                        </span>
+
+                        <span class="chip">
+                            Points: {student['referral_points'] or 0} / 5
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px">
+
+            <div class="card soft" style="border-left:5px solid #25D366">
+                <h2>Update Profile Picture</h2>
+
+                <p class="mini muted">
+                    Upload a clear picture of yourself. This may be used for EBTA awards and learner recognition.
+                </p>
+
+                <form method="post"
+                      action="/student/upload-profile-picture"
+                      enctype="multipart/form-data"
+                      style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+
+                    <input type="file"
+                           name="profile_picture"
+                           accept=".png,.jpg,.jpeg,.webp,image/*"
+                           required>
+
+                    <button class="btn success">
+                        Upload Picture
+                    </button>
+                </form>
+
+                <div class="mini muted" style="margin-top:8px">
+                    Last uploaded: {escape(uploaded_at)}
+                </div>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #3b82f6">
+                <h2>Personal Details</h2>
+
+                <form method="post"
+                      action="{url_for('student_update_profile')}"
+                      class="grid"
+                      style="grid-template-columns:1fr;gap:10px">
+
+                    <div>
+                        <label>Full Name</label>
+                        <input name="full_name"
+                               value="{escape(student['full_name'] or '')}"
+                               required>
+                    </div>
+
+                    <div>
+                        <label>WhatsApp Number</label>
+                        <input name="phone_whatsapp"
+                               value="{escape(student['phone_whatsapp'] or '')}"
+                               required>
+                        <div class="mini muted">
+                            This is the number you use to login and receive EBTA communication.
+                        </div>
+                    </div>
+
+                    <div>
+                        <label>Guardian Name</label>
+                        <input name="guardian_name"
+                               value="{escape(student['guardian_name'] or '')}">
+                    </div>
+
+                    <div>
+                        <label>Guardian WhatsApp Number</label>
+                        <input name="guardian_phone"
+                               value="{escape(student['guardian_phone'] or '')}">
+                    </div>
+
+                    <div>
+                        <label>Email</label>
+                        <input type="email"
+                               name="email"
+                               value="{escape(student['email'] or '')}">
+                    </div>
+
+                    <div>
+                        <label>School</label>
+                        <input name="school"
+                               value="{escape(student['school'] or '')}">
+                    </div>
+
+                    <div>
+                        <label>Province</label>
+                        <input name="province"
+                               value="{escape(student['province'] or '')}">
+                    </div>
+
+                    <button class="btn success">
+                        Save Profile Details
+                    </button>
+                </form>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #f59e0b">
+                <h2>Update Login PIN</h2>
+
+                <p class="mini muted">
+                    Your PIN must be 4 to 6 digits. Keep it private.
+                </p>
+
+                <form method="post"
+                      action="{url_for('student_update_pin')}"
+                      class="grid"
+                      style="grid-template-columns:1fr;gap:10px">
+
+                    <div>
+                        <label>Current PIN</label>
+                        <input name="current_pin"
+                               type="password"
+                               maxlength="6"
+                               required>
+                    </div>
+
+                    <div>
+                        <label>New PIN</label>
+                        <input name="new_pin"
+                               type="password"
+                               maxlength="6"
+                               minlength="4"
+                               required>
+                    </div>
+
+                    <div>
+                        <label>Confirm New PIN</label>
+                        <input name="confirm_pin"
+                               type="password"
+                               maxlength="6"
+                               minlength="4"
+                               required>
+                    </div>
+
+                    <button class="btn warn">
+                        Update PIN
+                    </button>
+                </form>
+            </div>
+
+            <div class="card soft">
+                <h2>Account Summary</h2>
+
+                <p>
+                    <strong>Grade:</strong> {grade_label(student['grade'])}<br>
+                    <strong>Referral Code:</strong> {escape(student['referral_code'] or '—')}<br>
+                    <strong>Current Referral Points:</strong> {student['referral_points'] or 0} / 5<br>
+                    <strong>Total Referrals:</strong> {student['referral_total_count'] or 0}<br>
+                    <strong>Joined:</strong> {escape((student['created_at'] or '')[:16].replace('T',' '))}
+                </p>
+
+                <p class="mini muted">
+                    Grade changes are managed by EBTA Admin to prevent incorrect subject access.
+                </p>
+            </div>
+
+        </div>
+    </section>
+    """
+
+    return page("My Profile", body)
+    
+    
+@app.post('/student/profile/update')
+def student_update_profile():
+
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+
+    full_name = request.form.get("full_name", "").strip()
+    phone_whatsapp = request.form.get("phone_whatsapp", "").strip()
+    guardian_name = request.form.get("guardian_name", "").strip()
+    guardian_phone = request.form.get("guardian_phone", "").strip()
+    email = request.form.get("email", "").strip()
+    school = request.form.get("school", "").strip()
+    province = request.form.get("province", "").strip()
+
+    if not full_name or not phone_whatsapp:
+        return page("Missing Information", card_msg("Full name and WhatsApp number are required."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id
+        FROM students
+        WHERE phone_whatsapp=?
+          AND id != ?
+        LIMIT 1
+    """, (phone_whatsapp, sid))
+
+    existing = cur.fetchone()
+
+    if existing:
+        conn.close()
+        return page(
+            "Number Already Used",
+            card_msg("This WhatsApp number is already linked to another learner profile.")
+        )
+
+    cur.execute("""
+        UPDATE students
+        SET full_name=?,
+            phone_whatsapp=?,
+            guardian_name=?,
+            guardian_phone=?,
+            email=?,
+            school=?,
+            province=?
+        WHERE id=?
+    """, (
+        full_name,
+        phone_whatsapp,
+        guardian_name,
+        guardian_phone,
+        email,
+        school,
+        province,
+        sid
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("student_profile_page"))   
+    
+    
+@app.post('/student/profile/pin')
+def student_update_pin():
+
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+
+    current_pin = request.form.get("current_pin", "").strip()
+    new_pin = request.form.get("new_pin", "").strip()
+    confirm_pin = request.form.get("confirm_pin", "").strip()
+
+    if not current_pin or not new_pin or not confirm_pin:
+        return page("Missing PIN", card_msg("Please complete all PIN fields."))
+
+    if new_pin != confirm_pin:
+        return page("PIN Mismatch", card_msg("The new PIN and confirmation PIN do not match."))
+
+    if not new_pin.isdigit() or len(new_pin) < 4 or len(new_pin) > 6:
+        return page("Invalid PIN", card_msg("Your new PIN must be 4 to 6 digits."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT pin
+        FROM students
+        WHERE id=?
+        LIMIT 1
+    """, (sid,))
+
+    student = cur.fetchone()
+
+    if not student:
+        conn.close()
+        return redirect(url_for("student_login"))
+
+    if str(student["pin"] or "") != current_pin:
+        conn.close()
+        return page("Incorrect PIN", card_msg("The current PIN you entered is incorrect."))
+
+    cur.execute("""
+        UPDATE students
+        SET pin=?
+        WHERE id=?
+    """, (new_pin, sid))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("student_profile_page"))
+   
     
 @app.post('/student/upload-profile-picture')
 def student_upload_profile_picture():
