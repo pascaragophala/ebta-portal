@@ -23939,7 +23939,7 @@ def student_profile_page():
                 <h2>Update Login PIN</h2>
 
                 <p class="mini muted">
-                    Your PIN must be 4 to 6 digits. Keep it private.
+                    Your PIN must be 5 digits. Keep it private.
                 </p>
 
                 <form method="post"
