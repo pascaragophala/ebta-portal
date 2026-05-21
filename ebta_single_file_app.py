@@ -30065,19 +30065,45 @@ def secretary_dashboard():
 def secretary_communications():
 
     r = require_secretary()
-    if r: return r
+    if r:
+        return r
 
     sid = is_secretary()
 
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 10
+    offset = (page_num - 1) * per_page
+
     conn = get_db()
     cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM secretary_communication_logs
+        WHERE secretary_id=?
+    """, (sid,))
+
+    total_records = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total_records + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
 
     cur.execute("""
         SELECT *
         FROM secretary_communication_logs
         WHERE secretary_id=?
         ORDER BY created_at DESC
-    """, (sid,))
+        LIMIT ? OFFSET ?
+    """, (sid, per_page, offset))
 
     rows = cur.fetchall()
     conn.close()
@@ -30086,6 +30112,7 @@ def secretary_communications():
 
     for log in rows:
         proof = "—"
+
         if log["proof_file_path"] and os.path.exists(log["proof_file_path"]):
             proof = f"""
             <a class="btn mini secondary" target="_blank" href="/secretary/communication/{log['id']}/proof">
@@ -30125,6 +30152,12 @@ def secretary_communications():
             </a>
         </div>
 
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total_records} communication log(s).
+        </div>
+
+        {pagination_controls("/secretary/communications", page_num, total_pages)}
+
         <div class="scroll-x">
             <table>
                 <thead>
@@ -30139,11 +30172,14 @@ def secretary_communications():
                         <th>Action</th>
                     </tr>
                 </thead>
+
                 <tbody>
                     {trs or "<tr><td colspan='8'>No communication logs yet.</td></tr>"}
                 </tbody>
             </table>
         </div>
+
+        {pagination_controls("/secretary/communications", page_num, total_pages)}
     </section>
     """
 
@@ -30515,19 +30551,45 @@ def secretary_communication_proof(log_id):
 def secretary_minutes():
 
     r = require_secretary()
-    if r: return r
+    if r:
+        return r
 
     sid = is_secretary()
 
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 10
+    offset = (page_num - 1) * per_page
+
     conn = get_db()
     cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM secretary_meeting_minutes
+        WHERE secretary_id=?
+    """, (sid,))
+
+    total_records = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total_records + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
 
     cur.execute("""
         SELECT *
         FROM secretary_meeting_minutes
         WHERE secretary_id=?
         ORDER BY meeting_date DESC, created_at DESC
-    """, (sid,))
+        LIMIT ? OFFSET ?
+    """, (sid, per_page, offset))
 
     rows = cur.fetchall()
     conn.close()
@@ -30544,7 +30606,9 @@ def secretary_minutes():
             <td>{escape(m['led_by'] or '—')}</td>
             <td><span class="chip">{escape(m['status'])}</span></td>
             <td>
-                <a class="btn mini" href="/secretary/minutes/{m['id']}">View</a>
+                <a class="btn mini" href="/secretary/minutes/{m['id']}">
+                    View
+                </a>
             </td>
         </tr>
         """
@@ -30561,6 +30625,12 @@ def secretary_minutes():
             </a>
         </div>
 
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total_records} meeting minute record(s).
+        </div>
+
+        {pagination_controls("/secretary/minutes", page_num, total_pages)}
+
         <div class="scroll-x">
             <table>
                 <thead>
@@ -30571,11 +30641,14 @@ def secretary_minutes():
                         <th>Action</th>
                     </tr>
                 </thead>
+
                 <tbody>
                     {trs or "<tr><td colspan='4'>No meeting minutes yet.</td></tr>"}
                 </tbody>
             </table>
         </div>
+
+        {pagination_controls("/secretary/minutes", page_num, total_pages)}
     </section>
     """
 
@@ -30915,12 +30988,37 @@ def secretary_add_action_item(minutes_id):
 def secretary_action_items():
 
     r = require_secretary()
-    if r: return r
+    if r:
+        return r
 
     sid = is_secretary()
 
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 10
+    offset = (page_num - 1) * per_page
+
     conn = get_db()
     cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM secretary_action_items
+        WHERE secretary_id=?
+    """, (sid,))
+
+    total_records = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total_records + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
 
     cur.execute("""
         SELECT *
@@ -30934,7 +31032,8 @@ def secretary_action_items():
                 ELSE 4
             END,
             deadline ASC
-    """, (sid,))
+        LIMIT ? OFFSET ?
+    """, (sid, per_page, offset))
 
     rows = cur.fetchall()
     conn.close()
@@ -30949,6 +31048,21 @@ def secretary_action_items():
         if current_status == "PENDING" and a["deadline"] and a["deadline"] < today:
             current_status = "OVERDUE"
 
+        done_button = ""
+
+        if current_status != "DONE":
+            done_button = f"""
+            <form method="post"
+                  action="/secretary/action/{a['id']}/done"
+                  style="display:inline">
+                <button class="btn mini success">
+                    Mark Done
+                </button>
+            </form>
+            """
+        else:
+            done_button = "<span class='mini muted'>Completed</span>"
+
         trs += f"""
         <tr>
             <td>{escape(a['task'])}</td>
@@ -30956,11 +31070,7 @@ def secretary_action_items():
             <td>{escape(a['deadline'] or '—')}</td>
             <td>{escape(a['followup_date'] or '—')}</td>
             <td><span class="chip">{escape(current_status)}</span></td>
-            <td>
-                <form method="post" action="/secretary/action/{a['id']}/done" style="display:inline">
-                    <button class="btn mini success">Mark Done</button>
-                </form>
-            </td>
+            <td>{done_button}</td>
         </tr>
         """
 
@@ -30969,6 +31079,12 @@ def secretary_action_items():
 
     <section class="card">
         <h1>Action Items</h1>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total_records} action item(s).
+        </div>
+
+        {pagination_controls("/secretary/action-items", page_num, total_pages)}
 
         <div class="scroll-x">
             <table>
@@ -30982,11 +31098,14 @@ def secretary_action_items():
                         <th>Action</th>
                     </tr>
                 </thead>
+
                 <tbody>
                     {trs or "<tr><td colspan='6'>No action items yet.</td></tr>"}
                 </tbody>
             </table>
         </div>
+
+        {pagination_controls("/secretary/action-items", page_num, total_pages)}
     </section>
     """
 
