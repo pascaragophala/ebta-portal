@@ -152,47 +152,6 @@ def init_db():
     """)
     
     
-    # ================= SAFE AFRIKAANS CLEANUP =================
-    # If Afrikaans FAL already exists, delete old Afrikaans.
-    # If Afrikaans FAL does not exist, rename Afrikaans to Afrikaans FAL.
-
-    cur.execute("""
-        SELECT id, grade
-        FROM subjects
-        WHERE name='Afrikaans'
-    """)
-
-    old_afrikaans_subjects = cur.fetchall()
-
-    for old_sub in old_afrikaans_subjects:
-        old_id = old_sub["id"]
-        grade = old_sub["grade"]
-
-        cur.execute("""
-            SELECT id
-            FROM subjects
-            WHERE name='Afrikaans FAL'
-              AND grade=?
-            LIMIT 1
-        """, (grade,))
-
-        existing_fal = cur.fetchone()
-
-        if existing_fal:
-            # Afrikaans FAL already exists, so remove the old Afrikaans subject.
-            cur.execute("""
-                DELETE FROM subjects
-                WHERE id=?
-            """, (old_id,))
-        else:
-            # Afrikaans FAL does not exist yet, so rename the old one.
-            cur.execute("""
-                UPDATE subjects
-                SET name='Afrikaans FAL'
-                WHERE id=?
-            """, (old_id,))
-    
-    
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS groups(
