@@ -87,6 +87,21 @@ def now_utc_iso():
     return (datetime.datetime.utcnow() + datetime.timedelta(hours=2)).replace(tzinfo=tz).isoformat()
 
 
+def format_chat_datetime(value):
+    """
+    Formats message timestamps nicely for chat screens.
+    Example: 2026-03-21T08:25:00+02:00 -> 21 Mar 2026, 08:25
+    """
+    if not value:
+        return ""
+
+    try:
+        dt = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return dt.strftime("%d %b %Y, %H:%M")
+    except Exception:
+        return str(value)[:16].replace("T", " ")
+
+
 def ensure_column(conn, table, column, ddl_tail):
     cur = conn.cursor()
     # -------- SAFE SUBJECTS GUARD --------
@@ -17980,7 +17995,7 @@ def admin_direct_messages():
         name = c["full_name"]
 
         preview = (c["last_message"] or "")[:40]
-        time = c["last_time"][11:16] if c["last_time"] else ""
+        time = format_chat_datetime(c["last_time"])
 
         active = "active" if selected == f"{role}|{cid}" else ""
 
@@ -18011,7 +18026,7 @@ def admin_direct_messages():
         name = c["full_name"]
 
         preview = (c["last_message"] or "")[:40]
-        time = c["last_time"][11:16] if c["last_time"] else ""
+        time = format_chat_datetime(c["last_time"])
 
         active = "active" if selected == f"{role}|{cid}" else ""
 
@@ -18060,7 +18075,7 @@ def admin_direct_messages():
         for m in msgs:
 
             side = "me" if m["from_role"] == "admin" else "them"
-            time = m["created_at"][11:16]
+            time = format_chat_datetime(m["created_at"])
 
             chat_messages += f"""
             <div class="bubble {side}">
