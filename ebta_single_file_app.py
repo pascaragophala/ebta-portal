@@ -4211,7 +4211,7 @@ def page(title, body_html, extra_head="", extra_js=""):
             role_title, user_name = "Student", session.get('student_name','Student')
             links = [
                 ("Dashboard", "#dashboard"),
-                ("My Profile", url_for('student_profile_page'))
+                ("My Profile", url_for('student_profile_page')),
                 ("Status", "#status"),
                 ("Assignments", url_for('student_assignments')),
                 ("Learning Materials", url_for('student_materials')),
