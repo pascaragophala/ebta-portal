@@ -1209,7 +1209,7 @@ def init_db():
             ("English FAL","G12"),
             
             #Afrikaans
-            ("Afrikaans","G9"),
+            ("Afrikaans FAL","G9"),
         ]
 
         cur.executemany("INSERT OR IGNORE INTO subjects(name,grade) VALUES(?,?)", seed)
@@ -1260,7 +1260,7 @@ def init_db():
             ("English FAL","G12"),
             
             #Afrikaans
-            ("Afrikaans","G9"),
+            ("Afrikaans FAL","G9"),
         ]
 
         cur.executemany("INSERT OR IGNORE INTO subjects(name,grade) VALUES(?,?)", required_subjects)
@@ -4940,7 +4940,7 @@ def home():
         ("English FAL","G12"),
         
         #Afrikaans
-        ("Afrikaans","G9"),
+        ("Afrikaans FAL","G9"),
     ]
 
     try:
