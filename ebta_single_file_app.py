@@ -154,8 +154,8 @@ def init_db():
     
     cur.execute("""
         UPDATE subjects
-        SET name = 'English FAL'
-        WHERE name = 'English'
+        SET name = 'Afrikaans FAL'
+        WHERE name = 'Afrikaans'
     """)
 
     cur.execute("""
