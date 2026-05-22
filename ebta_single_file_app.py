@@ -10114,6 +10114,7 @@ def student_academic_progress():
     data = student_progress_data(sid, month)
 
     subject_rows_html = ""
+    subject_cards_html = ""
 
     for row in data["subject_rows"]:
 
@@ -10148,6 +10149,45 @@ def student_academic_progress():
             </td>
         </tr>
         """
+        
+        subject_cards_html += f"""
+        <div class="student-progress-subject-card">
+            <div class="student-progress-subject-top">
+                <div>
+                    <strong>{grade_label(row['grade'])} - {escape(row['subject_name'])}</strong>
+                    <div class="mini muted">Focus: {escape(row['focus'])}</div>
+                </div>
+
+                <span class="chip {risk_class}">
+                    {escape(row['risk_level'])}
+                </span>
+            </div>
+
+            <div class="student-progress-mini-grid">
+                <div>
+                    <span>Assessments</span>
+                    <strong>{row['assignment_rate']}%</strong>
+                </div>
+
+                <div>
+                    <span>Materials</span>
+                    <strong>{row['material_rate']}%</strong>
+                </div>
+
+                <div>
+                    <span>Attendance</span>
+                    <strong>{row['attendance_rate']}%</strong>
+                </div>
+
+                <div>
+                    <span>Avg Mark</span>
+                    <strong>{mark_display}</strong>
+                </div>
+            </div>
+        </div>
+        """
+        
+    
 
     recommendations_html = "".join([
         f"""
@@ -10184,16 +10224,238 @@ def student_academic_progress():
     }
 
     chart_json = json.dumps(chart_payload)
+    
+    mobile_css = """
+    <style>
+        .student-progress-page {
+            overflow:hidden;
+        }
+
+        .student-progress-page * {
+            box-sizing:border-box;
+        }
+
+        .student-progress-toolbar {
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+            margin-top:10px;
+        }
+
+        .student-progress-toolbar .btn {
+            white-space:normal;
+        }
+
+        .student-progress-page .stats {
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+            gap:10px;
+        }
+
+        .student-progress-page .stats .stat,
+        .student-progress-page .stats > div {
+            min-width:0;
+        }
+
+        .student-chart-grid {
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+            gap:14px;
+            margin-top:14px;
+        }
+
+        .student-chart-box {
+            height:260px;
+            width:100%;
+            max-width:100%;
+            position:relative;
+        }
+
+        .student-chart-box-large {
+            height:320px;
+            width:100%;
+            max-width:100%;
+            position:relative;
+        }
+
+        .student-chart-box canvas,
+        .student-chart-box-large canvas {
+            width:100% !important;
+            max-width:100% !important;
+        }
+
+        .student-progress-desktop-table {
+            display:block;
+        }
+
+        .student-progress-mobile-cards {
+            display:none;
+        }
+
+        .student-progress-subject-card {
+            border:1px solid #dbe4ef;
+            border-left:5px solid #1b5e20;
+            border-radius:14px;
+            padding:12px;
+            background:#ffffff;
+            margin-bottom:10px;
+            box-shadow:0 2px 8px rgba(15,23,42,.05);
+        }
+
+        .student-progress-subject-top {
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:10px;
+            margin-bottom:10px;
+        }
+
+        .student-progress-mini-grid {
+            display:grid;
+            grid-template-columns:repeat(2,1fr);
+            gap:8px;
+        }
+
+        .student-progress-mini-grid div {
+            background:#f8fafc;
+            border:1px solid #e5e7eb;
+            border-radius:12px;
+            padding:9px;
+        }
+
+        .student-progress-mini-grid span {
+            display:block;
+            font-size:11px;
+            color:#64748b;
+            margin-bottom:3px;
+        }
+
+        .student-progress-mini-grid strong {
+            font-size:15px;
+            color:#0f172a;
+        }
+
+        @media(max-width:768px) {
+            .student-progress-page {
+                padding:12px !important;
+                border-radius:14px !important;
+            }
+
+            .student-progress-page h1 {
+                font-size:22px;
+                line-height:1.2;
+            }
+
+            .student-progress-page h2 {
+                font-size:18px;
+            }
+
+            .student-progress-page h3 {
+                font-size:15px;
+            }
+
+            .student-progress-toolbar {
+                display:grid;
+                grid-template-columns:1fr;
+            }
+
+            .student-progress-toolbar .btn {
+                width:100%;
+                text-align:center;
+                justify-content:center;
+            }
+
+            .student-progress-page .stats {
+                grid-template-columns:repeat(2,minmax(0,1fr));
+                gap:8px;
+            }
+
+            .student-progress-page .stats .stat,
+            .student-progress-page .stats > div {
+                padding:10px !important;
+                overflow:hidden;
+            }
+
+            .student-progress-page .stats .k,
+            .student-progress-page .stats strong {
+                font-size:17px !important;
+                word-break:break-word;
+            }
+
+            .student-progress-page .stats .t,
+            .student-progress-page .stats .muted {
+                font-size:11px !important;
+            }
+
+            .student-chart-grid {
+                grid-template-columns:1fr;
+                gap:10px;
+            }
+
+            .student-chart-box {
+                height:230px;
+            }
+
+            .student-chart-box-large {
+                height:290px;
+            }
+
+            .student-progress-page .card.soft {
+                padding:12px !important;
+                border-radius:14px !important;
+            }
+
+            .student-progress-page ul {
+                padding-left:18px;
+            }
+
+            .student-progress-desktop-table {
+                display:none;
+            }
+
+            .student-progress-mobile-cards {
+                display:block;
+            }
+        }
+
+        @media(max-width:420px) {
+            .student-progress-page .stats {
+                grid-template-columns:1fr;
+            }
+
+            .student-chart-box {
+                height:215px;
+            }
+
+            .student-chart-box-large {
+                height:270px;
+            }
+
+            .student-progress-mini-grid {
+                grid-template-columns:1fr;
+            }
+
+            .student-progress-subject-top {
+                flex-direction:column;
+            }
+
+            .student-progress-subject-top .chip {
+                width:100%;
+                text-align:center;
+            }
+        }
+    </style>
+    """
 
     body = f"""
-    <section class="card">
+    <section class="card student-progress-page">
         <h1>Academic Progress Tracker</h1>
 
         <p class="muted">
             Track your assessments, learning materials, attendance, report uploads and academic risk areas for {pretty_month_label(month)}.
         </p>
 
-        <div class="toolbar">
+        <div class="student-progress-toolbar">
             <a class="btn mini secondary" href="{url_for('student_home')}">Back to Dashboard</a>
             <a class="btn mini success" href="{url_for('student_assignments')}">View Assignments</a>
             <a class="btn mini" href="{url_for('student_materials')}">View Materials</a>
@@ -10244,13 +10506,13 @@ def student_academic_progress():
             </div>
         </div>
 
-        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+        <div class="student-chart-grid">
 
             <div class="card soft">
                 <h2>Overall Progress</h2>
                 <p class="mini muted">A quick view of your academic progress for the selected month.</p>
 
-                <div style="height:260px">
+                <div class="student-chart-box">
                     <canvas id="studentOverallProgressChart"></canvas>
                 </div>
             </div>
@@ -10259,7 +10521,7 @@ def student_academic_progress():
                 <h2>Academic Areas</h2>
                 <p class="mini muted">Assessments, materials, attendance and report upload progress.</p>
 
-                <div style="height:260px">
+                <div class="student-chart-box">
                     <canvas id="studentAcademicAreasChart"></canvas>
                 </div>
             </div>
@@ -10272,7 +10534,7 @@ def student_academic_progress():
                 Compare assessment completion, material engagement and attendance per subject.
             </p>
 
-            <div style="height:330px">
+            <div class="student-chart-box-large">
                 <canvas id="studentSubjectProgressChart"></canvas>
             </div>
         </div>
@@ -10288,23 +10550,29 @@ def student_academic_progress():
         <div class="card soft" style="margin-top:14px">
             <h2>Module Risk & Improvement Areas</h2>
 
-            <div class="scroll-x">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Module</th>
-                            <th>Assessments</th>
-                            <th>Materials</th>
-                            <th>Attendance</th>
-                            <th>Avg Mark</th>
-                            <th>Risk</th>
-                        </tr>
-                    </thead>
+            <div class="student-progress-desktop-table">
+                <div class="scroll-x">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Module</th>
+                                <th>Assessments</th>
+                                <th>Materials</th>
+                                <th>Attendance</th>
+                                <th>Avg Mark</th>
+                                <th>Risk</th>
+                            </tr>
+                        </thead>
 
-                    <tbody>
-                        {subject_rows_html or "<tr><td colspan='6'>No active academic subjects found for this month.</td></tr>"}
-                    </tbody>
-                </table>
+                        <tbody>
+                            {subject_rows_html or "<tr><td colspan='6'>No active academic subjects found for this month.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="student-progress-mobile-cards">
+                {subject_cards_html or "<div class='empty'>No active academic subjects found for this month.</div>"}
             </div>
         </div>
     </section>
@@ -10346,12 +10614,23 @@ def student_academic_progress():
             }};
         }}
 
+        const isSmallScreen = window.innerWidth <= 768;
+
         const commonOptions = {{
             responsive: true,
             maintainAspectRatio: false,
+            layout: {{
+                padding: isSmallScreen ? 4 : 10
+            }},
             plugins: {{
                 legend: {{
-                    position: "bottom"
+                    position: "bottom",
+                    labels: {{
+                        boxWidth: isSmallScreen ? 10 : 14,
+                        font: {{
+                            size: isSmallScreen ? 10 : 12
+                        }}
+                    }}
                 }}
             }}
         }};
@@ -10387,7 +10666,18 @@ def student_academic_progress():
                         display: false
                     }}
                 }},
-                scales: {{
+                indexAxis: isSmallScreen ? "y" : "x",
+                scales: isSmallScreen ? {{
+                    x: {{
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {{
+                            callback: function(value) {{
+                                return value + "%";
+                            }}
+                        }}
+                    }}
+                }} : {{
                     y: {{
                         beginAtZero: true,
                         max: 100,
@@ -10429,7 +10719,18 @@ def student_academic_progress():
             }},
             options: {{
                 ...commonOptions,
-                scales: {{
+                indexAxis: isSmallScreen ? "y" : "x",
+                scales: isSmallScreen ? {{
+                    x: {{
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {{
+                            callback: function(value) {{
+                                return value + "%";
+                            }}
+                        }}
+                    }}
+                }} : {{
                     y: {{
                         beginAtZero: true,
                         max: 100,
@@ -10474,7 +10775,7 @@ def student_academic_progress():
     </script>
     """
 
-    return page("Academic Progress Tracker", body)
+    return page("Academic Progress Tracker", body, extra_head=mobile_css)
 
 
 # ===================== Tutor Portal (includes messaging to student/admin) ==============
