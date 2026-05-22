@@ -42773,10 +42773,12 @@ def coo_dashboard():
     if r:
         return r
 
-    month = get_setting("current_month")
+    month = request.args.get("month") or get_setting("current_month")
 
     conn = get_db()
     cur = conn.cursor()
+
+    # ================= BASIC ENROLLMENT COUNTS =================
 
     cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,))
     total_enrollments = cur.fetchone()["c"] or 0
@@ -42787,8 +42789,13 @@ def coo_dashboard():
     cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='ACTIVE'", (month,))
     active_enrollments = cur.fetchone()["c"] or 0
 
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='LAPSED'", (month,))
+    lapsed_enrollments = cur.fetchone()["c"] or 0
+
     cur.execute("SELECT COUNT(DISTINCT student_id) AS c FROM enrollments WHERE month=?", (month,))
     total_students = cur.fetchone()["c"] or 0
+
+    # ================= OPERATIONAL TEAM COUNTS =================
 
     cur.execute("SELECT COUNT(*) AS c FROM duty_admins WHERE is_active=1")
     duty_admins = cur.fetchone()["c"] or 0
@@ -42805,6 +42812,8 @@ def coo_dashboard():
     cur.execute("SELECT COUNT(*) AS c FROM social_media_managers WHERE is_active=1")
     social_media_managers = cur.fetchone()["c"] or 0
 
+    # ================= FINANCE =================
+
     cur.execute("""
         SELECT COALESCE(SUM(amount),0) AS total
         FROM finance_payment_schedule
@@ -42814,11 +42823,55 @@ def coo_dashboard():
     pending_payments = float(cur.fetchone()["total"] or 0)
 
     cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_payment_schedule
+        WHERE month=?
+          AND status='PAID'
+    """, (month,))
+    paid_payments = float(cur.fetchone()["total"] or 0)
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=?
+          AND record_type='INCOME'
+    """, (month,))
+    total_income = float(cur.fetchone()["total"] or 0)
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=?
+          AND record_type='EXPENSE'
+    """, (month,))
+    total_expenses = float(cur.fetchone()["total"] or 0)
+
+    net_position = total_income - total_expenses
+
+    # ================= SECRETARY =================
+
+    cur.execute("""
         SELECT COUNT(*) AS c
         FROM secretary_action_items
         WHERE status='PENDING'
     """)
     pending_action_items = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT status, COUNT(*) AS c
+        FROM secretary_action_items
+        GROUP BY status
+    """)
+    secretary_action_statuses = cur.fetchall()
+
+    cur.execute("""
+        SELECT status, COUNT(*) AS c
+        FROM secretary_communication_logs
+        GROUP BY status
+    """)
+    secretary_log_statuses = cur.fetchall()
+
+    # ================= SOCIAL MEDIA =================
 
     cur.execute("""
         SELECT COUNT(*) AS c
@@ -42827,9 +42880,96 @@ def coo_dashboard():
     """)
     open_crisis_logs = cur.fetchone()["c"] or 0
 
+    cur.execute("""
+        SELECT status, COUNT(*) AS c
+        FROM social_media_content_logs
+        GROUP BY status
+    """)
+    social_content_statuses = cur.fetchall()
+
+    cur.execute("""
+        SELECT platform, COUNT(*) AS c
+        FROM social_media_content_logs
+        GROUP BY platform
+        ORDER BY c DESC
+        LIMIT 8
+    """)
+    social_platforms = cur.fetchall()
+
+    # ================= RECENT OPERATIONAL ACTIVITY =================
+
+    cur.execute("""
+        SELECT e.created_at, e.status, e.amount_paid,
+               st.full_name, st.phone_whatsapp,
+               sub.name AS subject_name, sub.grade
+        FROM enrollments e
+        JOIN students st ON st.id=e.student_id
+        JOIN subjects sub ON sub.id=e.subject_id
+        WHERE e.month=?
+        ORDER BY e.created_at DESC
+        LIMIT 8
+    """, (month,))
+    recent_enrollments = cur.fetchall()
+
     conn.close()
 
-    coo_name = session.get("coo_name", "COO")
+    # ================= RECENT TABLE ROWS =================
+
+    recent_rows = ""
+
+    for e in recent_enrollments:
+        recent_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(e['full_name'])}</strong>
+                <div class="mini muted">{escape(e['phone_whatsapp'] or '—')}</div>
+            </td>
+
+            <td>{grade_label(e['grade'])}</td>
+            <td>{escape(e['subject_name'])}</td>
+            <td>{coo_status_chip(e['status'])}</td>
+            <td>R{float(e['amount_paid'] or 0):,.2f}</td>
+            <td>{escape((e['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    # ================= CHART DATA =================
+
+    chart_payload = {
+        "enrollmentStatus": {
+            "labels": ["Pending", "Active", "Lapsed"],
+            "values": [pending_enrollments, active_enrollments, lapsed_enrollments]
+        },
+        "operationalTeam": {
+            "labels": ["Duty Admins", "Admissions", "Treasurers", "Secretaries", "Social Media"],
+            "values": [duty_admins, admission_coordinators, treasurers, secretaries, social_media_managers]
+        },
+        "financeOverview": {
+            "labels": ["Income", "Expenses", "Pending Payments", "Paid Payments"],
+            "values": [total_income, total_expenses, pending_payments, paid_payments]
+        },
+        "secretaryActions": {
+            "labels": [r["status"] or "UNKNOWN" for r in secretary_action_statuses],
+            "values": [r["c"] or 0 for r in secretary_action_statuses]
+        },
+        "secretaryLogs": {
+            "labels": [r["status"] or "UNKNOWN" for r in secretary_log_statuses],
+            "values": [r["c"] or 0 for r in secretary_log_statuses]
+        },
+        "socialContent": {
+            "labels": [r["status"] or "UNKNOWN" for r in social_content_statuses],
+            "values": [r["c"] or 0 for r in social_content_statuses]
+        },
+        "socialPlatforms": {
+            "labels": [r["platform"] or "Unknown" for r in social_platforms],
+            "values": [r["c"] or 0 for r in social_platforms]
+        }
+    }
+
+    chart_json = json.dumps(chart_payload)
+
+    net_chip = "active" if net_position >= 0 else "lapsed"
+    net_label = "Positive" if net_position >= 0 else "Negative"
 
     body = f"""
     {coo_nav()}
@@ -42842,7 +42982,12 @@ def coo_dashboard():
             Academic Quality Manager tools are excluded.
         </p>
 
-        <div class="stats">
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <button class="btn mini">View Month</button>
+        </form>
+
+        <div class="stats" style="margin-top:12px">
             {stat("Current Month", month)}
             {stat("Total Enrollments", total_enrollments)}
             {stat("Pending Enrollments", pending_enrollments)}
@@ -42853,29 +42998,368 @@ def coo_dashboard():
             {stat("Open Social Media Issues", open_crisis_logs)}
         </div>
 
-        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:14px">
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-top:14px">
+            <h2>Operational Health Snapshot</h2>
 
-            <div class="card soft" style="border-left:5px solid #1b5e20">
-                <h2>Operational Team</h2>
-                <p class="muted">
-                    View profiles of Duty Admins, Admission Coordinators, Treasurers, Secretaries and Social Media Managers.
-                </p>
-
-                <div class="stats-mini">
-                    <div class="s"><div class="k">{duty_admins}</div><div class="t">Duty Admins</div></div>
-                    <div class="s"><div class="k">{admission_coordinators}</div><div class="t">Admissions</div></div>
-                    <div class="s"><div class="k">{treasurers}</div><div class="t">Treasurers</div></div>
-                    <div class="s"><div class="k">{secretaries}</div><div class="t">Secretaries</div></div>
-                    <div class="s"><div class="k">{social_media_managers}</div><div class="t">Social Media</div></div>
+            <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+                <div class="card soft">
+                    <h3>Enrollment Flow</h3>
+                    <p class="muted">Current month enrollment activity and student movement.</p>
+                    <span class="chip active">{total_enrollments} enrollment record(s)</span>
                 </div>
 
-                <a class="btn success" href="{url_for('coo_team_profiles')}">
-                    View Operational Team
-                </a>
+                <div class="card soft">
+                    <h3>Finance Position</h3>
+                    <p class="muted">Income, expenses and scheduled payment activity.</p>
+                    <span class="chip {net_chip}">Net: {net_label} | R{net_position:,.2f}</span>
+                </div>
+
+                <div class="card soft">
+                    <h3>Operational Alerts</h3>
+                    <p class="muted">Pending secretary items and open social media issues.</p>
+                    <span class="chip pending">{pending_action_items + open_crisis_logs} item(s)</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft">
+                <h2>Enrollment Status</h2>
+                <p class="mini muted">Pending, active and lapsed enrollments for the selected month.</p>
+                <div style="height:280px">
+                    <canvas id="enrollmentStatusChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Operational Team Mix</h2>
+                <p class="mini muted">Active operational staff by role.</p>
+                <div style="height:280px">
+                    <canvas id="operationalTeamChart"></canvas>
+                </div>
             </div>
 
         </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft">
+                <h2>Finance Overview</h2>
+                <p class="mini muted">Income, expenses, pending payments and paid payments.</p>
+                <div style="height:320px">
+                    <canvas id="financeOverviewChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Secretary Action Items</h2>
+                <p class="mini muted">Pending, overdue and completed secretary tasks.</p>
+                <div style="height:320px">
+                    <canvas id="secretaryActionsChart"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft">
+                <h2>Secretary Communication Logs</h2>
+                <p class="mini muted">Draft, ready, sent and approval-based communication work.</p>
+                <div style="height:320px">
+                    <canvas id="secretaryLogsChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Social Media Content Status</h2>
+                <p class="mini muted">Planned, draft, posted and pending social media content.</p>
+                <div style="height:320px">
+                    <canvas id="socialContentChart"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Social Media Activity by Platform</h2>
+            <p class="mini muted">
+                Shows which social media platforms are receiving the most logged activity.
+            </p>
+
+            <div style="height:330px">
+                <canvas id="socialPlatformsChart"></canvas>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px;border-left:5px solid #1b5e20">
+            <h2>Operational Team</h2>
+
+            <p class="muted">
+                View profiles of Duty Admins, Admission Coordinators, Treasurers, Secretaries and Social Media Managers.
+            </p>
+
+            <div class="stats-mini">
+                <div class="s"><div class="k">{duty_admins}</div><div class="t">Duty Admins</div></div>
+                <div class="s"><div class="k">{admission_coordinators}</div><div class="t">Admissions</div></div>
+                <div class="s"><div class="k">{treasurers}</div><div class="t">Treasurers</div></div>
+                <div class="s"><div class="k">{secretaries}</div><div class="t">Secretaries</div></div>
+                <div class="s"><div class="k">{social_media_managers}</div><div class="t">Social Media</div></div>
+            </div>
+
+            <a class="btn success" href="{url_for('coo_team_profiles')}">
+                View Operational Team
+            </a>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Recent Enrollments</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Learner</th>
+                            <th>Grade</th>
+                            <th>Subject</th>
+                            <th>Status</th>
+                            <th>Amount Paid</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {recent_rows or "<tr><td colspan='6'>No recent enrollments found for this month.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        const cooCharts = {chart_json};
+
+        const ebtaColors = [
+            "#1b5e20",
+            "#2e7d32",
+            "#43a047",
+            "#66bb6a",
+            "#a5d6a7",
+            "#f59e0b",
+            "#64748b",
+            "#0f172a"
+        ];
+
+        function moneyLabel(value) {{
+            return "R" + Number(value || 0).toLocaleString("en-ZA", {{
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }});
+        }}
+
+        function noDataPlugin(message) {{
+            return {{
+                id: "noData_" + Math.random().toString(36).slice(2),
+                afterDraw(chart) {{
+                    const dataValues = chart.data.datasets.flatMap(ds => ds.data || []);
+                    const hasData = dataValues.some(v => Number(v) > 0);
+
+                    if (!hasData) {{
+                        const ctx = chart.ctx;
+                        ctx.save();
+                        ctx.textAlign = "center";
+                        ctx.textBaseline = "middle";
+                        ctx.font = "13px Arial";
+                        ctx.fillStyle = "#64748b";
+                        ctx.fillText(message || "No data available for this month", chart.width / 2, chart.height / 2);
+                        ctx.restore();
+                    }}
+                }}
+            }};
+        }}
+
+        const commonOptions = {{
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {{
+                legend: {{
+                    position: "bottom"
+                }}
+            }}
+        }};
+
+        new Chart(document.getElementById("enrollmentStatusChart"), {{
+            type: "doughnut",
+            data: {{
+                labels: cooCharts.enrollmentStatus.labels,
+                datasets: [{{
+                    data: cooCharts.enrollmentStatus.values,
+                    backgroundColor: ebtaColors
+                }}]
+            }},
+            options: commonOptions,
+            plugins: [noDataPlugin("No enrollment data yet")]
+        }});
+
+        new Chart(document.getElementById("operationalTeamChart"), {{
+            type: "pie",
+            data: {{
+                labels: cooCharts.operationalTeam.labels,
+                datasets: [{{
+                    data: cooCharts.operationalTeam.values,
+                    backgroundColor: ebtaColors
+                }}]
+            }},
+            options: commonOptions,
+            plugins: [noDataPlugin("No operational team data yet")]
+        }});
+
+        new Chart(document.getElementById("financeOverviewChart"), {{
+            type: "bar",
+            data: {{
+                labels: cooCharts.financeOverview.labels,
+                datasets: [{{
+                    label: "Amount",
+                    data: cooCharts.financeOverview.values,
+                    backgroundColor: "#1b5e20",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                plugins: {{
+                    legend: {{
+                        display: false
+                    }},
+                    tooltip: {{
+                        callbacks: {{
+                            label: function(context) {{
+                                return moneyLabel(context.parsed.y || 0);
+                            }}
+                        }}
+                    }}
+                }},
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            callback: function(value) {{
+                                return moneyLabel(value);
+                            }}
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No finance data yet")]
+        }});
+
+        new Chart(document.getElementById("secretaryActionsChart"), {{
+            type: "bar",
+            data: {{
+                labels: cooCharts.secretaryActions.labels,
+                datasets: [{{
+                    label: "Action Items",
+                    data: cooCharts.secretaryActions.values,
+                    backgroundColor: "#2e7d32",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                plugins: {{
+                    legend: {{
+                        display: false
+                    }}
+                }},
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No secretary action items yet")]
+        }});
+
+        new Chart(document.getElementById("secretaryLogsChart"), {{
+            type: "bar",
+            data: {{
+                labels: cooCharts.secretaryLogs.labels,
+                datasets: [{{
+                    label: "Communication Logs",
+                    data: cooCharts.secretaryLogs.values,
+                    backgroundColor: "#43a047",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                plugins: {{
+                    legend: {{
+                        display: false
+                    }}
+                }},
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No secretary communication logs yet")]
+        }});
+
+        new Chart(document.getElementById("socialContentChart"), {{
+            type: "doughnut",
+            data: {{
+                labels: cooCharts.socialContent.labels,
+                datasets: [{{
+                    data: cooCharts.socialContent.values,
+                    backgroundColor: ebtaColors
+                }}]
+            }},
+            options: commonOptions,
+            plugins: [noDataPlugin("No social media content data yet")]
+        }});
+
+        new Chart(document.getElementById("socialPlatformsChart"), {{
+            type: "bar",
+            data: {{
+                labels: cooCharts.socialPlatforms.labels,
+                datasets: [{{
+                    label: "Content Logs",
+                    data: cooCharts.socialPlatforms.values,
+                    backgroundColor: "#1b5e20",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                indexAxis: "y",
+                plugins: {{
+                    legend: {{
+                        display: false
+                    }}
+                }},
+                scales: {{
+                    x: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No social media platform data yet")]
+        }});
+    </script>
     """
 
     return page("COO Dashboard", body)
