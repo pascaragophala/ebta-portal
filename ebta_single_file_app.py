@@ -43201,139 +43201,2129 @@ def admin_coo_settings_update():
     return redirect(url_for("admin_coos"))
     
     
-def coo_placeholder(title, message):
+# =============================================================
+# COO FUNCTIONAL OPERATIONAL PAGES
+# =============================================================
+
+def coo_page_num():
+    try:
+        p = int(request.args.get("page", 1))
+    except Exception:
+        p = 1
+    return max(1, p)
+
+
+def coo_selected_month():
+    return request.args.get("month") or get_setting("current_month")
+
+
+def coo_status_chip(status):
+    status = status or "UNKNOWN"
+
+    if status in ["ACTIVE", "PAID", "APPROVED", "SENT", "POSTED", "DONE", "SUBMITTED", "REVIEWED"]:
+        cls = "active"
+    elif status in ["PENDING", "DRAFT", "READY", "PLANNED", "OPEN", "IN PROGRESS", "AWAITING POP"]:
+        cls = "pending"
+    elif status in ["LAPSED", "FAILED", "DECLINED", "CANCELLED", "OVERDUE", "ESCALATED"]:
+        cls = "lapsed"
+    else:
+        cls = ""
+
+    return f"<span class='chip {cls}'>{escape(status)}</span>"
+
+
+# ---------------- COO ENROLLMENTS ----------------
+
+@app.get('/coo/enrollments')
+def coo_enrollments():
+
+    r = require_coo_permission("coo_enrollments_enabled", "enrollments")
+    if r:
+        return r
+
+    month = coo_selected_month()
+    q = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    page_num = coo_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = ["e.month = ?"]
+    params = [month]
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                st.full_name LIKE ?
+                OR st.phone_whatsapp LIKE ?
+                OR st.guardian_phone LIKE ?
+                OR st.email LIKE ?
+                OR sub.name LIKE ?
+                OR sub.grade LIKE ?
+                OR e.status LIKE ?
+                OR e.coupon_code LIKE ?
+                OR e.referral_code_used LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search, search, search, search, search]
+
+    if status:
+        where.append("e.status = ?")
+        params.append(status)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM enrollments e
+        JOIN students st ON st.id = e.student_id
+        JOIN subjects sub ON sub.id = e.subject_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT
+            e.*,
+            st.full_name,
+            st.phone_whatsapp,
+            st.guardian_name,
+            st.guardian_phone,
+            st.email,
+            sub.name AS subject_name,
+            sub.grade
+        FROM enrollments e
+        JOIN students st ON st.id = e.student_id
+        JOIN subjects sub ON sub.id = e.subject_id
+        {where_sql}
+        ORDER BY e.created_at DESC, e.id DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT status, COUNT(*) AS c
+        FROM enrollments
+        WHERE month=?
+        GROUP BY status
+    """, (month,))
+
+    status_rows = cur.fetchall()
+    conn.close()
+
+    status_stats = "".join([
+        stat(r["status"], r["c"])
+        for r in status_rows
+    ])
+
+    trs = ""
+
+    for e in rows:
+        pop = "—"
+
+        if e["pop_url"]:
+            pop = f"<a target='_blank' href='{escape(e['pop_url'])}'>PoP</a>"
+
+        coupon = e["coupon_code"] or e["referral_code_used"] or "No code used"
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(e['full_name'])}</strong>
+                <div class="mini muted">{escape(e['phone_whatsapp'] or '—')}</div>
+                <div class="mini muted">Guardian: {escape(e['guardian_phone'] or '—')}</div>
+            </td>
+
+            <td>{grade_label(e['grade'])}</td>
+            <td>{escape(e['subject_name'])}</td>
+            <td>{coo_status_chip(e['status'])}</td>
+            <td>{escape(coupon)}</td>
+            <td>R{float(e['amount_paid'] or 0):,.2f}</td>
+            <td>{pop}</td>
+            <td>{escape((e['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    status_options = "".join([
+        f"<option value='{s}' {'selected' if status == s else ''}>{s}</option>"
+        for s in ["PENDING", "ACTIVE", "LAPSED", "DECLINED"]
+    ])
+
     body = f"""
     {coo_nav()}
 
     <section class="card">
-        <h1>{escape(title)}</h1>
+        <h1>COO Enrollments</h1>
 
         <p class="muted">
-            {escape(message)}
+            Operational enrollment overview. Academic marks and AQM tools are excluded.
         </p>
 
-        <div class="card soft">
-            <p>
-                This COO section is ready to be connected to the existing operational data.
-                It is intentionally separated from academic tools.
-            </p>
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search learner, phone, grade, subject, status or coupon">
+
+            <select name="status">
+                <option value="">All Statuses</option>
+                {status_options}
+            </select>
+
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('coo_enrollments')}">Clear</a>
+        </form>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Month", month)}
+            {stat("Total Records", total)}
+            {status_stats}
+        </div>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} enrollment record(s).
+        </div>
+
+        {pagination_controls("/coo/enrollments", page_num, total_pages, {"month": month, "q": q, "status": status})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Status</th>
+                        <th>Coupon / Referral</th>
+                        <th>Amount Paid</th>
+                        <th>PoP</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='8'>No enrollments found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/coo/enrollments", page_num, total_pages, {"month": month, "q": q, "status": status})}
+    </section>
+    """
+
+    return page("COO Enrollments", body)
+
+
+# ---------------- COO FOLLOW-UPS ----------------
+
+@app.get('/coo/followups')
+def coo_followups():
+
+    r = require_coo_permission("coo_duty_admin_enabled", "follow-ups")
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    grade = request.args.get("grade", "").strip()
+    page_num = coo_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                full_name LIKE ?
+                OR phone LIKE ?
+                OR subjects LIKE ?
+                OR issue_type LIKE ?
+                OR notes LIKE ?
+                OR captured_by LIKE ?
+                OR updated_by LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search, search, search]
+
+    if status:
+        where.append("followup_status = ?")
+        params.append(status)
+
+    if grade:
+        where.append("grade = ?")
+        params.append(grade)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"SELECT COUNT(*) AS c FROM followups {where_sql}", params)
+    total = cur.fetchone()["c"] or 0
+
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT *
+        FROM followups
+        {where_sql}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for f in rows:
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(f['full_name'])}</strong>
+                <div class="mini muted">{escape(f['phone'] or '—')}</div>
+            </td>
+            <td>{escape(f['grade'] or '—')}</td>
+            <td>{escape(f['subjects'] or '—')}</td>
+            <td>{escape(f['issue_type'] or '—')}</td>
+            <td>{coo_status_chip(f['followup_status'])}</td>
+            <td>{escape(f['captured_by'] or '—')}</td>
+            <td>{escape((f['created_at'] or '')[:16].replace('T',' '))}</td>
+            <td>{escape((f['notes'] or '—')[:120])}</td>
+        </tr>
+        """
+
+    status_options = "".join([
+        f"<option value='{s}' {'selected' if status == s else ''}>{s}</option>"
+        for s in FOLLOWUP_STATUSES
+    ])
+
+    grade_options = "".join([
+        f"<option value='{g}' {'selected' if grade == g else ''}>{grade_label(g)}</option>"
+        for g in ["G8", "G9", "G10", "G11", "G12", "G13"]
+    ])
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>COO Follow-Ups</h1>
+
+        <p class="muted">
+            Operational follow-up tracking across duty admin and admissions.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search name, phone, subject, issue, note or staff">
+
+            <select name="status">
+                <option value="">All Statuses</option>
+                {status_options}
+            </select>
+
+            <select name="grade">
+                <option value="">All Grades</option>
+                {grade_options}
+            </select>
+
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('coo_followups')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} follow-up record(s).
+        </div>
+
+        {pagination_controls("/coo/followups", page_num, total_pages, {"q": q, "status": status, "grade": grade})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Grade</th>
+                        <th>Subjects</th>
+                        <th>Issue</th>
+                        <th>Status</th>
+                        <th>Captured By</th>
+                        <th>Created</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='8'>No follow-ups found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/coo/followups", page_num, total_pages, {"q": q, "status": status, "grade": grade})}
+    </section>
+    """
+
+    return page("COO Follow-Ups", body)
+
+
+# ---------------- COO ADMISSION OVERVIEW ----------------
+
+@app.get('/coo/admission')
+def coo_admission_overview():
+
+    r = require_coo_permission("coo_admission_enabled", "admission operations")
+    if r:
+        return r
+
+    month = coo_selected_month()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS c FROM admission_coordinators WHERE is_active=1")
+    active_admissions = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='PENDING'", (month,))
+    pending = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='ACTIVE'", (month,))
+    active = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(DISTINCT student_id) AS c FROM enrollments WHERE month=?", (month,))
+    learners = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM discount_coupons
+        WHERE substr(created_at, 1, 7)=?
+    """, (month,))
+    discounts = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT e.created_at, e.status, e.amount_paid, st.full_name, st.phone_whatsapp,
+               sub.name AS subject_name, sub.grade
+        FROM enrollments e
+        JOIN students st ON st.id=e.student_id
+        JOIN subjects sub ON sub.id=e.subject_id
+        WHERE e.month=?
+        ORDER BY e.created_at DESC
+        LIMIT 10
+    """, (month,))
+
+    recent = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for r0 in recent:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(r0['full_name'])}</strong>
+                <div class="mini muted">{escape(r0['phone_whatsapp'] or '—')}</div>
+            </td>
+            <td>{grade_label(r0['grade'])}</td>
+            <td>{escape(r0['subject_name'])}</td>
+            <td>{coo_status_chip(r0['status'])}</td>
+            <td>R{float(r0['amount_paid'] or 0):,.2f}</td>
+            <td>{escape((r0['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Admission Operations</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <button class="btn mini">View Month</button>
+        </form>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Month", month)}
+            {stat("Active Admission Coordinators", active_admissions)}
+            {stat("Learners This Month", learners)}
+            {stat("Pending Enrollments", pending)}
+            {stat("Active Enrollments", active)}
+            {stat("Discount Codes Created", discounts)}
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Recent Admission Activity</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Learner</th>
+                            <th>Grade</th>
+                            <th>Subject</th>
+                            <th>Status</th>
+                            <th>Amount</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='6'>No admission activity found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
         </div>
     </section>
     """
 
-    return page(title, body)
+    return page("Admission Operations", body)
 
 
-@app.get('/coo/enrollments')
-def coo_enrollments():
-    r = require_coo_permission("coo_enrollments_enabled", "enrollments")
-    if r: return r
-    return coo_placeholder("COO Enrollments", "Operational enrollment oversight.")
-
-
-@app.get('/coo/followups')
-def coo_followups():
-    r = require_coo_permission("coo_duty_admin_enabled", "follow-ups")
-    if r: return r
-    return coo_placeholder("COO Follow-Ups", "Duty Admin and admission follow-up oversight.")
-
-
-@app.get('/coo/admission')
-def coo_admission_overview():
-    r = require_coo_permission("coo_admission_enabled", "admission operations")
-    if r: return r
-    return coo_placeholder("Admission Operations", "Admission Coordinator operations overview.")
-
+# ---------------- COO DUTY ADMIN OVERVIEW ----------------
 
 @app.get('/coo/duty-admin')
 def coo_duty_admin_overview():
-    r = require_coo_permission("coo_duty_admin_enabled", "duty admin operations")
-    if r: return r
-    return coo_placeholder("Duty Admin Operations", "Duty Admin operational oversight.")
 
+    r = require_coo_permission("coo_duty_admin_enabled", "duty admin operations")
+    if r:
+        return r
+
+    month = coo_selected_month()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS c FROM duty_admins WHERE is_active=1")
+    duty_admins = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM followups WHERE followup_status!='RESOLVED'")
+    open_followups = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='PENDING'", (month,))
+    pending_enrollments = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM student_reports WHERE substr(upload_date,1,7)=?", (month,))
+    reports = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT full_name, phone, grade, subjects, followup_status, issue_type, created_at
+        FROM followups
+        ORDER BY created_at DESC
+        LIMIT 10
+    """)
+
+    recent_followups = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for f in recent_followups:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(f['full_name'])}</strong>
+                <div class="mini muted">{escape(f['phone'] or '—')}</div>
+            </td>
+            <td>{escape(f['grade'] or '—')}</td>
+            <td>{escape(f['subjects'] or '—')}</td>
+            <td>{escape(f['issue_type'] or '—')}</td>
+            <td>{coo_status_chip(f['followup_status'])}</td>
+            <td>{escape((f['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Duty Admin Operations</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <button class="btn mini">View Month</button>
+        </form>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Month", month)}
+            {stat("Active Duty Admins", duty_admins)}
+            {stat("Open Follow-Ups", open_followups)}
+            {stat("Pending Enrollments", pending_enrollments)}
+            {stat("Student Reports Uploaded", reports)}
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Recent Follow-Ups</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Learner</th>
+                            <th>Grade</th>
+                            <th>Subjects</th>
+                            <th>Issue</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='6'>No follow-ups found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("Duty Admin Operations", body)
+
+
+# ---------------- COO PARENTS INFORMATION ----------------
 
 @app.get('/coo/parents')
 def coo_parents_information():
-    r = require_coo_permission("coo_admission_enabled", "parents information")
-    if r: return r
-    return coo_placeholder("Parents Information", "Parents communication and WhatsApp group information.")
 
+    r = require_coo_permission("coo_admission_enabled", "parents information")
+    if r:
+        return r
+
+    month = coo_selected_month()
+    q = request.args.get("q", "").strip()
+    parent_type = request.args.get("type", "").strip()
+    page_num = coo_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = ["e.month = ?"]
+    params = [month]
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                st.full_name LIKE ?
+                OR st.phone_whatsapp LIKE ?
+                OR st.guardian_name LIKE ?
+                OR st.guardian_phone LIKE ?
+                OR st.email LIKE ?
+                OR st.school LIKE ?
+                OR st.province LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search, search, search]
+
+    if parent_type == "new":
+        where.append("substr(st.created_at,1,7) = ?")
+        params.append(month)
+    elif parent_type == "returning":
+        where.append("substr(st.created_at,1,7) != ?")
+        params.append(month)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(DISTINCT st.id) AS c
+        FROM enrollments e
+        JOIN students st ON st.id=e.student_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT DISTINCT
+            st.id,
+            st.full_name,
+            st.phone_whatsapp,
+            st.guardian_name,
+            st.guardian_phone,
+            st.email,
+            st.grade,
+            st.school,
+            st.province,
+            st.created_at
+        FROM enrollments e
+        JOIN students st ON st.id=e.student_id
+        {where_sql}
+        ORDER BY st.full_name
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    group_link = "https://chat.whatsapp.com/DZYMvnEl9jpEyvzxqbgwV6"
+    msg = "Good day, please join the EBTA Parents Notifications WhatsApp group: " + group_link
+
+    trs = ""
+
+    for s in rows:
+        kind = "New" if (s["created_at"] or "")[:7] == month else "Returning"
+        phone = s["guardian_phone"] or s["phone_whatsapp"] or ""
+        wa = f"https://wa.me/{phone.replace('+','').replace(' ','')}?text={quote_from_bytes(msg.encode())}" if phone else "#"
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(s['full_name'])}</strong>
+                <div class="mini muted">{grade_label(s['grade'])}</div>
+            </td>
+            <td>
+                {escape(s['guardian_name'] or '—')}
+                <div class="mini muted">{escape(s['guardian_phone'] or '—')}</div>
+            </td>
+            <td>{escape(s['phone_whatsapp'] or '—')}</td>
+            <td>{escape(s['school'] or '—')}</td>
+            <td>{escape(s['province'] or '—')}</td>
+            <td>{coo_status_chip(kind)}</td>
+            <td><a class="btn mini success" target="_blank" href="{wa}">WhatsApp</a></td>
+        </tr>
+        """
+
+    type_options = f"""
+        <option value="" {'selected' if parent_type == '' else ''}>All Parents</option>
+        <option value="new" {'selected' if parent_type == 'new' else ''}>New Parents</option>
+        <option value="returning" {'selected' if parent_type == 'returning' else ''}>Returning Parents</option>
+    """
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Parents Information</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search learner, parent, phone, school or province">
+
+            <select name="type">
+                {type_options}
+            </select>
+
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('coo_parents_information')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} parent record(s) for {pretty_month_label(month)}.
+        </div>
+
+        {pagination_controls("/coo/parents", page_num, total_pages, {"month": month, "q": q, "type": parent_type})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Parent / Guardian</th>
+                        <th>Learner Phone</th>
+                        <th>School</th>
+                        <th>Province</th>
+                        <th>Type</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No parents found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/coo/parents", page_num, total_pages, {"month": month, "q": q, "type": parent_type})}
+    </section>
+    """
+
+    return page("Parents Information", body)
+    
+    
+# ---------------- COO DISCOUNTS ----------------
 
 @app.get('/coo/discounts')
 def coo_discounts():
-    r = require_coo_permission("coo_discounts_enabled", "discounts")
-    if r: return r
-    return coo_placeholder("COO Discounts", "Operational discount and coupon oversight.")
 
+    r = require_coo_permission("coo_discounts_enabled", "discounts")
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    page_num = coo_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                dc.code LIKE ?
+                OR dc.source LIKE ?
+                OR dc.status LIKE ?
+                OR ts.full_name LIKE ?
+                OR os.full_name LIKE ?
+                OR sub.name LIKE ?
+                OR sub.grade LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search, search, search]
+
+    if status:
+        where.append("dc.status = ?")
+        params.append(status)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM discount_coupons dc
+        LEFT JOIN students ts ON ts.id=dc.target_student_id
+        LEFT JOIN students os ON os.id=dc.owner_student_id
+        LEFT JOIN subjects sub ON sub.id=dc.subject_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT
+            dc.*,
+            ts.full_name AS target_name,
+            os.full_name AS owner_name,
+            sub.name AS subject_name,
+            sub.grade AS subject_grade
+        FROM discount_coupons dc
+        LEFT JOIN students ts ON ts.id=dc.target_student_id
+        LEFT JOIN students os ON os.id=dc.owner_student_id
+        LEFT JOIN subjects sub ON sub.id=dc.subject_id
+        {where_sql}
+        ORDER BY dc.created_at DESC, dc.id DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for d in rows:
+        applies = "All selected subjects"
+
+        if d["applies_to"] == "SUBJECT" and d["subject_name"]:
+            applies = f"{grade_label(d['subject_grade'])} - {d['subject_name']}"
+
+        sms = "SMS Sent" if int(d["sms_sent"] or 0) == 1 else "SMS Not Sent"
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(d['code'])}</strong>
+                <div class="mini muted">{escape(d['source'] or '—')}</div>
+            </td>
+            <td>{escape(d['target_name'] or d['owner_name'] or '—')}</td>
+            <td>{d['discount_percent']}%</td>
+            <td>{escape(applies)}</td>
+            <td>{coo_status_chip(d['status'])}</td>
+            <td>{d['used_count'] or 0} / {d['max_uses'] or 1}</td>
+            <td>{escape(sms)}</td>
+            <td>{escape((d['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    status_options = "".join([
+        f"<option value='{s}' {'selected' if status == s else ''}>{s}</option>"
+        for s in ["ACTIVE", "USED", "EXPIRED", "CANCELLED"]
+    ])
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>COO Discounts</h1>
+
+        <form method="get" class="toolbar">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search code, learner, subject, source or status">
+
+            <select name="status">
+                <option value="">All Statuses</option>
+                {status_options}
+            </select>
+
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('coo_discounts')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} discount code(s).
+        </div>
+
+        {pagination_controls("/coo/discounts", page_num, total_pages, {"q": q, "status": status})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Student</th>
+                        <th>Discount</th>
+                        <th>Applies To</th>
+                        <th>Status</th>
+                        <th>Uses</th>
+                        <th>SMS</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='8'>No discount codes found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/coo/discounts", page_num, total_pages, {"q": q, "status": status})}
+    </section>
+    """
+
+    return page("COO Discounts", body)
+
+
+# ---------------- COO FINANCE OVERVIEW ----------------
 
 @app.get('/coo/finance')
 def coo_finance_overview():
-    r = require_coo_permission("coo_treasurer_enabled", "finance overview")
-    if r: return r
-    return coo_placeholder("Finance Overview", "Treasurer and finance operational overview.")
 
+    r = require_coo_permission("coo_treasurer_enabled", "finance overview")
+    if r:
+        return r
+
+    month = coo_selected_month()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=? AND record_type='INCOME'
+    """, (month,))
+    income = float(cur.fetchone()["total"] or 0)
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=? AND record_type='EXPENSE'
+    """, (month,))
+    expenses = float(cur.fetchone()["total"] or 0)
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_payment_schedule
+        WHERE month=? AND status='PENDING'
+    """, (month,))
+    pending_payments = float(cur.fetchone()["total"] or 0)
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_payment_schedule
+        WHERE month=? AND status='PAID'
+    """, (month,))
+    paid_payments = float(cur.fetchone()["total"] or 0)
+
+    cur.execute("""
+        SELECT record_type, category, description, amount, payment_date, status, captured_at
+        FROM finance_records
+        WHERE month=?
+        ORDER BY captured_at DESC
+        LIMIT 12
+    """, (month,))
+    recent = cur.fetchall()
+
+    conn.close()
+
+    net = income - expenses
+
+    rows = ""
+
+    for r0 in recent:
+        rows += f"""
+        <tr>
+            <td>{coo_status_chip(r0['record_type'])}</td>
+            <td>{escape(r0['category'] or '—')}</td>
+            <td>{escape(r0['description'] or '—')}</td>
+            <td>R{float(r0['amount'] or 0):,.2f}</td>
+            <td>{escape(r0['payment_date'] or '—')}</td>
+            <td>{coo_status_chip(r0['status'])}</td>
+        </tr>
+        """
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Finance Overview</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <button class="btn mini">View Month</button>
+        </form>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Month", month)}
+            {stat("Income", f"R{income:,.2f}")}
+            {stat("Expenses", f"R{expenses:,.2f}")}
+            {stat("Net", f"R{net:,.2f}")}
+            {stat("Pending Payments", f"R{pending_payments:,.2f}")}
+            {stat("Paid Payments", f"R{paid_payments:,.2f}")}
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Recent Finance Records</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th>Category</th>
+                            <th>Description</th>
+                            <th>Amount</th>
+                            <th>Payment Date</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='6'>No finance records found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("Finance Overview", body)
+
+
+# ---------------- COO PAYMENT SCHEDULE ----------------
 
 @app.get('/coo/payments')
 def coo_payment_schedule():
-    r = require_coo_permission("coo_treasurer_enabled", "payment schedule")
-    if r: return r
-    return coo_placeholder("Payment Schedule", "Operational view of scheduled and pending payments.")
 
+    r = require_coo_permission("coo_treasurer_enabled", "payment schedule")
+    if r:
+        return r
+
+    month = coo_selected_month()
+    q = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    page_num = coo_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = ["month = ?"]
+    params = [month]
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                payee_name LIKE ?
+                OR payee_role LIKE ?
+                OR category LIKE ?
+                OR approval_note LIKE ?
+                OR payment_reference LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search]
+
+    if status:
+        where.append("status = ?")
+        params.append(status)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"SELECT COUNT(*) AS c FROM finance_payment_schedule {where_sql}", params)
+    total = cur.fetchone()["c"] or 0
+
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT *
+        FROM finance_payment_schedule
+        {where_sql}
+        ORDER BY due_date ASC, created_at DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for p in rows:
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(p['payee_name'])}</strong>
+                <div class="mini muted">{escape(p['payee_role'] or '—')}</div>
+            </td>
+            <td>{escape(p['category'] or '—')}</td>
+            <td>R{float(p['amount'] or 0):,.2f}</td>
+            <td>{escape(p['due_date'] or '—')}</td>
+            <td>{escape(p['paid_date'] or '—')}</td>
+            <td>{coo_status_chip(p['status'])}</td>
+            <td>{escape(p['payment_reference'] or '—')}</td>
+        </tr>
+        """
+
+    status_options = "".join([
+        f"<option value='{s}' {'selected' if status == s else ''}>{s}</option>"
+        for s in ["PENDING", "APPROVED", "PAID", "CANCELLED"]
+    ])
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Payment Schedule</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search payee, role, category or reference">
+
+            <select name="status">
+                <option value="">All Statuses</option>
+                {status_options}
+            </select>
+
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('coo_payment_schedule')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} scheduled payment(s).
+        </div>
+
+        {pagination_controls("/coo/payments", page_num, total_pages, {"month": month, "q": q, "status": status})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Payee</th>
+                        <th>Category</th>
+                        <th>Amount</th>
+                        <th>Due Date</th>
+                        <th>Paid Date</th>
+                        <th>Status</th>
+                        <th>Reference</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No scheduled payments found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/coo/payments", page_num, total_pages, {"month": month, "q": q, "status": status})}
+    </section>
+    """
+
+    return page("Payment Schedule", body)
+
+
+# ---------------- COO MONTHLY FINANCE REPORTS ----------------
 
 @app.get('/coo/monthly-reports')
 def coo_monthly_reports():
-    r = require_coo_permission("coo_treasurer_enabled", "monthly reports")
-    if r: return r
-    return coo_placeholder("Monthly Finance Reports", "COO view of monthly finance reports.")
 
+    r = require_coo_permission("coo_treasurer_enabled", "monthly reports")
+    if r:
+        return r
+
+    page_num = coo_page_num()
+    per_page = 12
+    offset = (page_num - 1) * per_page
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS c FROM finance_monthly_reports")
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    cur.execute("""
+        SELECT *
+        FROM finance_monthly_reports
+        ORDER BY month DESC
+        LIMIT ? OFFSET ?
+    """, (per_page, offset))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for r0 in rows:
+        trs += f"""
+        <tr>
+            <td><strong>{escape(r0['month'])}</strong></td>
+            <td>R{float(r0['total_income'] or 0):,.2f}</td>
+            <td>R{float(r0['total_expenses'] or 0):,.2f}</td>
+            <td>R{float(r0['net_profit_loss'] or 0):,.2f}</td>
+            <td>R{float(r0['bank_balance'] or 0):,.2f}</td>
+            <td>{coo_status_chip(r0['status'])}</td>
+            <td>{escape((r0['submitted_at'] or '—')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Monthly Finance Reports</h1>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} monthly report(s).
+        </div>
+
+        {pagination_controls("/coo/monthly-reports", page_num, total_pages)}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Month</th>
+                        <th>Income</th>
+                        <th>Expenses</th>
+                        <th>Net</th>
+                        <th>Bank Balance</th>
+                        <th>Status</th>
+                        <th>Submitted</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No monthly finance reports found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/coo/monthly-reports", page_num, total_pages)}
+    </section>
+    """
+
+    return page("Monthly Finance Reports", body)
+    
+    
+# ---------------- COO SECRETARY LOGS ----------------
 
 @app.get('/coo/secretary/logs')
 def coo_secretary_logs():
-    r = require_coo_permission("coo_secretary_enabled", "secretary logs")
-    if r: return r
-    return coo_placeholder("Secretary Logs", "Secretary communication logs.")
 
+    r = require_coo_permission("coo_secretary_enabled", "secretary logs")
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    page_num = coo_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                l.title LIKE ?
+                OR l.message_type LIKE ?
+                OR l.audience LIKE ?
+                OR l.grade LIKE ?
+                OR l.subject LIKE ?
+                OR l.group_name LIKE ?
+                OR s.full_name LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search, search, search]
+
+    if status:
+        where.append("l.status = ?")
+        params.append(status)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM secretary_communication_logs l
+        JOIN secretaries s ON s.id=l.secretary_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT l.*, s.full_name AS secretary_name
+        FROM secretary_communication_logs l
+        JOIN secretaries s ON s.id=l.secretary_id
+        {where_sql}
+        ORDER BY l.created_at DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for l in rows:
+        proof = "Yes" if l["proof_file_path"] else "No"
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(l['title'])}</strong>
+                <div class="mini muted">{escape(l['message_type'])}</div>
+            </td>
+            <td>{escape(l['secretary_name'])}</td>
+            <td>{escape(l['audience'])}</td>
+            <td>{escape(l['grade'] or '—')}</td>
+            <td>{escape(l['subject'] or '—')}</td>
+            <td>{coo_status_chip(l['status'])}</td>
+            <td>{escape(proof)}</td>
+            <td>{escape((l['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    status_options = "".join([
+        f"<option value='{s}' {'selected' if status == s else ''}>{s}</option>"
+        for s in ["DRAFT", "READY", "SENT", "NEEDS_APPROVAL"]
+    ])
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Secretary Logs</h1>
+
+        <form method="get" class="toolbar">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search title, audience, grade, subject or secretary">
+
+            <select name="status">
+                <option value="">All Statuses</option>
+                {status_options}
+            </select>
+
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('coo_secretary_logs')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} communication log(s).
+        </div>
+
+        {pagination_controls("/coo/secretary/logs", page_num, total_pages, {"q": q, "status": status})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Message</th>
+                        <th>Secretary</th>
+                        <th>Audience</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Status</th>
+                        <th>Proof</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='8'>No secretary logs found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/coo/secretary/logs", page_num, total_pages, {"q": q, "status": status})}
+    </section>
+    """
+
+    return page("Secretary Logs", body)
+
+
+# ---------------- COO MEETING MINUTES ----------------
 
 @app.get('/coo/secretary/minutes')
 def coo_secretary_minutes():
-    r = require_coo_permission("coo_secretary_enabled", "meeting minutes")
-    if r: return r
-    return coo_placeholder("Meeting Minutes", "Secretary meeting minutes archive.")
 
+    r = require_coo_permission("coo_secretary_enabled", "meeting minutes")
+    if r:
+        return r
+
+    page_num = coo_page_num()
+    per_page = 12
+    offset = (page_num - 1) * per_page
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM secretary_meeting_minutes m
+        JOIN secretaries s ON s.id=m.secretary_id
+    """)
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    cur.execute("""
+        SELECT m.*, s.full_name AS secretary_name
+        FROM secretary_meeting_minutes m
+        JOIN secretaries s ON s.id=m.secretary_id
+        ORDER BY m.meeting_date DESC, m.created_at DESC
+        LIMIT ? OFFSET ?
+    """, (per_page, offset))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for m in rows:
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(m['meeting_type'])}</strong>
+                <div class="mini muted">{escape(m['meeting_date'])}</div>
+            </td>
+            <td>{escape(m['secretary_name'])}</td>
+            <td>{escape(m['led_by'] or '—')}</td>
+            <td>{coo_status_chip(m['status'])}</td>
+            <td>{escape((m['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Meeting Minutes</h1>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} meeting minute(s).
+        </div>
+
+        {pagination_controls("/coo/secretary/minutes", page_num, total_pages)}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Meeting</th>
+                        <th>Secretary</th>
+                        <th>Led By</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='5'>No meeting minutes found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/coo/secretary/minutes", page_num, total_pages)}
+    </section>
+    """
+
+    return page("Meeting Minutes", body)
+
+
+# ---------------- COO ACTION ITEMS ----------------
 
 @app.get('/coo/secretary/actions')
 def coo_secretary_actions():
-    r = require_coo_permission("coo_secretary_enabled", "secretary action items")
-    if r: return r
-    return coo_placeholder("Secretary Action Items", "Secretary action item tracking.")
 
+    r = require_coo_permission("coo_secretary_enabled", "secretary action items")
+    if r:
+        return r
+
+    status = request.args.get("status", "").strip()
+    page_num = coo_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = []
+    params = []
+
+    if status:
+        where.append("a.status = ?")
+        params.append(status)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM secretary_action_items a
+        JOIN secretaries s ON s.id=a.secretary_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT a.*, s.full_name AS secretary_name
+        FROM secretary_action_items a
+        JOIN secretaries s ON s.id=a.secretary_id
+        {where_sql}
+        ORDER BY
+            CASE a.status
+                WHEN 'PENDING' THEN 1
+                WHEN 'OVERDUE' THEN 2
+                WHEN 'DONE' THEN 3
+                ELSE 4
+            END,
+            a.deadline ASC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date().isoformat()
+
+    trs = ""
+
+    for a in rows:
+        current_status = a["status"]
+
+        if current_status == "PENDING" and a["deadline"] and a["deadline"] < today:
+            current_status = "OVERDUE"
+
+        trs += f"""
+        <tr>
+            <td>{escape(a['task'])}</td>
+            <td>{escape(a['responsible_person'] or '—')}</td>
+            <td>{escape(a['secretary_name'])}</td>
+            <td>{escape(a['deadline'] or '—')}</td>
+            <td>{escape(a['followup_date'] or '—')}</td>
+            <td>{coo_status_chip(current_status)}</td>
+            <td>{escape(a['notes'] or '—')}</td>
+        </tr>
+        """
+
+    status_options = "".join([
+        f"<option value='{s}' {'selected' if status == s else ''}>{s}</option>"
+        for s in ["PENDING", "OVERDUE", "DONE"]
+    ])
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Secretary Action Items</h1>
+
+        <form method="get" class="toolbar">
+            <select name="status">
+                <option value="">All Statuses</option>
+                {status_options}
+            </select>
+
+            <button class="btn mini">Filter</button>
+            <a class="btn mini secondary" href="{url_for('coo_secretary_actions')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} action item(s).
+        </div>
+
+        {pagination_controls("/coo/secretary/actions", page_num, total_pages, {"status": status})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Task</th>
+                        <th>Responsible</th>
+                        <th>Secretary</th>
+                        <th>Deadline</th>
+                        <th>Follow-Up</th>
+                        <th>Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No action items found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/coo/secretary/actions", page_num, total_pages, {"status": status})}
+    </section>
+    """
+
+    return page("Secretary Action Items", body)
+
+
+# ---------------- COO SMS DASHBOARD ----------------
 
 @app.get('/coo/sms')
 def coo_sms_dashboard():
-    r = require_coo_permission("coo_sms_enabled", "SMS dashboard")
-    if r: return r
-    return coo_placeholder("SMS Dashboard", "Operational SMS queue and status overview.")
 
+    r = require_coo_permission("coo_sms_enabled", "SMS dashboard")
+    if r:
+        return r
+
+    status = request.args.get("status", "").strip()
+    page_num = coo_page_num()
+
+    per_page = 20
+    offset = (page_num - 1) * per_page
+
+    where = []
+    params = []
+
+    if status:
+        where.append("status = ?")
+        params.append(status)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS c FROM sms_queue")
+    all_sms = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM sms_queue WHERE status='PENDING'")
+    pending_sms = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM sms_queue WHERE status='SENT'")
+    sent_sms = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM sms_queue WHERE status='FAILED'")
+    failed_sms = cur.fetchone()["c"] or 0
+
+    cur.execute(f"SELECT COUNT(*) AS c FROM sms_queue {where_sql}", params)
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT *
+        FROM sms_queue
+        {where_sql}
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for s in rows:
+        trs += f"""
+        <tr>
+            <td>{escape(s['phone'])}</td>
+            <td>{escape(s['recipient_type'] or '—')}</td>
+            <td>{coo_status_chip(s['status'])}</td>
+            <td>{s['retry_count'] or 0}</td>
+            <td>{escape((s['created_at'] or '')[:16].replace('T',' '))}</td>
+            <td>{escape((s['sent_at'] or '—')[:16].replace('T',' '))}</td>
+            <td>{escape((s['body'] or '')[:120])}</td>
+        </tr>
+        """
+
+    status_options = "".join([
+        f"<option value='{s}' {'selected' if status == s else ''}>{s}</option>"
+        for s in ["PENDING", "SENT", "FAILED"]
+    ])
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>SMS Dashboard</h1>
+
+        <div class="stats">
+            {stat("All SMS", all_sms)}
+            {stat("Pending", pending_sms)}
+            {stat("Sent", sent_sms)}
+            {stat("Failed", failed_sms)}
+        </div>
+
+        <form method="get" class="toolbar" style="margin-top:12px">
+            <select name="status">
+                <option value="">All Statuses</option>
+                {status_options}
+            </select>
+
+            <button class="btn mini">Filter</button>
+            <a class="btn mini secondary" href="{url_for('coo_sms_dashboard')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} SMS record(s).
+        </div>
+
+        {pagination_controls("/coo/sms", page_num, total_pages, {"status": status})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Phone</th>
+                        <th>Recipient</th>
+                        <th>Status</th>
+                        <th>Retries</th>
+                        <th>Created</th>
+                        <th>Sent</th>
+                        <th>Message Preview</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No SMS records found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/coo/sms", page_num, total_pages, {"status": status})}
+    </section>
+    """
+
+    return page("SMS Dashboard", body)
+
+
+# ---------------- COO SOCIAL MEDIA LOGS ----------------
 
 @app.get('/coo/social-media/logs')
 def coo_social_media_logs():
-    r = require_coo_permission("coo_social_media_enabled", "social media logs")
-    if r: return r
-    return coo_placeholder("Social Media Logs", "Social media content logs.")
 
+    r = require_coo_permission("coo_social_media_enabled", "social media logs")
+    if r:
+        return r
+
+    status = request.args.get("status", "").strip()
+    page_num = coo_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = []
+    params = []
+
+    if status:
+        where.append("l.status = ?")
+        params.append(status)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM social_media_content_logs l
+        JOIN social_media_managers m ON m.id=l.manager_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT l.*, m.full_name AS manager_name
+        FROM social_media_content_logs l
+        JOIN social_media_managers m ON m.id=l.manager_id
+        {where_sql}
+        ORDER BY COALESCE(l.posted_date,l.planned_date,l.created_at) DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for l in rows:
+        link = f"<a target='_blank' href='{escape(l['post_link'])}'>Open</a>" if l["post_link"] else "—"
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(l['title'])}</strong>
+                <div class="mini muted">{escape(l['content_type'])}</div>
+            </td>
+            <td>{escape(l['manager_name'])}</td>
+            <td>{escape(l['platform'])}</td>
+            <td>{escape(l['planned_date'] or '—')}</td>
+            <td>{escape(l['posted_date'] or '—')}</td>
+            <td>{coo_status_chip(l['status'])}</td>
+            <td>{link}</td>
+        </tr>
+        """
+
+    status_options = "".join([
+        f"<option value='{s}' {'selected' if status == s else ''}>{s}</option>"
+        for s in ["PLANNED", "DRAFT", "POSTED", "NEEDS_APPROVAL", "CANCELLED"]
+    ])
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Social Media Content Logs</h1>
+
+        <form method="get" class="toolbar">
+            <select name="status">
+                <option value="">All Statuses</option>
+                {status_options}
+            </select>
+
+            <button class="btn mini">Filter</button>
+            <a class="btn mini secondary" href="{url_for('coo_social_media_logs')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} content log(s).
+        </div>
+
+        {pagination_controls("/coo/social-media/logs", page_num, total_pages, {"status": status})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Content</th>
+                        <th>Manager</th>
+                        <th>Platform</th>
+                        <th>Planned</th>
+                        <th>Posted</th>
+                        <th>Status</th>
+                        <th>Link</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No social media logs found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/coo/social-media/logs", page_num, total_pages, {"status": status})}
+    </section>
+    """
+
+    return page("Social Media Logs", body)
+
+
+# ---------------- COO SOCIAL MEDIA REPORTS ----------------
 
 @app.get('/coo/social-media/reports')
 def coo_social_media_reports():
-    r = require_coo_permission("coo_social_media_enabled", "social media reports")
-    if r: return r
-    return coo_placeholder("Social Media Reports", "Weekly social media reporting.")
 
+    r = require_coo_permission("coo_social_media_enabled", "social media reports")
+    if r:
+        return r
+
+    page_num = coo_page_num()
+    per_page = 12
+    offset = (page_num - 1) * per_page
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM social_media_weekly_reports r
+        JOIN social_media_managers m ON m.id=r.manager_id
+    """)
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    cur.execute("""
+        SELECT r.*, m.full_name AS manager_name
+        FROM social_media_weekly_reports r
+        JOIN social_media_managers m ON m.id=r.manager_id
+        ORDER BY r.week_start DESC, r.created_at DESC
+        LIMIT ? OFFSET ?
+    """, (per_page, offset))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for r0 in rows:
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(r0['week_start'])}</strong>
+                <div class="mini muted">to {escape(r0['week_end'] or '—')}</div>
+            </td>
+            <td>{escape(r0['manager_name'])}</td>
+            <td>{r0['posts_published'] or 0}</td>
+            <td>{r0['stories_posted'] or 0}</td>
+            <td>{r0['dms_received'] or 0}</td>
+            <td>{r0['dms_responded'] or 0}</td>
+            <td>{coo_status_chip(r0['status'])}</td>
+        </tr>
+        """
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Social Media Weekly Reports</h1>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} weekly report(s).
+        </div>
+
+        {pagination_controls("/coo/social-media/reports", page_num, total_pages)}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Week</th>
+                        <th>Manager</th>
+                        <th>Posts</th>
+                        <th>Stories</th>
+                        <th>DMs Received</th>
+                        <th>DMs Responded</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No weekly reports found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/coo/social-media/reports", page_num, total_pages)}
+    </section>
+    """
+
+    return page("Social Media Reports", body)
+
+
+# ---------------- COO SOCIAL MEDIA CRISIS LOGS ----------------
 
 @app.get('/coo/social-media/crisis')
 def coo_social_media_crisis():
+
     r = require_coo_permission("coo_social_media_enabled", "social media crisis logs")
-    if r: return r
-    return coo_placeholder("Social Media Crisis Logs", "Social media crisis and escalation logs.")
+    if r:
+        return r
+
+    status = request.args.get("status", "").strip()
+    page_num = coo_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = []
+    params = []
+
+    if status:
+        where.append("c.status = ?")
+        params.append(status)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM social_media_crisis_logs c
+        JOIN social_media_managers m ON m.id=c.manager_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT c.*, m.full_name AS manager_name
+        FROM social_media_crisis_logs c
+        JOIN social_media_managers m ON m.id=c.manager_id
+        {where_sql}
+        ORDER BY c.created_at DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for c in rows:
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(c['issue_type'])}</strong>
+                <div class="mini muted">{escape(c['platform'])}</div>
+            </td>
+            <td>{escape(c['manager_name'])}</td>
+            <td>{escape((c['description'] or '')[:140])}</td>
+            <td>{escape(c['action_taken'] or '—')}</td>
+            <td>{escape(c['escalated_to'] or '—')}</td>
+            <td>{coo_status_chip(c['status'])}</td>
+            <td>{escape((c['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    status_options = "".join([
+        f"<option value='{s}' {'selected' if status == s else ''}>{s}</option>"
+        for s in ["OPEN", "ESCALATED", "RESOLVED", "CLOSED"]
+    ])
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Social Media Crisis Logs</h1>
+
+        <form method="get" class="toolbar">
+            <select name="status">
+                <option value="">All Statuses</option>
+                {status_options}
+            </select>
+
+            <button class="btn mini">Filter</button>
+            <a class="btn mini secondary" href="{url_for('coo_social_media_crisis')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} crisis log(s).
+        </div>
+
+        {pagination_controls("/coo/social-media/crisis", page_num, total_pages, {"status": status})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Issue</th>
+                        <th>Manager</th>
+                        <th>Description</th>
+                        <th>Action Taken</th>
+                        <th>Escalated To</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No crisis logs found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/coo/social-media/crisis", page_num, total_pages, {"status": status})}
+    </section>
+    """
+
+    return page("Social Media Crisis Logs", body)
+    
+
+
 
 
 # --- Admin: Analytics dashboard ---
