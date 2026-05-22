@@ -4753,9 +4753,9 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("Work Progress", url_for('tutor_work_progress')),
                 ("Upload Material", url_for('tutor_home') + "#upload"),
                 ("My Library", url_for('tutor_uploads_library')),
-                ("Assignments", "#assignments"),
-                ("Messages", "#messages"),
-                ("Students", "#students"),
+                ("Assignments", url_for('tutor_home') + "#assignments"),
+                ("Messages", url_for('tutor_home') + "#messages"),
+                ("Students", url_for('tutor_home') + "#students"),
                 ("Logout", url_for('tutor_logout'))
             ]
 
@@ -14032,7 +14032,7 @@ def tutor_work_progress():
         <div class="toolbar">
             <a class="btn mini secondary" href="{url_for('tutor_home')}">Back to Dashboard</a>
             <a class="btn mini success" href="{url_for('tutor_uploads_library')}">Upload Library</a>
-            <a class="btn mini" href="{url_for('tutor_assignments')}">Assignments</a>
+            <a class="btn mini" href="{url_for('tutor_home')}#assignments">Assignments</a>
         </div>
 
         <div class="stats" style="margin-top:12px">
