@@ -42325,63 +42325,66 @@ def admin_delete_tutor_referral(referral_id):
 
 def coo_nav():
 
-    def coo_link(label, endpoint, permission_key=None, fallback="#"):
+    coo_name = session.get("coo_name", "COO")
+
+    def coo_link(label, endpoint, permission_key=None, fallback="#", icon=""):
         if permission_key and not coo_can(permission_key):
             return ""
 
         return f"""
-        <a href="{safe_url(endpoint, fallback)}">
-            {escape(label)}
+        <a class="coo-quick-link" href="{safe_url(endpoint, fallback)}">
+            <span class="coo-link-icon">{icon}</span>
+            <span>{escape(label)}</span>
         </a>
         """
 
     sections = [
         (
-            "Core Operations",
+            "Core",
             [
-                coo_link("Dashboard", "coo_dashboard"),
-                coo_link("Operational Team", "coo_team_profiles", "coo_employee_profiles_enabled"),
-                coo_link("Enrollments", "coo_enrollments", "coo_enrollments_enabled"),
-                coo_link("Follow-Ups", "coo_followups", "coo_duty_admin_enabled"),
+                coo_link("Dashboard", "coo_dashboard", icon="🏠"),
+                coo_link("Operational Team", "coo_team_profiles", "coo_employee_profiles_enabled", icon="👥"),
+                coo_link("Enrollments", "coo_enrollments", "coo_enrollments_enabled", icon="📝"),
+                coo_link("Follow-Ups", "coo_followups", "coo_duty_admin_enabled", icon="📌"),
             ]
         ),
         (
-            "Admissions & Duty Admin",
+            "Admissions",
             [
-                coo_link("Admission Overview", "coo_admission_overview", "coo_admission_enabled"),
-                coo_link("Duty Admin Overview", "coo_duty_admin_overview", "coo_duty_admin_enabled"),
-                coo_link("Parents Information", "coo_parents_information", "coo_admission_enabled"),
-                coo_link("Discounts", "coo_discounts", "coo_discounts_enabled"),
+                coo_link("Admission Overview", "coo_admission_overview", "coo_admission_enabled", icon="✅"),
+                coo_link("Duty Admin Overview", "coo_duty_admin_overview", "coo_duty_admin_enabled", icon="🧾"),
+                coo_link("Parents Information", "coo_parents_information", "coo_admission_enabled", icon="👨‍👩‍👧"),
+                coo_link("Discounts", "coo_discounts", "coo_discounts_enabled", icon="🏷️"),
             ]
         ),
         (
-            "Finance & Treasury",
+            "Finance",
             [
-                coo_link("Finance Overview", "coo_finance_overview", "coo_treasurer_enabled"),
-                coo_link("Payment Schedule", "coo_payment_schedule", "coo_treasurer_enabled"),
-                coo_link("Monthly Reports", "coo_monthly_reports", "coo_treasurer_enabled"),
+                coo_link("Finance Overview", "coo_finance_overview", "coo_treasurer_enabled", icon="💰"),
+                coo_link("Payment Schedule", "coo_payment_schedule", "coo_treasurer_enabled", icon="📅"),
+                coo_link("Monthly Reports", "coo_monthly_reports", "coo_treasurer_enabled", icon="📊"),
             ]
         ),
         (
-            "Secretary & Communication",
+            "Secretary",
             [
-                coo_link("Secretary Logs", "coo_secretary_logs", "coo_secretary_enabled"),
-                coo_link("Meeting Minutes", "coo_secretary_minutes", "coo_secretary_enabled"),
-                coo_link("Action Items", "coo_secretary_actions", "coo_secretary_enabled"),
-                coo_link("SMS Dashboard", "coo_sms_dashboard", "coo_sms_enabled"),
+                coo_link("Secretary Logs", "coo_secretary_logs", "coo_secretary_enabled", icon="📨"),
+                coo_link("Meeting Minutes", "coo_secretary_minutes", "coo_secretary_enabled", icon="📋"),
+                coo_link("Action Items", "coo_secretary_actions", "coo_secretary_enabled", icon="🎯"),
+                coo_link("SMS Dashboard", "coo_sms_dashboard", "coo_sms_enabled", icon="📱"),
             ]
         ),
         (
             "Social Media",
             [
-                coo_link("Content Logs", "coo_social_media_logs", "coo_social_media_enabled"),
-                coo_link("Weekly Reports", "coo_social_media_reports", "coo_social_media_enabled"),
-                coo_link("Crisis Logs", "coo_social_media_crisis", "coo_social_media_enabled"),
+                coo_link("Content Logs", "coo_social_media_logs", "coo_social_media_enabled", icon="📢"),
+                coo_link("Weekly Reports", "coo_social_media_reports", "coo_social_media_enabled", icon="📈"),
+                coo_link("Crisis Logs", "coo_social_media_crisis", "coo_social_media_enabled", icon="🚨"),
             ]
         ),
     ]
 
-    html = ""
+    section_tabs = ""
 
     for title, links in sections:
         clean_links = "".join([x for x in links if x.strip()])
@@ -42389,11 +42392,10 @@ def coo_nav():
         if not clean_links:
             continue
 
-        html += f"""
-        <details class="admin-nav-group" open>
+        section_tabs += f"""
+        <details class="coo-nav-section">
             <summary>{escape(title)}</summary>
-
-            <div class="admin-nav-links">
+            <div class="coo-section-links">
                 {clean_links}
             </div>
         </details>
@@ -42401,93 +42403,224 @@ def coo_nav():
 
     return f"""
     <style>
-        .coo-nav {{
-            background:#ffffff;
-            border:1px solid #dbe4ef;
-            border-radius:18px;
-            padding:14px;
-            box-shadow:0 4px 14px rgba(0,0,0,.06);
-            margin:12px 0 18px;
+        .coo-hero {{
+            background:
+                linear-gradient(135deg, rgba(27,94,32,.96), rgba(46,125,50,.88)),
+                radial-gradient(circle at top right, rgba(255,255,255,.25), transparent 35%);
+            color:#ffffff;
+            border-radius:24px;
+            padding:24px;
+            box-shadow:0 14px 32px rgba(15,23,42,.18);
+            margin:14px 0 20px;
+            overflow:hidden;
+            position:relative;
         }}
 
-        .coo-nav-header {{
+        .coo-hero::after {{
+            content:"";
+            position:absolute;
+            width:220px;
+            height:220px;
+            border-radius:50%;
+            background:rgba(255,255,255,.10);
+            right:-70px;
+            top:-70px;
+        }}
+
+        .coo-hero-top {{
+            position:relative;
+            z-index:2;
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:16px;
+            flex-wrap:wrap;
+        }}
+
+        .coo-hero h1 {{
+            margin:0;
+            font-size:28px;
+            line-height:1.2;
+            color:#ffffff;
+        }}
+
+        .coo-hero p {{
+            margin:8px 0 0;
+            max-width:760px;
+            color:rgba(255,255,255,.88);
+            font-size:14px;
+        }}
+
+        .coo-role-pill {{
+            background:rgba(255,255,255,.16);
+            border:1px solid rgba(255,255,255,.35);
+            color:#ffffff;
+            border-radius:999px;
+            padding:9px 14px;
+            font-weight:800;
+            font-size:13px;
+            white-space:nowrap;
+        }}
+
+        .coo-nav-panel {{
+            position:relative;
+            z-index:2;
+            margin-top:18px;
+            background:rgba(255,255,255,.96);
+            border-radius:18px;
+            padding:14px;
+            box-shadow:0 8px 20px rgba(0,0,0,.12);
+        }}
+
+        .coo-nav-panel-title {{
             display:flex;
             justify-content:space-between;
             align-items:center;
-            gap:12px;
+            gap:10px;
             flex-wrap:wrap;
             margin-bottom:10px;
         }}
 
-        .coo-nav-grid {{
-            display:grid;
-            grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+        .coo-nav-panel-title strong {{
+            color:#0f172a;
+            font-size:15px;
+        }}
+
+        .coo-nav-panel-title span {{
+            color:#64748b;
+            font-size:12px;
+        }}
+
+        .coo-nav-sections {{
+            display:flex;
+            flex-wrap:wrap;
             gap:10px;
         }}
 
-        .admin-nav-group {{
+        .coo-nav-section {{
+            background:#f8fafc;
             border:1px solid #dbe4ef;
             border-radius:14px;
-            background:#f8fafc;
             overflow:hidden;
+            min-width:180px;
+            flex:1;
         }}
 
-        .admin-nav-group summary {{
+        .coo-nav-section summary {{
             cursor:pointer;
-            padding:12px 14px;
-            font-weight:800;
-            color:#0f172a;
             list-style:none;
+            padding:11px 13px;
+            font-weight:900;
+            color:#0f172a;
             display:flex;
             justify-content:space-between;
+            align-items:center;
         }}
 
-        .admin-nav-group summary::-webkit-details-marker {{
+        .coo-nav-section summary::-webkit-details-marker {{
             display:none;
         }}
 
-        .admin-nav-links {{
+        .coo-nav-section summary::after {{
+            content:"Open";
+            font-size:11px;
+            color:#1b5e20;
+            background:#eef6ee;
+            border:1px solid rgba(27,94,32,.25);
+            border-radius:999px;
+            padding:3px 8px;
+            margin-left:8px;
+        }}
+
+        .coo-nav-section[open] summary::after {{
+            content:"Close";
+        }}
+
+        .coo-section-links {{
             display:flex;
             flex-wrap:wrap;
             gap:8px;
             padding:0 12px 12px;
         }}
 
-        .admin-nav-links a {{
+        .coo-quick-link {{
             text-decoration:none;
             color:#1b5e20;
             background:#ffffff;
-            border:1px solid rgba(27,94,32,.35);
+            border:1px solid rgba(27,94,32,.25);
             border-radius:999px;
             padding:8px 11px;
             font-size:13px;
-            font-weight:700;
+            font-weight:800;
+            display:inline-flex;
+            align-items:center;
+            gap:6px;
+            box-shadow:0 2px 8px rgba(15,23,42,.05);
+            transition:.15s ease;
         }}
 
-        .admin-nav-links a:hover {{
+        .coo-quick-link:hover {{
             background:#1b5e20;
             color:#ffffff;
+            transform:translateY(-1px);
+        }}
+
+        .coo-link-icon {{
+            font-size:14px;
+        }}
+
+        @media(max-width:768px) {{
+            .coo-hero {{
+                padding:18px;
+                border-radius:18px;
+            }}
+
+            .coo-hero h1 {{
+                font-size:22px;
+            }}
+
+            .coo-nav-sections {{
+                display:grid;
+                grid-template-columns:1fr;
+            }}
+
+            .coo-nav-section {{
+                width:100%;
+            }}
+
+            .coo-quick-link {{
+                width:100%;
+                border-radius:12px;
+            }}
         }}
     </style>
 
-    <nav class="coo-nav">
-        <div class="coo-nav-header">
+    <section class="coo-hero">
+        <div class="coo-hero-top">
             <div>
-                <h2>COO Operations Portal</h2>
-                <div class="mini muted">
-                    Operational oversight without academic quality controls.
-                </div>
+                <h1>Welcome, {escape(coo_name)}</h1>
+                <p>
+                    COO Operations Portal for admissions, enrollments, finance, secretary work,
+                    social media, follow-ups and operational team oversight.
+                </p>
             </div>
 
-            <span class="chip active">
+            <div class="coo-role-pill">
                 Chief Operations Officer
-            </span>
+            </div>
         </div>
 
-        <div class="coo-nav-grid">
-            {html}
+        <div class="coo-nav-panel">
+            <div class="coo-nav-panel-title">
+                <strong>Quick Access</strong>
+                <span>Open a section below to access COO tools</span>
+            </div>
+
+            <div class="coo-nav-sections">
+                {section_tabs}
+            </div>
         </div>
-    </nav>
+    </section>
     """
     
 @app.get('/coo/login')
@@ -42627,7 +42760,7 @@ def coo_dashboard():
     {coo_nav()}
 
     <section class="card">
-        <h1>Welcome, {escape(coo_name)}</h1>
+        <h1>Operational Dashboard</h1>
 
         <p class="muted">
             Here is your COO operational dashboard for enrollments, admissions, finance, secretary work, social media and operational staff.
