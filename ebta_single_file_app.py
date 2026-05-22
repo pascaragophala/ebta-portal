@@ -549,6 +549,21 @@ def init_db():
     """)
     
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS student_portal_activity(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id INTEGER NOT NULL,
+        activity_date TEXT NOT NULL,
+        month TEXT NOT NULL,
+        total_seconds INTEGER NOT NULL DEFAULT 0,
+        last_seen_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        UNIQUE(student_id, activity_date),
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
+    
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS treasurers(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         full_name TEXT NOT NULL,
@@ -1096,6 +1111,8 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_caos_phone ON caos(phone)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_caos_active ON caos(is_active)")
 
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_student_activity_student ON student_portal_activity(student_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_student_activity_month ON student_portal_activity(month)")
 
     coo_permission_defaults = {
         "coo_portal_enabled": "1",
@@ -4670,7 +4687,8 @@ def page(title, body_html, extra_head="", extra_js=""):
             unread = cur.fetchone()[0] or 0
             role_title, user_name = "Student", session.get('student_name','Student')
             links = [
-                ("Dashboard", "#dashboard"),
+                ("Dashboard", url_for('student_home')),
+                ("Academic Progress", url_for('student_academic_progress')),
                 ("My Profile", url_for('student_profile_page')),
                 ("Status", "#status"),
                 ("Assignments", url_for('student_assignments')),
@@ -7279,6 +7297,61 @@ def student_home():
 
         </div>
         """
+        
+    # ===== ACADEMIC PROGRESS PREVIEW =====
+
+    progress_preview = ""
+
+    if has_active_enrollment:
+        progress_data = student_progress_data(sid, month)
+
+        progress_preview = f"""
+        <div class="card soft" style="border-left:5px solid #1b5e20">
+
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+                <div>
+                    <h3 style="margin-bottom:6px">Academic Progress Tracker</h3>
+
+                    <div class="mini muted">
+                        Overall progress for {pretty_month_label(month)}
+                    </div>
+                </div>
+
+                <span class="chip {progress_data['overall_class']}">
+                    {progress_data['overall_rate']}% - {escape(progress_data['overall_status'])}
+                </span>
+            </div>
+
+            <div class="stats-mini" style="margin-top:10px">
+                <div class="s">
+                    <div class="k">{progress_data['completed_assignments']}/{progress_data['total_assignments']}</div>
+                    <div class="t">Assessments</div>
+                </div>
+
+                <div class="s">
+                    <div class="k">{progress_data['viewed_materials']}/{progress_data['total_materials']}</div>
+                    <div class="t">Materials viewed</div>
+                </div>
+
+                <div class="s">
+                    <div class="k">{progress_data['attendance_rate']}%</div>
+                    <div class="t">Attendance</div>
+                </div>
+
+                <div class="s">
+                    <div class="k">{progress_data['reports_uploaded']}</div>
+                    <div class="t">Reports uploaded</div>
+                </div>
+            </div>
+
+            <div style="margin-top:12px">
+                <a class="btn mini success" href="{url_for('student_academic_progress')}">
+                    Open Academic Progress
+                </a>
+            </div>
+
+        </div>
+        """
     
     enroll_cta = ""
 
@@ -8131,6 +8204,7 @@ def student_home():
     
     {groups_section}
     {sessions_section}
+    {progress_preview}
     {assignments_preview}
     
     <div class="toolbar" style="margin:16px 0;">
@@ -9495,6 +9569,891 @@ def student_submit_ratings():
                     (sid, subid, month, rating, comment, now))
     conn.commit(); conn.close()
     return page("Thanks!", card_msg("Your ratings were saved."))
+
+@app.post('/student/activity/ping')
+def student_activity_ping():
+
+    r = require_student()
+    if r:
+        return ("", 204)
+
+    sid = is_student()
+
+    try:
+        seconds = int(request.form.get("seconds", 0))
+    except Exception:
+        seconds = 0
+
+    # Safety cap so one ping cannot add too much time
+    if seconds < 0:
+        seconds = 0
+
+    if seconds > 300:
+        seconds = 300
+
+    now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))
+    today = now.date().isoformat()
+    month = now.strftime("%Y-%m")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO student_portal_activity(
+            student_id,
+            activity_date,
+            month,
+            total_seconds,
+            last_seen_at,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(student_id, activity_date)
+        DO UPDATE SET
+            total_seconds = total_seconds + excluded.total_seconds,
+            last_seen_at = excluded.last_seen_at,
+            updated_at = excluded.updated_at
+    """, (
+        sid,
+        today,
+        month,
+        seconds,
+        now_utc_iso(),
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return ("", 204)
+    
+    
+def percent_value(part, total):
+    try:
+        part = float(part or 0)
+        total = float(total or 0)
+
+        if total <= 0:
+            return 0
+
+        return round((part / total) * 100)
+    except Exception:
+        return 0
+
+
+def student_progress_band(rate):
+    rate = int(rate or 0)
+
+    if rate >= 75:
+        return "active", "On Track"
+
+    if rate >= 50:
+        return "pending", "Needs Attention"
+
+    return "lapsed", "High Risk"
+
+
+def student_progress_data(student_id, month):
+    """
+    Builds academic progress data for the learner for one month.
+    This uses existing EBTA tables and does not change student data.
+    """
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date()
+    today_iso = today.isoformat()
+    next_7_iso = (today + datetime.timedelta(days=7)).isoformat()
+
+    # Active subjects for selected month
+    cur.execute("""
+        SELECT
+            e.subject_id,
+            s.name AS subject_name,
+            s.grade
+        FROM enrollments e
+        JOIN subjects s ON s.id=e.subject_id
+        WHERE e.student_id=?
+          AND e.month=?
+          AND UPPER(e.status)='ACTIVE'
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.name
+    """, (student_id, month))
+
+    active_subjects = cur.fetchall()
+    active_subject_ids = [r["subject_id"] for r in active_subjects]
+
+    if not active_subject_ids:
+        conn.close()
+
+        return {
+            "month": month,
+            "active_subjects": [],
+            "total_assignments": 0,
+            "completed_assignments": 0,
+            "pending_assignments": 0,
+            "due_soon": 0,
+            "overdue": 0,
+            "assignment_rate": 0,
+            "total_materials": 0,
+            "viewed_materials": 0,
+            "not_viewed_materials": 0,
+            "material_view_rate": 0,
+            "attendance_total": 0,
+            "attendance_present": 0,
+            "attendance_rate": 0,
+            "reports_uploaded": 0,
+            "portal_seconds": 0,
+            "portal_minutes": 0,
+            "portal_hours_label": "0 min",
+            "subject_rows": [],
+            "recommendations": ["You are not actively enrolled for this month yet."],
+            "overall_rate": 0,
+            "overall_status": "Not Active",
+            "overall_class": "lapsed"
+        }
+
+    placeholders = ",".join("?" * len(active_subject_ids))
+
+    # Assignments
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM materials m
+        WHERE m.subject_id IN ({placeholders})
+          AND m.month LIKE ?
+          AND (m.is_assignment=1 OR m.kind='assignment')
+    """, (*active_subject_ids, month + "%"))
+
+    total_assignments = cur.fetchone()["c"] or 0
+
+    cur.execute(f"""
+        SELECT COUNT(DISTINCT m.id) AS c
+        FROM materials m
+        JOIN submissions sub ON sub.material_id=m.id AND sub.student_id=?
+        WHERE m.subject_id IN ({placeholders})
+          AND m.month LIKE ?
+          AND (m.is_assignment=1 OR m.kind='assignment')
+    """, (student_id, *active_subject_ids, month + "%"))
+
+    completed_assignments = cur.fetchone()["c"] or 0
+    pending_assignments = max(0, total_assignments - completed_assignments)
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM materials m
+        WHERE m.subject_id IN ({placeholders})
+          AND m.month LIKE ?
+          AND (m.is_assignment=1 OR m.kind='assignment')
+          AND m.due_date IS NOT NULL
+          AND m.due_date >= ?
+          AND m.due_date <= ?
+          AND NOT EXISTS (
+              SELECT 1
+              FROM submissions sub
+              WHERE sub.material_id=m.id
+                AND sub.student_id=?
+          )
+    """, (*active_subject_ids, month + "%", today_iso, next_7_iso, student_id))
+
+    due_soon = cur.fetchone()["c"] or 0
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM materials m
+        WHERE m.subject_id IN ({placeholders})
+          AND m.month LIKE ?
+          AND (m.is_assignment=1 OR m.kind='assignment')
+          AND m.due_date IS NOT NULL
+          AND m.due_date < ?
+          AND NOT EXISTS (
+              SELECT 1
+              FROM submissions sub
+              WHERE sub.material_id=m.id
+                AND sub.student_id=?
+          )
+    """, (*active_subject_ids, month + "%", today_iso, student_id))
+
+    overdue = cur.fetchone()["c"] or 0
+
+    assignment_rate = percent_value(completed_assignments, total_assignments)
+
+    # Materials viewed, excluding assignments
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM materials m
+        WHERE m.subject_id IN ({placeholders})
+          AND m.month LIKE ?
+          AND COALESCE(m.is_assignment,0)=0
+          AND m.kind!='assignment'
+    """, (*active_subject_ids, month + "%"))
+
+    total_materials = cur.fetchone()["c"] or 0
+
+    cur.execute(f"""
+        SELECT COUNT(DISTINCT m.id) AS c
+        FROM materials m
+        JOIN material_views mv ON mv.material_id=m.id AND mv.student_id=?
+        WHERE m.subject_id IN ({placeholders})
+          AND m.month LIKE ?
+          AND COALESCE(m.is_assignment,0)=0
+          AND m.kind!='assignment'
+    """, (student_id, *active_subject_ids, month + "%"))
+
+    viewed_materials = cur.fetchone()["c"] or 0
+    not_viewed_materials = max(0, total_materials - viewed_materials)
+    material_view_rate = percent_value(viewed_materials, total_materials)
+
+    # Attendance
+    cur.execute(f"""
+        SELECT COUNT(DISTINCT ats.id) AS c
+        FROM attendance_sessions ats
+        WHERE ats.subject_id IN ({placeholders})
+          AND ats.month=?
+    """, (*active_subject_ids, month))
+
+    attendance_total = cur.fetchone()["c"] or 0
+
+    cur.execute(f"""
+        SELECT COUNT(DISTINCT ats.id) AS c
+        FROM attendance_sessions ats
+        JOIN attendance a
+          ON a.session_id=ats.session_id
+         AND a.date=ats.date
+         AND a.student_id=?
+        WHERE ats.subject_id IN ({placeholders})
+          AND ats.month=?
+    """, (student_id, *active_subject_ids, month))
+
+    attendance_present = cur.fetchone()["c"] or 0
+    attendance_rate = percent_value(attendance_present, attendance_total)
+
+    # Reports uploaded by learner
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM student_reports
+        WHERE student_id=?
+          AND substr(upload_date,1,7)=?
+    """, (student_id, month))
+
+    reports_uploaded = cur.fetchone()["c"] or 0
+
+    # Portal activity, lightweight monthly sum
+    cur.execute("""
+        SELECT COALESCE(SUM(total_seconds),0) AS total_seconds
+        FROM student_portal_activity
+        WHERE student_id=?
+          AND month=?
+    """, (student_id, month))
+
+    portal_seconds = int(cur.fetchone()["total_seconds"] or 0)
+    portal_minutes = portal_seconds // 60
+
+    if portal_minutes >= 60:
+        portal_hours_label = f"{portal_minutes // 60}h {portal_minutes % 60}min"
+    else:
+        portal_hours_label = f"{portal_minutes} min"
+
+    # Per-subject breakdown
+    subject_rows = []
+
+    for subject in active_subjects:
+        subject_id = subject["subject_id"]
+
+        cur.execute("""
+            SELECT COUNT(*) AS c
+            FROM materials
+            WHERE subject_id=?
+              AND month LIKE ?
+              AND (is_assignment=1 OR kind='assignment')
+        """, (subject_id, month + "%"))
+
+        sub_total_assignments = cur.fetchone()["c"] or 0
+
+        cur.execute("""
+            SELECT COUNT(DISTINCT m.id) AS c
+            FROM materials m
+            JOIN submissions sub ON sub.material_id=m.id AND sub.student_id=?
+            WHERE m.subject_id=?
+              AND m.month LIKE ?
+              AND (m.is_assignment=1 OR m.kind='assignment')
+        """, (student_id, subject_id, month + "%"))
+
+        sub_completed_assignments = cur.fetchone()["c"] or 0
+        sub_assignment_rate = percent_value(sub_completed_assignments, sub_total_assignments)
+
+        cur.execute("""
+            SELECT COUNT(*) AS c
+            FROM materials
+            WHERE subject_id=?
+              AND month LIKE ?
+              AND COALESCE(is_assignment,0)=0
+              AND kind!='assignment'
+        """, (subject_id, month + "%"))
+
+        sub_total_materials = cur.fetchone()["c"] or 0
+
+        cur.execute("""
+            SELECT COUNT(DISTINCT m.id) AS c
+            FROM materials m
+            JOIN material_views mv ON mv.material_id=m.id AND mv.student_id=?
+            WHERE m.subject_id=?
+              AND m.month LIKE ?
+              AND COALESCE(m.is_assignment,0)=0
+              AND m.kind!='assignment'
+        """, (student_id, subject_id, month + "%"))
+
+        sub_viewed_materials = cur.fetchone()["c"] or 0
+        sub_material_rate = percent_value(sub_viewed_materials, sub_total_materials)
+
+        cur.execute("""
+            SELECT COUNT(DISTINCT ats.id) AS c
+            FROM attendance_sessions ats
+            WHERE ats.subject_id=?
+              AND ats.month=?
+        """, (subject_id, month))
+
+        sub_attendance_total = cur.fetchone()["c"] or 0
+
+        cur.execute("""
+            SELECT COUNT(DISTINCT ats.id) AS c
+            FROM attendance_sessions ats
+            JOIN attendance a
+              ON a.session_id=ats.session_id
+             AND a.date=ats.date
+             AND a.student_id=?
+            WHERE ats.subject_id=?
+              AND ats.month=?
+        """, (student_id, subject_id, month))
+
+        sub_attendance_present = cur.fetchone()["c"] or 0
+        sub_attendance_rate = percent_value(sub_attendance_present, sub_attendance_total)
+
+        cur.execute("""
+            SELECT mark
+            FROM academic_report_marks
+            WHERE student_id=?
+              AND subject_id=?
+              AND month=?
+            LIMIT 1
+        """, (student_id, subject_id, month))
+
+        report_mark_row = cur.fetchone()
+        report_mark = report_mark_row["mark"] if report_mark_row else None
+
+        cur.execute("""
+            SELECT mark
+            FROM aqm_student_marks
+            WHERE student_id=?
+              AND subject_id=?
+              AND month=?
+            LIMIT 1
+        """, (student_id, subject_id, month))
+
+        aqm_mark_row = cur.fetchone()
+        aqm_mark = aqm_mark_row["mark"] if aqm_mark_row else None
+
+        risk_points = 0
+        focus = []
+
+        if sub_total_assignments > 0 and sub_assignment_rate < 60:
+            risk_points += 1
+            focus.append("complete pending assessments")
+
+        if sub_total_materials > 0 and sub_material_rate < 60:
+            risk_points += 1
+            focus.append("view learning materials")
+
+        if sub_attendance_total > 0 and sub_attendance_rate < 60:
+            risk_points += 1
+            focus.append("improve attendance")
+
+        available_marks = [m for m in [report_mark, aqm_mark] if m is not None]
+
+        if available_marks:
+            avg_mark = round(sum(available_marks) / len(available_marks))
+            if avg_mark < 50:
+                risk_points += 1
+                focus.append("ask for help with marks below 50%")
+        else:
+            avg_mark = None
+
+        if risk_points >= 2:
+            risk_level = "HIGH"
+        elif risk_points == 1:
+            risk_level = "MEDIUM"
+        else:
+            risk_level = "LOW"
+
+        subject_rows.append({
+            "subject_id": subject_id,
+            "subject_name": subject["subject_name"],
+            "grade": subject["grade"],
+            "assignment_rate": sub_assignment_rate,
+            "material_rate": sub_material_rate,
+            "attendance_rate": sub_attendance_rate,
+            "report_mark": report_mark,
+            "aqm_mark": aqm_mark,
+            "avg_mark": avg_mark,
+            "risk_level": risk_level,
+            "focus": ", ".join(focus) if focus else "keep going"
+        })
+
+    # Recommendations
+    recommendations = []
+
+    if pending_assignments > 0:
+        recommendations.append(f"Complete {pending_assignments} pending assessment(s).")
+
+    if due_soon > 0:
+        recommendations.append(f"{due_soon} assessment(s) are due soon. Submit before the deadline.")
+
+    if overdue > 0:
+        recommendations.append(f"{overdue} assessment(s) are overdue. Ask your tutor if late submission is still possible.")
+
+    if not_viewed_materials > 0:
+        recommendations.append(f"View {not_viewed_materials} learning material(s) not yet opened.")
+
+    if attendance_total > 0 and attendance_rate < 75:
+        recommendations.append("Attend more live sessions to improve your attendance rate.")
+
+    if reports_uploaded == 0:
+        recommendations.append("Upload your latest school report so EBTA can track your academic progress.")
+
+    high_risk_subjects = [x for x in subject_rows if x["risk_level"] == "HIGH"]
+
+    if high_risk_subjects:
+        names = ", ".join([x["subject_name"] for x in high_risk_subjects[:3]])
+        recommendations.append(f"Seek clarity in: {names}.")
+
+    if not recommendations:
+        recommendations.append("You are doing well. Keep completing tasks, viewing materials and attending sessions.")
+
+    # Overall score
+    components = []
+
+    if total_assignments > 0:
+        components.append(assignment_rate)
+
+    if total_materials > 0:
+        components.append(material_view_rate)
+
+    if attendance_total > 0:
+        components.append(attendance_rate)
+
+    if reports_uploaded > 0:
+        components.append(100)
+    else:
+        components.append(0)
+
+    overall_rate = round(sum(components) / len(components)) if components else 0
+    overall_class, overall_status = student_progress_band(overall_rate)
+
+    conn.close()
+
+    return {
+        "month": month,
+        "active_subjects": active_subjects,
+        "total_assignments": total_assignments,
+        "completed_assignments": completed_assignments,
+        "pending_assignments": pending_assignments,
+        "due_soon": due_soon,
+        "overdue": overdue,
+        "assignment_rate": assignment_rate,
+        "total_materials": total_materials,
+        "viewed_materials": viewed_materials,
+        "not_viewed_materials": not_viewed_materials,
+        "material_view_rate": material_view_rate,
+        "attendance_total": attendance_total,
+        "attendance_present": attendance_present,
+        "attendance_rate": attendance_rate,
+        "reports_uploaded": reports_uploaded,
+        "portal_seconds": portal_seconds,
+        "portal_minutes": portal_minutes,
+        "portal_hours_label": portal_hours_label,
+        "subject_rows": subject_rows,
+        "recommendations": recommendations,
+        "overall_rate": overall_rate,
+        "overall_status": overall_status,
+        "overall_class": overall_class
+    }
+    
+    
+@app.get('/student/progress')
+def student_academic_progress():
+
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+    month = get_active_month('student')
+
+    data = student_progress_data(sid, month)
+
+    subject_rows_html = ""
+
+    for row in data["subject_rows"]:
+
+        risk_class = "active"
+
+        if row["risk_level"] == "HIGH":
+            risk_class = "lapsed"
+        elif row["risk_level"] == "MEDIUM":
+            risk_class = "pending"
+
+        mark_display = "—"
+
+        if row["avg_mark"] is not None:
+            mark_display = f"{row['avg_mark']}%"
+
+        subject_rows_html += f"""
+        <tr>
+            <td>
+                <strong>{grade_label(row['grade'])} - {escape(row['subject_name'])}</strong>
+                <div class="mini muted">Focus: {escape(row['focus'])}</div>
+            </td>
+
+            <td>{row['assignment_rate']}%</td>
+            <td>{row['material_rate']}%</td>
+            <td>{row['attendance_rate']}%</td>
+            <td>{mark_display}</td>
+
+            <td>
+                <span class="chip {risk_class}">
+                    {escape(row['risk_level'])}
+                </span>
+            </td>
+        </tr>
+        """
+
+    recommendations_html = "".join([
+        f"""
+        <li style="margin-bottom:8px">
+            {escape(item)}
+        </li>
+        """
+        for item in data["recommendations"]
+    ])
+
+    chart_payload = {
+        "overall": {
+            "labels": ["Completed", "Remaining"],
+            "values": [data["overall_rate"], max(0, 100 - data["overall_rate"])]
+        },
+        "academicAreas": {
+            "labels": ["Assessments", "Materials", "Attendance", "Reports"],
+            "values": [
+                data["assignment_rate"],
+                data["material_view_rate"],
+                data["attendance_rate"],
+                100 if data["reports_uploaded"] > 0 else 0
+            ]
+        },
+        "subjectRisk": {
+            "labels": [
+                f"{grade_label(row['grade'])} - {row['subject_name']}"
+                for row in data["subject_rows"]
+            ],
+            "assignments": [row["assignment_rate"] for row in data["subject_rows"]],
+            "materials": [row["material_rate"] for row in data["subject_rows"]],
+            "attendance": [row["attendance_rate"] for row in data["subject_rows"]]
+        }
+    }
+
+    chart_json = json.dumps(chart_payload)
+
+    body = f"""
+    <section class="card">
+        <h1>Academic Progress Tracker</h1>
+
+        <p class="muted">
+            Track your assessments, learning materials, attendance, report uploads and academic risk areas for {pretty_month_label(month)}.
+        </p>
+
+        <div class="toolbar">
+            <a class="btn mini secondary" href="{url_for('student_home')}">Back to Dashboard</a>
+            <a class="btn mini success" href="{url_for('student_assignments')}">View Assignments</a>
+            <a class="btn mini" href="{url_for('student_materials')}">View Materials</a>
+            <a class="btn mini secondary" href="{url_for('student_upload_report')}">Upload Report</a>
+        </div>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Overall Progress", str(data["overall_rate"]) + "%")}
+            {stat("Completed Assessments", f"{data['completed_assignments']} / {data['total_assignments']}")}
+            {stat("Due Soon", data["due_soon"])}
+            {stat("Overdue", data["overdue"])}
+            {stat("Materials Viewed", f"{data['viewed_materials']} / {data['total_materials']}")}
+            {stat("Not Viewed", data["not_viewed_materials"])}
+            {stat("Attendance", str(data["attendance_rate"]) + "%")}
+            {stat("Reports Uploaded", data["reports_uploaded"])}
+            {stat("Portal Time", data["portal_hours_label"])}
+        </div>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-top:14px">
+            <h2>Progress Summary</h2>
+
+            <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+
+                <div class="card soft">
+                    <h3>Academic Status</h3>
+                    <p class="muted">Your current overall academic tracking status.</p>
+                    <span class="chip {data['overall_class']}">{escape(data['overall_status'])}</span>
+                </div>
+
+                <div class="card soft">
+                    <h3>Assessment Completion</h3>
+                    <p class="muted">Submitted assignments compared to available assignments.</p>
+                    <span class="chip active">{data['assignment_rate']}%</span>
+                </div>
+
+                <div class="card soft">
+                    <h3>Learning Engagement</h3>
+                    <p class="muted">Learning materials opened and reviewed.</p>
+                    <span class="chip pending">{data['material_view_rate']}%</span>
+                </div>
+
+                <div class="card soft">
+                    <h3>Attendance Rate</h3>
+                    <p class="muted">Attendance based on recorded EBTA sessions.</p>
+                    <span class="chip">{data['attendance_rate']}%</span>
+                </div>
+
+            </div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft">
+                <h2>Overall Progress</h2>
+                <p class="mini muted">A quick view of your academic progress for the selected month.</p>
+
+                <div style="height:260px">
+                    <canvas id="studentOverallProgressChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Academic Areas</h2>
+                <p class="mini muted">Assessments, materials, attendance and report upload progress.</p>
+
+                <div style="height:260px">
+                    <canvas id="studentAcademicAreasChart"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Subject Progress</h2>
+            <p class="mini muted">
+                Compare assessment completion, material engagement and attendance per subject.
+            </p>
+
+            <div style="height:330px">
+                <canvas id="studentSubjectProgressChart"></canvas>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px;border-left:5px solid #f59e0b">
+            <h2>What You Should Focus On</h2>
+
+            <ul style="margin-top:8px">
+                {recommendations_html}
+            </ul>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Module Risk & Improvement Areas</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Module</th>
+                            <th>Assessments</th>
+                            <th>Materials</th>
+                            <th>Attendance</th>
+                            <th>Avg Mark</th>
+                            <th>Risk</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {subject_rows_html or "<tr><td colspan='6'>No active academic subjects found for this month.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        const studentProgressCharts = {chart_json};
+
+        const ebtaColors = [
+            "#1b5e20",
+            "#2e7d32",
+            "#43a047",
+            "#66bb6a",
+            "#a5d6a7",
+            "#f59e0b",
+            "#64748b",
+            "#0f172a"
+        ];
+
+        function noDataPlugin(message) {{
+            return {{
+                id: "noData_" + Math.random().toString(36).slice(2),
+                afterDraw(chart) {{
+                    const values = chart.data.datasets.flatMap(ds => ds.data || []);
+                    const hasData = values.some(v => Number(v) > 0);
+
+                    if (!hasData) {{
+                        const ctx = chart.ctx;
+                        ctx.save();
+                        ctx.textAlign = "center";
+                        ctx.textBaseline = "middle";
+                        ctx.font = "13px Arial";
+                        ctx.fillStyle = "#64748b";
+                        ctx.fillText(message || "No data available yet", chart.width / 2, chart.height / 2);
+                        ctx.restore();
+                    }}
+                }}
+            }};
+        }}
+
+        const commonOptions = {{
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {{
+                legend: {{
+                    position: "bottom"
+                }}
+            }}
+        }};
+
+        new Chart(document.getElementById("studentOverallProgressChart"), {{
+            type: "doughnut",
+            data: {{
+                labels: studentProgressCharts.overall.labels,
+                datasets: [{{
+                    data: studentProgressCharts.overall.values,
+                    backgroundColor: ["#1b5e20", "#e5e7eb"]
+                }}]
+            }},
+            options: commonOptions,
+            plugins: [noDataPlugin("No progress data yet")]
+        }});
+
+        new Chart(document.getElementById("studentAcademicAreasChart"), {{
+            type: "bar",
+            data: {{
+                labels: studentProgressCharts.academicAreas.labels,
+                datasets: [{{
+                    label: "Progress %",
+                    data: studentProgressCharts.academicAreas.values,
+                    backgroundColor: "#1b5e20",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                plugins: {{
+                    legend: {{
+                        display: false
+                    }}
+                }},
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {{
+                            callback: function(value) {{
+                                return value + "%";
+                            }}
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No academic area data yet")]
+        }});
+
+        new Chart(document.getElementById("studentSubjectProgressChart"), {{
+            type: "bar",
+            data: {{
+                labels: studentProgressCharts.subjectRisk.labels,
+                datasets: [
+                    {{
+                        label: "Assessments",
+                        data: studentProgressCharts.subjectRisk.assignments,
+                        backgroundColor: "#1b5e20",
+                        borderRadius: 8
+                    }},
+                    {{
+                        label: "Materials",
+                        data: studentProgressCharts.subjectRisk.materials,
+                        backgroundColor: "#43a047",
+                        borderRadius: 8
+                    }},
+                    {{
+                        label: "Attendance",
+                        data: studentProgressCharts.subjectRisk.attendance,
+                        backgroundColor: "#f59e0b",
+                        borderRadius: 8
+                    }}
+                ]
+            }},
+            options: {{
+                ...commonOptions,
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {{
+                            callback: function(value) {{
+                                return value + "%";
+                            }}
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No subject tracking data yet")]
+        }});
+
+        let activityStart = Date.now();
+
+        function sendStudentActivityPing() {{
+            const now = Date.now();
+            const seconds = Math.round((now - activityStart) / 1000);
+            activityStart = now;
+
+            if (seconds <= 0) {{
+                return;
+            }}
+
+            const formData = new FormData();
+            formData.append("seconds", seconds);
+
+            if (navigator.sendBeacon) {{
+                navigator.sendBeacon("{url_for('student_activity_ping')}", formData);
+            }} else {{
+                fetch("{url_for('student_activity_ping')}", {{
+                    method: "POST",
+                    body: formData,
+                    keepalive: true
+                }});
+            }}
+        }}
+
+        setInterval(sendStudentActivityPing, 60000);
+        window.addEventListener("beforeunload", sendStudentActivityPing);
+    </script>
+    """
+
+    return page("Academic Progress Tracker", body)
 
 
 # ===================== Tutor Portal (includes messaging to student/admin) ==============
