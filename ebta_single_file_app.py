@@ -885,6 +885,19 @@ def init_db():
     """)
     
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS caos(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL UNIQUE,
+        email TEXT,
+        pin TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+    
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS discount_coupons(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
 
@@ -1079,6 +1092,9 @@ def init_db():
     
     cur.execute("CREATE INDEX IF NOT EXISTS idx_coos_phone ON coos(phone)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_coos_active ON coos(is_active)")
+    
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_caos_phone ON caos(phone)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_caos_active ON caos(is_active)")
 
 
     coo_permission_defaults = {
@@ -1101,6 +1117,28 @@ def init_db():
                 "INSERT INTO settings(key,value) VALUES(?,?)",
                 (key, value)
         )
+        
+        
+    cao_permission_defaults = {
+        "cao_portal_enabled": "1",
+        "cao_tutors_enabled": "1",
+        "cao_tutor_managers_enabled": "1",
+        "cao_aqm_enabled": "1",
+        "cao_academic_dashboard_enabled": "1",
+        "cao_materials_enabled": "1",
+        "cao_assignments_enabled": "1",
+        "cao_attendance_enabled": "1",
+        "cao_student_reports_enabled": "1",
+        "cao_performance_enabled": "1"
+    }
+
+    for key, value in cao_permission_defaults.items():
+        cur.execute("SELECT value FROM settings WHERE key=?", (key,))
+        if not cur.fetchone():
+            cur.execute(
+                "INSERT INTO settings(key,value) VALUES(?,?)",
+                (key, value)
+            )
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS submissions(
@@ -2333,6 +2371,37 @@ def require_coo_permission(permission_key, section_name="this section"):
         return page(
             "Access Restricted",
             card_msg(f"COO access to {section_name} has been disabled by High Admin.")
+        )
+
+
+def is_cao():
+    return session.get("cao_id")
+
+
+def require_cao():
+    if not is_cao():
+        return redirect(url_for("cao_login"))
+
+    if get_setting("cao_portal_enabled", "1") != "1":
+        return page(
+            "CAO Portal Disabled",
+            card_msg("The CAO Academy Offices portal is currently disabled by High Admin.")
+        )
+
+
+def cao_can(permission_key):
+    return get_setting(permission_key, "1") == "1"
+
+
+def require_cao_permission(permission_key, section_name="this section"):
+    r = require_cao()
+    if r:
+        return r
+
+    if not cao_can(permission_key):
+        return page(
+            "Access Restricted",
+            card_msg(f"CAO access to {section_name} has been disabled by High Admin.")
         )
 
 
@@ -4497,7 +4566,7 @@ body:`manager_id=${manager}&tutor_id=${tutor}&state=${state?1:0}`
 
 def page(title, body_html, extra_head="", extra_js=""):
     auth = []
-    if not (is_student() or is_tutor() or is_admin() or is_coo()):
+    if not (is_student() or is_tutor() or is_admin() or is_coo() or is_cao()):
         auth += [f"<a href='{url_for('student_login')}'>Student</a>",
                 f"<a href='{url_for('tutor_login')}'>Tutor</a>"]
     else:
@@ -4511,7 +4580,12 @@ def page(title, body_html, extra_head="", extra_js=""):
             auth += [
                 f"<a href='{url_for('coo_dashboard')}'>COO</a>",
                 f"<a href='{url_for('coo_logout')}'>Logout</a>"
-            ]    
+            ]  
+        if is_cao():
+            auth += [
+                f"<a href='{url_for('cao_dashboard')}'>CAO</a>",
+                f"<a href='{url_for('cao_logout')}'>Logout</a>"
+            ]
             
     right = " ".join(auth)
 
@@ -12475,6 +12549,7 @@ def admin_nav():
                 "Finance & Management",
                 [
                     ("COOs", "admin_coos", "/admin/coos"),
+                    ("CAOs", "admin_caos", "/admin/caos"),
                     ("Treasurers", "admin_treasurers", "/admin/treasurers"),
                     ("Finance Overview", "admin_finance_overview", "/admin/finance-overview"),
                     ("Management Roles", "admin_management_roles", "/admin/management-roles"),
@@ -45494,6 +45569,875 @@ def coo_social_media_crisis():
     
 
 
+#---------------------------CAO SECTION---------------------------
+def cao_nav():
+
+    cao_name = session.get("cao_name", "CAO")
+
+    def cao_link(label, endpoint, permission_key=None, fallback="#", icon=""):
+        if permission_key and not cao_can(permission_key):
+            return ""
+
+        return f"""
+        <a class="cao-quick-link" href="{safe_url(endpoint, fallback)}">
+            <span>{icon}</span>
+            <span>{escape(label)}</span>
+        </a>
+        """
+
+    sections = [
+        (
+            "Academy Office",
+            [
+                cao_link("Dashboard", "cao_dashboard", "cao_academic_dashboard_enabled", icon="🏠"),
+                cao_link("Academic Team", "cao_academic_team", "cao_tutors_enabled", icon="👥"),
+                cao_link("Tutor Managers", "cao_tutor_managers", "cao_tutor_managers_enabled", icon="🧑‍🏫"),
+                cao_link("AQM Team", "cao_aqm_team", "cao_aqm_enabled", icon="✅"),
+            ]
+        ),
+        (
+            "Teaching Activity",
+            [
+                cao_link("Tutor Performance", "cao_tutor_performance", "cao_performance_enabled", icon="📊"),
+                cao_link("Classes & Sessions", "cao_sessions", "cao_attendance_enabled", icon="📅"),
+                cao_link("Materials", "cao_materials", "cao_materials_enabled", icon="📚"),
+                cao_link("Assignments", "cao_assignments", "cao_assignments_enabled", icon="📝"),
+            ]
+        ),
+        (
+            "Learner Academic View",
+            [
+                cao_link("Learner Performance", "cao_learner_performance", "cao_performance_enabled", icon="🎓"),
+                cao_link("Attendance Trends", "cao_attendance", "cao_attendance_enabled", icon="📈"),
+                cao_link("Student Reports", "cao_student_reports", "cao_student_reports_enabled", icon="📄"),
+                cao_link("Learner Movement", "cao_learner_movement", "cao_performance_enabled", icon="🔁"),
+            ]
+        ),
+    ]
+
+    section_html = ""
+
+    for title, links in sections:
+        clean_links = "".join([x for x in links if x.strip()])
+
+        if not clean_links:
+            continue
+
+        section_html += f"""
+        <details class="cao-nav-section" open>
+            <summary>{escape(title)}</summary>
+            <div class="cao-section-links">
+                {clean_links}
+            </div>
+        </details>
+        """
+
+    return f"""
+    <style>
+        .cao-hero {{
+            background:
+                linear-gradient(135deg, rgba(30,64,175,.96), rgba(37,99,235,.88)),
+                radial-gradient(circle at top right, rgba(255,255,255,.25), transparent 35%);
+            color:#ffffff;
+            border-radius:24px;
+            padding:24px;
+            box-shadow:0 14px 32px rgba(15,23,42,.18);
+            margin:14px 0 20px;
+            overflow:hidden;
+            position:relative;
+        }}
+
+        .cao-hero-top {{
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:16px;
+            flex-wrap:wrap;
+        }}
+
+        .cao-hero h1 {{
+            margin:0;
+            font-size:28px;
+            color:#ffffff;
+        }}
+
+        .cao-hero p {{
+            margin:8px 0 0;
+            max-width:760px;
+            color:rgba(255,255,255,.9);
+            font-size:14px;
+        }}
+
+        .cao-role-pill {{
+            background:rgba(255,255,255,.16);
+            border:1px solid rgba(255,255,255,.35);
+            color:#ffffff;
+            border-radius:999px;
+            padding:9px 14px;
+            font-weight:800;
+            font-size:13px;
+            white-space:nowrap;
+        }}
+
+        .cao-nav-panel {{
+            margin-top:18px;
+            background:rgba(255,255,255,.96);
+            border-radius:18px;
+            padding:14px;
+            box-shadow:0 8px 20px rgba(0,0,0,.12);
+        }}
+
+        .cao-nav-sections {{
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
+            gap:10px;
+        }}
+
+        .cao-nav-section {{
+            background:#f8fafc;
+            border:1px solid #dbe4ef;
+            border-radius:14px;
+            overflow:hidden;
+        }}
+
+        .cao-nav-section summary {{
+            cursor:pointer;
+            list-style:none;
+            padding:12px 14px;
+            font-weight:900;
+            color:#0f172a;
+        }}
+
+        .cao-nav-section summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .cao-section-links {{
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+            padding:0 12px 12px;
+        }}
+
+        .cao-quick-link {{
+            text-decoration:none;
+            color:#1e40af;
+            background:#ffffff;
+            border:1px solid rgba(37,99,235,.28);
+            border-radius:999px;
+            padding:8px 11px;
+            font-size:13px;
+            font-weight:800;
+            display:inline-flex;
+            align-items:center;
+            gap:6px;
+            box-shadow:0 2px 8px rgba(15,23,42,.05);
+            transition:.15s ease;
+        }}
+
+        .cao-quick-link:hover {{
+            background:#1e40af;
+            color:#ffffff;
+            transform:translateY(-1px);
+        }}
+
+        @media(max-width:768px) {{
+            .cao-hero {{
+                padding:18px;
+                border-radius:18px;
+            }}
+
+            .cao-hero h1 {{
+                font-size:22px;
+            }}
+
+            .cao-nav-sections {{
+                grid-template-columns:1fr;
+            }}
+
+            .cao-quick-link {{
+                width:100%;
+                border-radius:12px;
+            }}
+        }}
+    </style>
+
+    <section class="cao-hero">
+        <div class="cao-hero-top">
+            <div>
+                <h1>Welcome, {escape(cao_name)}</h1>
+                <p>
+                    CAO Academy Offices for tutors, tutor managers, academic quality, learner performance,
+                    attendance, uploaded academic resources, assignments and academic progress tracking.
+                </p>
+            </div>
+
+            <div class="cao-role-pill">
+                Chief Academic Officer
+            </div>
+        </div>
+
+        <div class="cao-nav-panel">
+            <div class="mini muted" style="margin-bottom:10px">
+                Open an academic office section below.
+            </div>
+
+            <div class="cao-nav-sections">
+                {section_html}
+            </div>
+        </div>
+    </section>
+    """
+
+@app.get('/cao/login')
+def cao_login():
+
+    body = """
+    <section class="card" style="max-width:420px;margin:30px auto">
+        <h1>CAO Login</h1>
+
+        <p class="muted">
+            Chief Academic Officer Academy Offices access.
+        </p>
+
+        <form method="post">
+            <label>Phone Number</label>
+            <input name="phone" required>
+
+            <label>PIN</label>
+            <input name="pin" type="password" required>
+
+            <button class="btn success" style="width:100%;margin-top:12px">
+                Login
+            </button>
+        </form>
+    </section>
+    """
+
+    return page("CAO Login", body)
+
+
+@app.post('/cao/login')
+def cao_login_post():
+
+    phone = request.form.get("phone", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM caos
+        WHERE phone=?
+          AND pin=?
+          AND is_active=1
+        LIMIT 1
+    """, (phone, pin))
+
+    cao = cur.fetchone()
+    conn.close()
+
+    if not cao:
+        return page("Login Failed", card_msg("Invalid CAO login details or inactive account."))
+
+    session.clear()
+    session["cao_id"] = cao["id"]
+    session["cao_name"] = cao["full_name"]
+
+    return redirect(url_for("cao_dashboard"))
+
+
+@app.get('/cao/logout')
+def cao_logout():
+
+    session.pop("cao_id", None)
+    session.pop("cao_name", None)
+
+    return redirect(url_for("cao_login"))
+
+
+@app.get('/cao')
+def cao_dashboard():
+
+    r = require_cao_permission("cao_academic_dashboard_enabled", "CAO dashboard")
+    if r:
+        return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS c FROM tutors")
+    total_tutors = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM tutor_managers")
+    total_tutor_managers = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM academic_quality_managers")
+    total_aqms = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM sessions WHERE active=1")
+    active_sessions = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM attendance_sessions
+        WHERE month=?
+    """, (month,))
+    sessions_logged = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM materials
+        WHERE month LIKE ?
+    """, (month + "%",))
+    total_uploads = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM materials
+        WHERE month LIKE ?
+          AND (is_assignment=1 OR kind='assignment')
+    """, (month + "%",))
+    assignments_uploaded = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM materials
+        WHERE month LIKE ?
+          AND youtube_url IS NOT NULL
+          AND TRIM(youtube_url) != ''
+    """, (month + "%",))
+    recordings_uploaded = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM submissions
+        WHERE substr(submitted_at,1,7)=?
+    """, (month,))
+    assignment_submissions = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM student_reports
+        WHERE substr(upload_date,1,7)=?
+    """, (month,))
+    student_reports = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM enrollments
+        WHERE month=?
+          AND status='ACTIVE'
+    """, (month,))
+    active_learners = cur.fetchone()["c"] or 0
+
+    prev_month_dt = datetime.datetime.strptime(month + "-01", "%Y-%m-%d") - datetime.timedelta(days=1)
+    prev_month = prev_month_dt.strftime("%Y-%m")
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT e1.student_id) AS c
+        FROM enrollments e1
+        WHERE e1.month=?
+          AND e1.status='ACTIVE'
+          AND e1.student_id NOT IN (
+              SELECT DISTINCT student_id
+              FROM enrollments
+              WHERE month=?
+          )
+    """, (prev_month, month))
+    learners_lost = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT t.full_name,
+               COUNT(DISTINCT m.id) AS uploads,
+               COUNT(DISTINCT CASE WHEN m.youtube_url IS NOT NULL AND TRIM(m.youtube_url) != '' THEN m.id END) AS recordings,
+               COUNT(DISTINCT CASE WHEN m.is_assignment=1 OR m.kind='assignment' THEN m.id END) AS assignments,
+               COUNT(DISTINCT a.id) AS tracker_logs
+        FROM tutors t
+        LEFT JOIN materials m ON m.tutor_id=t.id AND m.month LIKE ?
+        LEFT JOIN tutor_weekly_tracker a ON a.tutor_id=t.id AND substr(a.session_date,1,7)=?
+        GROUP BY t.id
+        ORDER BY uploads DESC, tracker_logs DESC
+        LIMIT 8
+    """, (month + "%", month))
+
+    top_tutors = cur.fetchall()
+
+    conn.close()
+
+    tutor_rows = ""
+
+    for t in top_tutors:
+        tutor_rows += f"""
+        <tr>
+            <td><strong>{escape(t['full_name'])}</strong></td>
+            <td>{t['uploads'] or 0}</td>
+            <td>{t['recordings'] or 0}</td>
+            <td>{t['assignments'] or 0}</td>
+            <td>{t['tracker_logs'] or 0}</td>
+        </tr>
+        """
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Academy Offices Dashboard</h1>
+
+        <p class="muted">
+            Academic overview for tutors, tutor managers, AQM, learner performance, attendance, materials and assignments.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <button class="btn mini">View Month</button>
+        </form>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Month", month)}
+            {stat("Tutors", total_tutors)}
+            {stat("Tutor Managers", total_tutor_managers)}
+            {stat("AQMs", total_aqms)}
+            {stat("Active Sessions", active_sessions)}
+            {stat("Sessions Logged", sessions_logged)}
+            {stat("Academic Uploads", total_uploads)}
+            {stat("Recordings", recordings_uploaded)}
+            {stat("Assignments", assignments_uploaded)}
+            {stat("Submissions", assignment_submissions)}
+            {stat("Student Reports", student_reports)}
+            {stat("Active Learners", active_learners)}
+            {stat("Learners Lost", learners_lost)}
+        </div>
+
+        <div class="card soft" style="margin-top:14px;border-left:5px solid #1e40af">
+            <h2>Top Tutor Academic Activity</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tutor</th>
+                            <th>Uploads</th>
+                            <th>Recordings</th>
+                            <th>Assignments</th>
+                            <th>Tracker Logs</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {tutor_rows or "<tr><td colspan='5'>No tutor activity found for this month.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("CAO Dashboard", body)
+    
+
+@app.get('/cao/team')
+def cao_academic_team():
+
+    r = require_cao_permission("cao_tutors_enabled", "academic team")
+    if r:
+        return r
+
+    role = request.args.get("role", "").strip()
+    q = request.args.get("q", "").strip()
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except:
+        page_num = 1
+
+    page_num = max(1, page_num)
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    role_map = {
+        "tutor": ("Tutor", "tutors"),
+        "manager": ("Tutor Manager", "tutor_managers"),
+        "aqm": ("Academic Quality Manager", "academic_quality_managers"),
+    }
+
+    union_parts = []
+
+    for key, item in role_map.items():
+        label, table = item
+
+        union_parts.append(f"""
+            SELECT
+                '{key}' AS role_key,
+                '{label}' AS role_name,
+                id,
+                full_name,
+                phone,
+                NULL AS email,
+                created_at
+            FROM {table}
+        """)
+
+    base_sql = " UNION ALL ".join(union_parts)
+
+    where = []
+    params = []
+
+    if role and role in role_map:
+        where.append("role_key=?")
+        params.append(role)
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                full_name LIKE ?
+                OR phone LIKE ?
+                OR role_name LIKE ?
+            )
+        """)
+        params += [search, search, search]
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM ({base_sql}) team
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT *
+        FROM ({base_sql}) team
+        {where_sql}
+        ORDER BY role_name, full_name
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for r0 in rows:
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(r0['full_name'] or '—')}</strong>
+                <div class="mini muted">ID: {r0['id']}</div>
+            </td>
+            <td>{escape(r0['role_name'])}</td>
+            <td>{escape(r0['phone'] or '—')}</td>
+            <td>{escape((r0['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    role_options = """
+        <option value="">All Academic Roles</option>
+    """
+
+    for key, item in role_map.items():
+        label = item[0]
+        selected = "selected" if role == key else ""
+        role_options += f"<option value='{key}' {selected}>{escape(label)}</option>"
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Academic Team</h1>
+
+        <p class="muted">
+            Tutors, Tutor Managers and Academic Quality Managers in one academic office view.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input name="q" value="{escape(q)}" placeholder="Search name, phone or role">
+
+            <select name="role">
+                {role_options}
+            </select>
+
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('cao_academic_team')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} academic staff member(s).
+        </div>
+
+        {pagination_controls("/cao/team", page_num, total_pages, {"q": q, "role": role})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Role</th>
+                        <th>Phone</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='4'>No academic team members found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/cao/team", page_num, total_pages, {"q": q, "role": role})}
+    </section>
+    """
+
+    return page("Academic Team", body)
+    
+    
+@app.get('/admin/caos')
+def admin_caos():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can manage CAO accounts."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM caos
+        ORDER BY is_active DESC, full_name
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    cao_rows = ""
+
+    for c in rows:
+        status = "<span class='chip active'>Active</span>" if c["is_active"] == 1 else "<span class='chip lapsed'>Inactive</span>"
+
+        cao_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(c['full_name'])}</strong>
+                <div class="mini muted">{escape(c['email'] or '—')}</div>
+            </td>
+
+            <td>{escape(c['phone'])}</td>
+
+            <td>
+                <span class="chip">{escape(c['pin'] or '—')}</span>
+            </td>
+
+            <td>{status}</td>
+
+            <td>
+                <form method="post" action="{url_for('admin_cao_toggle', cao_id=c['id'])}" style="display:inline">
+                    <button class="btn mini secondary">
+                        {'Deactivate' if c['is_active'] == 1 else 'Activate'}
+                    </button>
+                </form>
+
+                <form method="post" action="{url_for('admin_cao_reset_pin', cao_id=c['id'])}" style="display:inline">
+                    <button class="btn mini warn">
+                        Reset PIN
+                    </button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>CAO Management</h1>
+
+        <p class="muted">
+            Create CAO accounts for Academy Offices access.
+        </p>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px">
+
+            <div class="card soft">
+                <h2>Add CAO</h2>
+
+                <form method="post" action="{url_for('admin_cao_add')}">
+                    <label>Full Name</label>
+                    <input name="full_name" required>
+
+                    <label>Phone</label>
+                    <input name="phone" required>
+
+                    <label>Email</label>
+                    <input name="email">
+
+                    <label>PIN</label>
+                    <input name="pin" required>
+
+                    <button class="btn success" style="margin-top:10px">
+                        Add CAO
+                    </button>
+                </form>
+            </div>
+
+            <div class="card soft">
+                <h2>Existing CAO Accounts</h2>
+
+                <div class="scroll-x">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>CAO</th>
+                                <th>Phone</th>
+                                <th>PIN</th>
+                                <th>Status</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            {cao_rows or "<tr><td colspan='5'>No CAO accounts yet.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </section>
+    """
+
+    return page("CAO Management", body)
+
+
+@app.post('/admin/caos/add')
+def admin_cao_add():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can add CAO accounts."))
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    email = request.form.get("email", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    if not full_name or not phone or not pin:
+        return page("Missing Information", card_msg("Full name, phone and PIN are required."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            INSERT INTO caos(
+                full_name,
+                phone,
+                email,
+                pin,
+                is_active,
+                created_at,
+                updated_at
+            )
+            VALUES(?,?,?,?,?,?,?)
+        """, (
+            full_name,
+            phone,
+            email,
+            pin,
+            1,
+            now_utc_iso(),
+            now_utc_iso()
+        ))
+
+        conn.commit()
+
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Duplicate Phone", card_msg("A CAO account with this phone number already exists."))
+
+    conn.close()
+
+    return redirect(url_for("admin_caos"))
+
+
+@app.post('/admin/cao/<int:cao_id>/toggle')
+def admin_cao_toggle(cao_id):
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can update CAO accounts."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE caos
+        SET is_active = CASE WHEN is_active=1 THEN 0 ELSE 1 END,
+            updated_at=?
+        WHERE id=?
+    """, (now_utc_iso(), cao_id))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_caos"))
+
+
+@app.post('/admin/cao/<int:cao_id>/reset-pin')
+def admin_cao_reset_pin(cao_id):
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can reset CAO PINs."))
+
+    new_pin = str(random.randint(1000, 999999))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE caos
+        SET pin=?,
+            updated_at=?
+        WHERE id=?
+    """, (new_pin, now_utc_iso(), cao_id))
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "CAO PIN Reset",
+        card_msg(f"The new CAO PIN is: <b>{escape(new_pin)}</b>")
+    )
 
 
 # --- Admin: Analytics dashboard ---
