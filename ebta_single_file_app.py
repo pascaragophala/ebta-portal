@@ -4751,9 +4751,9 @@ def page(title, body_html, extra_head="", extra_js=""):
             links = [
                 ("Dashboard", url_for('tutor_home')),
                 ("Work Progress", url_for('tutor_work_progress')),
-                ("Upload Material", "#upload"),
+                ("Upload Material", url_for('tutor_home') + "#upload"),
                 ("My Library", url_for('tutor_uploads_library')),
-                ("Assignments", url_for('tutor_assignments')),
+                ("Assignments", "#assignments"),
                 ("Messages", "#messages"),
                 ("Students", "#students"),
                 ("Logout", url_for('tutor_logout'))
