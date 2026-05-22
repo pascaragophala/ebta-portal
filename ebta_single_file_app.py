@@ -14236,6 +14236,8 @@ def tutor_work_progress():
     data = tutor_work_progress_data(tid, month)
 
     subject_rows_html = ""
+    subject_cards_html = ""
+    
 
     for row in data["subject_rows"]:
 
@@ -14267,6 +14269,58 @@ def tutor_work_progress():
                 </span>
             </td>
         </tr>
+        """
+        
+        subject_cards_html += f"""
+        <div class="tutor-progress-subject-card">
+            <div class="tutor-progress-subject-top">
+                <div>
+                    <strong>{grade_label(row['grade'])} - {escape(row['subject_name'])}</strong>
+                    <div class="mini muted">Focus: {escape(row['focus'])}</div>
+                </div>
+
+                <span class="chip {risk_class}">
+                    {escape(row['risk_level'])}
+                </span>
+            </div>
+
+            <div class="tutor-progress-mini-grid">
+                <div>
+                    <span>Uploads</span>
+                    <strong>{row['uploads']}</strong>
+                </div>
+
+                <div>
+                    <span>Recordings</span>
+                    <strong>{row['recordings']}</strong>
+                </div>
+
+                <div>
+                    <span>Assignments</span>
+                    <strong>{row['assignments']}</strong>
+                </div>
+
+                <div>
+                    <span>Submissions</span>
+                    <strong>{row['submissions']}</strong>
+                </div>
+
+                <div>
+                    <span>Marked</span>
+                    <strong>{row['marked']}</strong>
+                </div>
+
+                <div>
+                    <span>Marking</span>
+                    <strong>{row['marking_rate']}%</strong>
+                </div>
+
+                <div>
+                    <span>Attendance Logs</span>
+                    <strong>{row['attendance_rate']}%</strong>
+                </div>
+            </div>
+        </div>
         """
 
     recommendations_html = "".join([
@@ -14315,6 +14369,228 @@ def tutor_work_progress():
     }
 
     chart_json = json.dumps(chart_payload)
+    
+    mobile_css = """
+    <style>
+        .tutor-progress-page {
+            overflow:hidden;
+        }
+
+        .tutor-progress-page * {
+            box-sizing:border-box;
+        }
+
+        .tutor-progress-toolbar {
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+            margin-top:10px;
+        }
+
+        .tutor-progress-toolbar .btn {
+            white-space:normal;
+        }
+
+        .tutor-progress-page .stats {
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+            gap:10px;
+        }
+
+        .tutor-progress-page .stats .stat,
+        .tutor-progress-page .stats > div {
+            min-width:0;
+        }
+
+        .tutor-chart-grid {
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+            gap:14px;
+            margin-top:14px;
+        }
+
+        .tutor-chart-box {
+            height:260px;
+            width:100%;
+            max-width:100%;
+            position:relative;
+        }
+
+        .tutor-chart-box-large {
+            height:320px;
+            width:100%;
+            max-width:100%;
+            position:relative;
+        }
+
+        .tutor-chart-box canvas,
+        .tutor-chart-box-large canvas {
+            width:100% !important;
+            max-width:100% !important;
+        }
+
+        .tutor-progress-desktop-table {
+            display:block;
+        }
+
+        .tutor-progress-mobile-cards {
+            display:none;
+        }
+
+        .tutor-progress-subject-card {
+            border:1px solid #dbe4ef;
+            border-left:5px solid #1b5e20;
+            border-radius:14px;
+            padding:12px;
+            background:#ffffff;
+            margin-bottom:10px;
+            box-shadow:0 2px 8px rgba(15,23,42,.05);
+        }
+
+        .tutor-progress-subject-top {
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:10px;
+            margin-bottom:10px;
+        }
+
+        .tutor-progress-mini-grid {
+            display:grid;
+            grid-template-columns:repeat(2,1fr);
+            gap:8px;
+        }
+
+        .tutor-progress-mini-grid div {
+            background:#f8fafc;
+            border:1px solid #e5e7eb;
+            border-radius:12px;
+            padding:9px;
+        }
+
+        .tutor-progress-mini-grid span {
+            display:block;
+            font-size:11px;
+            color:#64748b;
+            margin-bottom:3px;
+        }
+
+        .tutor-progress-mini-grid strong {
+            font-size:15px;
+            color:#0f172a;
+        }
+
+        @media(max-width:768px) {
+            .tutor-progress-page {
+                padding:12px !important;
+                border-radius:14px !important;
+            }
+
+            .tutor-progress-page h1 {
+                font-size:22px;
+                line-height:1.2;
+            }
+
+            .tutor-progress-page h2 {
+                font-size:18px;
+            }
+
+            .tutor-progress-page h3 {
+                font-size:15px;
+            }
+
+            .tutor-progress-toolbar {
+                display:grid;
+                grid-template-columns:1fr;
+            }
+
+            .tutor-progress-toolbar .btn {
+                width:100%;
+                text-align:center;
+                justify-content:center;
+            }
+
+            .tutor-progress-page .stats {
+                grid-template-columns:repeat(2,minmax(0,1fr));
+                gap:8px;
+            }
+
+            .tutor-progress-page .stats .stat,
+            .tutor-progress-page .stats > div {
+                padding:10px !important;
+                overflow:hidden;
+            }
+
+            .tutor-progress-page .stats .k,
+            .tutor-progress-page .stats strong {
+                font-size:17px !important;
+                word-break:break-word;
+            }
+
+            .tutor-progress-page .stats .t,
+            .tutor-progress-page .stats .muted {
+                font-size:11px !important;
+            }
+
+            .tutor-chart-grid {
+                grid-template-columns:1fr;
+                gap:10px;
+            }
+
+            .tutor-chart-box {
+                height:230px;
+            }
+
+            .tutor-chart-box-large {
+                height:290px;
+            }
+
+            .tutor-progress-page .card.soft {
+                padding:12px !important;
+                border-radius:14px !important;
+            }
+
+            .tutor-progress-page ul {
+                padding-left:18px;
+            }
+
+            .tutor-progress-desktop-table {
+                display:none;
+            }
+
+            .tutor-progress-mobile-cards {
+                display:block;
+            }
+        }
+
+        @media(max-width:420px) {
+            .tutor-progress-page .stats {
+                grid-template-columns:1fr;
+            }
+
+            .tutor-chart-box {
+                height:215px;
+            }
+
+            .tutor-chart-box-large {
+                height:270px;
+            }
+
+            .tutor-progress-mini-grid {
+                grid-template-columns:1fr;
+            }
+
+            .tutor-progress-subject-top {
+                flex-direction:column;
+            }
+
+            .tutor-progress-subject-top .chip {
+                width:100%;
+                text-align:center;
+            }
+        }
+    </style>
+    """
 
     rating_display = "—"
 
@@ -14322,7 +14598,7 @@ def tutor_work_progress():
         rating_display = str(data["avg_manager_rating"])
 
     body = f"""
-    <section class="card">
+    <section class="card tutor-progress-page">
         <h1>Tutor Work Progress</h1>
 
         <p class="muted">
@@ -14330,7 +14606,7 @@ def tutor_work_progress():
             assignments, attendance logs, marking, tracker activity and learner engagement.
         </p>
 
-        <div class="toolbar">
+        <div class="tutor-progress-toolbar">
             <a class="btn mini secondary" href="{url_for('tutor_home')}">Back to Dashboard</a>
             <a class="btn mini success" href="{url_for('tutor_uploads_library')}">Upload Library</a>
             <a class="btn mini" href="{url_for('tutor_home')}#assignments">Assignments</a>
@@ -14383,13 +14659,13 @@ def tutor_work_progress():
             </div>
         </div>
 
-        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+        <div class="tutor-chart-grid">
 
             <div class="card soft">
                 <h2>Overall Work Progress</h2>
                 <p class="mini muted">A quick view of your tutor progress this month.</p>
 
-                <div style="height:260px">
+                <div class="tutor-chart-box">
                     <canvas id="tutorOverallProgressChart"></canvas>
                 </div>
             </div>
@@ -14398,7 +14674,7 @@ def tutor_work_progress():
                 <h2>Work Activity</h2>
                 <p class="mini muted">Uploads, recordings, assignments, attendance logs and marking.</p>
 
-                <div style="height:260px">
+                <div class="tutor-chart-box">
                     <canvas id="tutorWorkAreasChart"></canvas>
                 </div>
             </div>
@@ -14411,7 +14687,7 @@ def tutor_work_progress():
                 Work progress, attendance logging, marking and tracker completion.
             </p>
 
-            <div style="height:300px">
+            <div class="tutor-chart-box-large">
                 <canvas id="tutorRatesChart"></canvas>
             </div>
         </div>
@@ -14422,7 +14698,7 @@ def tutor_work_progress():
                 Compare uploads, recordings and assignments per assigned subject.
             </p>
 
-            <div style="height:330px">
+            <div class="tutor-chart-box-large">
                 <canvas id="tutorSubjectProgressChart"></canvas>
             </div>
         </div>
@@ -14438,26 +14714,32 @@ def tutor_work_progress():
         <div class="card soft" style="margin-top:14px">
             <h2>Subject Risk & Improvement Areas</h2>
 
-            <div class="scroll-x">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Subject</th>
-                            <th>Uploads</th>
-                            <th>Recordings</th>
-                            <th>Assignments</th>
-                            <th>Submissions</th>
-                            <th>Marked</th>
-                            <th>Marking</th>
-                            <th>Attendance Logs</th>
-                            <th>Risk</th>
-                        </tr>
-                    </thead>
+            <div class="tutor-progress-desktop-table">
+                <div class="scroll-x">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Subject</th>
+                                <th>Uploads</th>
+                                <th>Recordings</th>
+                                <th>Assignments</th>
+                                <th>Submissions</th>
+                                <th>Marked</th>
+                                <th>Marking</th>
+                                <th>Attendance Logs</th>
+                                <th>Risk</th>
+                            </tr>
+                        </thead>
 
-                    <tbody>
-                        {subject_rows_html or "<tr><td colspan='9'>No assigned subjects found.</td></tr>"}
-                    </tbody>
-                </table>
+                        <tbody>
+                            {subject_rows_html or "<tr><td colspan='9'>No assigned subjects found.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="tutor-progress-mobile-cards">
+                {subject_cards_html or "<div class='empty'>No assigned subjects found.</div>"}
             </div>
         </div>
     </section>
@@ -14499,12 +14781,23 @@ def tutor_work_progress():
             }};
         }}
 
+        const isSmallScreen = window.innerWidth <= 768;
+
         const commonOptions = {{
             responsive: true,
             maintainAspectRatio: false,
+            layout: {{
+                padding: isSmallScreen ? 4 : 10
+            }},
             plugins: {{
                 legend: {{
-                    position: "bottom"
+                    position: "bottom",
+                    labels: {{
+                        boxWidth: isSmallScreen ? 10 : 14,
+                        font: {{
+                            size: isSmallScreen ? 10 : 12
+                        }}
+                    }}
                 }}
             }}
         }};
@@ -14570,7 +14863,18 @@ def tutor_work_progress():
                         display: false
                     }}
                 }},
-                scales: {{
+                indexAxis: isSmallScreen ? "y" : "x",
+                scales: isSmallScreen ? {{
+                    x: {{
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {{
+                            callback: function(value) {{
+                                return value + "%";
+                            }}
+                        }}
+                    }}
+                }} : {{
                     y: {{
                         beginAtZero: true,
                         max: 100,
@@ -14612,7 +14916,15 @@ def tutor_work_progress():
             }},
             options: {{
                 ...commonOptions,
-                scales: {{
+                indexAxis: isSmallScreen ? "y" : "x",
+                scales: isSmallScreen ? {{
+                    x: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }} : {{
                     y: {{
                         beginAtZero: true,
                         ticks: {{
@@ -14654,7 +14966,7 @@ def tutor_work_progress():
     </script>
     """
 
-    return page("Tutor Work Progress", body)
+    return page("Tutor Work Progress", body, extra_head=mobile_css)
 
 
 
