@@ -45591,7 +45591,8 @@ def cao_nav():
             [
                 cao_link("Dashboard", "cao_dashboard", "cao_academic_dashboard_enabled", icon="🏠"),
                 cao_link("Academic Team", "cao_academic_team", "cao_tutors_enabled", icon="👥"),
-                cao_link("Tutor Managers", "cao_tutor_managers", "cao_tutor_managers_enabled", icon="🧑‍🏫"),
+                cao_link("Tutors", "cao_tutors", "cao_tutors_enabled", icon="🧑‍🏫"),
+                cao_link("Tutor Managers", "cao_tutor_managers", "cao_tutor_managers_enabled", icon="📋"),
                 cao_link("AQM Team", "cao_aqm_team", "cao_aqm_enabled", icon="✅"),
             ]
         ),
@@ -45636,7 +45637,7 @@ def cao_nav():
     <style>
         .cao-hero {{
             background:
-                linear-gradient(135deg, rgba(30,64,175,.96), rgba(37,99,235,.88)),
+                linear-gradient(135deg, rgba(27,94,32,.96), rgba(46,125,50,.88)),
                 radial-gradient(circle at top right, rgba(255,255,255,.25), transparent 35%);
             color:#ffffff;
             border-radius:24px;
@@ -45721,9 +45722,9 @@ def cao_nav():
 
         .cao-quick-link {{
             text-decoration:none;
-            color:#1e40af;
+            color:#1b5e20;
             background:#ffffff;
-            border:1px solid rgba(37,99,235,.28);
+            border:1px solid rgba(27,94,32,.28);
             border-radius:999px;
             padding:8px 11px;
             font-size:13px;
@@ -45736,7 +45737,7 @@ def cao_nav():
         }}
 
         .cao-quick-link:hover {{
-            background:#1e40af;
+            background:#1b5e20;
             color:#ffffff;
             transform:translateY(-1px);
         }}
@@ -46012,7 +46013,7 @@ def cao_dashboard():
             {stat("Learners Lost", learners_lost)}
         </div>
 
-        <div class="card soft" style="margin-top:14px;border-left:5px solid #1e40af">
+        <div class="card soft" style="margin-top:14px;border-left:5px solid #1b5e20">
             <h2>Top Tutor Academic Activity</h2>
 
             <div class="scroll-x">
@@ -46438,6 +46439,1482 @@ def admin_cao_reset_pin(cao_id):
         "CAO PIN Reset",
         card_msg(f"The new CAO PIN is: <b>{escape(new_pin)}</b>")
     )
+
+
+# =============================================================
+# CAO ACADEMY OFFICES DETAILED PAGES
+# =============================================================
+
+def cao_page_num():
+    try:
+        p = int(request.args.get("page", 1))
+    except Exception:
+        p = 1
+    return max(1, p)
+
+
+def cao_selected_month():
+    return request.args.get("month") or get_setting("current_month")
+
+
+def cao_status_chip(status):
+    status = status or "UNKNOWN"
+
+    if status in ["ACTIVE", "PAID", "APPROVED", "SENT", "POSTED", "DONE", "SUBMITTED", "REVIEWED", "PUBLISHED"]:
+        cls = "active"
+    elif status in ["PENDING", "DRAFT", "READY", "PLANNED", "OPEN", "IN PROGRESS", "AWAITING POP", "NEW"]:
+        cls = "pending"
+    elif status in ["LAPSED", "FAILED", "DECLINED", "CANCELLED", "OVERDUE", "ESCALATED"]:
+        cls = "lapsed"
+    else:
+        cls = ""
+
+    return f"<span class='chip {cls}'>{escape(status)}</span>"
+
+
+def cao_month_toolbar(month):
+    return f"""
+    <form method="get" class="toolbar">
+        <input type="month" name="month" value="{escape(month)}">
+        <button class="btn mini">View Month</button>
+    </form>
+    """
+
+
+@app.get('/cao/tutors')
+def cao_tutors():
+
+    r = require_cao_permission("cao_tutors_enabled", "tutors")
+    if r:
+        return r
+
+    month = cao_selected_month()
+    q = request.args.get("q", "").strip()
+    page_num = cao_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("(t.full_name LIKE ? OR t.phone LIKE ? OR s.name LIKE ? OR s.grade LIKE ?)")
+        params += [search, search, search, search]
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(DISTINCT t.id) AS c
+        FROM tutors t
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        LEFT JOIN subjects s ON s.id=ts.subject_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    data_params = list(params)
+    data_params.extend([month + "%", month, month, per_page, offset])
+
+    cur.execute(f"""
+        SELECT
+            t.id,
+            t.full_name,
+            t.phone,
+            t.pin,
+            t.created_at,
+            COUNT(DISTINCT ts.subject_id) AS subject_count,
+            COUNT(DISTINCT m.id) AS upload_count,
+            COUNT(DISTINCT CASE WHEN m.youtube_url IS NOT NULL AND TRIM(m.youtube_url) != '' THEN m.id END) AS recording_count,
+            COUNT(DISTINCT CASE WHEN m.is_assignment=1 OR m.kind='assignment' THEN m.id END) AS assignment_count,
+            COUNT(DISTINCT twt.id) AS tracker_logs
+        FROM tutors t
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        LEFT JOIN subjects s ON s.id=ts.subject_id
+        LEFT JOIN materials m ON m.tutor_id=t.id AND m.month LIKE ?
+        LEFT JOIN tutor_weekly_tracker twt ON twt.tutor_id=t.id AND substr(twt.session_date,1,7)=?
+        {where_sql}
+        GROUP BY t.id
+        ORDER BY t.full_name ASC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    tutors = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for t in tutors:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(t['full_name'])}</strong>
+                <div class="mini muted">{escape(t['phone'] or '—')}</div>
+            </td>
+            <td>{t['subject_count'] or 0}</td>
+            <td>{t['upload_count'] or 0}</td>
+            <td>{t['recording_count'] or 0}</td>
+            <td>{t['assignment_count'] or 0}</td>
+            <td>{t['tracker_logs'] or 0}</td>
+            <td>{escape((t['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Tutors</h1>
+
+        <p class="muted">
+            Academic overview of tutors, subjects, uploads, recordings, assignments and tracker activity.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <input name="q" value="{escape(q)}" placeholder="Search tutor, phone, subject or grade">
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('cao_tutors')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(tutors)} of {total} tutor(s).
+        </div>
+
+        {pagination_controls("/cao/tutors", page_num, total_pages, {"month": month, "q": q})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Tutor</th>
+                        <th>Subjects</th>
+                        <th>Uploads</th>
+                        <th>Recordings</th>
+                        <th>Assignments</th>
+                        <th>Tracker Logs</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='7'>No tutors found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/cao/tutors", page_num, total_pages, {"month": month, "q": q})}
+    </section>
+    """
+
+    return page("CAO Tutors", body)
+    
+    
+
+@app.get('/cao/tutor-managers')
+def cao_tutor_managers():
+
+    r = require_cao_permission("cao_tutor_managers_enabled", "tutor managers")
+    if r:
+        return r
+
+    month = cao_selected_month()
+    q = request.args.get("q", "").strip()
+    page_num = cao_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("(tm.full_name LIKE ? OR tm.phone LIKE ?)")
+        params += [search, search]
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"SELECT COUNT(*) AS c FROM tutor_managers tm {where_sql}", params)
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([month, per_page, offset])
+
+    cur.execute(f"""
+        SELECT
+            tm.id,
+            tm.full_name,
+            tm.phone,
+            tm.pin,
+            tm.created_at,
+            COUNT(DISTINCT mt.tutor_id) AS assigned_tutors,
+            COUNT(DISTINCT twt.id) AS tracker_logs
+        FROM tutor_managers tm
+        LEFT JOIN manager_tutors mt ON mt.manager_id=tm.id
+        LEFT JOIN tutor_weekly_tracker twt ON twt.manager_id=tm.id AND substr(twt.session_date,1,7)=?
+        {where_sql}
+        GROUP BY tm.id
+        ORDER BY tm.full_name
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    managers = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for m in managers:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(m['full_name'])}</strong>
+                <div class="mini muted">{escape(m['phone'] or '—')}</div>
+            </td>
+            <td>{m['assigned_tutors'] or 0}</td>
+            <td>{m['tracker_logs'] or 0}</td>
+            <td>{escape((m['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Tutor Managers</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <input name="q" value="{escape(q)}" placeholder="Search manager name or phone">
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('cao_tutor_managers')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(managers)} of {total} tutor manager(s).
+        </div>
+
+        {pagination_controls("/cao/tutor-managers", page_num, total_pages, {"month": month, "q": q})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Tutor Manager</th>
+                        <th>Assigned Tutors</th>
+                        <th>Tracker Logs</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='4'>No tutor managers found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/cao/tutor-managers", page_num, total_pages, {"month": month, "q": q})}
+    </section>
+    """
+
+    return page("CAO Tutor Managers", body)
+    
+    
+@app.get('/cao/aqm')
+def cao_aqm_team():
+
+    r = require_cao_permission("cao_aqm_enabled", "AQM team")
+    if r:
+        return r
+
+    month = cao_selected_month()
+    q = request.args.get("q", "").strip()
+    page_num = cao_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("(aqm.full_name LIKE ? OR aqm.phone LIKE ?)")
+        params += [search, search]
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"SELECT COUNT(*) AS c FROM academic_quality_managers aqm {where_sql}", params)
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT aqm.*
+        FROM academic_quality_managers aqm
+        {where_sql}
+        ORDER BY aqm.full_name
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    aqms = cur.fetchall()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM aqm_student_marks
+        WHERE month=?
+    """, (month,))
+    aqm_marks_this_month = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM academic_report_marks
+        WHERE month=?
+    """, (month,))
+    academic_report_marks_this_month = cur.fetchone()["c"] or 0
+
+    conn.close()
+
+    rows = ""
+
+    for a in aqms:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(a['full_name'])}</strong>
+                <div class="mini muted">ID: {a['id']}</div>
+            </td>
+            <td>{escape(a['phone'] or '—')}</td>
+            <td>{escape((a['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Academic Quality Managers</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <input name="q" value="{escape(q)}" placeholder="Search AQM name or phone">
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('cao_aqm_team')}">Clear</a>
+        </form>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Month", month)}
+            {stat("AQM Marks Captured", aqm_marks_this_month)}
+            {stat("Academic Report Marks", academic_report_marks_this_month)}
+        </div>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(aqms)} of {total} AQM(s).
+        </div>
+
+        {pagination_controls("/cao/aqm", page_num, total_pages, {"month": month, "q": q})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>AQM</th>
+                        <th>Phone</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='3'>No AQMs found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/cao/aqm", page_num, total_pages, {"month": month, "q": q})}
+    </section>
+    """
+
+    return page("CAO AQM Team", body)
+    
+    
+@app.get('/cao/tutor-performance')
+def cao_tutor_performance():
+
+    r = require_cao_permission("cao_performance_enabled", "tutor performance")
+    if r:
+        return r
+
+    month = cao_selected_month()
+    q = request.args.get("q", "").strip()
+    page_num = cao_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = []
+    params = [month + "%", month]
+
+    if q:
+        search = f"%{q}%"
+        where.append("(t.full_name LIKE ? OR t.phone LIKE ?)")
+        params += [search, search]
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    count_params = params[2:] if q else []
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM tutors t
+        {where_sql}
+    """, count_params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT
+            t.id,
+            t.full_name,
+            t.phone,
+            COUNT(DISTINCT m.id) AS uploads,
+            COUNT(DISTINCT CASE WHEN m.youtube_url IS NOT NULL AND TRIM(m.youtube_url) != '' THEN m.id END) AS recordings,
+            COUNT(DISTINCT CASE WHEN m.is_assignment=1 OR m.kind='assignment' THEN m.id END) AS assignments,
+            COUNT(DISTINCT subm.id) AS submissions_received,
+            COUNT(DISTINCT twt.id) AS tracker_logs,
+            ROUND(AVG(twt.manager_rating), 1) AS avg_manager_rating
+        FROM tutors t
+        LEFT JOIN materials m ON m.tutor_id=t.id AND m.month LIKE ?
+        LEFT JOIN submissions subm ON subm.material_id=m.id AND substr(subm.submitted_at,1,7)=?
+        LEFT JOIN tutor_weekly_tracker twt ON twt.tutor_id=t.id AND substr(twt.session_date,1,7)=?
+        {where_sql}
+        GROUP BY t.id
+        ORDER BY uploads DESC, recordings DESC, assignments DESC, t.full_name
+        LIMIT ? OFFSET ?
+    """, data_params[:1] + [month, month] + data_params[2:])
+
+    rows_data = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for t in rows_data:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(t['full_name'])}</strong>
+                <div class="mini muted">{escape(t['phone'] or '—')}</div>
+            </td>
+            <td>{t['uploads'] or 0}</td>
+            <td>{t['recordings'] or 0}</td>
+            <td>{t['assignments'] or 0}</td>
+            <td>{t['submissions_received'] or 0}</td>
+            <td>{t['tracker_logs'] or 0}</td>
+            <td>{t['avg_manager_rating'] or '—'}</td>
+        </tr>
+        """
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Tutor Performance</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <input name="q" value="{escape(q)}" placeholder="Search tutor name or phone">
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('cao_tutor_performance')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows_data)} of {total} tutor performance record(s).
+        </div>
+
+        {pagination_controls("/cao/tutor-performance", page_num, total_pages, {"month": month, "q": q})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Tutor</th>
+                        <th>Uploads</th>
+                        <th>Recordings</th>
+                        <th>Assignments</th>
+                        <th>Submissions</th>
+                        <th>Tracker Logs</th>
+                        <th>Avg Rating</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='7'>No tutor performance data found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/cao/tutor-performance", page_num, total_pages, {"month": month, "q": q})}
+    </section>
+    """
+
+    return page("CAO Tutor Performance", body)    
+    
+    
+@app.get('/cao/sessions')
+def cao_sessions():
+
+    r = require_cao_permission("cao_attendance_enabled", "classes and sessions")
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    page_num = cao_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = ["se.active=1"]
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("(t.full_name LIKE ? OR s.name LIKE ? OR s.grade LIKE ? OR se.meet_link LIKE ?)")
+        params += [search, search, search, search]
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM sessions se
+        JOIN tutors t ON t.id=se.tutor_id
+        JOIN subjects s ON s.id=se.subject_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT
+            se.*,
+            t.full_name AS tutor_name,
+            s.name AS subject_name,
+            s.grade
+        FROM sessions se
+        JOIN tutors t ON t.id=se.tutor_id
+        JOIN subjects s ON s.id=se.subject_id
+        {where_sql}
+        ORDER BY s.grade, s.name, se.day_of_week, se.start_time
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    sessions_rows = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for s in sessions_rows:
+        day = DOW[int(s["day_of_week"] or 0)] if str(s["day_of_week"]).isdigit() else "—"
+
+        rows += f"""
+        <tr>
+            <td>{grade_label(s['grade'])}</td>
+            <td>{escape(s['subject_name'])}</td>
+            <td>{escape(s['tutor_name'])}</td>
+            <td>{escape(day)}</td>
+            <td>{escape(s['start_time'])} - {escape(s['end_time'])}</td>
+            <td>{escape(s['meet_link'] or '—')}</td>
+        </tr>
+        """
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Classes & Sessions</h1>
+
+        <form method="get" class="toolbar">
+            <input name="q" value="{escape(q)}" placeholder="Search tutor, subject, grade or link">
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('cao_sessions')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(sessions_rows)} of {total} active session(s).
+        </div>
+
+        {pagination_controls("/cao/sessions", page_num, total_pages, {"q": q})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Tutor</th>
+                        <th>Day</th>
+                        <th>Time</th>
+                        <th>Link</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='6'>No sessions found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/cao/sessions", page_num, total_pages, {"q": q})}
+    </section>
+    """
+
+    return page("CAO Sessions", body)
+    
+    
+@app.get('/cao/materials')
+def cao_materials():
+
+    r = require_cao_permission("cao_materials_enabled", "materials")
+    if r:
+        return r
+
+    month = cao_selected_month()
+    q = request.args.get("q", "").strip()
+    kind = request.args.get("kind", "").strip()
+    page_num = cao_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = ["m.month LIKE ?"]
+    params = [month + "%"]
+
+    if q:
+        search = f"%{q}%"
+        where.append("(m.title LIKE ? OR t.full_name LIKE ? OR s.name LIKE ? OR s.grade LIKE ?)")
+        params += [search, search, search, search]
+
+    if kind == "recordings":
+        where.append("m.youtube_url IS NOT NULL AND TRIM(m.youtube_url) != ''")
+    elif kind == "documents":
+        where.append("(m.youtube_url IS NULL OR TRIM(m.youtube_url) = '') AND COALESCE(m.is_assignment,0)=0 AND m.kind!='assignment'")
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM materials m
+        JOIN tutors t ON t.id=m.tutor_id
+        JOIN subjects s ON s.id=m.subject_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT
+            m.*,
+            t.full_name AS tutor_name,
+            s.name AS subject_name,
+            s.grade
+        FROM materials m
+        JOIN tutors t ON t.id=m.tutor_id
+        JOIN subjects s ON s.id=m.subject_id
+        {where_sql}
+        ORDER BY m.created_at DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    materials_rows = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for m in materials_rows:
+        material_type = "Recording" if m["youtube_url"] else "Assignment" if (m["is_assignment"] == 1 or m["kind"] == "assignment") else "Document"
+
+        link = "—"
+        if m["youtube_url"]:
+            link = f"<a target='_blank' href='{escape(m['youtube_url'])}'>Watch</a>"
+        elif m["file_path"]:
+            link = f"<a target='_blank' href='{escape(m['file_path'])}'>Download</a>"
+
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(m['title'])}</strong>
+                <div class="mini muted">{escape(material_type)}</div>
+            </td>
+            <td>{grade_label(m['grade'])}</td>
+            <td>{escape(m['subject_name'])}</td>
+            <td>{escape(m['tutor_name'])}</td>
+            <td>{link}</td>
+            <td>{escape((m['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    kind_options = f"""
+        <option value="" {'selected' if kind == '' else ''}>All Materials</option>
+        <option value="recordings" {'selected' if kind == 'recordings' else ''}>Recordings</option>
+        <option value="documents" {'selected' if kind == 'documents' else ''}>Documents</option>
+    """
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Academic Materials</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <input name="q" value="{escape(q)}" placeholder="Search title, tutor, subject or grade">
+            <select name="kind">{kind_options}</select>
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('cao_materials')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(materials_rows)} of {total} material(s).
+        </div>
+
+        {pagination_controls("/cao/materials", page_num, total_pages, {"month": month, "q": q, "kind": kind})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Material</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Tutor</th>
+                        <th>File / Link</th>
+                        <th>Uploaded</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='6'>No materials found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/cao/materials", page_num, total_pages, {"month": month, "q": q, "kind": kind})}
+    </section>
+    """
+
+    return page("CAO Materials", body)
+    
+    
+@app.get('/cao/assignments')
+def cao_assignments():
+
+    r = require_cao_permission("cao_assignments_enabled", "assignments")
+    if r:
+        return r
+
+    month = cao_selected_month()
+    q = request.args.get("q", "").strip()
+    page_num = cao_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = ["m.month LIKE ?", "(m.is_assignment=1 OR m.kind='assignment')"]
+    params = [month + "%"]
+
+    if q:
+        search = f"%{q}%"
+        where.append("(m.title LIKE ? OR t.full_name LIKE ? OR s.name LIKE ? OR s.grade LIKE ?)")
+        params += [search, search, search, search]
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM materials m
+        JOIN tutors t ON t.id=m.tutor_id
+        JOIN subjects s ON s.id=m.subject_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT
+            m.*,
+            t.full_name AS tutor_name,
+            s.name AS subject_name,
+            s.grade,
+            COUNT(sub.id) AS submission_count,
+            COUNT(CASE WHEN sub.mark IS NOT NULL THEN 1 END) AS marked_count
+        FROM materials m
+        JOIN tutors t ON t.id=m.tutor_id
+        JOIN subjects s ON s.id=m.subject_id
+        LEFT JOIN submissions sub ON sub.material_id=m.id
+        {where_sql}
+        GROUP BY m.id
+        ORDER BY m.created_at DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    assignments = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for a in assignments:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(a['title'])}</strong>
+                <div class="mini muted">Due: {escape(a['due_date'] or '—')}</div>
+            </td>
+            <td>{grade_label(a['grade'])}</td>
+            <td>{escape(a['subject_name'])}</td>
+            <td>{escape(a['tutor_name'])}</td>
+            <td>{a['submission_count'] or 0}</td>
+            <td>{a['marked_count'] or 0}</td>
+            <td>{a['max_points'] or 100}</td>
+            <td>{escape((a['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Assignments</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <input name="q" value="{escape(q)}" placeholder="Search assignment, tutor, subject or grade">
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('cao_assignments')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(assignments)} of {total} assignment(s).
+        </div>
+
+        {pagination_controls("/cao/assignments", page_num, total_pages, {"month": month, "q": q})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Assignment</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Tutor</th>
+                        <th>Submissions</th>
+                        <th>Marked</th>
+                        <th>Max Points</th>
+                        <th>Uploaded</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='8'>No assignments found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/cao/assignments", page_num, total_pages, {"month": month, "q": q})}
+    </section>
+    """
+
+    return page("CAO Assignments", body)
+    
+    
+@app.get('/cao/learner-performance')
+def cao_learner_performance():
+
+    r = require_cao_permission("cao_performance_enabled", "learner performance")
+    if r:
+        return r
+
+    month = cao_selected_month()
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+    page_num = cao_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = ["e.month=?", "e.status='ACTIVE'"]
+    params = [month]
+
+    if q:
+        search = f"%{q}%"
+        where.append("(st.full_name LIKE ? OR st.phone_whatsapp LIKE ? OR sub.name LIKE ?)")
+        params += [search, search, search]
+
+    if grade:
+        where.append("st.grade=?")
+        params.append(grade)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(DISTINCT st.id) AS c
+        FROM students st
+        JOIN enrollments e ON e.student_id=st.id
+        JOIN subjects sub ON sub.id=e.subject_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([month, month, per_page, offset])
+
+    cur.execute(f"""
+        SELECT
+            st.id,
+            st.full_name,
+            st.phone_whatsapp,
+            st.grade,
+            COUNT(DISTINCT e.subject_id) AS active_subjects,
+            ROUND(AVG(arm.mark), 1) AS avg_report_mark,
+            ROUND(AVG(aqm.mark), 1) AS avg_aqm_mark
+        FROM students st
+        JOIN enrollments e ON e.student_id=st.id
+        JOIN subjects sub ON sub.id=e.subject_id
+        LEFT JOIN academic_report_marks arm ON arm.student_id=st.id AND arm.month=?
+        LEFT JOIN aqm_student_marks aqm ON aqm.student_id=st.id AND aqm.month=?
+        {where_sql}
+        GROUP BY st.id
+        ORDER BY st.full_name
+        LIMIT ? OFFSET ?
+    """, [month, month] + params + [per_page, offset])
+
+    learners = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for l in learners:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(l['full_name'])}</strong>
+                <div class="mini muted">{escape(l['phone_whatsapp'] or '—')}</div>
+            </td>
+            <td>{grade_label(l['grade'])}</td>
+            <td>{l['active_subjects'] or 0}</td>
+            <td>{l['avg_report_mark'] or '—'}</td>
+            <td>{l['avg_aqm_mark'] or '—'}</td>
+        </tr>
+        """
+
+    grade_options = "".join([
+        f"<option value='{g}' {'selected' if grade == g else ''}>{grade_label(g)}</option>"
+        for g in ["G8","G9","G10","G11","G12","G13"]
+    ])
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Learner Performance</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <input name="q" value="{escape(q)}" placeholder="Search learner, phone or subject">
+            <select name="grade">
+                <option value="">All Grades</option>
+                {grade_options}
+            </select>
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('cao_learner_performance')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(learners)} of {total} learner(s).
+        </div>
+
+        {pagination_controls("/cao/learner-performance", page_num, total_pages, {"month": month, "q": q, "grade": grade})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Grade</th>
+                        <th>Active Subjects</th>
+                        <th>Avg Report Mark</th>
+                        <th>Avg AQM Mark</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='5'>No learner performance data found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/cao/learner-performance", page_num, total_pages, {"month": month, "q": q, "grade": grade})}
+    </section>
+    """
+
+    return page("CAO Learner Performance", body)
+    
+    
+@app.get('/cao/attendance')
+def cao_attendance():
+
+    r = require_cao_permission("cao_attendance_enabled", "attendance trends")
+    if r:
+        return r
+
+    month = cao_selected_month()
+    q = request.args.get("q", "").strip()
+    page_num = cao_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = ["ats.month=?"]
+    params = [month]
+
+    if q:
+        search = f"%{q}%"
+        where.append("(t.full_name LIKE ? OR s.name LIKE ? OR s.grade LIKE ?)")
+        params += [search, search, search]
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM attendance_sessions ats
+        JOIN tutors t ON t.id=ats.tutor_id
+        JOIN subjects s ON s.id=ats.subject_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT
+            ats.*,
+            t.full_name AS tutor_name,
+            s.name AS subject_name,
+            s.grade,
+            COUNT(a.id) AS attendance_count
+        FROM attendance_sessions ats
+        JOIN tutors t ON t.id=ats.tutor_id
+        JOIN subjects s ON s.id=ats.subject_id
+        LEFT JOIN attendance a ON a.session_id=ats.session_id AND a.date=ats.date
+        {where_sql}
+        GROUP BY ats.id
+        ORDER BY ats.date DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    att_rows = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for a in att_rows:
+        rows += f"""
+        <tr>
+            <td>{escape(a['date'])}</td>
+            <td>{grade_label(a['grade'])}</td>
+            <td>{escape(a['subject_name'])}</td>
+            <td>{escape(a['tutor_name'])}</td>
+            <td>{a['attendance_count'] or 0}</td>
+            <td>{escape((a['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Attendance Trends</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <input name="q" value="{escape(q)}" placeholder="Search tutor, subject or grade">
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('cao_attendance')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(att_rows)} of {total} attendance session(s).
+        </div>
+
+        {pagination_controls("/cao/attendance", page_num, total_pages, {"month": month, "q": q})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Tutor</th>
+                        <th>Attendance Count</th>
+                        <th>Logged</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='6'>No attendance records found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/cao/attendance", page_num, total_pages, {"month": month, "q": q})}
+    </section>
+    """
+
+    return page("CAO Attendance", body)
+    
+    
+@app.get('/cao/student-reports')
+def cao_student_reports():
+
+    r = require_cao_permission("cao_student_reports_enabled", "student reports")
+    if r:
+        return r
+
+    month = cao_selected_month()
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+    page_num = cao_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = ["substr(sr.upload_date,1,7)=?"]
+    params = [month]
+
+    if q:
+        search = f"%{q}%"
+        where.append("(st.full_name LIKE ? OR st.phone_whatsapp LIKE ? OR sr.file_name LIKE ?)")
+        params += [search, search, search]
+
+    if grade:
+        where.append("sr.grade=?")
+        params.append(grade)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM student_reports sr
+        JOIN students st ON st.id=sr.student_id
+        {where_sql}
+    """, params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    data_params = list(params)
+    data_params.extend([per_page, offset])
+
+    cur.execute(f"""
+        SELECT
+            sr.*,
+            st.full_name,
+            st.phone_whatsapp
+        FROM student_reports sr
+        JOIN students st ON st.id=sr.student_id
+        {where_sql}
+        ORDER BY sr.upload_date DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+
+    reports = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for r0 in reports:
+        file_link = f"<a target='_blank' href='{escape(r0['file_path'])}'>Open</a>" if r0["file_path"] else "—"
+
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(r0['full_name'])}</strong>
+                <div class="mini muted">{escape(r0['phone_whatsapp'] or '—')}</div>
+            </td>
+            <td>{grade_label(r0['grade'] or '')}</td>
+            <td>{escape(r0['term'] or '—')}</td>
+            <td>{escape(r0['file_name'])}</td>
+            <td>{escape(r0['file_type'])}</td>
+            <td>{file_link}</td>
+            <td>{escape((r0['upload_date'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    grade_options = "".join([
+        f"<option value='{g}' {'selected' if grade == g else ''}>{grade_label(g)}</option>"
+        for g in ["G8","G9","G10","G11","G12","G13"]
+    ])
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Student Reports</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <input name="q" value="{escape(q)}" placeholder="Search learner, phone or file">
+            <select name="grade">
+                <option value="">All Grades</option>
+                {grade_options}
+            </select>
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('cao_student_reports')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(reports)} of {total} report(s).
+        </div>
+
+        {pagination_controls("/cao/student-reports", page_num, total_pages, {"month": month, "q": q, "grade": grade})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Grade</th>
+                        <th>Term</th>
+                        <th>File</th>
+                        <th>Type</th>
+                        <th>Open</th>
+                        <th>Uploaded</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='7'>No student reports found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/cao/student-reports", page_num, total_pages, {"month": month, "q": q, "grade": grade})}
+    </section>
+    """
+
+    return page("CAO Student Reports", body)
+    
+    
+@app.get('/cao/learner-movement')
+def cao_learner_movement():
+
+    r = require_cao_permission("cao_performance_enabled", "learner movement")
+    if r:
+        return r
+
+    month = cao_selected_month()
+    page_num = cao_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    prev_month_dt = datetime.datetime.strptime(month + "-01", "%Y-%m-%d") - datetime.timedelta(days=1)
+    prev_month = prev_month_dt.strftime("%Y-%m")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM enrollments
+        WHERE month=? AND status='ACTIVE'
+    """, (month,))
+    active_now = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM enrollments
+        WHERE month=? AND status='ACTIVE'
+    """, (prev_month,))
+    active_prev = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT e1.student_id) AS c
+        FROM enrollments e1
+        WHERE e1.month=? AND e1.status='ACTIVE'
+          AND e1.student_id NOT IN (
+              SELECT DISTINCT student_id FROM enrollments WHERE month=?
+          )
+    """, (prev_month, month))
+    lost = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT e1.student_id) AS c
+        FROM enrollments e1
+        WHERE e1.month=? AND e1.status='ACTIVE'
+          AND e1.student_id IN (
+              SELECT DISTINCT student_id FROM enrollments WHERE month=?
+          )
+    """, (month, prev_month))
+    returning = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT e.student_id) AS c
+        FROM enrollments e
+        JOIN students st ON st.id=e.student_id
+        WHERE e.month=? AND e.status='ACTIVE'
+          AND substr(st.created_at,1,7)=?
+    """, (month, month))
+    new_learners = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT st.id) AS c
+        FROM students st
+        JOIN enrollments e ON e.student_id=st.id
+        WHERE e.month=? AND e.status='ACTIVE'
+    """, (month,))
+    total = cur.fetchone()["c"] or 0
+
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    cur.execute("""
+        SELECT
+            st.id,
+            st.full_name,
+            st.phone_whatsapp,
+            st.grade,
+            st.created_at,
+            COUNT(DISTINCT e.subject_id) AS active_subjects,
+            CASE
+                WHEN substr(st.created_at,1,7)=? THEN 'NEW'
+                WHEN st.id IN (SELECT DISTINCT student_id FROM enrollments WHERE month=? AND status='ACTIVE') THEN 'RETURNING'
+                ELSE 'ACTIVE'
+            END AS movement_status
+        FROM students st
+        JOIN enrollments e ON e.student_id=st.id
+        WHERE e.month=? AND e.status='ACTIVE'
+        GROUP BY st.id
+        ORDER BY st.full_name
+        LIMIT ? OFFSET ?
+    """, (month, prev_month, month, per_page, offset))
+
+    learners = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for l in learners:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(l['full_name'])}</strong>
+                <div class="mini muted">{escape(l['phone_whatsapp'] or '—')}</div>
+            </td>
+            <td>{grade_label(l['grade'])}</td>
+            <td>{l['active_subjects'] or 0}</td>
+            <td>{cao_status_chip(l['movement_status'])}</td>
+            <td>{escape((l['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Learner Movement</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <button class="btn mini">View Month</button>
+        </form>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Current Month", month)}
+            {stat("Previous Month", prev_month)}
+            {stat("Active Now", active_now)}
+            {stat("Active Previous Month", active_prev)}
+            {stat("New Learners", new_learners)}
+            {stat("Returning Learners", returning)}
+            {stat("Learners Lost", lost)}
+        </div>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(learners)} of {total} active learner movement record(s).
+        </div>
+
+        {pagination_controls("/cao/learner-movement", page_num, total_pages, {"month": month})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Grade</th>
+                        <th>Active Subjects</th>
+                        <th>Movement</th>
+                        <th>Joined</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='5'>No learner movement records found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/cao/learner-movement", page_num, total_pages, {"month": month})}
+    </section>
+    """
+
+    return page("CAO Learner Movement", body)
 
 
 # --- Admin: Analytics dashboard ---
