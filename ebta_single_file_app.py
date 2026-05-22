@@ -563,6 +563,23 @@ def init_db():
     );
     """)
     
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS tutor_portal_activity(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tutor_id INTEGER NOT NULL,
+        activity_date TEXT NOT NULL,
+        month TEXT NOT NULL,
+        total_seconds INTEGER NOT NULL DEFAULT 0,
+        last_seen_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        UNIQUE(tutor_id, activity_date),
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE
+    );
+    """)
+    
+    
     cur.execute("""
     CREATE TABLE IF NOT EXISTS treasurers(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1113,6 +1130,9 @@ def init_db():
 
     cur.execute("CREATE INDEX IF NOT EXISTS idx_student_activity_student ON student_portal_activity(student_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_student_activity_month ON student_portal_activity(month)")
+    
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_activity_tutor ON tutor_portal_activity(tutor_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_activity_month ON tutor_portal_activity(month)")
 
     coo_permission_defaults = {
         "coo_portal_enabled": "1",
@@ -4729,10 +4749,11 @@ def page(title, body_html, extra_head="", extra_js=""):
             unread = cur.fetchone()[0] or 0
             role_title, user_name = "Tutor", session.get('tutor_name','Tutor')
             links = [
-                ("Dashboard", "#dashboard"),
+                ("Dashboard", url_for('tutor_home')),
+                ("Work Progress", url_for('tutor_work_progress')),
                 ("Upload Material", "#upload"),
-                ("Upload Library", url_for('tutor_uploads_library')),
-                ("Assignments", "#assignments"),
+                ("My Library", url_for('tutor_uploads_library')),
+                ("Assignments", url_for('tutor_assignments')),
                 ("Messages", "#messages"),
                 ("Students", "#students"),
                 ("Logout", url_for('tutor_logout'))
@@ -11199,6 +11220,62 @@ def tutor_home():
     </div>
     """
     
+    # ===== TUTOR WORK PROGRESS PREVIEW =====
+
+    work_progress = tutor_work_progress_data(tid, month)
+
+    work_progress_preview = f"""
+    <div class="card soft" style="border-left:5px solid #1b5e20">
+
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+            <div>
+                <h3 style="margin-bottom:6px">Work Progress Tracker</h3>
+
+                <div class="mini muted">
+                    Your tutor work progress for {pretty_month_label(month)}
+                </div>
+            </div>
+
+            <span class="chip {work_progress['overall_class']}">
+                {work_progress['overall_rate']}% - {escape(work_progress['overall_status'])}
+            </span>
+        </div>
+
+        <div class="stats-mini" style="margin-top:10px">
+            <div class="s">
+                <div class="k">{work_progress['total_uploads']}</div>
+                <div class="t">Uploads</div>
+            </div>
+
+            <div class="s">
+                <div class="k">{work_progress['recordings_uploaded']}</div>
+                <div class="t">Recordings</div>
+            </div>
+
+            <div class="s">
+                <div class="k">{work_progress['assignments_uploaded']}</div>
+                <div class="t">Assignments</div>
+            </div>
+
+            <div class="s">
+                <div class="k">{work_progress['attendance_log_rate']}%</div>
+                <div class="t">Attendance logs</div>
+            </div>
+
+            <div class="s">
+                <div class="k">{work_progress['marking_rate']}%</div>
+                <div class="t">Marking</div>
+            </div>
+        </div>
+
+        <div style="margin-top:12px">
+            <a class="btn mini success" href="{url_for('tutor_work_progress')}">
+                Open Work Progress
+            </a>
+        </div>
+
+    </div>
+    """
    
    
     # Assignments you posted (manage submissions)
@@ -11936,6 +12013,8 @@ def tutor_home():
 
 
     {upload_block}
+    
+    {work_progress_preview}
 
     {uploads_html}
 
@@ -13348,6 +13427,934 @@ def tutor_session_attendance(sid: int):
     """
 
     return page("Capture Attendance", body)
+
+
+@app.post('/tutor/activity/ping')
+def tutor_activity_ping():
+
+    r = require_tutor()
+    if r:
+        return ("", 204)
+
+    tid = is_tutor()
+
+    try:
+        seconds = int(request.form.get("seconds", 0))
+    except Exception:
+        seconds = 0
+
+    if seconds < 0:
+        seconds = 0
+
+    # Safety cap: one ping cannot add more than 5 minutes
+    if seconds > 300:
+        seconds = 300
+
+    now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))
+    today = now.date().isoformat()
+    month = now.strftime("%Y-%m")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO tutor_portal_activity(
+            tutor_id,
+            activity_date,
+            month,
+            total_seconds,
+            last_seen_at,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(tutor_id, activity_date)
+        DO UPDATE SET
+            total_seconds = total_seconds + excluded.total_seconds,
+            last_seen_at = excluded.last_seen_at,
+            updated_at = excluded.updated_at
+    """, (
+        tid,
+        today,
+        month,
+        seconds,
+        now_utc_iso(),
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return ("", 204)
+    
+    
+def tutor_work_band(rate):
+    rate = int(rate or 0)
+
+    if rate >= 75:
+        return "active", "On Track"
+
+    if rate >= 50:
+        return "pending", "Needs Attention"
+
+    return "lapsed", "High Risk"
+
+
+def tutor_work_progress_data(tutor_id, month):
+    """
+    Builds tutor work progress data for one month.
+    Uses existing EBTA tables and does not modify tutor data.
+    """
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Assigned subjects
+    cur.execute("""
+        SELECT
+            s.id AS subject_id,
+            s.name AS subject_name,
+            s.grade
+        FROM tutor_subjects ts
+        JOIN subjects s ON s.id=ts.subject_id
+        WHERE ts.tutor_id=?
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.name
+    """, (tutor_id,))
+
+    assigned_subjects = cur.fetchall()
+    assigned_subject_ids = [r["subject_id"] for r in assigned_subjects]
+
+    # Assigned active sessions
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM sessions
+        WHERE tutor_id=?
+          AND active=1
+    """, (tutor_id,))
+
+    assigned_sessions = cur.fetchone()["c"] or 0
+
+    # Uploads
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM materials
+        WHERE tutor_id=?
+          AND month LIKE ?
+    """, (tutor_id, month + "%"))
+
+    total_uploads = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM materials
+        WHERE tutor_id=?
+          AND month LIKE ?
+          AND youtube_url IS NOT NULL
+          AND TRIM(youtube_url) != ''
+    """, (tutor_id, month + "%"))
+
+    recordings_uploaded = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM materials
+        WHERE tutor_id=?
+          AND month LIKE ?
+          AND (is_assignment=1 OR kind='assignment')
+    """, (tutor_id, month + "%"))
+
+    assignments_uploaded = cur.fetchone()["c"] or 0
+
+    documents_uploaded = max(0, total_uploads - recordings_uploaded - assignments_uploaded)
+
+    # Material views by students
+    cur.execute("""
+        SELECT COUNT(DISTINCT mv.id) AS c
+        FROM material_views mv
+        JOIN materials m ON m.id=mv.material_id
+        WHERE m.tutor_id=?
+          AND m.month LIKE ?
+    """, (tutor_id, month + "%"))
+
+    material_views = cur.fetchone()["c"] or 0
+
+    # Submissions and marking
+    cur.execute("""
+        SELECT COUNT(sub.id) AS c
+        FROM submissions sub
+        JOIN materials m ON m.id=sub.material_id
+        WHERE m.tutor_id=?
+          AND m.month LIKE ?
+          AND (m.is_assignment=1 OR m.kind='assignment')
+    """, (tutor_id, month + "%"))
+
+    submissions_received = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(sub.id) AS c
+        FROM submissions sub
+        JOIN materials m ON m.id=sub.material_id
+        WHERE m.tutor_id=?
+          AND m.month LIKE ?
+          AND (m.is_assignment=1 OR m.kind='assignment')
+          AND (
+                sub.mark IS NOT NULL
+                OR sub.feedback IS NOT NULL
+                OR sub.evaluated_at IS NOT NULL
+          )
+    """, (tutor_id, month + "%"))
+
+    marked_submissions = cur.fetchone()["c"] or 0
+    unmarked_submissions = max(0, submissions_received - marked_submissions)
+    marking_rate = percent_value(marked_submissions, submissions_received)
+
+    # Attendance logging
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM attendance_sessions
+        WHERE tutor_id=?
+          AND month=?
+    """, (tutor_id, month))
+
+    attendance_logs = cur.fetchone()["c"] or 0
+    attendance_log_rate = percent_value(attendance_logs, assigned_sessions)
+
+    cur.execute("""
+        SELECT COALESCE(COUNT(a.id),0) AS c
+        FROM attendance_sessions ats
+        LEFT JOIN attendance a
+          ON a.session_id=ats.session_id
+         AND a.date=ats.date
+        WHERE ats.tutor_id=?
+          AND ats.month=?
+    """, (tutor_id, month))
+
+    total_attendance_marks = cur.fetchone()["c"] or 0
+
+    avg_students_attended = 0
+
+    if attendance_logs > 0:
+        avg_students_attended = round(total_attendance_marks / attendance_logs, 1)
+
+    # Tutor manager weekly tracker
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM tutor_weekly_tracker
+        WHERE tutor_id=?
+          AND substr(session_date,1,7)=?
+    """, (tutor_id, month))
+
+    tracker_logs = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT
+            COALESCE(SUM(CASE WHEN session_held=1 THEN 1 ELSE 0 END),0) AS held,
+            COALESCE(SUM(CASE WHEN recording_posted=1 THEN 1 ELSE 0 END),0) AS recordings_posted,
+            COALESCE(SUM(CASE WHEN posted_within_24h=1 THEN 1 ELSE 0 END),0) AS within_24h,
+            COALESCE(SUM(CASE WHEN extra_resources=1 THEN 1 ELSE 0 END),0) AS extra_resources,
+            ROUND(AVG(manager_rating),1) AS avg_rating
+        FROM tutor_weekly_tracker
+        WHERE tutor_id=?
+          AND substr(session_date,1,7)=?
+    """, (tutor_id, month))
+
+    tracker = cur.fetchone()
+
+    tracker_sessions_held = tracker["held"] or 0
+    tracker_recordings_posted = tracker["recordings_posted"] or 0
+    tracker_within_24h = tracker["within_24h"] or 0
+    tracker_extra_resources = tracker["extra_resources"] or 0
+    avg_manager_rating = tracker["avg_rating"] or None
+
+    tracker_completion_rate = percent_value(tracker_logs, assigned_sessions)
+
+    # Messages sent to students and admin
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM direct_messages
+        WHERE from_role='tutor'
+          AND from_id=?
+          AND substr(created_at,1,7)=?
+    """, (tutor_id, month))
+
+    messages_sent = cur.fetchone()["c"] or 0
+
+    # Tutor portal time
+    cur.execute("""
+        SELECT COALESCE(SUM(total_seconds),0) AS total_seconds
+        FROM tutor_portal_activity
+        WHERE tutor_id=?
+          AND month=?
+    """, (tutor_id, month))
+
+    portal_seconds = int(cur.fetchone()["total_seconds"] or 0)
+    portal_minutes = portal_seconds // 60
+
+    if portal_minutes >= 60:
+        portal_hours_label = f"{portal_minutes // 60}h {portal_minutes % 60}min"
+    else:
+        portal_hours_label = f"{portal_minutes} min"
+
+    # Per-subject breakdown
+    subject_rows = []
+
+    for subject in assigned_subjects:
+        subject_id = subject["subject_id"]
+
+        cur.execute("""
+            SELECT COUNT(*) AS c
+            FROM materials
+            WHERE tutor_id=?
+              AND subject_id=?
+              AND month LIKE ?
+        """, (tutor_id, subject_id, month + "%"))
+
+        sub_uploads = cur.fetchone()["c"] or 0
+
+        cur.execute("""
+            SELECT COUNT(*) AS c
+            FROM materials
+            WHERE tutor_id=?
+              AND subject_id=?
+              AND month LIKE ?
+              AND youtube_url IS NOT NULL
+              AND TRIM(youtube_url) != ''
+        """, (tutor_id, subject_id, month + "%"))
+
+        sub_recordings = cur.fetchone()["c"] or 0
+
+        cur.execute("""
+            SELECT COUNT(*) AS c
+            FROM materials
+            WHERE tutor_id=?
+              AND subject_id=?
+              AND month LIKE ?
+              AND (is_assignment=1 OR kind='assignment')
+        """, (tutor_id, subject_id, month + "%"))
+
+        sub_assignments = cur.fetchone()["c"] or 0
+
+        cur.execute("""
+            SELECT COUNT(sub.id) AS c
+            FROM submissions sub
+            JOIN materials m ON m.id=sub.material_id
+            WHERE m.tutor_id=?
+              AND m.subject_id=?
+              AND m.month LIKE ?
+              AND (m.is_assignment=1 OR m.kind='assignment')
+        """, (tutor_id, subject_id, month + "%"))
+
+        sub_submissions = cur.fetchone()["c"] or 0
+
+        cur.execute("""
+            SELECT COUNT(sub.id) AS c
+            FROM submissions sub
+            JOIN materials m ON m.id=sub.material_id
+            WHERE m.tutor_id=?
+              AND m.subject_id=?
+              AND m.month LIKE ?
+              AND (m.is_assignment=1 OR m.kind='assignment')
+              AND (
+                    sub.mark IS NOT NULL
+                    OR sub.feedback IS NOT NULL
+                    OR sub.evaluated_at IS NOT NULL
+              )
+        """, (tutor_id, subject_id, month + "%"))
+
+        sub_marked = cur.fetchone()["c"] or 0
+        sub_marking_rate = percent_value(sub_marked, sub_submissions)
+
+        cur.execute("""
+            SELECT COUNT(*) AS c
+            FROM attendance_sessions
+            WHERE tutor_id=?
+              AND subject_id=?
+              AND month=?
+        """, (tutor_id, subject_id, month))
+
+        sub_attendance_logs = cur.fetchone()["c"] or 0
+
+        cur.execute("""
+            SELECT COUNT(*) AS c
+            FROM sessions
+            WHERE tutor_id=?
+              AND subject_id=?
+              AND active=1
+        """, (tutor_id, subject_id))
+
+        sub_assigned_sessions = cur.fetchone()["c"] or 0
+        sub_attendance_rate = percent_value(sub_attendance_logs, sub_assigned_sessions)
+
+        risk_points = 0
+        focus = []
+
+        if sub_uploads == 0:
+            risk_points += 1
+            focus.append("upload resources")
+
+        if sub_recordings == 0:
+            risk_points += 1
+            focus.append("post recordings")
+
+        if sub_assignments == 0:
+            risk_points += 1
+            focus.append("upload assignments")
+
+        if sub_submissions > 0 and sub_marking_rate < 70:
+            risk_points += 1
+            focus.append("mark submissions")
+
+        if sub_assigned_sessions > 0 and sub_attendance_rate < 60:
+            risk_points += 1
+            focus.append("log attendance")
+
+        if risk_points >= 2:
+            risk_level = "HIGH"
+        elif risk_points == 1:
+            risk_level = "MEDIUM"
+        else:
+            risk_level = "LOW"
+
+        subject_rows.append({
+            "subject_id": subject_id,
+            "subject_name": subject["subject_name"],
+            "grade": subject["grade"],
+            "uploads": sub_uploads,
+            "recordings": sub_recordings,
+            "assignments": sub_assignments,
+            "submissions": sub_submissions,
+            "marked": sub_marked,
+            "marking_rate": sub_marking_rate,
+            "attendance_logs": sub_attendance_logs,
+            "attendance_rate": sub_attendance_rate,
+            "risk_level": risk_level,
+            "focus": ", ".join(focus) if focus else "keep going"
+        })
+
+    # Recommendations
+    recommendations = []
+
+    if total_uploads == 0:
+        recommendations.append("Upload academic resources for your assigned subjects.")
+
+    if recordings_uploaded == 0:
+        recommendations.append("Upload or share class recordings for learners to revise.")
+
+    if assignments_uploaded == 0:
+        recommendations.append("Upload at least one assignment or activity for learners.")
+
+    if submissions_received > 0 and unmarked_submissions > 0:
+        recommendations.append(f"Mark {unmarked_submissions} pending submission(s).")
+
+    if assigned_sessions > 0 and attendance_log_rate < 75:
+        recommendations.append("Improve attendance logging for your active sessions.")
+
+    if tracker_logs == 0:
+        recommendations.append("Ensure your tutor manager tracker logs are being completed.")
+
+    high_risk_subjects = [x for x in subject_rows if x["risk_level"] == "HIGH"]
+
+    if high_risk_subjects:
+        names = ", ".join([x["subject_name"] for x in high_risk_subjects[:3]])
+        recommendations.append(f"Prioritise these subjects: {names}.")
+
+    if not recommendations:
+        recommendations.append("Your work progress looks healthy. Keep uploading, tracking and supporting learners.")
+
+    # Overall work progress
+    components = []
+
+    # Upload expectation: at least 4 uploads per month is treated as full progress
+    components.append(min(100, percent_value(total_uploads, 4)))
+
+    if assigned_sessions > 0:
+        components.append(attendance_log_rate)
+
+    if submissions_received > 0:
+        components.append(marking_rate)
+
+    if tracker_logs > 0 or assigned_sessions > 0:
+        components.append(tracker_completion_rate)
+
+    if recordings_uploaded > 0:
+        components.append(100)
+    else:
+        components.append(0)
+
+    overall_rate = round(sum(components) / len(components)) if components else 0
+    overall_class, overall_status = tutor_work_band(overall_rate)
+
+    conn.close()
+
+    return {
+        "month": month,
+        "assigned_subjects": assigned_subjects,
+        "assigned_sessions": assigned_sessions,
+        "total_uploads": total_uploads,
+        "recordings_uploaded": recordings_uploaded,
+        "assignments_uploaded": assignments_uploaded,
+        "documents_uploaded": documents_uploaded,
+        "material_views": material_views,
+        "submissions_received": submissions_received,
+        "marked_submissions": marked_submissions,
+        "unmarked_submissions": unmarked_submissions,
+        "marking_rate": marking_rate,
+        "attendance_logs": attendance_logs,
+        "attendance_log_rate": attendance_log_rate,
+        "avg_students_attended": avg_students_attended,
+        "tracker_logs": tracker_logs,
+        "tracker_sessions_held": tracker_sessions_held,
+        "tracker_recordings_posted": tracker_recordings_posted,
+        "tracker_within_24h": tracker_within_24h,
+        "tracker_extra_resources": tracker_extra_resources,
+        "tracker_completion_rate": tracker_completion_rate,
+        "avg_manager_rating": avg_manager_rating,
+        "messages_sent": messages_sent,
+        "portal_seconds": portal_seconds,
+        "portal_minutes": portal_minutes,
+        "portal_hours_label": portal_hours_label,
+        "subject_rows": subject_rows,
+        "recommendations": recommendations,
+        "overall_rate": overall_rate,
+        "overall_status": overall_status,
+        "overall_class": overall_class
+    }
+
+
+@app.get('/tutor/progress')
+def tutor_work_progress():
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    month = get_active_month('tutor')
+
+    data = tutor_work_progress_data(tid, month)
+
+    subject_rows_html = ""
+
+    for row in data["subject_rows"]:
+
+        risk_class = "active"
+
+        if row["risk_level"] == "HIGH":
+            risk_class = "lapsed"
+        elif row["risk_level"] == "MEDIUM":
+            risk_class = "pending"
+
+        subject_rows_html += f"""
+        <tr>
+            <td>
+                <strong>{grade_label(row['grade'])} - {escape(row['subject_name'])}</strong>
+                <div class="mini muted">Focus: {escape(row['focus'])}</div>
+            </td>
+
+            <td>{row['uploads']}</td>
+            <td>{row['recordings']}</td>
+            <td>{row['assignments']}</td>
+            <td>{row['submissions']}</td>
+            <td>{row['marked']}</td>
+            <td>{row['marking_rate']}%</td>
+            <td>{row['attendance_rate']}%</td>
+
+            <td>
+                <span class="chip {risk_class}">
+                    {escape(row['risk_level'])}
+                </span>
+            </td>
+        </tr>
+        """
+
+    recommendations_html = "".join([
+        f"""
+        <li style="margin-bottom:8px">
+            {escape(item)}
+        </li>
+        """
+        for item in data["recommendations"]
+    ])
+
+    chart_payload = {
+        "overall": {
+            "labels": ["Completed", "Remaining"],
+            "values": [data["overall_rate"], max(0, 100 - data["overall_rate"])]
+        },
+        "workAreas": {
+            "labels": ["Uploads", "Recordings", "Assignments", "Attendance Logs", "Marking", "Tracker Logs"],
+            "values": [
+                data["total_uploads"],
+                data["recordings_uploaded"],
+                data["assignments_uploaded"],
+                data["attendance_logs"],
+                data["marked_submissions"],
+                data["tracker_logs"]
+            ]
+        },
+        "rates": {
+            "labels": ["Work Progress", "Attendance Logging", "Marking", "Tracker Completion"],
+            "values": [
+                data["overall_rate"],
+                data["attendance_log_rate"],
+                data["marking_rate"],
+                data["tracker_completion_rate"]
+            ]
+        },
+        "subjectProgress": {
+            "labels": [
+                f"{grade_label(row['grade'])} - {row['subject_name']}"
+                for row in data["subject_rows"]
+            ],
+            "uploads": [row["uploads"] for row in data["subject_rows"]],
+            "recordings": [row["recordings"] for row in data["subject_rows"]],
+            "assignments": [row["assignments"] for row in data["subject_rows"]]
+        }
+    }
+
+    chart_json = json.dumps(chart_payload)
+
+    rating_display = "—"
+
+    if data["avg_manager_rating"] is not None:
+        rating_display = str(data["avg_manager_rating"])
+
+    body = f"""
+    <section class="card">
+        <h1>Tutor Work Progress</h1>
+
+        <p class="muted">
+            Track your EBTA work progress for {pretty_month_label(month)} based on uploads, recordings,
+            assignments, attendance logs, marking, tracker activity and learner engagement.
+        </p>
+
+        <div class="toolbar">
+            <a class="btn mini secondary" href="{url_for('tutor_home')}">Back to Dashboard</a>
+            <a class="btn mini success" href="{url_for('tutor_uploads_library')}">Upload Library</a>
+            <a class="btn mini" href="{url_for('tutor_assignments')}">Assignments</a>
+        </div>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Overall Work Progress", str(data["overall_rate"]) + "%")}
+            {stat("Uploads", data["total_uploads"])}
+            {stat("Recordings", data["recordings_uploaded"])}
+            {stat("Assignments", data["assignments_uploaded"])}
+            {stat("Documents", data["documents_uploaded"])}
+            {stat("Material Views", data["material_views"])}
+            {stat("Submissions", data["submissions_received"])}
+            {stat("Marked", f"{data['marked_submissions']} / {data['submissions_received']}")}
+            {stat("Attendance Logs", f"{data['attendance_logs']} / {data['assigned_sessions']}")}
+            {stat("Tracker Logs", data["tracker_logs"])}
+            {stat("Avg Manager Rating", rating_display)}
+            {stat("Portal Time", data["portal_hours_label"])}
+        </div>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-top:14px">
+            <h2>Work Summary</h2>
+
+            <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+
+                <div class="card soft">
+                    <h3>Work Status</h3>
+                    <p class="muted">Your current tutor work progress status.</p>
+                    <span class="chip {data['overall_class']}">{escape(data['overall_status'])}</span>
+                </div>
+
+                <div class="card soft">
+                    <h3>Upload Activity</h3>
+                    <p class="muted">Documents, recordings and assignments uploaded.</p>
+                    <span class="chip active">{data['total_uploads']} upload(s)</span>
+                </div>
+
+                <div class="card soft">
+                    <h3>Marking Progress</h3>
+                    <p class="muted">Marked submissions compared to submissions received.</p>
+                    <span class="chip pending">{data['marking_rate']}%</span>
+                </div>
+
+                <div class="card soft">
+                    <h3>Attendance Logging</h3>
+                    <p class="muted">Attendance logs compared to assigned active sessions.</p>
+                    <span class="chip">{data['attendance_log_rate']}%</span>
+                </div>
+
+            </div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft">
+                <h2>Overall Work Progress</h2>
+                <p class="mini muted">A quick view of your tutor progress this month.</p>
+
+                <div style="height:260px">
+                    <canvas id="tutorOverallProgressChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Work Activity</h2>
+                <p class="mini muted">Uploads, recordings, assignments, attendance logs and marking.</p>
+
+                <div style="height:260px">
+                    <canvas id="tutorWorkAreasChart"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Performance Rates</h2>
+            <p class="mini muted">
+                Work progress, attendance logging, marking and tracker completion.
+            </p>
+
+            <div style="height:300px">
+                <canvas id="tutorRatesChart"></canvas>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Subject Work Breakdown</h2>
+            <p class="mini muted">
+                Compare uploads, recordings and assignments per assigned subject.
+            </p>
+
+            <div style="height:330px">
+                <canvas id="tutorSubjectProgressChart"></canvas>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px;border-left:5px solid #f59e0b">
+            <h2>What You Should Focus On</h2>
+
+            <ul style="margin-top:8px">
+                {recommendations_html}
+            </ul>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Subject Risk & Improvement Areas</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Subject</th>
+                            <th>Uploads</th>
+                            <th>Recordings</th>
+                            <th>Assignments</th>
+                            <th>Submissions</th>
+                            <th>Marked</th>
+                            <th>Marking</th>
+                            <th>Attendance Logs</th>
+                            <th>Risk</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {subject_rows_html or "<tr><td colspan='9'>No assigned subjects found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        const tutorProgressCharts = {chart_json};
+
+        const ebtaColors = [
+            "#1b5e20",
+            "#2e7d32",
+            "#43a047",
+            "#66bb6a",
+            "#a5d6a7",
+            "#f59e0b",
+            "#64748b",
+            "#0f172a"
+        ];
+
+        function noDataPlugin(message) {{
+            return {{
+                id: "noData_" + Math.random().toString(36).slice(2),
+                afterDraw(chart) {{
+                    const values = chart.data.datasets.flatMap(ds => ds.data || []);
+                    const hasData = values.some(v => Number(v) > 0);
+
+                    if (!hasData) {{
+                        const ctx = chart.ctx;
+                        ctx.save();
+                        ctx.textAlign = "center";
+                        ctx.textBaseline = "middle";
+                        ctx.font = "13px Arial";
+                        ctx.fillStyle = "#64748b";
+                        ctx.fillText(message || "No data available yet", chart.width / 2, chart.height / 2);
+                        ctx.restore();
+                    }}
+                }}
+            }};
+        }}
+
+        const commonOptions = {{
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {{
+                legend: {{
+                    position: "bottom"
+                }}
+            }}
+        }};
+
+        new Chart(document.getElementById("tutorOverallProgressChart"), {{
+            type: "doughnut",
+            data: {{
+                labels: tutorProgressCharts.overall.labels,
+                datasets: [{{
+                    data: tutorProgressCharts.overall.values,
+                    backgroundColor: ["#1b5e20", "#e5e7eb"]
+                }}]
+            }},
+            options: commonOptions,
+            plugins: [noDataPlugin("No work progress data yet")]
+        }});
+
+        new Chart(document.getElementById("tutorWorkAreasChart"), {{
+            type: "bar",
+            data: {{
+                labels: tutorProgressCharts.workAreas.labels,
+                datasets: [{{
+                    label: "Count",
+                    data: tutorProgressCharts.workAreas.values,
+                    backgroundColor: "#1b5e20",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                plugins: {{
+                    legend: {{
+                        display: false
+                    }}
+                }},
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No work activity yet")]
+        }});
+
+        new Chart(document.getElementById("tutorRatesChart"), {{
+            type: "bar",
+            data: {{
+                labels: tutorProgressCharts.rates.labels,
+                datasets: [{{
+                    label: "Rate %",
+                    data: tutorProgressCharts.rates.values,
+                    backgroundColor: "#2e7d32",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                plugins: {{
+                    legend: {{
+                        display: false
+                    }}
+                }},
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {{
+                            callback: function(value) {{
+                                return value + "%";
+                            }}
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No rate data yet")]
+        }});
+
+        new Chart(document.getElementById("tutorSubjectProgressChart"), {{
+            type: "bar",
+            data: {{
+                labels: tutorProgressCharts.subjectProgress.labels,
+                datasets: [
+                    {{
+                        label: "Uploads",
+                        data: tutorProgressCharts.subjectProgress.uploads,
+                        backgroundColor: "#1b5e20",
+                        borderRadius: 8
+                    }},
+                    {{
+                        label: "Recordings",
+                        data: tutorProgressCharts.subjectProgress.recordings,
+                        backgroundColor: "#43a047",
+                        borderRadius: 8
+                    }},
+                    {{
+                        label: "Assignments",
+                        data: tutorProgressCharts.subjectProgress.assignments,
+                        backgroundColor: "#f59e0b",
+                        borderRadius: 8
+                    }}
+                ]
+            }},
+            options: {{
+                ...commonOptions,
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No subject activity yet")]
+        }});
+
+        let tutorActivityStart = Date.now();
+
+        function sendTutorActivityPing() {{
+            const now = Date.now();
+            const seconds = Math.round((now - tutorActivityStart) / 1000);
+            tutorActivityStart = now;
+
+            if (seconds <= 0) {{
+                return;
+            }}
+
+            const formData = new FormData();
+            formData.append("seconds", seconds);
+
+            if (navigator.sendBeacon) {{
+                navigator.sendBeacon("{url_for('tutor_activity_ping')}", formData);
+            }} else {{
+                fetch("{url_for('tutor_activity_ping')}", {{
+                    method: "POST",
+                    body: formData,
+                    keepalive: true
+                }});
+            }}
+        }}
+
+        setInterval(sendTutorActivityPing, 60000);
+        window.addEventListener("beforeunload", sendTutorActivityPing);
+    </script>
+    """
+
+    return page("Tutor Work Progress", body)
+
 
 
 # ===================== Admin Portal (guardian/email in Students, DM, analytics) ==============
