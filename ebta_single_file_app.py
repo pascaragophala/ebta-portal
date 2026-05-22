@@ -45870,6 +45870,8 @@ def cao_dashboard():
     conn = get_db()
     cur = conn.cursor()
 
+    # ================= BASIC ACADEMIC COUNTS =================
+
     cur.execute("SELECT COUNT(*) AS c FROM tutors")
     total_tutors = cur.fetchone()["c"] or 0
 
@@ -45913,6 +45915,8 @@ def cao_dashboard():
     """, (month + "%",))
     recordings_uploaded = cur.fetchone()["c"] or 0
 
+    documents_uploaded = max(0, total_uploads - assignments_uploaded - recordings_uploaded)
+
     cur.execute("""
         SELECT COUNT(*) AS c
         FROM submissions
@@ -45939,6 +45943,14 @@ def cao_dashboard():
     prev_month = prev_month_dt.strftime("%Y-%m")
 
     cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM enrollments
+        WHERE month=?
+          AND status='ACTIVE'
+    """, (prev_month,))
+    active_prev_month = cur.fetchone()["c"] or 0
+
+    cur.execute("""
         SELECT COUNT(DISTINCT e1.student_id) AS c
         FROM enrollments e1
         WHERE e1.month=?
@@ -45950,6 +45962,32 @@ def cao_dashboard():
           )
     """, (prev_month, month))
     learners_lost = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT e1.student_id) AS c
+        FROM enrollments e1
+        WHERE e1.month=?
+          AND e1.status='ACTIVE'
+          AND e1.student_id IN (
+              SELECT DISTINCT student_id
+              FROM enrollments
+              WHERE month=?
+                AND status='ACTIVE'
+          )
+    """, (month, prev_month))
+    returning_learners = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT e.student_id) AS c
+        FROM enrollments e
+        JOIN students st ON st.id=e.student_id
+        WHERE e.month=?
+          AND e.status='ACTIVE'
+          AND substr(st.created_at,1,7)=?
+    """, (month, month))
+    new_learners = cur.fetchone()["c"] or 0
+
+    # ================= TOP TUTOR ACTIVITY =================
 
     cur.execute("""
         SELECT t.full_name,
@@ -45967,7 +46005,63 @@ def cao_dashboard():
 
     top_tutors = cur.fetchall()
 
+    # ================= SUBJECT UPLOAD BREAKDOWN =================
+
+    cur.execute("""
+        SELECT
+            s.grade,
+            s.name AS subject_name,
+            COUNT(m.id) AS total_uploads
+        FROM materials m
+        JOIN subjects s ON s.id=m.subject_id
+        WHERE m.month LIKE ?
+        GROUP BY s.id
+        ORDER BY total_uploads DESC
+        LIMIT 8
+    """, (month + "%",))
+
+    subject_uploads = cur.fetchall()
+
+    # ================= ATTENDANCE BY GRADE =================
+
+    cur.execute("""
+        SELECT
+            s.grade,
+            COUNT(DISTINCT ats.id) AS session_logs,
+            COUNT(a.id) AS attendance_count
+        FROM attendance_sessions ats
+        JOIN subjects s ON s.id=ats.subject_id
+        LEFT JOIN attendance a ON a.session_id=ats.session_id AND a.date=ats.date
+        WHERE ats.month=?
+        GROUP BY s.grade
+        ORDER BY s.grade
+    """, (month,))
+
+    attendance_by_grade = cur.fetchall()
+
+    # ================= ASSIGNMENTS BY SUBJECT =================
+
+    cur.execute("""
+        SELECT
+            s.grade,
+            s.name AS subject_name,
+            COUNT(DISTINCT m.id) AS assignments,
+            COUNT(DISTINCT sub.id) AS submissions
+        FROM materials m
+        JOIN subjects s ON s.id=m.subject_id
+        LEFT JOIN submissions sub ON sub.material_id=m.id
+        WHERE m.month LIKE ?
+          AND (m.is_assignment=1 OR m.kind='assignment')
+        GROUP BY s.id
+        ORDER BY assignments DESC, submissions DESC
+        LIMIT 8
+    """, (month + "%",))
+
+    assignment_subjects = cur.fetchall()
+
     conn.close()
+
+    # ================= TABLE ROWS =================
 
     tutor_rows = ""
 
@@ -45981,6 +46075,52 @@ def cao_dashboard():
             <td>{t['tracker_logs'] or 0}</td>
         </tr>
         """
+
+    # ================= CHART DATA =================
+
+    chart_payload = {
+        "staffMix": {
+            "labels": ["Tutors", "Tutor Managers", "AQMs"],
+            "values": [total_tutors, total_tutor_managers, total_aqms]
+        },
+        "uploadMix": {
+            "labels": ["Recordings", "Assignments", "Documents"],
+            "values": [recordings_uploaded, assignments_uploaded, documents_uploaded]
+        },
+        "learnerMovement": {
+            "labels": ["Active Learners", "New Learners", "Returning Learners", "Learners Lost"],
+            "values": [active_learners, new_learners, returning_learners, learners_lost]
+        },
+        "topTutors": {
+            "labels": [t["full_name"] for t in top_tutors],
+            "uploads": [t["uploads"] or 0 for t in top_tutors],
+            "recordings": [t["recordings"] or 0 for t in top_tutors],
+            "assignments": [t["assignments"] or 0 for t in top_tutors],
+            "trackerLogs": [t["tracker_logs"] or 0 for t in top_tutors]
+        },
+        "subjectUploads": {
+            "labels": [
+                f"{grade_label(r['grade'])} - {r['subject_name']}"
+                for r in subject_uploads
+            ],
+            "values": [r["total_uploads"] or 0 for r in subject_uploads]
+        },
+        "attendanceByGrade": {
+            "labels": [grade_label(r["grade"]) for r in attendance_by_grade],
+            "sessionLogs": [r["session_logs"] or 0 for r in attendance_by_grade],
+            "attendanceCount": [r["attendance_count"] or 0 for r in attendance_by_grade]
+        },
+        "assignmentSubjects": {
+            "labels": [
+                f"{grade_label(r['grade'])} - {r['subject_name']}"
+                for r in assignment_subjects
+            ],
+            "assignments": [r["assignments"] or 0 for r in assignment_subjects],
+            "submissions": [r["submissions"] or 0 for r in assignment_subjects]
+        }
+    }
+
+    chart_json = json.dumps(chart_payload)
 
     body = f"""
     {cao_nav()}
@@ -46013,6 +46153,101 @@ def cao_dashboard():
             {stat("Learners Lost", learners_lost)}
         </div>
 
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-top:14px">
+            <h2>Academic Health Snapshot</h2>
+
+            <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+                <div class="card soft">
+                    <h3>Teaching Activity</h3>
+                    <p class="muted">Uploads, recordings and assignments created by tutors.</p>
+                    <span class="chip active">{total_uploads} upload(s)</span>
+                </div>
+
+                <div class="card soft">
+                    <h3>Learner Movement</h3>
+                    <p class="muted">New, returning and lost learners for the selected month.</p>
+                    <span class="chip pending">{active_learners} active learner(s)</span>
+                </div>
+
+                <div class="card soft">
+                    <h3>Academic Monitoring</h3>
+                    <p class="muted">Attendance logs, submissions and student reports captured.</p>
+                    <span class="chip">{sessions_logged} session log(s)</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft">
+                <h2>Staff Mix</h2>
+                <p class="mini muted">Tutors, Tutor Managers and AQMs.</p>
+                <div style="height:280px">
+                    <canvas id="staffMixChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Upload Mix</h2>
+                <p class="mini muted">Recordings, assignments and documents uploaded this month.</p>
+                <div style="height:280px">
+                    <canvas id="uploadMixChart"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft">
+                <h2>Learner Movement</h2>
+                <p class="mini muted">Active, new, returning and lost learners.</p>
+                <div style="height:300px">
+                    <canvas id="learnerMovementChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Top Tutor Activity</h2>
+                <p class="mini muted">Tutor uploads, recordings, assignments and tracker logs.</p>
+                <div style="height:320px">
+                    <canvas id="topTutorActivityChart"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft">
+                <h2>Subject Uploads</h2>
+                <p class="mini muted">Top subjects by uploaded academic resources.</p>
+                <div style="height:320px">
+                    <canvas id="subjectUploadsChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Attendance by Grade</h2>
+                <p class="mini muted">Session logs and attendance count by grade.</p>
+                <div style="height:320px">
+                    <canvas id="attendanceByGradeChart"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Assignments vs Submissions</h2>
+            <p class="mini muted">
+                Helps the CAO see whether uploaded assignments are receiving student submissions.
+            </p>
+
+            <div style="height:330px">
+                <canvas id="assignmentsSubmissionsChart"></canvas>
+            </div>
+        </div>
+
         <div class="card soft" style="margin-top:14px;border-left:5px solid #1b5e20">
             <h2>Top Tutor Academic Activity</h2>
 
@@ -46035,6 +46270,252 @@ def cao_dashboard():
             </div>
         </div>
     </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        const caoCharts = {chart_json};
+
+        const ebtaColors = [
+            "#1b5e20",
+            "#2e7d32",
+            "#43a047",
+            "#66bb6a",
+            "#a5d6a7",
+            "#f59e0b",
+            "#64748b",
+            "#0f172a"
+        ];
+
+        function noDataPlugin(message) {{
+            return {{
+                id: "noData_" + Math.random().toString(36).slice(2),
+                afterDraw(chart) {{
+                    const dataValues = chart.data.datasets.flatMap(ds => ds.data || []);
+                    const hasData = dataValues.some(v => Number(v) > 0);
+
+                    if (!hasData) {{
+                        const ctx = chart.ctx;
+                        ctx.save();
+                        ctx.textAlign = "center";
+                        ctx.textBaseline = "middle";
+                        ctx.font = "13px Arial";
+                        ctx.fillStyle = "#64748b";
+                        ctx.fillText(message || "No data available for this month", chart.width / 2, chart.height / 2);
+                        ctx.restore();
+                    }}
+                }}
+            }};
+        }}
+
+        const commonOptions = {{
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {{
+                legend: {{
+                    position: "bottom"
+                }}
+            }}
+        }};
+
+        new Chart(document.getElementById("staffMixChart"), {{
+            type: "pie",
+            data: {{
+                labels: caoCharts.staffMix.labels,
+                datasets: [{{
+                    data: caoCharts.staffMix.values,
+                    backgroundColor: ebtaColors
+                }}]
+            }},
+            options: commonOptions,
+            plugins: [noDataPlugin("No staff data yet")]
+        }});
+
+        new Chart(document.getElementById("uploadMixChart"), {{
+            type: "doughnut",
+            data: {{
+                labels: caoCharts.uploadMix.labels,
+                datasets: [{{
+                    data: caoCharts.uploadMix.values,
+                    backgroundColor: ebtaColors
+                }}]
+            }},
+            options: commonOptions,
+            plugins: [noDataPlugin("No uploads yet")]
+        }});
+
+        new Chart(document.getElementById("learnerMovementChart"), {{
+            type: "bar",
+            data: {{
+                labels: caoCharts.learnerMovement.labels,
+                datasets: [{{
+                    label: "Learners",
+                    data: caoCharts.learnerMovement.values,
+                    backgroundColor: "#1b5e20",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                plugins: {{
+                    legend: {{
+                        display: false
+                    }}
+                }},
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No learner movement data yet")]
+        }});
+
+        new Chart(document.getElementById("topTutorActivityChart"), {{
+            type: "bar",
+            data: {{
+                labels: caoCharts.topTutors.labels,
+                datasets: [
+                    {{
+                        label: "Uploads",
+                        data: caoCharts.topTutors.uploads,
+                        backgroundColor: "#1b5e20",
+                        borderRadius: 8
+                    }},
+                    {{
+                        label: "Recordings",
+                        data: caoCharts.topTutors.recordings,
+                        backgroundColor: "#43a047",
+                        borderRadius: 8
+                    }},
+                    {{
+                        label: "Assignments",
+                        data: caoCharts.topTutors.assignments,
+                        backgroundColor: "#f59e0b",
+                        borderRadius: 8
+                    }},
+                    {{
+                        label: "Tracker Logs",
+                        data: caoCharts.topTutors.trackerLogs,
+                        backgroundColor: "#64748b",
+                        borderRadius: 8
+                    }}
+                ]
+            }},
+            options: {{
+                ...commonOptions,
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No tutor activity yet")]
+        }});
+
+        new Chart(document.getElementById("subjectUploadsChart"), {{
+            type: "bar",
+            data: {{
+                labels: caoCharts.subjectUploads.labels,
+                datasets: [{{
+                    label: "Uploads",
+                    data: caoCharts.subjectUploads.values,
+                    backgroundColor: "#2e7d32",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                indexAxis: "y",
+                plugins: {{
+                    legend: {{
+                        display: false
+                    }}
+                }},
+                scales: {{
+                    x: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No subject uploads yet")]
+        }});
+
+        new Chart(document.getElementById("attendanceByGradeChart"), {{
+            type: "bar",
+            data: {{
+                labels: caoCharts.attendanceByGrade.labels,
+                datasets: [
+                    {{
+                        label: "Session Logs",
+                        data: caoCharts.attendanceByGrade.sessionLogs,
+                        backgroundColor: "#1b5e20",
+                        borderRadius: 8
+                    }},
+                    {{
+                        label: "Attendance Count",
+                        data: caoCharts.attendanceByGrade.attendanceCount,
+                        backgroundColor: "#66bb6a",
+                        borderRadius: 8
+                    }}
+                ]
+            }},
+            options: {{
+                ...commonOptions,
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No attendance data yet")]
+        }});
+
+        new Chart(document.getElementById("assignmentsSubmissionsChart"), {{
+            type: "bar",
+            data: {{
+                labels: caoCharts.assignmentSubjects.labels,
+                datasets: [
+                    {{
+                        label: "Assignments",
+                        data: caoCharts.assignmentSubjects.assignments,
+                        backgroundColor: "#1b5e20",
+                        borderRadius: 8
+                    }},
+                    {{
+                        label: "Submissions",
+                        data: caoCharts.assignmentSubjects.submissions,
+                        backgroundColor: "#f59e0b",
+                        borderRadius: 8
+                    }}
+                ]
+            }},
+            options: {{
+                ...commonOptions,
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No assignment data yet")]
+        }});
+    </script>
     """
 
     return page("CAO Dashboard", body)
