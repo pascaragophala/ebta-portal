@@ -42621,14 +42621,16 @@ def coo_dashboard():
 
     conn.close()
 
+    coo_name = session.get("coo_name", "COO")
+
     body = f"""
     {coo_nav()}
 
     <section class="card">
-        <h1>COO Dashboard</h1>
+        <h1>Welcome, {escape(coo_name)}</h1>
 
         <p class="muted">
-            Operational overview for enrollments, admissions, finance, secretary work, social media and operational staff.
+            Here is your COO operational dashboard for enrollments, admissions, finance, secretary work, social media and operational staff.
             Academic Quality Manager tools are excluded.
         </p>
 
@@ -42661,17 +42663,6 @@ def coo_dashboard():
 
                 <a class="btn success" href="{url_for('coo_team_profiles')}">
                     View Operational Team
-                </a>
-            </div>
-
-            <div class="card soft" style="border-left:5px solid #f59e0b">
-                <h2>High Admin Controls</h2>
-                <p class="muted">
-                    High Admin can switch COO access on or off for sensitive operational sections.
-                </p>
-
-                <a class="btn secondary" href="{safe_url('admin_coos', '/admin/coos')}">
-                    Manage COO Access
                 </a>
             </div>
 
