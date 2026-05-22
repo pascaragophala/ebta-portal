@@ -42823,6 +42823,13 @@ def admin_coos():
             </td>
 
             <td>{escape(c['phone'])}</td>
+
+            <td>
+                <span class="chip">
+                    {escape(c['pin'] or '—')}
+                </span>
+            </td>
+
             <td>{status}</td>
 
             <td>
@@ -42911,13 +42918,14 @@ def admin_coos():
                         <tr>
                             <th>COO</th>
                             <th>Phone</th>
+                            <th>PIN</th>
                             <th>Status</th>
                             <th>Action</th>
                         </tr>
                     </thead>
 
                     <tbody>
-                        {coo_rows or "<tr><td colspan='4'>No COO accounts yet.</td></tr>"}
+                        {coo_rows or "<tr><td colspan='5'>No COO accounts yet.</td></tr>"}
                     </tbody>
                 </table>
             </div>
