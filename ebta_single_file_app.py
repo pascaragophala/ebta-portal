@@ -42813,73 +42813,132 @@ def coo_team_profiles():
     if r:
         return r
 
+    role = request.args.get("role", "").strip()
+    q = request.args.get("q", "").strip()
+    page_num = coo_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    role_map = {
+        "duty_admin": ("Duty Admin", "duty_admins"),
+        "admission": ("Admission Coordinator", "admission_coordinators"),
+        "treasurer": ("Treasurer", "treasurers"),
+        "secretary": ("Secretary", "secretaries"),
+        "social_media": ("Social Media Manager", "social_media_managers"),
+    }
+
+    union_parts = []
+    union_params = []
+
+    for key, item in role_map.items():
+        role_label, table_name = item
+
+        union_parts.append(f"""
+            SELECT
+                '{key}' AS role_key,
+                '{role_label}' AS role_name,
+                id,
+                full_name,
+                phone,
+                email,
+                is_active,
+                created_at,
+                updated_at
+            FROM {table_name}
+        """)
+
+    base_sql = " UNION ALL ".join(union_parts)
+
+    where = []
+    params = []
+
+    if role and role in role_map:
+        where.append("role_key = ?")
+        params.append(role)
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                full_name LIKE ?
+                OR phone LIKE ?
+                OR email LIKE ?
+                OR role_name LIKE ?
+            )
+        """)
+        params += [search, search, search, search]
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
     conn = get_db()
     cur = conn.cursor()
 
-    team_queries = [
-        ("Duty Admin", "duty_admins"),
-        ("Admission Coordinator", "admission_coordinators"),
-        ("Treasurer", "treasurers"),
-        ("Secretary", "secretaries"),
-        ("Social Media Manager", "social_media_managers"),
-    ]
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM (
+            {base_sql}
+        ) team
+        {where_sql}
+    """, params)
 
-    cards = ""
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
 
-    for role_name, table_name in team_queries:
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
 
-        cur.execute(f"""
-            SELECT id, full_name, phone, email, is_active, created_at, updated_at
-            FROM {table_name}
-            ORDER BY is_active DESC, full_name
-        """)
+    data_params = list(params)
+    data_params.extend([per_page, offset])
 
-        rows = cur.fetchall()
+    cur.execute(f"""
+        SELECT *
+        FROM (
+            {base_sql}
+        ) team
+        {where_sql}
+        ORDER BY is_active DESC, role_name ASC, full_name ASC
+        LIMIT ? OFFSET ?
+    """, data_params)
 
-        member_rows = ""
+    rows = cur.fetchall()
+    conn.close()
 
-        for r in rows:
-            status = "<span class='chip active'>Active</span>" if r["is_active"] == 1 else "<span class='chip lapsed'>Inactive</span>"
+    trs = ""
 
-            member_rows += f"""
-            <tr>
-                <td>
-                    <strong>{escape(r['full_name'] or '—')}</strong>
-                    <div class="mini muted">ID: {r['id']}</div>
-                </td>
+    for member in rows:
+        status = (
+            "<span class='chip active'>Active</span>"
+            if member["is_active"] == 1
+            else "<span class='chip lapsed'>Inactive</span>"
+        )
 
-                <td>{escape(r['phone'] or '—')}</td>
-                <td>{escape(r['email'] or '—')}</td>
-                <td>{status}</td>
-                <td>{escape((r['created_at'] or '')[:16].replace('T',' '))}</td>
-            </tr>
-            """
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(member['full_name'] or '—')}</strong>
+                <div class="mini muted">ID: {member['id']}</div>
+            </td>
 
-        cards += f"""
-        <div class="card soft" style="margin-bottom:14px">
-            <h2>{escape(role_name)}</h2>
-
-            <div class="scroll-x">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Phone</th>
-                            <th>Email</th>
-                            <th>Status</th>
-                            <th>Created</th>
-                        </tr>
-                    </thead>
-
-                    <tbody>
-                        {member_rows or "<tr><td colspan='5'>No team members found.</td></tr>"}
-                    </tbody>
-                </table>
-            </div>
-        </div>
+            <td>{escape(member['role_name'] or '—')}</td>
+            <td>{escape(member['phone'] or '—')}</td>
+            <td>{escape(member['email'] or '—')}</td>
+            <td>{status}</td>
+            <td>{escape((member['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
         """
 
-    conn.close()
+    role_options = """
+        <option value="">All Operational Roles</option>
+    """
+
+    for key, item in role_map.items():
+        role_label = item[0]
+        selected = "selected" if role == key else ""
+        role_options += f"""
+        <option value="{key}" {selected}>{escape(role_label)}</option>
+        """
 
     body = f"""
     {coo_nav()}
@@ -42891,7 +42950,45 @@ def coo_team_profiles():
             COO view of operational staff members. Academic Quality Managers are intentionally excluded.
         </p>
 
-        {cards}
+        <form method="get" class="toolbar">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search name, phone, email or role">
+
+            <select name="role">
+                {role_options}
+            </select>
+
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('coo_team_profiles')}">Clear</a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} operational team member(s).
+        </div>
+
+        {pagination_controls("/coo/team", page_num, total_pages, {"q": q, "role": role})}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Role</th>
+                        <th>Phone</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='6'>No operational team members found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls("/coo/team", page_num, total_pages, {"q": q, "role": role})}
     </section>
     """
 
@@ -43603,6 +43700,10 @@ def coo_admission_overview():
         return r
 
     month = coo_selected_month()
+    page_num = coo_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
 
     conn = get_db()
     cur = conn.cursor()
@@ -43627,6 +43728,21 @@ def coo_admission_overview():
     discounts = cur.fetchone()["c"] or 0
 
     cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM enrollments e
+        JOIN students st ON st.id=e.student_id
+        JOIN subjects sub ON sub.id=e.subject_id
+        WHERE e.month=?
+    """, (month,))
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    cur.execute("""
         SELECT e.created_at, e.status, e.amount_paid, st.full_name, st.phone_whatsapp,
                sub.name AS subject_name, sub.grade
         FROM enrollments e
@@ -43634,8 +43750,8 @@ def coo_admission_overview():
         JOIN subjects sub ON sub.id=e.subject_id
         WHERE e.month=?
         ORDER BY e.created_at DESC
-        LIMIT 10
-    """, (month,))
+        LIMIT ? OFFSET ?
+    """, (month, per_page, offset))
 
     recent = cur.fetchall()
     conn.close()
@@ -43678,7 +43794,13 @@ def coo_admission_overview():
         </div>
 
         <div class="card soft" style="margin-top:14px">
-            <h2>Recent Admission Activity</h2>
+            <h2>Admission Activity</h2>
+
+            <div class="mini muted" style="margin:10px 0">
+                Showing {len(recent)} of {total} admission activity record(s).
+            </div>
+
+            {pagination_controls("/coo/admission", page_num, total_pages, {"month": month})}
 
             <div class="scroll-x">
                 <table>
@@ -43698,6 +43820,8 @@ def coo_admission_overview():
                     </tbody>
                 </table>
             </div>
+
+            {pagination_controls("/coo/admission", page_num, total_pages, {"month": month})}
         </div>
     </section>
     """
@@ -43715,6 +43839,10 @@ def coo_duty_admin_overview():
         return r
 
     month = coo_selected_month()
+    page_num = coo_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
 
     conn = get_db()
     cur = conn.cursor()
@@ -43731,12 +43859,21 @@ def coo_duty_admin_overview():
     cur.execute("SELECT COUNT(*) AS c FROM student_reports WHERE substr(upload_date,1,7)=?", (month,))
     reports = cur.fetchone()["c"] or 0
 
+    cur.execute("SELECT COUNT(*) AS c FROM followups")
+    total = cur.fetchone()["c"] or 0
+
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
     cur.execute("""
         SELECT full_name, phone, grade, subjects, followup_status, issue_type, created_at
         FROM followups
-        ORDER BY created_at DESC
-        LIMIT 10
-    """)
+        ORDER BY created_at DESC, id DESC
+        LIMIT ? OFFSET ?
+    """, (per_page, offset))
 
     recent_followups = cur.fetchall()
     conn.close()
@@ -43778,7 +43915,13 @@ def coo_duty_admin_overview():
         </div>
 
         <div class="card soft" style="margin-top:14px">
-            <h2>Recent Follow-Ups</h2>
+            <h2>Follow-Ups Activity</h2>
+
+            <div class="mini muted" style="margin:10px 0">
+                Showing {len(recent_followups)} of {total} follow-up record(s).
+            </div>
+
+            {pagination_controls("/coo/duty-admin", page_num, total_pages, {"month": month})}
 
             <div class="scroll-x">
                 <table>
@@ -43798,6 +43941,8 @@ def coo_duty_admin_overview():
                     </tbody>
                 </table>
             </div>
+
+            {pagination_controls("/coo/duty-admin", page_num, total_pages, {"month": month})}
         </div>
     </section>
     """
@@ -44147,6 +44292,10 @@ def coo_finance_overview():
         return r
 
     month = coo_selected_month()
+    page_num = coo_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
 
     conn = get_db()
     cur = conn.cursor()
@@ -44180,14 +44329,27 @@ def coo_finance_overview():
     paid_payments = float(cur.fetchone()["total"] or 0)
 
     cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM finance_records
+        WHERE month=?
+    """, (month,))
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    cur.execute("""
         SELECT record_type, category, description, amount, payment_date, status, captured_at
         FROM finance_records
         WHERE month=?
-        ORDER BY captured_at DESC
-        LIMIT 12
-    """, (month,))
-    recent = cur.fetchall()
+        ORDER BY captured_at DESC, id DESC
+        LIMIT ? OFFSET ?
+    """, (month, per_page, offset))
 
+    recent = cur.fetchall()
     conn.close()
 
     net = income - expenses
@@ -44227,7 +44389,13 @@ def coo_finance_overview():
         </div>
 
         <div class="card soft" style="margin-top:14px">
-            <h2>Recent Finance Records</h2>
+            <h2>Finance Records</h2>
+
+            <div class="mini muted" style="margin:10px 0">
+                Showing {len(recent)} of {total} finance record(s).
+            </div>
+
+            {pagination_controls("/coo/finance", page_num, total_pages, {"month": month})}
 
             <div class="scroll-x">
                 <table>
@@ -44247,6 +44415,8 @@ def coo_finance_overview():
                     </tbody>
                 </table>
             </div>
+
+            {pagination_controls("/coo/finance", page_num, total_pages, {"month": month})}
         </div>
     </section>
     """
