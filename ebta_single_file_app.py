@@ -872,6 +872,19 @@ def init_db():
     """)
     
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS coos(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL UNIQUE,
+        email TEXT,
+        pin TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+    
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS discount_coupons(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
 
@@ -1063,7 +1076,31 @@ def init_db():
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tutors_referral_code ON tutors(referral_code)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_referral_uses_tutor ON tutor_referral_uses(tutor_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_referral_uses_student ON tutor_referral_uses(referred_student_id)")
+    
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_coos_phone ON coos(phone)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_coos_active ON coos(is_active)")
 
+
+    coo_permission_defaults = {
+        "coo_portal_enabled": "1",
+        "coo_enrollments_enabled": "1",
+        "coo_duty_admin_enabled": "1",
+        "coo_admission_enabled": "1",
+        "coo_treasurer_enabled": "1",
+        "coo_secretary_enabled": "1",
+        "coo_social_media_enabled": "1",
+        "coo_employee_profiles_enabled": "1",
+        "coo_sms_enabled": "1",
+        "coo_discounts_enabled": "1"
+    }
+
+    for key, value in coo_permission_defaults.items():
+        cur.execute("SELECT value FROM settings WHERE key=?", (key,))
+        if not cur.fetchone():
+            cur.execute(
+                "INSERT INTO settings(key,value) VALUES(?,?)",
+                (key, value)
+        )
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS submissions(
@@ -2263,6 +2300,41 @@ def require_treasurer():
     if not is_treasurer():
         return redirect(url_for("treasurer_login"))
         
+
+def is_coo():
+    return session.get("coo_id")
+
+
+def require_coo():
+    if not is_coo():
+        return redirect(url_for("coo_login"))
+
+    if get_setting("coo_portal_enabled", "1") != "1":
+        return page(
+            "COO Portal Disabled",
+            card_msg("The COO portal is currently disabled by High Admin.")
+        )
+
+
+def coo_can(permission_key):
+    """
+    Checks whether the COO is allowed to access a section.
+    Example: coo_can("coo_treasurer_enabled")
+    """
+    return get_setting(permission_key, "1") == "1"
+
+
+def require_coo_permission(permission_key, section_name="this section"):
+    r = require_coo()
+    if r:
+        return r
+
+    if not coo_can(permission_key):
+        return page(
+            "Access Restricted",
+            card_msg(f"COO access to {section_name} has been disabled by High Admin.")
+        )
+
 
 def is_duty_admin():
     return session.get("duty_admin_id")
@@ -4425,7 +4497,7 @@ body:`manager_id=${manager}&tutor_id=${tutor}&state=${state?1:0}`
 
 def page(title, body_html, extra_head="", extra_js=""):
     auth = []
-    if not (is_student() or is_tutor() or is_admin()):
+    if not (is_student() or is_tutor() or is_admin() or is_coo()):
         auth += [f"<a href='{url_for('student_login')}'>Student</a>",
                 f"<a href='{url_for('tutor_login')}'>Tutor</a>"]
     else:
@@ -4435,6 +4507,12 @@ def page(title, body_html, extra_head="", extra_js=""):
             auth += [f"<a href='{url_for('tutor_home')}'>Tutor</a>", f"<a href='{url_for('tutor_logout')}'>Logout</a>"]
         if is_admin():
             auth += [f"<a href='{safe_url('admin_home','/admin')}'>Admin</a>", f"<a href='{url_for('admin_logout')}'>Logout</a>"]
+        if is_coo():
+            auth += [
+                f"<a href='{url_for('coo_dashboard')}'>COO</a>",
+                f"<a href='{url_for('coo_logout')}'>Logout</a>"
+            ]    
+            
     right = " ".join(auth)
 
     # Build role-aware sidebar with compact stats
@@ -12396,6 +12474,7 @@ def admin_nav():
             (
                 "Finance & Management",
                 [
+                    ("COOs", "admin_coos", "/admin/coos"),
                     ("Treasurers", "admin_treasurers", "/admin/treasurers"),
                     ("Finance Overview", "admin_finance_overview", "/admin/finance-overview"),
                     ("Management Roles", "admin_management_roles", "/admin/management-roles"),
@@ -42243,6 +42322,887 @@ def admin_delete_tutor_referral(referral_id):
 
     return redirect(request.referrer or url_for("admin_tutor_referrals"))    
     
+
+def coo_nav():
+
+    def coo_link(label, endpoint, permission_key=None, fallback="#"):
+        if permission_key and not coo_can(permission_key):
+            return ""
+
+        return f"""
+        <a href="{safe_url(endpoint, fallback)}">
+            {escape(label)}
+        </a>
+        """
+
+    sections = [
+        (
+            "Core Operations",
+            [
+                coo_link("Dashboard", "coo_dashboard"),
+                coo_link("Operational Team", "coo_team_profiles", "coo_employee_profiles_enabled"),
+                coo_link("Enrollments", "coo_enrollments", "coo_enrollments_enabled"),
+                coo_link("Follow-Ups", "coo_followups", "coo_duty_admin_enabled"),
+            ]
+        ),
+        (
+            "Admissions & Duty Admin",
+            [
+                coo_link("Admission Overview", "coo_admission_overview", "coo_admission_enabled"),
+                coo_link("Duty Admin Overview", "coo_duty_admin_overview", "coo_duty_admin_enabled"),
+                coo_link("Parents Information", "coo_parents_information", "coo_admission_enabled"),
+                coo_link("Discounts", "coo_discounts", "coo_discounts_enabled"),
+            ]
+        ),
+        (
+            "Finance & Treasury",
+            [
+                coo_link("Finance Overview", "coo_finance_overview", "coo_treasurer_enabled"),
+                coo_link("Payment Schedule", "coo_payment_schedule", "coo_treasurer_enabled"),
+                coo_link("Monthly Reports", "coo_monthly_reports", "coo_treasurer_enabled"),
+            ]
+        ),
+        (
+            "Secretary & Communication",
+            [
+                coo_link("Secretary Logs", "coo_secretary_logs", "coo_secretary_enabled"),
+                coo_link("Meeting Minutes", "coo_secretary_minutes", "coo_secretary_enabled"),
+                coo_link("Action Items", "coo_secretary_actions", "coo_secretary_enabled"),
+                coo_link("SMS Dashboard", "coo_sms_dashboard", "coo_sms_enabled"),
+            ]
+        ),
+        (
+            "Social Media",
+            [
+                coo_link("Content Logs", "coo_social_media_logs", "coo_social_media_enabled"),
+                coo_link("Weekly Reports", "coo_social_media_reports", "coo_social_media_enabled"),
+                coo_link("Crisis Logs", "coo_social_media_crisis", "coo_social_media_enabled"),
+            ]
+        ),
+    ]
+
+    html = ""
+
+    for title, links in sections:
+        clean_links = "".join([x for x in links if x.strip()])
+
+        if not clean_links:
+            continue
+
+        html += f"""
+        <details class="admin-nav-group" open>
+            <summary>{escape(title)}</summary>
+
+            <div class="admin-nav-links">
+                {clean_links}
+            </div>
+        </details>
+        """
+
+    return f"""
+    <style>
+        .coo-nav {{
+            background:#ffffff;
+            border:1px solid #dbe4ef;
+            border-radius:18px;
+            padding:14px;
+            box-shadow:0 4px 14px rgba(0,0,0,.06);
+            margin:12px 0 18px;
+        }}
+
+        .coo-nav-header {{
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:12px;
+            flex-wrap:wrap;
+            margin-bottom:10px;
+        }}
+
+        .coo-nav-grid {{
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+            gap:10px;
+        }}
+
+        .admin-nav-group {{
+            border:1px solid #dbe4ef;
+            border-radius:14px;
+            background:#f8fafc;
+            overflow:hidden;
+        }}
+
+        .admin-nav-group summary {{
+            cursor:pointer;
+            padding:12px 14px;
+            font-weight:800;
+            color:#0f172a;
+            list-style:none;
+            display:flex;
+            justify-content:space-between;
+        }}
+
+        .admin-nav-group summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .admin-nav-links {{
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+            padding:0 12px 12px;
+        }}
+
+        .admin-nav-links a {{
+            text-decoration:none;
+            color:#1b5e20;
+            background:#ffffff;
+            border:1px solid rgba(27,94,32,.35);
+            border-radius:999px;
+            padding:8px 11px;
+            font-size:13px;
+            font-weight:700;
+        }}
+
+        .admin-nav-links a:hover {{
+            background:#1b5e20;
+            color:#ffffff;
+        }}
+    </style>
+
+    <nav class="coo-nav">
+        <div class="coo-nav-header">
+            <div>
+                <h2>COO Operations Portal</h2>
+                <div class="mini muted">
+                    Operational oversight without academic quality controls.
+                </div>
+            </div>
+
+            <span class="chip active">
+                Chief Operations Officer
+            </span>
+        </div>
+
+        <div class="coo-nav-grid">
+            {html}
+        </div>
+    </nav>
+    """
+    
+@app.get('/coo/login')
+def coo_login():
+
+    body = """
+    <section class="card" style="max-width:420px;margin:30px auto">
+        <h1>COO Login</h1>
+
+        <p class="muted">
+            Chief Operations Officer portal access.
+        </p>
+
+        <form method="post">
+            <label>Phone Number</label>
+            <input name="phone" required>
+
+            <label>PIN</label>
+            <input name="pin" type="password" required>
+
+            <button class="btn success" style="width:100%;margin-top:12px">
+                Login
+            </button>
+        </form>
+    </section>
+    """
+
+    return page("COO Login", body)
+
+
+@app.post('/coo/login')
+def coo_login_post():
+
+    phone = request.form.get("phone", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM coos
+        WHERE phone=?
+          AND pin=?
+          AND is_active=1
+        LIMIT 1
+    """, (phone, pin))
+
+    coo = cur.fetchone()
+    conn.close()
+
+    if not coo:
+        return page("Login Failed", card_msg("Invalid COO login details or inactive account."))
+
+    session.clear()
+    session["coo_id"] = coo["id"]
+    session["coo_name"] = coo["full_name"]
+
+    return redirect(url_for("coo_dashboard"))
+
+
+@app.get('/coo/logout')
+def coo_logout():
+
+    session.pop("coo_id", None)
+    session.pop("coo_name", None)
+
+    return redirect(url_for("coo_login"))
+    
+    
+@app.get('/coo')
+def coo_dashboard():
+
+    r = require_coo()
+    if r:
+        return r
+
+    month = get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,))
+    total_enrollments = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='PENDING'", (month,))
+    pending_enrollments = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='ACTIVE'", (month,))
+    active_enrollments = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(DISTINCT student_id) AS c FROM enrollments WHERE month=?", (month,))
+    total_students = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM duty_admins WHERE is_active=1")
+    duty_admins = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM admission_coordinators WHERE is_active=1")
+    admission_coordinators = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM treasurers WHERE is_active=1")
+    treasurers = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM secretaries WHERE is_active=1")
+    secretaries = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM social_media_managers WHERE is_active=1")
+    social_media_managers = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_payment_schedule
+        WHERE month=?
+          AND status='PENDING'
+    """, (month,))
+    pending_payments = float(cur.fetchone()["total"] or 0)
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM secretary_action_items
+        WHERE status='PENDING'
+    """)
+    pending_action_items = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM social_media_crisis_logs
+        WHERE status IN ('OPEN','ESCALATED')
+    """)
+    open_crisis_logs = cur.fetchone()["c"] or 0
+
+    conn.close()
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>COO Dashboard</h1>
+
+        <p class="muted">
+            Operational overview for enrollments, admissions, finance, secretary work, social media and operational staff.
+            Academic Quality Manager tools are excluded.
+        </p>
+
+        <div class="stats">
+            {stat("Current Month", month)}
+            {stat("Total Enrollments", total_enrollments)}
+            {stat("Pending Enrollments", pending_enrollments)}
+            {stat("Active Enrollments", active_enrollments)}
+            {stat("Students This Month", total_students)}
+            {stat("Pending Payments", f"R{pending_payments:,.2f}")}
+            {stat("Secretary Action Items", pending_action_items)}
+            {stat("Open Social Media Issues", open_crisis_logs)}
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <h2>Operational Team</h2>
+                <p class="muted">
+                    View profiles of Duty Admins, Admission Coordinators, Treasurers, Secretaries and Social Media Managers.
+                </p>
+
+                <div class="stats-mini">
+                    <div class="s"><div class="k">{duty_admins}</div><div class="t">Duty Admins</div></div>
+                    <div class="s"><div class="k">{admission_coordinators}</div><div class="t">Admissions</div></div>
+                    <div class="s"><div class="k">{treasurers}</div><div class="t">Treasurers</div></div>
+                    <div class="s"><div class="k">{secretaries}</div><div class="t">Secretaries</div></div>
+                    <div class="s"><div class="k">{social_media_managers}</div><div class="t">Social Media</div></div>
+                </div>
+
+                <a class="btn success" href="{url_for('coo_team_profiles')}">
+                    View Operational Team
+                </a>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #f59e0b">
+                <h2>High Admin Controls</h2>
+                <p class="muted">
+                    High Admin can switch COO access on or off for sensitive operational sections.
+                </p>
+
+                <a class="btn secondary" href="{safe_url('admin_coos', '/admin/coos')}">
+                    Manage COO Access
+                </a>
+            </div>
+
+        </div>
+    </section>
+    """
+
+    return page("COO Dashboard", body)
+
+
+@app.get('/coo/team')
+def coo_team_profiles():
+
+    r = require_coo_permission("coo_employee_profiles_enabled", "operational team profiles")
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    team_queries = [
+        ("Duty Admin", "duty_admins"),
+        ("Admission Coordinator", "admission_coordinators"),
+        ("Treasurer", "treasurers"),
+        ("Secretary", "secretaries"),
+        ("Social Media Manager", "social_media_managers"),
+    ]
+
+    cards = ""
+
+    for role_name, table_name in team_queries:
+
+        cur.execute(f"""
+            SELECT id, full_name, phone, email, is_active, created_at, updated_at
+            FROM {table_name}
+            ORDER BY is_active DESC, full_name
+        """)
+
+        rows = cur.fetchall()
+
+        member_rows = ""
+
+        for r in rows:
+            status = "<span class='chip active'>Active</span>" if r["is_active"] == 1 else "<span class='chip lapsed'>Inactive</span>"
+
+            member_rows += f"""
+            <tr>
+                <td>
+                    <strong>{escape(r['full_name'] or '—')}</strong>
+                    <div class="mini muted">ID: {r['id']}</div>
+                </td>
+
+                <td>{escape(r['phone'] or '—')}</td>
+                <td>{escape(r['email'] or '—')}</td>
+                <td>{status}</td>
+                <td>{escape((r['created_at'] or '')[:16].replace('T',' '))}</td>
+            </tr>
+            """
+
+        cards += f"""
+        <div class="card soft" style="margin-bottom:14px">
+            <h2>{escape(role_name)}</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Phone</th>
+                            <th>Email</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {member_rows or "<tr><td colspan='5'>No team members found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        """
+
+    conn.close()
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Operational Team Profiles</h1>
+
+        <p class="muted">
+            COO view of operational staff members. Academic Quality Managers are intentionally excluded.
+        </p>
+
+        {cards}
+    </section>
+    """
+
+    return page("Operational Team Profiles", body)
+
+
+@app.get('/admin/coos')
+def admin_coos():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can manage COO accounts."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM coos
+        ORDER BY is_active DESC, full_name
+    """)
+
+    rows = cur.fetchall()
+
+    settings_keys = [
+        ("coo_portal_enabled", "Main COO Portal"),
+        ("coo_enrollments_enabled", "Enrollments"),
+        ("coo_duty_admin_enabled", "Duty Admin Operations"),
+        ("coo_admission_enabled", "Admission Operations"),
+        ("coo_treasurer_enabled", "Treasurer / Finance"),
+        ("coo_secretary_enabled", "Secretary Operations"),
+        ("coo_social_media_enabled", "Social Media Operations"),
+        ("coo_employee_profiles_enabled", "Employee Profiles"),
+        ("coo_sms_enabled", "SMS Controls"),
+        ("coo_discounts_enabled", "Discount Controls"),
+    ]
+
+    conn.close()
+
+    coo_rows = ""
+
+    for c in rows:
+        status = "<span class='chip active'>Active</span>" if c["is_active"] == 1 else "<span class='chip lapsed'>Inactive</span>"
+
+        coo_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(c['full_name'])}</strong>
+                <div class="mini muted">{escape(c['email'] or '—')}</div>
+            </td>
+
+            <td>{escape(c['phone'])}</td>
+            <td>{status}</td>
+
+            <td>
+                <form method="post" action="{url_for('admin_coo_toggle', coo_id=c['id'])}" style="display:inline">
+                    <button class="btn mini secondary">
+                        {'Deactivate' if c['is_active'] == 1 else 'Activate'}
+                    </button>
+                </form>
+
+                <form method="post" action="{url_for('admin_coo_reset_pin', coo_id=c['id'])}" style="display:inline">
+                    <button class="btn mini warn">
+                        Reset PIN
+                    </button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    settings_html = ""
+
+    for key, label in settings_keys:
+        value = get_setting(key, "1")
+        checked = "checked" if value == "1" else ""
+
+        settings_html += f"""
+        <label style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
+            <input type="checkbox" name="{key}" value="1" {checked}>
+            <span>{escape(label)}</span>
+        </label>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>COO Management</h1>
+
+        <p class="muted">
+            Create COO accounts and control which operational areas the COO can access.
+        </p>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px">
+
+            <div class="card soft">
+                <h2>Add COO</h2>
+
+                <form method="post" action="{url_for('admin_coo_add')}">
+                    <label>Full Name</label>
+                    <input name="full_name" required>
+
+                    <label>Phone</label>
+                    <input name="phone" required>
+
+                    <label>Email</label>
+                    <input name="email">
+
+                    <label>PIN</label>
+                    <input name="pin" required>
+
+                    <button class="btn success" style="margin-top:10px">
+                        Add COO
+                    </button>
+                </form>
+            </div>
+
+            <div class="card soft">
+                <h2>COO Access Controls</h2>
+
+                <form method="post" action="{url_for('admin_coo_settings_update')}">
+                    {settings_html}
+
+                    <button class="btn success" style="margin-top:10px">
+                        Save Access Controls
+                    </button>
+                </form>
+            </div>
+
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Existing COO Accounts</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>COO</th>
+                            <th>Phone</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {coo_rows or "<tr><td colspan='4'>No COO accounts yet.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("COO Management", body)
+
+
+@app.post('/admin/coos/add')
+def admin_coo_add():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can add COO accounts."))
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    email = request.form.get("email", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    if not full_name or not phone or not pin:
+        return page("Missing Information", card_msg("Full name, phone and PIN are required."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            INSERT INTO coos(
+                full_name,
+                phone,
+                email,
+                pin,
+                is_active,
+                created_at,
+                updated_at
+            )
+            VALUES(?,?,?,?,?,?,?)
+        """, (
+            full_name,
+            phone,
+            email,
+            pin,
+            1,
+            now_utc_iso(),
+            now_utc_iso()
+        ))
+
+        conn.commit()
+
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Duplicate Phone", card_msg("A COO account with this phone number already exists."))
+
+    conn.close()
+
+    return redirect(url_for("admin_coos"))
+
+
+@app.post('/admin/coo/<int:coo_id>/toggle')
+def admin_coo_toggle(coo_id):
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can update COO accounts."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE coos
+        SET is_active = CASE WHEN is_active=1 THEN 0 ELSE 1 END,
+            updated_at=?
+        WHERE id=?
+    """, (now_utc_iso(), coo_id))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_coos"))
+
+
+@app.post('/admin/coo/<int:coo_id>/reset-pin')
+def admin_coo_reset_pin(coo_id):
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can reset COO PINs."))
+
+    new_pin = str(random.randint(1000, 999999))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE coos
+        SET pin=?,
+            updated_at=?
+        WHERE id=?
+    """, (new_pin, now_utc_iso(), coo_id))
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "COO PIN Reset",
+        card_msg(f"The new COO PIN is: <b>{escape(new_pin)}</b>")
+    )
+
+
+@app.post('/admin/coo-settings')
+def admin_coo_settings_update():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can update COO settings."))
+
+    keys = [
+        "coo_portal_enabled",
+        "coo_enrollments_enabled",
+        "coo_duty_admin_enabled",
+        "coo_admission_enabled",
+        "coo_treasurer_enabled",
+        "coo_secretary_enabled",
+        "coo_social_media_enabled",
+        "coo_employee_profiles_enabled",
+        "coo_sms_enabled",
+        "coo_discounts_enabled",
+    ]
+
+    for key in keys:
+        value = "1" if request.form.get(key) == "1" else "0"
+        set_setting(key, value)
+
+    return redirect(url_for("admin_coos"))
+    
+    
+def coo_placeholder(title, message):
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>{escape(title)}</h1>
+
+        <p class="muted">
+            {escape(message)}
+        </p>
+
+        <div class="card soft">
+            <p>
+                This COO section is ready to be connected to the existing operational data.
+                It is intentionally separated from academic tools.
+            </p>
+        </div>
+    </section>
+    """
+
+    return page(title, body)
+
+
+@app.get('/coo/enrollments')
+def coo_enrollments():
+    r = require_coo_permission("coo_enrollments_enabled", "enrollments")
+    if r: return r
+    return coo_placeholder("COO Enrollments", "Operational enrollment oversight.")
+
+
+@app.get('/coo/followups')
+def coo_followups():
+    r = require_coo_permission("coo_duty_admin_enabled", "follow-ups")
+    if r: return r
+    return coo_placeholder("COO Follow-Ups", "Duty Admin and admission follow-up oversight.")
+
+
+@app.get('/coo/admission')
+def coo_admission_overview():
+    r = require_coo_permission("coo_admission_enabled", "admission operations")
+    if r: return r
+    return coo_placeholder("Admission Operations", "Admission Coordinator operations overview.")
+
+
+@app.get('/coo/duty-admin')
+def coo_duty_admin_overview():
+    r = require_coo_permission("coo_duty_admin_enabled", "duty admin operations")
+    if r: return r
+    return coo_placeholder("Duty Admin Operations", "Duty Admin operational oversight.")
+
+
+@app.get('/coo/parents')
+def coo_parents_information():
+    r = require_coo_permission("coo_admission_enabled", "parents information")
+    if r: return r
+    return coo_placeholder("Parents Information", "Parents communication and WhatsApp group information.")
+
+
+@app.get('/coo/discounts')
+def coo_discounts():
+    r = require_coo_permission("coo_discounts_enabled", "discounts")
+    if r: return r
+    return coo_placeholder("COO Discounts", "Operational discount and coupon oversight.")
+
+
+@app.get('/coo/finance')
+def coo_finance_overview():
+    r = require_coo_permission("coo_treasurer_enabled", "finance overview")
+    if r: return r
+    return coo_placeholder("Finance Overview", "Treasurer and finance operational overview.")
+
+
+@app.get('/coo/payments')
+def coo_payment_schedule():
+    r = require_coo_permission("coo_treasurer_enabled", "payment schedule")
+    if r: return r
+    return coo_placeholder("Payment Schedule", "Operational view of scheduled and pending payments.")
+
+
+@app.get('/coo/monthly-reports')
+def coo_monthly_reports():
+    r = require_coo_permission("coo_treasurer_enabled", "monthly reports")
+    if r: return r
+    return coo_placeholder("Monthly Finance Reports", "COO view of monthly finance reports.")
+
+
+@app.get('/coo/secretary/logs')
+def coo_secretary_logs():
+    r = require_coo_permission("coo_secretary_enabled", "secretary logs")
+    if r: return r
+    return coo_placeholder("Secretary Logs", "Secretary communication logs.")
+
+
+@app.get('/coo/secretary/minutes')
+def coo_secretary_minutes():
+    r = require_coo_permission("coo_secretary_enabled", "meeting minutes")
+    if r: return r
+    return coo_placeholder("Meeting Minutes", "Secretary meeting minutes archive.")
+
+
+@app.get('/coo/secretary/actions')
+def coo_secretary_actions():
+    r = require_coo_permission("coo_secretary_enabled", "secretary action items")
+    if r: return r
+    return coo_placeholder("Secretary Action Items", "Secretary action item tracking.")
+
+
+@app.get('/coo/sms')
+def coo_sms_dashboard():
+    r = require_coo_permission("coo_sms_enabled", "SMS dashboard")
+    if r: return r
+    return coo_placeholder("SMS Dashboard", "Operational SMS queue and status overview.")
+
+
+@app.get('/coo/social-media/logs')
+def coo_social_media_logs():
+    r = require_coo_permission("coo_social_media_enabled", "social media logs")
+    if r: return r
+    return coo_placeholder("Social Media Logs", "Social media content logs.")
+
+
+@app.get('/coo/social-media/reports')
+def coo_social_media_reports():
+    r = require_coo_permission("coo_social_media_enabled", "social media reports")
+    if r: return r
+    return coo_placeholder("Social Media Reports", "Weekly social media reporting.")
+
+
+@app.get('/coo/social-media/crisis')
+def coo_social_media_crisis():
+    r = require_coo_permission("coo_social_media_enabled", "social media crisis logs")
+    if r: return r
+    return coo_placeholder("Social Media Crisis Logs", "Social media crisis and escalation logs.")
+
 
 # --- Admin: Analytics dashboard ---
 
