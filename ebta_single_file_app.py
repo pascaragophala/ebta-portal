@@ -54119,6 +54119,993 @@ def ceo_goal_delete(goal_id):
     return redirect(url_for("ceo_goals"))
 
 
+@app.get('/ceo/budget-plans')
+def ceo_budget_plans():
+
+    r = require_ceo()
+    if r:
+        return r
+
+    year = request.args.get("year", "").strip() or str(datetime.date.today().year)
+    category = request.args.get("category", "").strip()
+    status = request.args.get("status", "").strip()
+    q = request.args.get("q", "").strip()
+
+    where = ["budget_year=?"]
+    params = [year]
+
+    if category:
+        where.append("category=?")
+        params.append(category)
+
+    if status:
+        where.append("status=?")
+        params.append(status)
+
+    if q:
+        search = f"%{q}%"
+        where.append("(category LIKE ? OR description LIKE ? OR notes LIKE ?)")
+        params += [search, search, search]
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT *
+        FROM ceo_budget_plans
+        {where_sql}
+        ORDER BY
+            budget_month IS NULL,
+            budget_month ASC,
+            category ASC,
+            created_at DESC
+    """, params)
+
+    plans = cur.fetchall()
+
+    cur.execute("""
+        SELECT
+            COALESCE(SUM(planned_amount),0) AS planned_total,
+            COALESCE(SUM(actual_amount),0) AS actual_total
+        FROM ceo_budget_plans
+        WHERE budget_year=?
+    """, (year,))
+
+    totals = cur.fetchone()
+    planned_total = float(totals["planned_total"] or 0)
+    actual_total = float(totals["actual_total"] or 0)
+    variance = planned_total - actual_total
+
+    cur.execute("""
+        SELECT category,
+               COALESCE(SUM(planned_amount),0) AS planned,
+               COALESCE(SUM(actual_amount),0) AS actual
+        FROM ceo_budget_plans
+        WHERE budget_year=?
+        GROUP BY category
+        ORDER BY planned DESC
+    """, (year,))
+    category_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT status, COUNT(*) AS c
+        FROM ceo_budget_plans
+        WHERE budget_year=?
+        GROUP BY status
+    """, (year,))
+    status_rows = cur.fetchall()
+
+    conn.close()
+
+    rows = ""
+
+    for p in plans:
+        variance_amount = float(p["planned_amount"] or 0) - float(p["actual_amount"] or 0)
+        variance_class = "active" if variance_amount >= 0 else "lapsed"
+
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(p['category'])}</strong>
+                <div class="mini muted">{escape(p['description'] or 'No description')[:130]}</div>
+            </td>
+            <td>{escape(p['budget_year'])}</td>
+            <td>{escape(p['budget_month'] or 'Yearly')}</td>
+            <td>R{float(p['planned_amount'] or 0):,.2f}</td>
+            <td>R{float(p['actual_amount'] or 0):,.2f}</td>
+            <td><span class="chip {variance_class}">R{variance_amount:,.2f}</span></td>
+            <td>{ceo_status_chip(p['status'])}</td>
+            <td>{escape(p['notes'] or '—')[:120]}</td>
+            <td>
+                <a class="btn mini secondary" href="{url_for('ceo_budget_edit', budget_id=p['id'])}">
+                    Edit
+                </a>
+
+                <form method="post"
+                      action="{url_for('ceo_budget_delete', budget_id=p['id'])}"
+                      style="display:inline">
+                    <button class="btn mini danger"
+                            onclick="return confirm('Delete this budget plan?')">
+                        Delete
+                    </button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    chart_payload = {
+        "categoryBudget": {
+            "labels": [r["category"] or "Unknown" for r in category_rows],
+            "planned": [float(r["planned"] or 0) for r in category_rows],
+            "actual": [float(r["actual"] or 0) for r in category_rows]
+        },
+        "statusMix": {
+            "labels": [r["status"] or "Unknown" for r in status_rows],
+            "values": [r["c"] or 0 for r in status_rows]
+        }
+    }
+
+    chart_json = json.dumps(chart_payload)
+
+    variance_chip = "active" if variance >= 0 else "lapsed"
+
+    body = f"""
+    {ceo_nav()}
+
+    <section class="card">
+        <h1>CEO Budget Plans</h1>
+
+        <p class="muted">
+            Plan yearly and monthly budgets, compare planned amounts against actual spending, and track budget usage.
+        </p>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Budget Year", year)}
+            {stat("Planned Budget", f"R{planned_total:,.2f}")}
+            {stat("Actual Spending", f"R{actual_total:,.2f}")}
+            {stat("Variance", f"R{variance:,.2f}")}
+            {stat("Budget Items", len(plans))}
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <h2>Add Budget Plan</h2>
+
+                <form method="post" action="{url_for('ceo_budget_add')}">
+
+                    <label>Budget Year</label>
+                    <input name="budget_year" value="{escape(year)}" required>
+
+                    <label>Budget Month</label>
+                    <input type="month" name="budget_month">
+
+                    <label>Category</label>
+                    <select name="category" required>
+                        <option>Academic</option>
+                        <option>Operations</option>
+                        <option>Marketing</option>
+                        <option>Technology</option>
+                        <option>Awards</option>
+                        <option>Staff</option>
+                        <option>Transport</option>
+                        <option>Other</option>
+                    </select>
+
+                    <label>Description</label>
+                    <textarea name="description" rows="3" placeholder="Example: October yearly awards ceremony preparation"></textarea>
+
+                    <label>Planned Amount</label>
+                    <input type="number" step="0.01" name="planned_amount" value="0">
+
+                    <label>Actual Amount</label>
+                    <input type="number" step="0.01" name="actual_amount" value="0">
+
+                    <label>Status</label>
+                    <select name="status">
+                        <option>PLANNED</option>
+                        <option>ACTIVE</option>
+                        <option>USED</option>
+                        <option>CANCELLED</option>
+                    </select>
+
+                    <label>Notes</label>
+                    <textarea name="notes" rows="3"></textarea>
+
+                    <button class="btn success" style="margin-top:10px">
+                        Save Budget Plan
+                    </button>
+                </form>
+            </div>
+
+            <div class="card soft">
+                <h2>Budget Visuals</h2>
+
+                <div style="height:270px">
+                    <canvas id="budgetCategoryChart"></canvas>
+                </div>
+
+                <div style="height:240px;margin-top:12px">
+                    <canvas id="budgetStatusChart"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Filter Budget Plans</h2>
+
+            <form method="get" class="toolbar">
+                <input name="year" value="{escape(year)}" placeholder="Year">
+                <input name="q" value="{escape(q)}" placeholder="Search category, description or notes">
+
+                <select name="category">
+                    <option value="">All Categories</option>
+                    {''.join(f"<option value='{x}' {'selected' if category == x else ''}>{x}</option>" for x in ['Academic','Operations','Marketing','Technology','Awards','Staff','Transport','Other'])}
+                </select>
+
+                <select name="status">
+                    <option value="">All Statuses</option>
+                    {''.join(f"<option value='{x}' {'selected' if status == x else ''}>{x}</option>" for x in ['PLANNED','ACTIVE','USED','CANCELLED'])}
+                </select>
+
+                <button class="btn mini">Filter</button>
+                <a class="btn mini secondary" href="{url_for('ceo_budget_plans')}">Clear</a>
+            </form>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Budget Register</h2>
+
+            <div class="mini muted" style="margin-bottom:10px">
+                Showing {len(plans)} budget plan(s).
+            </div>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Budget Item</th>
+                            <th>Year</th>
+                            <th>Month</th>
+                            <th>Planned</th>
+                            <th>Actual</th>
+                            <th>Variance</th>
+                            <th>Status</th>
+                            <th>Notes</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='9'>No budget plans found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        const budgetCharts = {chart_json};
+        const ebtaColors = ["#1b5e20","#2e7d32","#43a047","#f59e0b","#64748b","#0f172a"];
+
+        function moneyLabel(value) {{
+            return "R" + Number(value || 0).toLocaleString("en-ZA", {{
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }});
+        }}
+
+        new Chart(document.getElementById("budgetCategoryChart"), {{
+            type: "bar",
+            data: {{
+                labels: budgetCharts.categoryBudget.labels,
+                datasets: [
+                    {{
+                        label: "Planned",
+                        data: budgetCharts.categoryBudget.planned,
+                        backgroundColor: "#1b5e20",
+                        borderRadius: 8
+                    }},
+                    {{
+                        label: "Actual",
+                        data: budgetCharts.categoryBudget.actual,
+                        backgroundColor: "#f59e0b",
+                        borderRadius: 8
+                    }}
+                ]
+            }},
+            options: {{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {{
+                    legend: {{ position: "bottom" }}
+                }},
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            callback: function(value) {{
+                                return moneyLabel(value);
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+        }});
+
+        new Chart(document.getElementById("budgetStatusChart"), {{
+            type: "doughnut",
+            data: {{
+                labels: budgetCharts.statusMix.labels,
+                datasets: [{{
+                    data: budgetCharts.statusMix.values,
+                    backgroundColor: ebtaColors
+                }}]
+            }},
+            options: {{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {{
+                    legend: {{ position: "bottom" }}
+                }}
+            }}
+        }});
+    </script>
+    """
+
+    return page("CEO Budget Plans", body)
+    
+    
+@app.post('/ceo/budget-plans/add')
+def ceo_budget_add():
+
+    r = require_ceo()
+    if r:
+        return r
+
+    budget_year = request.form.get("budget_year", "").strip()
+    budget_month = request.form.get("budget_month", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO ceo_budget_plans(
+            budget_year,
+            budget_month,
+            category,
+            description,
+            planned_amount,
+            actual_amount,
+            status,
+            notes,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+    """, (
+        budget_year,
+        budget_month,
+        request.form.get("category", "").strip(),
+        request.form.get("description", "").strip(),
+        ceo_safe_float(request.form.get("planned_amount"), 0),
+        ceo_safe_float(request.form.get("actual_amount"), 0),
+        request.form.get("status", "PLANNED").strip(),
+        request.form.get("notes", "").strip(),
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("ceo_budget_plans", year=budget_year))
+
+
+@app.get('/ceo/budget-plans/<int:budget_id>/edit')
+def ceo_budget_edit(budget_id):
+
+    r = require_ceo()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM ceo_budget_plans WHERE id=?", (budget_id,))
+    plan = cur.fetchone()
+    conn.close()
+
+    if not plan:
+        return page("Budget Plan Not Found", card_msg("The selected budget plan could not be found."))
+
+    def opt(value, current):
+        return "selected" if value == current else ""
+
+    body = f"""
+    {ceo_nav()}
+
+    <section class="card">
+        <h1>Edit Budget Plan</h1>
+
+        <form method="post" action="{url_for('ceo_budget_update', budget_id=budget_id)}">
+
+            <label>Budget Year</label>
+            <input name="budget_year" value="{escape(plan['budget_year'])}" required>
+
+            <label>Budget Month</label>
+            <input type="month" name="budget_month" value="{escape(plan['budget_month'] or '')}">
+
+            <label>Category</label>
+            <select name="category">
+                {''.join(f"<option value='{x}' {opt(x, plan['category'])}>{x}</option>" for x in ['Academic','Operations','Marketing','Technology','Awards','Staff','Transport','Other'])}
+            </select>
+
+            <label>Description</label>
+            <textarea name="description" rows="3">{escape(plan['description'] or '')}</textarea>
+
+            <label>Planned Amount</label>
+            <input type="number" step="0.01" name="planned_amount" value="{float(plan['planned_amount'] or 0)}">
+
+            <label>Actual Amount</label>
+            <input type="number" step="0.01" name="actual_amount" value="{float(plan['actual_amount'] or 0)}">
+
+            <label>Status</label>
+            <select name="status">
+                {''.join(f"<option value='{x}' {opt(x, plan['status'])}>{x}</option>" for x in ['PLANNED','ACTIVE','USED','CANCELLED'])}
+            </select>
+
+            <label>Notes</label>
+            <textarea name="notes" rows="3">{escape(plan['notes'] or '')}</textarea>
+
+            <button class="btn success" style="margin-top:10px">
+                Save Changes
+            </button>
+
+            <a class="btn secondary" href="{url_for('ceo_budget_plans', year=plan['budget_year'])}">
+                Cancel
+            </a>
+        </form>
+    </section>
+    """
+
+    return page("Edit Budget Plan", body)
+
+
+@app.post('/ceo/budget-plans/<int:budget_id>/update')
+def ceo_budget_update(budget_id):
+
+    r = require_ceo()
+    if r:
+        return r
+
+    budget_year = request.form.get("budget_year", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE ceo_budget_plans
+        SET budget_year=?,
+            budget_month=?,
+            category=?,
+            description=?,
+            planned_amount=?,
+            actual_amount=?,
+            status=?,
+            notes=?,
+            updated_at=?
+        WHERE id=?
+    """, (
+        budget_year,
+        request.form.get("budget_month", "").strip(),
+        request.form.get("category", "").strip(),
+        request.form.get("description", "").strip(),
+        ceo_safe_float(request.form.get("planned_amount"), 0),
+        ceo_safe_float(request.form.get("actual_amount"), 0),
+        request.form.get("status", "PLANNED").strip(),
+        request.form.get("notes", "").strip(),
+        now_utc_iso(),
+        budget_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("ceo_budget_plans", year=budget_year))
+
+
+@app.post('/ceo/budget-plans/<int:budget_id>/delete')
+def ceo_budget_delete(budget_id):
+
+    r = require_ceo()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM ceo_budget_plans WHERE id=?", (budget_id,))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("ceo_budget_plans"))
+    
+
+@app.get('/ceo/awards')
+def ceo_awards():
+
+    r = require_ceo()
+    if r:
+        return r
+
+    year = request.args.get("year", "").strip() or str(datetime.date.today().year)
+    award_type = request.args.get("award_type", "").strip()
+    status = request.args.get("status", "").strip()
+    q = request.args.get("q", "").strip()
+
+    where = ["award_year=?"]
+    params = [year]
+
+    if award_type:
+        where.append("award_type=?")
+        params.append(award_type)
+
+    if status:
+        where.append("status=?")
+        params.append(status)
+
+    if q:
+        search = f"%{q}%"
+        where.append("(title LIKE ? OR notes LIKE ? OR award_term LIKE ?)")
+        params += [search, search, search]
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT *
+        FROM ceo_awards_plans
+        {where_sql}
+        ORDER BY
+            ceremony_date IS NULL,
+            ceremony_date ASC,
+            created_at DESC
+    """, params)
+
+    awards = cur.fetchall()
+
+    cur.execute("""
+        SELECT award_type, COUNT(*) AS c
+        FROM ceo_awards_plans
+        WHERE award_year=?
+        GROUP BY award_type
+    """, (year,))
+    type_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT status, COUNT(*) AS c
+        FROM ceo_awards_plans
+        WHERE award_year=?
+        GROUP BY status
+    """, (year,))
+    status_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT COALESCE(SUM(budget_amount),0) AS total
+        FROM ceo_awards_plans
+        WHERE award_year=?
+    """, (year,))
+    total_budget = float(cur.fetchone()["total"] or 0)
+
+    conn.close()
+
+    rows = ""
+
+    for a in awards:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(a['title'])}</strong>
+                <div class="mini muted">{escape(a['notes'] or 'No notes')[:130]}</div>
+            </td>
+            <td>{escape(a['award_type'])}</td>
+            <td>{escape(a['award_term'] or '—')}</td>
+            <td>{escape(a['ceremony_month'] or '—')}</td>
+            <td>{escape(a['ceremony_date'] or '—')}</td>
+            <td>R{float(a['budget_amount'] or 0):,.2f}</td>
+            <td>{ceo_status_chip(a['status'])}</td>
+            <td>
+                <a class="btn mini secondary" href="{url_for('ceo_award_edit', award_id=a['id'])}">
+                    Edit
+                </a>
+
+                <form method="post"
+                      action="{url_for('ceo_award_delete', award_id=a['id'])}"
+                      style="display:inline">
+                    <button class="btn mini danger"
+                            onclick="return confirm('Delete this awards plan?')">
+                        Delete
+                    </button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    chart_payload = {
+        "types": {
+            "labels": [r["award_type"] or "Unknown" for r in type_rows],
+            "values": [r["c"] or 0 for r in type_rows]
+        },
+        "statuses": {
+            "labels": [r["status"] or "Unknown" for r in status_rows],
+            "values": [r["c"] or 0 for r in status_rows]
+        }
+    }
+
+    chart_json = json.dumps(chart_payload)
+
+    body = f"""
+    {ceo_nav()}
+
+    <section class="card">
+        <h1>Awards Planning</h1>
+
+        <p class="muted">
+            Plan termly awards and the yearly awards ceremony. The yearly ceremony can be prepared for early October before learners write final exams.
+        </p>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Awards Year", year)}
+            {stat("Awards Plans", len(awards))}
+            {stat("Total Budget", f"R{total_budget:,.2f}")}
+            {stat("Yearly Ceremony Target", "Early October")}
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <h2>Add Awards Plan</h2>
+
+                <form method="post" action="{url_for('ceo_award_add')}">
+
+                    <label>Award Type</label>
+                    <select name="award_type" required>
+                        <option>TERMLY</option>
+                        <option>YEARLY</option>
+                    </select>
+
+                    <label>Award Year</label>
+                    <input name="award_year" value="{escape(year)}" required>
+
+                    <label>Award Term</label>
+                    <input name="award_term" placeholder="Example: Term 1, Term 2, Term 3, Yearly">
+
+                    <label>Ceremony Month</label>
+                    <input type="month" name="ceremony_month" value="{escape(year)}-10">
+
+                    <label>Ceremony Date</label>
+                    <input type="date" name="ceremony_date">
+
+                    <label>Title</label>
+                    <input name="title" placeholder="Example: EBTA Yearly Awards Ceremony" required>
+
+                    <label>Budget Amount</label>
+                    <input type="number" step="0.01" name="budget_amount" value="0">
+
+                    <label>Status</label>
+                    <select name="status">
+                        <option>PLANNED</option>
+                        <option>PREPARING</option>
+                        <option>READY</option>
+                        <option>COMPLETED</option>
+                    </select>
+
+                    <label>Notes</label>
+                    <textarea name="notes" rows="4" placeholder="Venue, certificates, trophies, student recognition, tutor awards, parents communication, programme planning."></textarea>
+
+                    <button class="btn success" style="margin-top:10px">
+                        Save Awards Plan
+                    </button>
+                </form>
+            </div>
+
+            <div class="card soft">
+                <h2>Awards Visuals</h2>
+
+                <div style="height:250px">
+                    <canvas id="awardsTypeChart"></canvas>
+                </div>
+
+                <div style="height:250px;margin-top:12px">
+                    <canvas id="awardsStatusChart"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Filter Awards Plans</h2>
+
+            <form method="get" class="toolbar">
+                <input name="year" value="{escape(year)}" placeholder="Year">
+                <input name="q" value="{escape(q)}" placeholder="Search title, term or notes">
+
+                <select name="award_type">
+                    <option value="">All Types</option>
+                    <option value="TERMLY" {'selected' if award_type == 'TERMLY' else ''}>Termly</option>
+                    <option value="YEARLY" {'selected' if award_type == 'YEARLY' else ''}>Yearly</option>
+                </select>
+
+                <select name="status">
+                    <option value="">All Statuses</option>
+                    {''.join(f"<option value='{x}' {'selected' if status == x else ''}>{x}</option>" for x in ['PLANNED','PREPARING','READY','COMPLETED'])}
+                </select>
+
+                <button class="btn mini">Filter</button>
+                <a class="btn mini secondary" href="{url_for('ceo_awards')}">Clear</a>
+            </form>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Awards Planning Register</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Awards Plan</th>
+                            <th>Type</th>
+                            <th>Term</th>
+                            <th>Month</th>
+                            <th>Date</th>
+                            <th>Budget</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='8'>No awards plans found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        const awardsCharts = {chart_json};
+        const ebtaColors = ["#1b5e20","#2e7d32","#43a047","#f59e0b","#64748b","#0f172a"];
+
+        new Chart(document.getElementById("awardsTypeChart"), {{
+            type: "pie",
+            data: {{
+                labels: awardsCharts.types.labels,
+                datasets: [{{
+                    data: awardsCharts.types.values,
+                    backgroundColor: ebtaColors
+                }}]
+            }},
+            options: {{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {{
+                    legend: {{ position: "bottom" }}
+                }}
+            }}
+        }});
+
+        new Chart(document.getElementById("awardsStatusChart"), {{
+            type: "doughnut",
+            data: {{
+                labels: awardsCharts.statuses.labels,
+                datasets: [{{
+                    data: awardsCharts.statuses.values,
+                    backgroundColor: ebtaColors
+                }}]
+            }},
+            options: {{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {{
+                    legend: {{ position: "bottom" }}
+                }}
+            }}
+        }});
+    </script>
+    """
+
+    return page("CEO Awards", body)
+
+
+@app.post('/ceo/awards/add')
+def ceo_award_add():
+
+    r = require_ceo()
+    if r:
+        return r
+
+    award_year = request.form.get("award_year", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO ceo_awards_plans(
+            award_type,
+            award_year,
+            award_term,
+            ceremony_month,
+            ceremony_date,
+            title,
+            budget_amount,
+            status,
+            notes,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        request.form.get("award_type", "TERMLY").strip(),
+        award_year,
+        request.form.get("award_term", "").strip(),
+        request.form.get("ceremony_month", "").strip(),
+        request.form.get("ceremony_date", "").strip(),
+        request.form.get("title", "").strip(),
+        ceo_safe_float(request.form.get("budget_amount"), 0),
+        request.form.get("status", "PLANNED").strip(),
+        request.form.get("notes", "").strip(),
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("ceo_awards", year=award_year))
+
+
+@app.get('/ceo/awards/<int:award_id>/edit')
+def ceo_award_edit(award_id):
+
+    r = require_ceo()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM ceo_awards_plans WHERE id=?", (award_id,))
+    award = cur.fetchone()
+    conn.close()
+
+    if not award:
+        return page("Awards Plan Not Found", card_msg("The selected awards plan could not be found."))
+
+    def opt(value, current):
+        return "selected" if value == current else ""
+
+    body = f"""
+    {ceo_nav()}
+
+    <section class="card">
+        <h1>Edit Awards Plan</h1>
+
+        <form method="post" action="{url_for('ceo_award_update', award_id=award_id)}">
+
+            <label>Award Type</label>
+            <select name="award_type">
+                {''.join(f"<option value='{x}' {opt(x, award['award_type'])}>{x}</option>" for x in ['TERMLY','YEARLY'])}
+            </select>
+
+            <label>Award Year</label>
+            <input name="award_year" value="{escape(award['award_year'])}" required>
+
+            <label>Award Term</label>
+            <input name="award_term" value="{escape(award['award_term'] or '')}">
+
+            <label>Ceremony Month</label>
+            <input type="month" name="ceremony_month" value="{escape(award['ceremony_month'] or '')}">
+
+            <label>Ceremony Date</label>
+            <input type="date" name="ceremony_date" value="{escape(award['ceremony_date'] or '')}">
+
+            <label>Title</label>
+            <input name="title" value="{escape(award['title'])}" required>
+
+            <label>Budget Amount</label>
+            <input type="number" step="0.01" name="budget_amount" value="{float(award['budget_amount'] or 0)}">
+
+            <label>Status</label>
+            <select name="status">
+                {''.join(f"<option value='{x}' {opt(x, award['status'])}>{x}</option>" for x in ['PLANNED','PREPARING','READY','COMPLETED'])}
+            </select>
+
+            <label>Notes</label>
+            <textarea name="notes" rows="4">{escape(award['notes'] or '')}</textarea>
+
+            <button class="btn success" style="margin-top:10px">
+                Save Changes
+            </button>
+
+            <a class="btn secondary" href="{url_for('ceo_awards', year=award['award_year'])}">
+                Cancel
+            </a>
+        </form>
+    </section>
+    """
+
+    return page("Edit Awards Plan", body)
+
+
+@app.post('/ceo/awards/<int:award_id>/update')
+def ceo_award_update(award_id):
+
+    r = require_ceo()
+    if r:
+        return r
+
+    award_year = request.form.get("award_year", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE ceo_awards_plans
+        SET award_type=?,
+            award_year=?,
+            award_term=?,
+            ceremony_month=?,
+            ceremony_date=?,
+            title=?,
+            budget_amount=?,
+            status=?,
+            notes=?,
+            updated_at=?
+        WHERE id=?
+    """, (
+        request.form.get("award_type", "TERMLY").strip(),
+        award_year,
+        request.form.get("award_term", "").strip(),
+        request.form.get("ceremony_month", "").strip(),
+        request.form.get("ceremony_date", "").strip(),
+        request.form.get("title", "").strip(),
+        ceo_safe_float(request.form.get("budget_amount"), 0),
+        request.form.get("status", "PLANNED").strip(),
+        request.form.get("notes", "").strip(),
+        now_utc_iso(),
+        award_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("ceo_awards", year=award_year))
+
+
+@app.post('/ceo/awards/<int:award_id>/delete')
+def ceo_award_delete(award_id):
+
+    r = require_ceo()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM ceo_awards_plans WHERE id=?", (award_id,))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("ceo_awards"))
+    
+    
+
 # --- Admin: Analytics dashboard ---
 
 @app.get('/admin/analytics')
