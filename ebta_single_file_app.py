@@ -16483,6 +16483,10 @@ def admin_students():
 
         trs.append(f"""
         <tr>
+            <td style="text-align:center">
+                {f'<input form="bulkDeleteStudentsForm" type="checkbox" name="student_ids" value="{s["id"]}">' if is_high_admin() else ''}
+            </td>
+
             <td>
                 <strong>{escape(s['full_name'] or '')}</strong>
                 <div class='muted'>{escape(s['phone_whatsapp'] or '')}</div>
@@ -16688,10 +16692,44 @@ def admin_students():
 
         {nav}
 
+        {f'''
+        <div class="card soft" style="border-left:5px solid #dc2626;margin:12px 0">
+            <h3>High Admin Duplicate Cleanup</h3>
+
+            <p class="muted">
+                Use this carefully. Selected bulk delete will only remove records with zero enrollments.
+                Auto-delete will remove only 0-number duplicates when a matching +27 record exists and the 0-number record has zero enrollments.
+            </p>
+
+            <form id="bulkDeleteStudentsForm"
+                  method="post"
+                  action="{url_for('admin_students_bulk_delete_selected')}"
+                  style="display:inline"
+                  onsubmit="return confirm('Delete selected unused student records? Records with enrollments will be skipped.')">
+
+                <button class="btn danger mini">
+                    Delete Selected Unused Records
+                </button>
+            </form>
+
+            <form method="post"
+                  action="{url_for('admin_students_auto_delete_zero_phone_duplicates')}"
+                  style="display:inline"
+                  onsubmit="return confirm('Auto-delete unused 0-number duplicates where a matching +27 record exists?')">
+
+                <button class="btn warn mini">
+                    Auto-delete 0-number duplicates
+                </button>
+            </form>
+        </div>
+        ''' if is_high_admin() and duplicates else ''}
+
         <div class="scroll-x">
             <table id='stu_tbl'>
                 <thead>
                     <tr>
+                        <tr>
+                        <th>Select</th>
                         <th>Student</th>
                         <th>Grade</th>
                         <th>Subject</th>
@@ -16707,7 +16745,7 @@ def admin_students():
                 </thead>
 
                 <tbody>
-                    {''.join(trs) or "<tr><td colspan='11'>No students found.</td></tr>"}
+                    {''.join(trs) or "<tr><td colspan='12'>No students found.</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -18413,71 +18451,341 @@ def admin_student_reset_pin(sid:int):
     conn.close()
     return page("PIN Updated", card_msg(f"Student PIN reset to: {new_pin}"))
 
+def delete_student_record_safely(cur, sid):
+    """
+    Deletes a student record using the same cleanup logic as the normal High Admin delete.
+    This function does not commit. The route calling it must commit or rollback.
+    """
+
+    # 1. Delete attendance
+    cur.execute("DELETE FROM attendance WHERE student_id=?", (sid,))
+
+    # 2. Delete submissions
+    cur.execute("DELETE FROM submissions WHERE student_id=?", (sid,))
+
+    # 3. Delete lesson ratings
+    cur.execute("DELETE FROM lesson_ratings WHERE student_id=?", (sid,))
+
+    # 4. Delete enrollment files
+    cur.execute("""
+        DELETE FROM enrollment_files
+        WHERE enrollment_id IN (
+            SELECT id FROM enrollments WHERE student_id=?
+        )
+    """, (sid,))
+
+    # 5. Delete payments
+    cur.execute("""
+        DELETE FROM payments
+        WHERE enrollment_id IN (
+            SELECT id FROM enrollments WHERE student_id=?
+        )
+    """, (sid,))
+
+    # 6. Delete enrollments
+    cur.execute("DELETE FROM enrollments WHERE student_id=?", (sid,))
+
+    # 7. Delete registrations
+    cur.execute("DELETE FROM registrations WHERE student_id=?", (sid,))
+
+    # 8. Delete direct messages
+    cur.execute("""
+        DELETE FROM direct_messages
+        WHERE (from_role='student' AND from_id=?)
+           OR (to_role='student' AND to_id=?)
+    """, (sid, sid))
+
+    # 9. Delete referral usage where this student appears
+    cur.execute("""
+        DELETE FROM referral_uses
+        WHERE referrer_student_id=?
+           OR referred_student_id=?
+    """, (sid, sid))
+
+    # 10. Delete tutor referral usage where this student was referred
+    cur.execute("""
+        DELETE FROM tutor_referral_uses
+        WHERE referred_student_id=?
+    """, (sid,))
+
+    # 11. Detach coupons linked to this student
+    cur.execute("""
+        UPDATE discount_coupons
+        SET target_student_id=NULL
+        WHERE target_student_id=?
+    """, (sid,))
+
+    cur.execute("""
+        UPDATE discount_coupons
+        SET owner_student_id=NULL
+        WHERE owner_student_id=?
+    """, (sid,))
+
+    # 12. Finally delete student
+    cur.execute("DELETE FROM students WHERE id=?", (sid,))
+
+
 @app.post('/admin/students/<int:sid>/delete')
 @require_high_admin
 def admin_student_delete(sid: int):
+
     r = require_admin()
     if r:
         return r
-        
+
     if not is_high_admin():
         return page("Access Denied", card_msg("You do not have permission to perform this action."))
 
     conn = get_db()
+
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
 
-        # 1. Delete attendance
-        cur.execute("DELETE FROM attendance WHERE student_id=?", (sid,))
-
-        # 2. Delete submissions
-        cur.execute("DELETE FROM submissions WHERE student_id=?", (sid,))
-
-        # 3. Delete lesson ratings
-        cur.execute("DELETE FROM lesson_ratings WHERE student_id=?", (sid,))
-
-        # 4. Delete enrollment files (important)
-        cur.execute("""
-            DELETE FROM enrollment_files
-            WHERE enrollment_id IN (
-                SELECT id FROM enrollments WHERE student_id=?
-            )
-        """, (sid,))
-
-        # 5. Delete payments
-        cur.execute("""
-            DELETE FROM payments
-            WHERE enrollment_id IN (
-                SELECT id FROM enrollments WHERE student_id=?
-            )
-        """, (sid,))
-
-        # 6. Delete enrollments
-        cur.execute("DELETE FROM enrollments WHERE student_id=?", (sid,))
-
-        # 7. Delete registrations
-        cur.execute("DELETE FROM registrations WHERE student_id=?", (sid,))
-
-        # 8. Delete messages
-        cur.execute("""
-            DELETE FROM direct_messages
-            WHERE (from_role='student' AND from_id=?)
-               OR (to_role='student' AND to_id=?)
-        """, (sid, sid))
-
-        # 9. Finally delete student
-        cur.execute("DELETE FROM students WHERE id=?", (sid,))
+        delete_student_record_safely(cur, sid)
 
         conn.commit()
-    except Exception as e:
+
+    except Exception:
         conn.rollback()
         raise
+
     finally:
         conn.close()
 
     return redirect(url_for('admin_students'))
+    
+@app.post('/admin/students/bulk-delete-selected')
+@require_high_admin
+def admin_students_bulk_delete_selected():
 
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can delete student records."))
+
+    selected_ids = request.form.getlist("student_ids")
+
+    if not selected_ids:
+        return redirect(url_for("admin_students", duplicates="either"))
+
+    clean_ids = []
+
+    for sid in selected_ids:
+        try:
+            clean_ids.append(int(sid))
+        except Exception:
+            pass
+
+    if not clean_ids:
+        return redirect(url_for("admin_students", duplicates="either"))
+
+    conn = get_db()
+
+    deleted = 0
+    skipped = 0
+
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+
+        for sid in clean_ids:
+
+            # Safety check: selected bulk delete only deletes unused records
+            cur.execute("""
+                SELECT COUNT(*) AS c
+                FROM enrollments
+                WHERE student_id=?
+            """, (sid,))
+
+            enrollment_count = cur.fetchone()["c"] or 0
+
+            if enrollment_count > 0:
+                skipped += 1
+                continue
+
+            delete_student_record_safely(cur, sid)
+            deleted += 1
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+    return page(
+        "Bulk Delete Completed",
+        f"""
+        {admin_nav()}
+
+        <section class="card">
+            <h1>Bulk Delete Completed</h1>
+
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <p><strong>{deleted}</strong> unused student record(s) deleted.</p>
+                <p><strong>{skipped}</strong> selected record(s) skipped because they have enrollments.</p>
+
+                <a class="btn secondary" href="{url_for('admin_students', duplicates='either')}">
+                    Back to Possible Duplicates
+                </a>
+            </div>
+        </section>
+        """
+    )
+    
+    
+@app.post('/admin/students/auto-delete-zero-phone-duplicates')
+@require_high_admin
+def admin_students_auto_delete_zero_phone_duplicates():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can delete duplicate student records."))
+
+    conn = get_db()
+
+    deleted = 0
+    skipped_with_enrollments = 0
+    reviewed_groups = 0
+
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+
+        # Find phone groups with same last 9 digits and at least 2 records
+        cur.execute("""
+            SELECT
+                SUBSTR(
+                    REPLACE(
+                        REPLACE(
+                            REPLACE(
+                                REPLACE(
+                                    REPLACE(COALESCE(phone_whatsapp,''), ' ', ''),
+                                '+', ''),
+                            '-', ''),
+                        '(', ''),
+                    ')', ''),
+                -9) AS phone_last9,
+                COUNT(*) AS c
+            FROM students
+            WHERE phone_whatsapp IS NOT NULL
+              AND TRIM(phone_whatsapp) != ''
+              AND LENGTH(
+                    REPLACE(
+                        REPLACE(
+                            REPLACE(
+                                REPLACE(
+                                    REPLACE(COALESCE(phone_whatsapp,''), ' ', ''),
+                                '+', ''),
+                            '-', ''),
+                        '(', ''),
+                    ')', '')
+              ) >= 9
+            GROUP BY phone_last9
+            HAVING COUNT(*) >= 2
+        """)
+
+        groups = cur.fetchall()
+
+        for group in groups:
+            phone_last9 = group["phone_last9"]
+
+            cur.execute("""
+                SELECT
+                    s.id,
+                    s.full_name,
+                    s.phone_whatsapp,
+                    REPLACE(
+                        REPLACE(
+                            REPLACE(
+                                REPLACE(
+                                    REPLACE(COALESCE(s.phone_whatsapp,''), ' ', ''),
+                                '+', ''),
+                            '-', ''),
+                        '(', ''),
+                    ')', '') AS clean_phone,
+                    (
+                        SELECT COUNT(*)
+                        FROM enrollments e
+                        WHERE e.student_id=s.id
+                    ) AS enrollment_count
+                FROM students s
+                WHERE SUBSTR(
+                    REPLACE(
+                        REPLACE(
+                            REPLACE(
+                                REPLACE(
+                                    REPLACE(COALESCE(s.phone_whatsapp,''), ' ', ''),
+                                '+', ''),
+                            '-', ''),
+                        '(', ''),
+                    ')', ''),
+                -9) = ?
+                ORDER BY s.created_at DESC
+            """, (phone_last9,))
+
+            records = cur.fetchall()
+
+            has_plus27 = any((r["clean_phone"] or "").startswith("27") for r in records)
+            zero_records = [r for r in records if (r["clean_phone"] or "").startswith("0")]
+
+            if not has_plus27 or not zero_records:
+                continue
+
+            reviewed_groups += 1
+
+            for rec in zero_records:
+                enrollment_count = int(rec["enrollment_count"] or 0)
+
+                if enrollment_count > 0:
+                    skipped_with_enrollments += 1
+                    continue
+
+                delete_student_record_safely(cur, rec["id"])
+                deleted += 1
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+    return page(
+        "Auto Duplicate Cleanup Completed",
+        f"""
+        {admin_nav()}
+
+        <section class="card">
+            <h1>Auto Duplicate Cleanup Completed</h1>
+
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <p><strong>{reviewed_groups}</strong> duplicate phone group(s) reviewed.</p>
+                <p><strong>{deleted}</strong> zero-format duplicate record(s) deleted.</p>
+                <p><strong>{skipped_with_enrollments}</strong> zero-format record(s) skipped because they have enrollments.</p>
+
+                <p class="muted">
+                    The system only deleted records starting with 0 where a matching +27 version existed
+                    and the 0-number record had zero enrollments.
+                </p>
+
+                <a class="btn secondary" href="{url_for('admin_students', duplicates='phone9')}">
+                    Back to Phone Duplicates
+                </a>
+            </div>
+        </section>
+        """
+    )
 
 @app.get('/admin/reports')
 def admin_reports():
