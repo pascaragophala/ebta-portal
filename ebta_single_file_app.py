@@ -16697,25 +16697,25 @@ def admin_students():
             <h3>High Admin Duplicate Cleanup</h3>
 
             <p class="muted">
-                Use this carefully. Selected bulk delete will only remove records with zero enrollments.
-                Auto-delete will remove only 0-number duplicates when a matching +27 record exists and the 0-number record has zero enrollments.
+                Use this carefully. Selected bulk delete will delete every selected student record.
+                Auto-delete will delete 0-number duplicate records when a matching +27 record exists using the same last 9 digits.
             </p>
 
             <form id="bulkDeleteStudentsForm"
                   method="post"
                   action="{url_for('admin_students_bulk_delete_selected')}"
                   style="display:inline"
-                  onsubmit="return confirm('Delete selected unused student records? Records with enrollments will be skipped.')">
+                  onsubmit="return confirm('Delete all selected student records? This will also remove linked portal data for those students.')">
 
                 <button class="btn danger mini">
-                    Delete Selected Unused Records
+                    Delete Selected Records
                 </button>
             </form>
 
             <form method="post"
                   action="{url_for('admin_students_auto_delete_zero_phone_duplicates')}"
                   style="display:inline"
-                  onsubmit="return confirm('Auto-delete unused 0-number duplicates where a matching +27 record exists?')">
+                  onsubmit="return confirm('Auto-delete all 0-number duplicates where a matching +27 record exists?')">
 
                 <button class="btn warn mini">
                     Auto-delete 0-number duplicates
@@ -16728,7 +16728,6 @@ def admin_students():
             <table id='stu_tbl'>
                 <thead>
                     <tr>
-                        <tr>
                         <th>Select</th>
                         <th>Student</th>
                         <th>Grade</th>
@@ -18564,7 +18563,10 @@ def admin_students_bulk_delete_selected():
         return r
 
     if not is_high_admin():
-        return page("Access Denied", card_msg("Only High Admin can delete student records."))
+        return page(
+            "Access Denied",
+            card_msg("Only High Admin can delete student records.")
+        )
 
     selected_ids = request.form.getlist("student_ids")
 
@@ -18583,29 +18585,13 @@ def admin_students_bulk_delete_selected():
         return redirect(url_for("admin_students", duplicates="either"))
 
     conn = get_db()
-
     deleted = 0
-    skipped = 0
 
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
 
         for sid in clean_ids:
-
-            # Safety check: selected bulk delete only deletes unused records
-            cur.execute("""
-                SELECT COUNT(*) AS c
-                FROM enrollments
-                WHERE student_id=?
-            """, (sid,))
-
-            enrollment_count = cur.fetchone()["c"] or 0
-
-            if enrollment_count > 0:
-                skipped += 1
-                continue
-
             delete_student_record_safely(cur, sid)
             deleted += 1
 
@@ -18618,25 +18604,29 @@ def admin_students_bulk_delete_selected():
     finally:
         conn.close()
 
-    return page(
-        "Bulk Delete Completed",
-        f"""
-        {admin_nav()}
+    body = f"""
+    {admin_nav()}
 
-        <section class="card">
-            <h1>Bulk Delete Completed</h1>
+    <section class="card">
+        <h1>Bulk Delete Completed</h1>
 
-            <div class="card soft" style="border-left:5px solid #1b5e20">
-                <p><strong>{deleted}</strong> unused student record(s) deleted.</p>
-                <p><strong>{skipped}</strong> selected record(s) skipped because they have enrollments.</p>
+        <div class="card soft" style="border-left:5px solid #1b5e20">
+            <p>
+                <strong>{deleted}</strong> selected student record(s) deleted.
+            </p>
 
-                <a class="btn secondary" href="{url_for('admin_students', duplicates='either')}">
-                    Back to Possible Duplicates
-                </a>
-            </div>
-        </section>
-        """
-    )
+            <p class="muted">
+                The selected student records were deleted together with their linked portal data.
+            </p>
+
+            <a class="btn secondary" href="{url_for('admin_students', duplicates='either')}">
+                Back to Possible Duplicates
+            </a>
+        </div>
+    </section>
+    """
+
+    return page("Bulk Delete Completed", body)
     
     
 @app.post('/admin/students/auto-delete-zero-phone-duplicates')
@@ -18653,14 +18643,13 @@ def admin_students_auto_delete_zero_phone_duplicates():
     conn = get_db()
 
     deleted = 0
-    skipped_with_enrollments = 0
     reviewed_groups = 0
 
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
 
-        # Find phone groups with same last 9 digits and at least 2 records
+        # Find phone groups with the same last 9 digits and at least 2 records
         cur.execute("""
             SELECT
                 SUBSTR(
@@ -18711,12 +18700,7 @@ def admin_students_auto_delete_zero_phone_duplicates():
                                 '+', ''),
                             '-', ''),
                         '(', ''),
-                    ')', '') AS clean_phone,
-                    (
-                        SELECT COUNT(*)
-                        FROM enrollments e
-                        WHERE e.student_id=s.id
-                    ) AS enrollment_count
+                    ')', '') AS clean_phone
                 FROM students s
                 WHERE SUBSTR(
                     REPLACE(
@@ -18737,18 +18721,13 @@ def admin_students_auto_delete_zero_phone_duplicates():
             has_plus27 = any((r["clean_phone"] or "").startswith("27") for r in records)
             zero_records = [r for r in records if (r["clean_phone"] or "").startswith("0")]
 
+            # Only auto-delete 0-format records when a matching +27-format record exists
             if not has_plus27 or not zero_records:
                 continue
 
             reviewed_groups += 1
 
             for rec in zero_records:
-                enrollment_count = int(rec["enrollment_count"] or 0)
-
-                if enrollment_count > 0:
-                    skipped_with_enrollments += 1
-                    continue
-
                 delete_student_record_safely(cur, rec["id"])
                 deleted += 1
 
@@ -18772,11 +18751,10 @@ def admin_students_auto_delete_zero_phone_duplicates():
             <div class="card soft" style="border-left:5px solid #1b5e20">
                 <p><strong>{reviewed_groups}</strong> duplicate phone group(s) reviewed.</p>
                 <p><strong>{deleted}</strong> zero-format duplicate record(s) deleted.</p>
-                <p><strong>{skipped_with_enrollments}</strong> zero-format record(s) skipped because they have enrollments.</p>
 
                 <p class="muted">
-                    The system only deleted records starting with 0 where a matching +27 version existed
-                    and the 0-number record had zero enrollments.
+                    The system deleted records starting with 0 where a matching +27 version existed
+                    using the same last 9 phone digits.
                 </p>
 
                 <a class="btn secondary" href="{url_for('admin_students', duplicates='phone9')}">
@@ -18786,6 +18764,8 @@ def admin_students_auto_delete_zero_phone_duplicates():
         </section>
         """
     )
+
+
 
 @app.get('/admin/reports')
 def admin_reports():
