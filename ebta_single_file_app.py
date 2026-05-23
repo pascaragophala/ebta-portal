@@ -16125,54 +16125,202 @@ def set_admin_month():
 
     return redirect(url_for('admin_enrollments'))
 
-# --- Admin: Students (show Guardian & Email) ---
+# --- Admin: Students (show Guardian & Email + duplicate filter) ---
 
 @app.get('/admin/students')
 def admin_students():
-    
+
     q = request.args.get("q", "").strip()
     selected_month = request.args.get("month", "").strip()
     grade_filter = request.args.get("grade", "").strip()
+    duplicates = request.args.get("duplicates", "").strip()
     q_safe = escape(q)
 
     r = require_admin()
     if r:
         return r
-    
-    page_num = int(request.args.get("page", 1))
+
+    try:
+        page_num = max(1, int(request.args.get("page", 1)))
+    except Exception:
+        page_num = 1
+
     limit = 20
     offset = (page_num - 1) * limit
+
+    # Clean phone expression for SQLite:
+    # Removes spaces, +, -, brackets, then compares last 9 digits.
+    phone_clean_expr = """
+        REPLACE(
+            REPLACE(
+                REPLACE(
+                    REPLACE(
+                        REPLACE(COALESCE(s.phone_whatsapp,''), ' ', ''),
+                    '+', ''),
+                '-', ''),
+            '(', ''),
+        ')', '')
+    """
+
+    phone_clean_expr_s2 = """
+        REPLACE(
+            REPLACE(
+                REPLACE(
+                    REPLACE(
+                        REPLACE(COALESCE(s2.phone_whatsapp,''), ' ', ''),
+                    '+', ''),
+                '-', ''),
+            '(', ''),
+        ')', '')
+    """
+
+    def build_where():
+        params = []
+        where_clauses = []
+
+        if selected_month:
+            where_clauses.append("e.month = ?")
+            params.append(selected_month)
+
+        if grade_filter:
+            where_clauses.append("s.grade = ?")
+            params.append(grade_filter)
+
+        if q:
+            where_clauses.append("""
+                (
+                    s.full_name LIKE ?
+                    OR s.phone_whatsapp LIKE ?
+                    OR s.guardian_phone LIKE ?
+                    OR s.email LIKE ?
+                    OR s.school LIKE ?
+                )
+            """)
+            search_term = f"%{q}%"
+            params.extend([search_term] * 5)
+
+        # Duplicate filters
+        if duplicates == "name":
+            where_clauses.append("""
+                LOWER(TRIM(s.full_name)) IN (
+                    SELECT LOWER(TRIM(full_name))
+                    FROM students
+                    WHERE full_name IS NOT NULL
+                      AND TRIM(full_name) != ''
+                    GROUP BY LOWER(TRIM(full_name))
+                    HAVING COUNT(*) >= 2
+                )
+            """)
+
+        elif duplicates == "phone9":
+            where_clauses.append(f"""
+                SUBSTR({phone_clean_expr}, -9) IN (
+                    SELECT SUBSTR(
+                        REPLACE(
+                            REPLACE(
+                                REPLACE(
+                                    REPLACE(
+                                        REPLACE(COALESCE(phone_whatsapp,''), ' ', ''),
+                                    '+', ''),
+                                '-', ''),
+                            '(', ''),
+                        ')', ''),
+                    -9)
+                    FROM students
+                    WHERE phone_whatsapp IS NOT NULL
+                      AND TRIM(phone_whatsapp) != ''
+                      AND LENGTH(
+                        REPLACE(
+                            REPLACE(
+                                REPLACE(
+                                    REPLACE(
+                                        REPLACE(COALESCE(phone_whatsapp,''), ' ', ''),
+                                    '+', ''),
+                                '-', ''),
+                            '(', ''),
+                        ')', '')
+                      ) >= 9
+                    GROUP BY SUBSTR(
+                        REPLACE(
+                            REPLACE(
+                                REPLACE(
+                                    REPLACE(
+                                        REPLACE(COALESCE(phone_whatsapp,''), ' ', ''),
+                                    '+', ''),
+                                '-', ''),
+                            '(', ''),
+                        ')', ''),
+                    -9)
+                    HAVING COUNT(*) >= 2
+                )
+                AND LENGTH({phone_clean_expr}) >= 9
+            """)
+
+        elif duplicates == "either":
+            where_clauses.append(f"""
+                (
+                    LOWER(TRIM(s.full_name)) IN (
+                        SELECT LOWER(TRIM(full_name))
+                        FROM students
+                        WHERE full_name IS NOT NULL
+                          AND TRIM(full_name) != ''
+                        GROUP BY LOWER(TRIM(full_name))
+                        HAVING COUNT(*) >= 2
+                    )
+                    OR
+                    (
+                        SUBSTR({phone_clean_expr}, -9) IN (
+                            SELECT SUBSTR(
+                                REPLACE(
+                                    REPLACE(
+                                        REPLACE(
+                                            REPLACE(
+                                                REPLACE(COALESCE(phone_whatsapp,''), ' ', ''),
+                                            '+', ''),
+                                        '-', ''),
+                                    '(', ''),
+                                ')', ''),
+                            -9)
+                            FROM students
+                            WHERE phone_whatsapp IS NOT NULL
+                              AND TRIM(phone_whatsapp) != ''
+                              AND LENGTH(
+                                REPLACE(
+                                    REPLACE(
+                                        REPLACE(
+                                            REPLACE(
+                                                REPLACE(COALESCE(phone_whatsapp,''), ' ', ''),
+                                            '+', ''),
+                                        '-', ''),
+                                    '(', ''),
+                                ')', '')
+                              ) >= 9
+                            GROUP BY SUBSTR(
+                                REPLACE(
+                                    REPLACE(
+                                        REPLACE(
+                                            REPLACE(
+                                                REPLACE(COALESCE(phone_whatsapp,''), ' ', ''),
+                                            '+', ''),
+                                        '-', ''),
+                                    '(', ''),
+                                ')', ''),
+                            -9)
+                            HAVING COUNT(*) >= 2
+                        )
+                        AND LENGTH({phone_clean_expr}) >= 9
+                    )
+                )
+            """)
+
+        where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+
+        return where_sql, params
 
     conn = get_db()
     cur = conn.cursor()
 
-    params = []
-    where_clauses = []
-
-    if selected_month:
-        where_clauses.append("e.month = ?")
-        params.append(selected_month)
-    
-    if grade_filter:
-        where_clauses.append("s.grade = ?")
-        params.append(grade_filter)
-
-    if q:
-        where_clauses.append("""
-            (
-                s.full_name LIKE ?
-                OR s.phone_whatsapp LIKE ?
-                OR s.guardian_phone LIKE ?
-                OR s.email LIKE ?
-                OR s.school LIKE ?
-            )
-        """)
-        search_term = f"%{q}%"
-        params.extend([search_term]*5)
-
-    where_sql = ""
-    if where_clauses:
-        where_sql = "WHERE " + " AND ".join(where_clauses)
+    where_sql, params = build_where()
 
     cur.execute(f"""
         SELECT COUNT(DISTINCT s.id) AS c
@@ -16181,40 +16329,11 @@ def admin_students():
         {where_sql}
     """, params)
 
-    total = cur.fetchone()['c']
-    total_pages = (total + limit - 1) // limit
-    if total_pages == 0:
-        total_pages = 1
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + limit - 1) // limit)
 
-    params = []
-    where_clauses = []
-
-    if selected_month:
-        where_clauses.append("e.month = ?")
-        params.append(selected_month)
-        
-    if grade_filter:
-        where_clauses.append("s.grade = ?")
-        params.append(grade_filter)
-
-    if q:
-        where_clauses.append("""
-            (
-                s.full_name LIKE ?
-                OR s.phone_whatsapp LIKE ?
-                OR s.guardian_phone LIKE ?
-                OR s.email LIKE ?
-                OR s.school LIKE ?
-            )
-        """)
-        search_term = f"%{q}%"
-        params.extend([search_term]*5)
-
-    where_sql = ""
-    if where_clauses:
-        where_sql = "WHERE " + " AND ".join(where_clauses)
-
-    params.extend([limit, offset])
+    data_params = list(params)
+    data_params.extend([limit, offset])
 
     cur.execute(f"""
         SELECT
@@ -16228,18 +16347,70 @@ def admin_students():
             s.province,
             s.school,
             s.pin,
-            strftime('%Y-%m-%d', datetime(MIN(e.created_at), '+2 hours')) AS first_enrolled
+
+            strftime('%Y-%m-%d', datetime(MIN(e.created_at), '+2 hours')) AS first_enrolled,
+
+            (
+                SELECT COUNT(*)
+                FROM enrollments e2
+                WHERE e2.student_id = s.id
+            ) AS enrollment_count,
+
+            (
+                SELECT MAX(month)
+                FROM enrollments e3
+                WHERE e3.student_id = s.id
+            ) AS last_enrollment_month,
+
+            (
+                SELECT COUNT(*)
+                FROM students s2
+                WHERE LOWER(TRIM(s2.full_name)) = LOWER(TRIM(s.full_name))
+                  AND TRIM(COALESCE(s2.full_name,'')) != ''
+            ) AS duplicate_name_count,
+
+            (
+                SELECT COUNT(*)
+                FROM students s2
+                WHERE SUBSTR({phone_clean_expr_s2}, -9) = SUBSTR({phone_clean_expr}, -9)
+                  AND LENGTH({phone_clean_expr_s2}) >= 9
+                  AND LENGTH({phone_clean_expr}) >= 9
+            ) AS duplicate_phone9_count,
+
+            SUBSTR({phone_clean_expr}, -9) AS phone_last9
+
         FROM students s
         LEFT JOIN enrollments e ON e.student_id = s.id
         {where_sql}
         GROUP BY s.id
-        ORDER BY s.created_at DESC
+        ORDER BY
+            CASE
+                WHEN (
+                    (
+                        SELECT COUNT(*)
+                        FROM students s2
+                        WHERE LOWER(TRIM(s2.full_name)) = LOWER(TRIM(s.full_name))
+                          AND TRIM(COALESCE(s2.full_name,'')) != ''
+                    ) >= 2
+                    OR
+                    (
+                        SELECT COUNT(*)
+                        FROM students s2
+                        WHERE SUBSTR({phone_clean_expr_s2}, -9) = SUBSTR({phone_clean_expr}, -9)
+                          AND LENGTH({phone_clean_expr_s2}) >= 9
+                          AND LENGTH({phone_clean_expr}) >= 9
+                    ) >= 2
+                )
+                THEN 0 ELSE 1
+            END,
+            LOWER(TRIM(s.full_name)),
+            s.created_at DESC
         LIMIT ? OFFSET ?
-    """, params)
+    """, data_params)
 
     students = cur.fetchall()
 
-    ids = [s['id'] for s in students]
+    ids = [s["id"] for s in students]
     subject_map = {}
 
     if ids:
@@ -16261,92 +16432,135 @@ def admin_students():
                 WHERE e.student_id IN ({qmarks})
             """, ids)
 
-        for r in cur.fetchall():
-            subject_map.setdefault(r['student_id'], []).append(r['name'])
+        for row in cur.fetchall():
+            subject_map.setdefault(row["student_id"], []).append(row["name"])
 
     conn.close()
 
     def nz(v):
-        return v if (v and str(v).strip()) else "N/A"
+        return escape(str(v)) if (v and str(v).strip()) else "N/A"
+
+    def build_query(page):
+        return urlencode({
+            "page": page,
+            "q": q,
+            "month": selected_month,
+            "grade": grade_filter,
+            "duplicates": duplicates
+        })
 
     trs = []
+
     for s in students:
-        subjects = ", ".join(subject_map.get(s['id'], [])) or "N/A"
-        pin = s['pin'] if s['pin'] else "<span class='muted'>not set</span>"
+        subjects = ", ".join(subject_map.get(s["id"], [])) or "N/A"
+
+        pin = escape(s["pin"]) if s["pin"] else "<span class='muted'>not set</span>"
+
+        duplicate_name_count = int(s["duplicate_name_count"] or 0)
+        duplicate_phone9_count = int(s["duplicate_phone9_count"] or 0)
+
+        duplicate_badges = []
+
+        if duplicate_name_count >= 2:
+            duplicate_badges.append(f"<span class='chip pending'>Name matches: {duplicate_name_count}</span>")
+
+        if duplicate_phone9_count >= 2:
+            duplicate_badges.append(f"<span class='chip pending'>Phone9 matches: {duplicate_phone9_count}</span>")
+
+        if not duplicate_badges:
+            duplicate_badges.append("<span class='chip active'>Unique</span>")
+
+        duplicate_info = f"""
+            {' '.join(duplicate_badges)}
+            <div class="mini muted">Last 9 digits: {escape(s['phone_last9'] or '—')}</div>
+            <div class="mini muted">Enrollments: {s['enrollment_count'] or 0}</div>
+            <div class="mini muted">Last enrollment: {escape(s['last_enrollment_month'] or 'N/A')}</div>
+        """
+
+        delete_warning = (
+            "Delete this student record? Please make sure you are deleting the unused duplicate record, not the active learner profile."
+        )
 
         trs.append(f"""
         <tr>
-            <td>{s['full_name']}<div class='muted'>{s['phone_whatsapp']}</div></td>
+            <td>
+                <strong>{escape(s['full_name'] or '')}</strong>
+                <div class='muted'>{escape(s['phone_whatsapp'] or '')}</div>
+                <div class='mini muted'>ID: {s['id']}</div>
+            </td>
+
             <td>{grade_label(s['grade'])}</td>
-            <td>{subjects}</td>
+            <td>{escape(subjects)}</td>
+
             <td>
                 {nz(s['guardian_name'])}
                 <div class='muted'>{nz(s['guardian_phone'])}</div>
             </td>
+
             <td>{nz(s['province'])}</td>
             <td>{nz(s['school'])}</td>
             <td>{nz(s['email'])}</td>
-            <td>{s['first_enrolled'] or 'N/A'}</td>
+            <td>{escape(s['first_enrolled'] or 'N/A')}</td>
             <td>{pin}</td>
+
+            <td>
+                {duplicate_info}
+            </td>
+
             <td style="white-space:nowrap">
 
-                {f"""
-                <a class='btn mini'
-                   href='{url_for("admin_student_edit", sid=s["id"])}'>
+                {f'''
+                <a class="btn mini"
+                   href="{url_for("admin_student_edit", sid=s["id"])}">
                    Edit
                 </a>
 
-                <form method='post'
-                      action='{url_for('admin_student_reset_pin', sid=s['id'])}'
-                      style='display:inline'>
-                    <button class='btn success mini'>
+                <form method="post"
+                      action="{url_for("admin_student_reset_pin", sid=s["id"])}"
+                      style="display:inline">
+                    <button class="btn success mini">
                         Reset
                     </button>
                 </form>
 
-                <form method='post'
-                      action='{url_for('admin_student_delete', sid=s['id'])}'
-                      style='display:inline'
-                      onsubmit='return confirm("Delete this student?")'>
-                    <button class='btn danger mini'>
+                <form method="post"
+                      action="{url_for("admin_student_delete", sid=s["id"])}"
+                      style="display:inline"
+                      onsubmit="return confirm('{delete_warning}')">
+                    <button class="btn danger mini">
                         Delete
                     </button>
                 </form>
-                """ if is_high_admin() else ""}
+                ''' if is_high_admin() else ""}
 
             </td>
         </tr>
         """)
 
-    # Build smart page number range
     start = max(1, page_num - 3)
     end = min(total_pages, page_num + 3)
 
     page_links = []
 
-    # First
     if page_num > 1:
-        page_links.append(f"<a class='links' href='?page=1&q={q}&month={selected_month}&grade={grade_filter}'>« First</a>")
-        page_links.append(f"<a class='links' href='?page={page_num-1}&q={q}&month={selected_month}&grade={grade_filter}'>‹ Prev</a>")
+        page_links.append(f"<a class='links' href='?{build_query(1)}'>« First</a>")
+        page_links.append(f"<a class='links' href='?{build_query(page_num - 1)}'>‹ Prev</a>")
 
-    # Numbered pages
     for p in range(start, end + 1):
         if p == page_num:
             page_links.append(f"<span class='current'>{p}</span>")
         else:
-            page_links.append(f"<a class='links' href='?page={p}&q={q}&month={selected_month}&grade={grade_filter}'>{p}</a>")
+            page_links.append(f"<a class='links' href='?{build_query(p)}'>{p}</a>")
 
-    # Next
     if page_num < total_pages:
-        page_links.append(f"<a class='links' href='?page={page_num+1}&q={q}&month={selected_month}&grade={grade_filter}'>Next ›</a>")
-        page_links.append(f"<a class='links' href='?page={total_pages}&q={q}&month={selected_month}&grade={grade_filter}'>Last »</a>")
-
+        page_links.append(f"<a class='links' href='?{build_query(page_num + 1)}'>Next ›</a>")
+        page_links.append(f"<a class='links' href='?{build_query(total_pages)}'>Last »</a>")
 
     nav = f"""
     <div class='pager' style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0">
 
         <span class="mini muted">
-            Page {page_num} of {total_pages}
+            Page {page_num} of {total_pages} | Showing {total} student record(s)
         </span>
 
         {"".join(page_links)}
@@ -16359,9 +16573,12 @@ def admin_students():
                    max="{total_pages}"
                    value="{page_num}"
                    style="width:70px;padding:4px;border-radius:6px;border:1px solid #ccc">
+
             <input type="hidden" name="q" value="{q_safe}">
-            <input type="hidden" name="month" value="{selected_month}">
-            <input type="hidden" name="grade" value="{grade_filter}">
+            <input type="hidden" name="month" value="{escape(selected_month)}">
+            <input type="hidden" name="grade" value="{escape(grade_filter)}">
+            <input type="hidden" name="duplicates" value="{escape(duplicates)}">
+
             <button class="btn mini">Go</button>
         </form>
 
@@ -16374,27 +16591,81 @@ def admin_students():
         selected = "selected" if grade_filter == g else ""
         grade_options += f"<option value='{g}' {selected}>{grade_label(g)}</option>"
 
+    duplicate_options = f"""
+        <option value="" {'selected' if duplicates == '' else ''}>All Students</option>
+        <option value="name" {'selected' if duplicates == 'name' else ''}>Possible duplicates by full name</option>
+        <option value="phone9" {'selected' if duplicates == 'phone9' else ''}>Possible duplicates by last 9 phone digits</option>
+        <option value="either" {'selected' if duplicates == 'either' else ''}>Possible duplicates by name OR phone</option>
+    """
+
+    quick_duplicate_url = url_for("admin_students") + "?" + urlencode({"duplicates": "either"})
+    clear_url = url_for("admin_students")
+
+    export_link = ""
+
+    if selected_month:
+        export_link = (
+            "<a class='btn success mini' href='"
+            + url_for("admin_students_export")
+            + "?"
+            + urlencode({"month": selected_month})
+            + "'>Export Excel</a>"
+        )
+
+    duplicate_note = ""
+
+    if duplicates:
+        duplicate_note = f"""
+        <div class="card soft" style="border-left:5px solid #f59e0b;margin:12px 0">
+            <h3>Duplicate Review Mode</h3>
+            <p class="muted">
+                You are currently viewing possible duplicate student records. Check the enrollment count,
+                last enrollment month, phone number, and subjects before deleting any record.
+            </p>
+        </div>
+        """
 
     body = f"""
     {admin_nav()}
+
     <section class='card'>
         <h1>Students</h1>
 
+        <p class="muted">
+            Manage student records. Use the duplicate filter to find learners who may have been captured more than once.
+        </p>
+
         <div class='toolbar'>
             <form method="get" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                <input type="text" name="q" placeholder="Search name, phone, email, school"
-                       value="{q_safe}" style="min-width:220px">
+                <input type="text"
+                       name="q"
+                       placeholder="Search name, phone, email, school"
+                       value="{q_safe}"
+                       style="min-width:220px">
 
-                <input type="month" name="month" value="{selected_month}">
-                
+                <input type="month" name="month" value="{escape(selected_month)}">
+
                 <select name="grade" style="min-width:150px">
                     {grade_options}
                 </select>
 
+                <select name="duplicates" style="min-width:260px">
+                    {duplicate_options}
+                </select>
+
                 <button class="btn mini">Search</button>
+
+                <a class="btn mini secondary" href="{clear_url}">
+                    Clear
+                </a>
+
+                <a class="btn mini warn" href="{quick_duplicate_url}">
+                    Show Possible Duplicates
+                </a>
             </form>
 
-            {"<a class='btn success mini' href='"+url_for('admin_students_export')+"?month="+selected_month+"'>Export Excel</a>" if selected_month else ""}
+            {export_link}
+
             <div style="margin-top:10px">
                 <form method="get" action="{url_for('admin_students_compare_export')}"
                       style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -16413,6 +16684,8 @@ def admin_students():
             </div>
         </div>
 
+        {duplicate_note}
+
         {nav}
 
         <div class="scroll-x">
@@ -16428,11 +16701,13 @@ def admin_students():
                         <th>Email</th>
                         <th>First Enrolled</th>
                         <th>PIN</th>
+                        <th>Duplicate Check</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
+
                 <tbody>
-                    {''.join(trs) or "<tr><td colspan='10'>No students.</td></tr>"}
+                    {''.join(trs) or "<tr><td colspan='11'>No students found.</td></tr>"}
                 </tbody>
             </table>
         </div>
