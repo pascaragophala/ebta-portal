@@ -51162,7 +51162,100 @@ def cao_attendance():
     """
 
     return page("CAO Attendance", body)
-    
+   
+
+
+@app.get('/cao/view-report/<int:rid>')
+def cao_view_student_report(rid):
+
+    r = require_cao_permission("cao_student_reports_enabled", "student reports")
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, file_path, file_name
+        FROM student_reports
+        WHERE id=?
+        LIMIT 1
+    """, (rid,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return page(
+            "Report Not Found",
+            f"""
+            {cao_nav()}
+            <section class="card">
+                <h1>Report Not Found</h1>
+                <p class="muted">The selected student report could not be found.</p>
+                <a class="btn secondary" href="{url_for('cao_student_reports')}">Back to Student Reports</a>
+            </section>
+            """
+        )
+
+    raw_path = row["file_path"] or ""
+
+    if not raw_path:
+        return page(
+            "Missing File Path",
+            f"""
+            {cao_nav()}
+            <section class="card">
+                <h1>Missing File Path</h1>
+                <p class="muted">This report record exists, but no file path was saved.</p>
+                <a class="btn secondary" href="{url_for('cao_student_reports')}">Back to Student Reports</a>
+            </section>
+            """
+        )
+
+    file_path = Path(raw_path)
+
+    if not file_path.is_absolute():
+        file_path = (Path(BASE_DATA_DIR) / raw_path).resolve()
+    else:
+        file_path = file_path.resolve()
+
+    reports_root = REPORTS_DIR.resolve()
+
+    if not str(file_path).startswith(str(reports_root)):
+        return page(
+            "Invalid Report Path",
+            f"""
+            {cao_nav()}
+            <section class="card">
+                <h1>Invalid Report Path</h1>
+                <p class="muted">This report file is not inside the approved reports folder.</p>
+                <a class="btn secondary" href="{url_for('cao_student_reports')}">Back to Student Reports</a>
+            </section>
+            """
+        )
+
+    if not file_path.exists():
+        return page(
+            "File Missing",
+            f"""
+            {cao_nav()}
+            <section class="card">
+                <h1>File Missing</h1>
+                <p class="muted">
+                    The report record exists, but the actual file is missing from storage.
+                </p>
+                <a class="btn secondary" href="{url_for('cao_student_reports')}">Back to Student Reports</a>
+            </section>
+            """
+        )
+
+    return send_from_directory(
+        str(file_path.parent),
+        file_path.name,
+        as_attachment=False
+    )
+   
     
 @app.get('/cao/student-reports')
 def cao_student_reports():
@@ -51227,7 +51320,7 @@ def cao_student_reports():
     rows = ""
 
     for r0 in reports:
-        file_link = f"<a target='_blank' href='{escape(r0['file_path'])}'>Open</a>" if r0["file_path"] else "—"
+        file_link = f"<a target='_blank' href='{url_for('cao_view_student_report', rid=r0['id'])}'>Open</a>" if r0["file_path"] else "—"
 
         rows += f"""
         <tr>
