@@ -6603,19 +6603,41 @@ def register():
     else:
         bulk_discount = 0
 
-    coupon_result = validate_discount_or_referral_code(
-        conn,
-        coupon_code,
-        sid,
-        subject_ids,
-        subtotal
-    )
+    coupon_code_entered = bool(coupon_code and coupon_code.strip())
 
-    if not coupon_result["valid"]:
-        conn.close()
-        return page("Invalid Code", card_msg(coupon_result["message"]))
+    coupon_result = {
+        "valid": True,
+        "message": "",
+        "discount_amount": 0,
+        "code_type": None,
+        "coupon_id": None
+    }
 
-    coupon_discount = coupon_result["discount_amount"]
+    coupon_discount = 0
+
+    if coupon_code_entered:
+        checked_coupon = validate_discount_or_referral_code(
+            conn,
+            coupon_code,
+            sid,
+            subject_ids,
+            subtotal
+        )
+
+        if checked_coupon.get("valid"):
+            coupon_result = checked_coupon
+            coupon_discount = checked_coupon.get("discount_amount", 0) or 0
+        else:
+            # Do not block the parent because of the discount/referral code.
+            # Save it for admin review instead.
+            coupon_result = {
+                "valid": True,
+                "message": checked_coupon.get("message", ""),
+                "discount_amount": 0,
+                "code_type": "UNVERIFIED_CODE",
+                "coupon_id": None
+            }
+            coupon_discount = 0
 
     total_discount = bulk_discount + coupon_discount
 
@@ -6624,26 +6646,35 @@ def register():
 
     total_due = subtotal - total_discount
 
-    if amount_paid != total_due:
-        conn.close()
-        return page(
-            "Payment error",
-            card_msg(
-                f"You need to pay R{total_due}. "
-                f"Subtotal: R{subtotal}, Discount: R{total_discount}."
+    # Only enforce exact payment when there is no coupon/referral code.
+    # If a code is entered, accept the parent's entered amount and let admin review it.
+    if not coupon_code_entered:
+        if amount_paid != total_due:
+            conn.close()
+            return page(
+                "Payment error",
+                card_msg(
+                    f"You need to pay R{total_due}. "
+                    f"Subtotal: R{subtotal}, Discount: R{total_discount}."
+                )
             )
-        )
-        
+
+    # Basic safety only: amount cannot be negative.
+    if amount_paid < 0:
+        conn.close()
+        return page("Payment error", card_msg("Amount paid cannot be negative."))
+
     # ================= PROOF OF PAYMENT VALIDATION =================
 
     pops = [f for f in pops if f and f.filename]
 
-    if total_due > 0:
+    # Require PoP whenever the parent says they paid something.
+    # If they enter R0 because of a code, allow no PoP and let admin review.
+    if amount_paid > 0:
         if len(pops) < 1 or len(pops) > 2:
             conn.close()
             return page("Error", card_msg("Upload 1 or 2 Proof of Payment files."))
     else:
-        # If the student has a 100% discount and pays R0, no PoP is required.
         pops = []
 
     # Save PoP files only after the final amount has been validated.
