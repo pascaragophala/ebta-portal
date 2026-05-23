@@ -52375,6 +52375,7 @@ def ceo_nav():
         (
             "Finance & Planning",
             [
+                ceo_link("Finance Analytics", "ceo_finance_analytics", "/ceo/finance-analytics", "📊"),
                 ceo_link("Budget Plans", "ceo_budget_plans", "/ceo/budget-plans", "💰"),
                 ceo_link("Awards Planning", "ceo_awards", "/ceo/awards", "🏆"),
             ]
@@ -52887,9 +52888,18 @@ def ceo_dashboard():
 
     # Finance
     cur.execute("""
-        SELECT COALESCE(SUM(amount),0) AS total
-        FROM finance_records
-        WHERE month=? AND record_type='INCOME'
+        SELECT ROUND(SUM(
+            COALESCE(e.amount_paid, 0) * 1.0 / (
+                SELECT COUNT(*)
+                FROM enrollments e2
+                WHERE e2.student_id = e.student_id
+                  AND e2.month = e.month
+                  AND e2.status = 'ACTIVE'
+            )
+        ), 2) AS total
+        FROM enrollments e
+        WHERE e.month=?
+          AND e.status='ACTIVE'
     """, (month,))
     total_income = float(cur.fetchone()["total"] or 0)
 
@@ -53849,6 +53859,628 @@ def ceo_monthly_reports():
     """
 
     return page("CEO Monthly Reports", body)
+
+
+@app.get('/ceo/finance-analytics')
+def ceo_finance_analytics():
+
+    r = require_ceo()
+    if r:
+        return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    try:
+        current = datetime.datetime.strptime(month, "%Y-%m")
+    except Exception:
+        month = get_setting("current_month")
+        current = datetime.datetime.strptime(month, "%Y-%m")
+
+    previous_month = (current.replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")
+    two_months_back = (
+        datetime.datetime.strptime(previous_month, "%Y-%m").replace(day=1)
+        - datetime.timedelta(days=1)
+    ).strftime("%Y-%m")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # =========================================================
+    # REAL REVENUE FROM ENROLLMENTS
+    # This matches the High Admin Analytics logic.
+    # It distributes a learner's amount_paid across their active subjects.
+    # =========================================================
+
+    def true_revenue_for_month(m):
+        cur.execute("""
+            SELECT ROUND(SUM(
+                COALESCE(e.amount_paid, 0) * 1.0 / (
+                    SELECT COUNT(*)
+                    FROM enrollments e2
+                    WHERE e2.student_id = e.student_id
+                      AND e2.month = e.month
+                      AND e2.status = 'ACTIVE'
+                )
+            ), 2) AS revenue
+            FROM enrollments e
+            WHERE e.month=?
+              AND e.status='ACTIVE'
+        """, (m,))
+
+        return float(cur.fetchone()["revenue"] or 0)
+
+    revenue = true_revenue_for_month(month)
+    previous_revenue = true_revenue_for_month(previous_month)
+    two_months_revenue = true_revenue_for_month(two_months_back)
+
+    revenue_change = revenue - previous_revenue
+
+    if previous_revenue > 0:
+        revenue_change_percent = round((revenue_change / previous_revenue) * 100, 1)
+    else:
+        revenue_change_percent = 0
+
+    # =========================================================
+    # ENROLLMENT KPIs
+    # =========================================================
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,))
+    total_enrollments = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='ACTIVE'", (month,))
+    active_enrollments = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='PENDING'", (month,))
+    pending_enrollments = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='LAPSED'", (month,))
+    lapsed_enrollments = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM enrollments
+        WHERE month=? AND status='ACTIVE'
+    """, (month,))
+    active_students = cur.fetchone()["c"] or 0
+
+    # New students
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM enrollments
+        WHERE month=? AND status='ACTIVE'
+          AND student_id NOT IN (
+              SELECT student_id
+              FROM enrollments
+              WHERE month < ?
+          )
+    """, (month, month))
+    new_students = cur.fetchone()["c"] or 0
+
+    # Returning students
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM enrollments
+        WHERE month=? AND status='ACTIVE'
+          AND student_id IN (
+              SELECT student_id
+              FROM enrollments
+              WHERE month < ?
+          )
+    """, (month, month))
+    returning_students = cur.fetchone()["c"] or 0
+
+    # =========================================================
+    # EXPENSES FROM FINANCE RECORDS
+    # =========================================================
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=?
+          AND record_type='EXPENSE'
+          AND status != 'CANCELLED'
+    """, (month,))
+    expenses = float(cur.fetchone()["total"] or 0)
+
+    net_position = revenue - expenses
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_payment_schedule
+        WHERE month=?
+          AND status='PENDING'
+    """, (month,))
+    pending_payments = float(cur.fetchone()["total"] or 0)
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_payment_schedule
+        WHERE month=?
+          AND status='PAID'
+    """, (month,))
+    paid_scheduled_payments = float(cur.fetchone()["total"] or 0)
+
+    # =========================================================
+    # DAILY REVENUE TREND
+    # =========================================================
+
+    cur.execute("""
+        SELECT substr(e.created_at,1,10) AS day,
+               ROUND(SUM(
+                   COALESCE(e.amount_paid, 0) * 1.0 / (
+                       SELECT COUNT(*)
+                       FROM enrollments e2
+                       WHERE e2.student_id = e.student_id
+                         AND e2.month = e.month
+                         AND e2.status = 'ACTIVE'
+                   )
+               ), 2) AS revenue
+        FROM enrollments e
+        WHERE e.month=?
+          AND e.status='ACTIVE'
+        GROUP BY day
+        ORDER BY day
+    """, (month,))
+
+    daily_rows = cur.fetchall()
+    daily_labels = [r["day"] for r in daily_rows]
+    daily_revenue = [float(r["revenue"] or 0) for r in daily_rows]
+
+    # =========================================================
+    # REVENUE PER SUBJECT
+    # =========================================================
+
+    cur.execute("""
+        SELECT s.name || ' (' || s.grade || ')' AS subject_label,
+               ROUND(SUM(
+                   COALESCE(e.amount_paid, 0) * 1.0 / (
+                       SELECT COUNT(*)
+                       FROM enrollments e2
+                       WHERE e2.student_id = e.student_id
+                         AND e2.month = e.month
+                         AND e2.status = 'ACTIVE'
+                   )
+               ), 2) AS revenue,
+               COUNT(*) AS enrollment_count
+        FROM enrollments e
+        JOIN subjects s ON s.id = e.subject_id
+        WHERE e.month=?
+          AND e.status='ACTIVE'
+        GROUP BY s.id
+        ORDER BY revenue DESC
+    """, (month,))
+
+    subject_rows = cur.fetchall()
+    subject_labels = [r["subject_label"] for r in subject_rows]
+    subject_revenue = [float(r["revenue"] or 0) for r in subject_rows]
+
+    # =========================================================
+    # STATUS MIX
+    # =========================================================
+
+    cur.execute("""
+        SELECT status, COUNT(*) AS c
+        FROM enrollments
+        WHERE month=?
+        GROUP BY status
+        ORDER BY c DESC
+    """, (month,))
+
+    status_rows = cur.fetchall()
+    status_labels = [r["status"] or "UNKNOWN" for r in status_rows]
+    status_values = [r["c"] or 0 for r in status_rows]
+
+    # =========================================================
+    # MONTHLY COMPARISON
+    # =========================================================
+
+    month_compare_labels = [two_months_back, previous_month, month]
+    month_compare_values = [two_months_revenue, previous_revenue, revenue]
+
+    # =========================================================
+    # LOW REVENUE SUBJECTS
+    # =========================================================
+
+    low_revenue_subjects = []
+
+    for row in subject_rows:
+        if float(row["revenue"] or 0) <= 500:
+            low_revenue_subjects.append(row)
+
+    subject_table_rows = ""
+
+    for row in subject_rows:
+        subject_table_rows += f"""
+        <tr>
+            <td>{escape(row['subject_label'])}</td>
+            <td>{row['enrollment_count'] or 0}</td>
+            <td>R{float(row['revenue'] or 0):,.2f}</td>
+        </tr>
+        """
+
+    low_subject_list = "".join(
+        f"<li>{escape(r['subject_label'])} - R{float(r['revenue'] or 0):,.2f}</li>"
+        for r in low_revenue_subjects[:10]
+    ) or "<li>No low revenue subjects found.</li>"
+
+    conn.close()
+
+    chart_payload = {
+        "dailyRevenue": {
+            "labels": daily_labels,
+            "values": daily_revenue
+        },
+        "subjectRevenue": {
+            "labels": subject_labels,
+            "values": subject_revenue
+        },
+        "statusMix": {
+            "labels": status_labels,
+            "values": status_values
+        },
+        "studentMix": {
+            "labels": ["New Students", "Returning Students"],
+            "values": [new_students, returning_students]
+        },
+        "financeSummary": {
+            "labels": ["Revenue", "Expenses", "Net Position", "Pending Payments"],
+            "values": [revenue, expenses, net_position, pending_payments]
+        },
+        "monthlyComparison": {
+            "labels": month_compare_labels,
+            "values": month_compare_values
+        }
+    }
+
+    chart_json = json.dumps(chart_payload)
+
+    net_chip = "active" if net_position >= 0 else "lapsed"
+    change_chip = "active" if revenue_change >= 0 else "lapsed"
+
+    body = f"""
+    {ceo_nav()}
+
+    <section class="card">
+        <h1>CEO Finance Analytics</h1>
+
+        <p class="muted">
+            This page uses real enrollment payments from the portal and distributes each learner's payment across their active subjects.
+            Expenses and scheduled payments are included from the finance records where available.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <button class="btn mini success">View Month</button>
+            <a class="btn mini secondary" href="{url_for('ceo_finance_analytics')}">Current Month</a>
+        </form>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Month", pretty_month_label(month))}
+            {stat("Real Revenue", f"R{revenue:,.2f}")}
+            {stat("Expenses", f"R{expenses:,.2f}")}
+            {stat("Net Position", f"R{net_position:,.2f}")}
+            {stat("Revenue Change", f"R{revenue_change:,.2f} ({revenue_change_percent}%)")}
+            {stat("Active Students", active_students)}
+            {stat("Active Enrollments", active_enrollments)}
+            {stat("Pending Payments", f"R{pending_payments:,.2f}")}
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <h2>Executive Finance Summary</h2>
+                <p class="muted">Real income compared with captured expenses.</p>
+                <span class="chip {net_chip}">Net Position: R{net_position:,.2f}</span>
+                <span class="chip {change_chip}">Change vs previous month: R{revenue_change:,.2f}</span>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #f59e0b">
+                <h2>Payment Movement</h2>
+                <p class="muted">Scheduled payment movement for the selected month.</p>
+                <p><strong>Pending:</strong> R{pending_payments:,.2f}</p>
+                <p><strong>Paid:</strong> R{paid_scheduled_payments:,.2f}</p>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <h2>Enrollment Movement</h2>
+                <p><strong>Total enrollments:</strong> {total_enrollments}</p>
+                <p><strong>Pending:</strong> {pending_enrollments}</p>
+                <p><strong>Active:</strong> {active_enrollments}</p>
+                <p><strong>Lapsed:</strong> {lapsed_enrollments}</p>
+            </div>
+
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+            <div class="card soft">
+                <h2>Daily Revenue Trend</h2>
+                <p class="mini muted">Revenue from active enrollments by day.</p>
+                <div style="height:300px">
+                    <canvas id="ceoDailyRevenueChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Monthly Revenue Comparison</h2>
+                <p class="mini muted">Last three months based on active enrollment payments.</p>
+                <div style="height:300px">
+                    <canvas id="ceoMonthlyRevenueChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+            <div class="card soft">
+                <h2>Revenue per Subject</h2>
+
+                <select id="subjectRevenueFilter" onchange="updateSubjectRevenueChart()">
+                    <option value="5">Top 5</option>
+                    <option value="10">Top 10</option>
+                    <option value="all">All</option>
+                </select>
+
+                <div style="height:330px">
+                    <canvas id="ceoSubjectRevenueChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Finance Breakdown</h2>
+                <p class="mini muted">Revenue, expenses, net position and pending payments.</p>
+                <div style="height:330px">
+                    <canvas id="ceoFinanceBreakdownChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+            <div class="card soft">
+                <h2>Student Mix</h2>
+                <div style="height:280px">
+                    <canvas id="ceoStudentMixChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Enrollment Status</h2>
+                <div style="height:280px">
+                    <canvas id="ceoStatusMixChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft" style="border-left:5px solid #f59e0b">
+                <h2>Low Revenue Subjects</h2>
+                <p class="mini muted">Subjects currently at or below R500 revenue.</p>
+                <ul>
+                    {low_subject_list}
+                </ul>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <h2>CEO Notes</h2>
+                <p class="muted">
+                    Use this page for real monthly income visibility. Budget planning remains separate because it tracks planned spending,
+                    while this analytics page tracks actual enrollment-driven income.
+                </p>
+            </div>
+
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Subject Revenue Table</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Subject</th>
+                            <th>Active Enrollments</th>
+                            <th>Revenue</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {subject_table_rows or "<tr><td colspan='3'>No active revenue data found for this month.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        const ceoFinanceCharts = {chart_json};
+
+        const ebtaColors = [
+            "#1b5e20", "#2e7d32", "#43a047", "#66bb6a",
+            "#f59e0b", "#64748b", "#0f172a", "#94a3b8"
+        ];
+
+        function moneyLabel(value) {{
+            return "R" + Number(value || 0).toLocaleString("en-ZA", {{
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }});
+        }}
+
+        const commonOptions = {{
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {{
+                legend: {{
+                    position: "bottom"
+                }}
+            }}
+        }};
+
+        new Chart(document.getElementById("ceoDailyRevenueChart"), {{
+            type: "line",
+            data: {{
+                labels: ceoFinanceCharts.dailyRevenue.labels,
+                datasets: [{{
+                    label: "Daily Revenue",
+                    data: ceoFinanceCharts.dailyRevenue.values,
+                    borderColor: "#1b5e20",
+                    backgroundColor: "rgba(27,94,32,.12)",
+                    fill: true,
+                    tension: 0.35
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            callback: function(value) {{
+                                return moneyLabel(value);
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+        }});
+
+        new Chart(document.getElementById("ceoMonthlyRevenueChart"), {{
+            type: "bar",
+            data: {{
+                labels: ceoFinanceCharts.monthlyComparison.labels,
+                datasets: [{{
+                    label: "Revenue",
+                    data: ceoFinanceCharts.monthlyComparison.values,
+                    backgroundColor: "#1b5e20",
+                    borderRadius: 8
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                plugins: {{
+                    legend: {{ display: false }}
+                }},
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            callback: function(value) {{
+                                return moneyLabel(value);
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+        }});
+
+        const subjectLabels = ceoFinanceCharts.subjectRevenue.labels;
+        const subjectValues = ceoFinanceCharts.subjectRevenue.values;
+
+        const subjectRevenueCtx = document.getElementById("ceoSubjectRevenueChart").getContext("2d");
+
+        let subjectRevenueChart = new Chart(subjectRevenueCtx, {{
+            type: "bar",
+            data: {{
+                labels: subjectLabels.slice(0, 5),
+                datasets: [{{
+                    label: "Revenue",
+                    data: subjectValues.slice(0, 5),
+                    backgroundColor: "#1b5e20",
+                    borderRadius: 8
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                indexAxis: "y",
+                plugins: {{
+                    legend: {{ display: false }}
+                }},
+                scales: {{
+                    x: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            callback: function(value) {{
+                                return moneyLabel(value);
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+        }});
+
+        function updateSubjectRevenueChart() {{
+            const mode = document.getElementById("subjectRevenueFilter").value;
+
+            let labels = subjectLabels;
+            let values = subjectValues;
+
+            if (mode !== "all") {{
+                const limit = Number(mode);
+                labels = subjectLabels.slice(0, limit);
+                values = subjectValues.slice(0, limit);
+            }}
+
+            subjectRevenueChart.data.labels = labels;
+            subjectRevenueChart.data.datasets[0].data = values;
+            subjectRevenueChart.update();
+        }}
+
+        new Chart(document.getElementById("ceoFinanceBreakdownChart"), {{
+            type: "bar",
+            data: {{
+                labels: ceoFinanceCharts.financeSummary.labels,
+                datasets: [{{
+                    label: "Amount",
+                    data: ceoFinanceCharts.financeSummary.values,
+                    backgroundColor: ["#1b5e20", "#f59e0b", "#2e7d32", "#64748b"],
+                    borderRadius: 8
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                plugins: {{
+                    legend: {{ display: false }}
+                }},
+                scales: {{
+                    y: {{
+                        ticks: {{
+                            callback: function(value) {{
+                                return moneyLabel(value);
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+        }});
+
+        new Chart(document.getElementById("ceoStudentMixChart"), {{
+            type: "doughnut",
+            data: {{
+                labels: ceoFinanceCharts.studentMix.labels,
+                datasets: [{{
+                    data: ceoFinanceCharts.studentMix.values,
+                    backgroundColor: ebtaColors
+                }}]
+            }},
+            options: commonOptions
+        }});
+
+        new Chart(document.getElementById("ceoStatusMixChart"), {{
+            type: "pie",
+            data: {{
+                labels: ceoFinanceCharts.statusMix.labels,
+                datasets: [{{
+                    data: ceoFinanceCharts.statusMix.values,
+                    backgroundColor: ebtaColors
+                }}]
+            }},
+            options: commonOptions
+        }});
+    </script>
+    """
+
+    return page("CEO Finance Analytics", body)
 
 
 @app.get('/ceo/risks')
