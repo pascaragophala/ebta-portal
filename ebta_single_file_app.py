@@ -5029,7 +5029,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("Direct messages", "#messages"),
                 ("Student Reports", url_for('admin_reports')),
                 ("Analytics", "#analytics"),
-                ("Settings", "#settings"),
+                ("Settings", url_for('admin_settings')),
                 ("Logout", url_for('admin_logout'))
             ]
 
