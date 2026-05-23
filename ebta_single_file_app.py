@@ -51,6 +51,9 @@ SOCIAL_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 APPLICATIONS_DIR = UPLOADS_DIR / "applications"
 APPLICATIONS_DIR.mkdir(parents=True, exist_ok=True)
 
+CEO_REPORTS_DIR = UPLOADS_DIR / "ceo_reports"
+CEO_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
 UPLOAD_DIR = UPLOADS_DIR
 MATERIALS_DIR = Path(BASE_DATA_DIR) / "materials"
 SUBMISSIONS_DIR = Path(BASE_DATA_DIR) / "submissions"
@@ -930,6 +933,112 @@ def init_db():
     """)
     
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS ceos(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL UNIQUE,
+        email TEXT,
+        pin TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS ceo_monthly_reports(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        submitted_by_role TEXT NOT NULL, -- COO | CAO
+        submitted_by_id INTEGER NOT NULL,
+        submitted_by_name TEXT,
+
+        report_month TEXT NOT NULL,
+        report_title TEXT NOT NULL,
+        report_category TEXT NOT NULL, -- Operational | Academic
+
+        summary TEXT,
+        file_path TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        file_type TEXT,
+
+        status TEXT NOT NULL DEFAULT 'SUBMITTED',
+        -- SUBMITTED | REVIEWED | NEEDS_REVISION | ARCHIVED
+
+        ceo_feedback TEXT,
+        reviewed_at TEXT,
+
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS ceo_risks(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        risk_title TEXT NOT NULL,
+        risk_area TEXT NOT NULL, -- Operational | Academic | Finance | Reputation | Compliance | Other
+        risk_level TEXT NOT NULL DEFAULT 'MEDIUM', -- LOW | MEDIUM | HIGH | CRITICAL
+        description TEXT,
+        mitigation_plan TEXT,
+        owner_role TEXT,
+        target_date TEXT,
+        status TEXT NOT NULL DEFAULT 'OPEN', -- OPEN | IN_PROGRESS | MITIGATED | CLOSED
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS ceo_goals(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        goal_title TEXT NOT NULL,
+        goal_area TEXT NOT NULL, -- Academic | Operational | Finance | Growth | Awards | Other
+        target_month TEXT,
+        target_year TEXT,
+        success_measure TEXT,
+        current_progress INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'PLANNED', -- PLANNED | IN_PROGRESS | ACHIEVED | DELAYED
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS ceo_budget_plans(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        budget_year TEXT NOT NULL,
+        budget_month TEXT,
+        category TEXT NOT NULL,
+        description TEXT,
+        planned_amount REAL NOT NULL DEFAULT 0,
+        actual_amount REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'PLANNED', -- PLANNED | ACTIVE | USED | CANCELLED
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS ceo_awards_plans(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        award_type TEXT NOT NULL, -- TERMLY | YEARLY
+        award_year TEXT NOT NULL,
+        award_term TEXT,
+        ceremony_month TEXT,
+        ceremony_date TEXT,
+        title TEXT NOT NULL,
+        budget_amount REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'PLANNED', -- PLANNED | PREPARING | READY | COMPLETED
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+    
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS discount_coupons(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
 
@@ -1133,6 +1242,23 @@ def init_db():
     
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_activity_tutor ON tutor_portal_activity(tutor_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tutor_activity_month ON tutor_portal_activity(month)")
+    
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceos_phone ON ceos(phone)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceos_active ON ceos(is_active)")
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_reports_month ON ceo_monthly_reports(report_month)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_reports_role ON ceo_monthly_reports(submitted_by_role)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_reports_status ON ceo_monthly_reports(status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_reports_created ON ceo_monthly_reports(created_at)")
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_risks_status ON ceo_risks(status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_risks_level ON ceo_risks(risk_level)")
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_goals_status ON ceo_goals(status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_goals_year ON ceo_goals(target_year)")
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_budget_year ON ceo_budget_plans(budget_year)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_awards_year ON ceo_awards_plans(award_year)")
 
     coo_permission_defaults = {
         "coo_portal_enabled": "1",
@@ -2440,6 +2566,50 @@ def require_cao_permission(permission_key, section_name="this section"):
             "Access Restricted",
             card_msg(f"CAO access to {section_name} has been disabled by High Admin.")
         )
+
+def is_ceo():
+    return session.get("ceo_id")
+
+
+def require_ceo():
+    if not is_ceo():
+        return redirect(url_for("ceo_login"))
+
+
+def allowed_ceo_report_file(filename):
+    if not filename:
+        return False
+
+    ext = Path(filename).suffix.lower()
+    return ext in [".pdf", ".doc", ".docx"]
+
+
+def ceo_status_chip(status):
+    status = status or "UNKNOWN"
+
+    if status in ["SUBMITTED", "REVIEWED", "ACHIEVED", "COMPLETED", "READY", "MITIGATED", "CLOSED"]:
+        cls = "active"
+    elif status in ["PLANNED", "IN_PROGRESS", "NEEDS_REVISION", "PREPARING", "ACTIVE", "OPEN"]:
+        cls = "pending"
+    elif status in ["DELAYED", "CRITICAL", "HIGH", "CANCELLED"]:
+        cls = "lapsed"
+    else:
+        cls = ""
+
+    return f"<span class='chip {cls}'>{escape(status)}</span>"
+
+
+def ceo_risk_chip(level):
+    level = level or "MEDIUM"
+
+    if level in ["LOW"]:
+        cls = "active"
+    elif level in ["MEDIUM"]:
+        cls = "pending"
+    else:
+        cls = "lapsed"
+
+    return f"<span class='chip {cls}'>{escape(level)}</span>"
 
 
 def is_duty_admin():
@@ -4603,7 +4773,7 @@ body:`manager_id=${manager}&tutor_id=${tutor}&state=${state?1:0}`
 
 def page(title, body_html, extra_head="", extra_js=""):
     auth = []
-    if not (is_student() or is_tutor() or is_admin() or is_coo() or is_cao()):
+    if not (is_student() or is_tutor() or is_admin() or is_coo() or is_cao() or is_ceo()):
         auth += [f"<a href='{url_for('student_login')}'>Student</a>",
                 f"<a href='{url_for('tutor_login')}'>Tutor</a>"]
     else:
@@ -4622,6 +4792,11 @@ def page(title, body_html, extra_head="", extra_js=""):
             auth += [
                 f"<a href='{url_for('cao_dashboard')}'>CAO</a>",
                 f"<a href='{url_for('cao_logout')}'>Logout</a>"
+            ]
+        if is_ceo():
+            auth += [
+                f"<a href='{url_for('ceo_dashboard')}'>CEO</a>",
+                f"<a href='{url_for('ceo_logout')}'>Logout</a>"
             ]
             
     right = " ".join(auth)
@@ -15129,6 +15304,7 @@ def admin_nav():
                 [
                     ("COOs", "admin_coos", "/admin/coos"),
                     ("CAOs", "admin_caos", "/admin/caos"),
+                    ("CEOs", "admin_ceos", "/admin/ceos"),
                     ("Treasurers", "admin_treasurers", "/admin/treasurers"),
                     ("Finance Overview", "admin_finance_overview", "/admin/finance-overview"),
                     ("Management Roles", "admin_management_roles", "/admin/management-roles"),
@@ -44997,6 +45173,7 @@ def coo_nav():
             "Core",
             [
                 coo_link("Dashboard", "coo_dashboard", icon="🏠"),
+                coo_link("Reports to CEO", "coo_ceo_reports", icon="📤"),
                 coo_link("Operational Team", "coo_team_profiles", "coo_employee_profiles_enabled", icon="👥"),
                 coo_link("Enrollments", "coo_enrollments", "coo_enrollments_enabled", icon="📝"),
                 coo_link("Follow-Ups", "coo_followups", "coo_duty_admin_enabled", icon="📌"),
@@ -48653,6 +48830,7 @@ def cao_nav():
             "Academy Office",
             [
                 cao_link("Dashboard", "cao_dashboard", "cao_academic_dashboard_enabled", icon="🏠"),
+                cao_link("Reports to CEO", "cao_ceo_reports", icon="📤"),
                 cao_link("Academic Team", "cao_academic_team", "cao_tutors_enabled", icon="👥"),
                 cao_link("Tutors", "cao_tutors", "cao_tutors_enabled", icon="🧑‍🏫"),
                 cao_link("Tutor Managers", "cao_tutor_managers", "cao_tutor_managers_enabled", icon="📋"),
@@ -51553,6 +51731,1450 @@ def cao_learner_movement():
 
     return page("CAO Learner Movement", body)
 
+
+# --- CEO SECTION -------
+
+def ceo_nav():
+
+    ceo_name = session.get("ceo_name", "CEO")
+
+    def ceo_link(label, endpoint, fallback="#", icon=""):
+        return f"""
+        <a class="ceo-quick-link" href="{safe_url(endpoint, fallback)}">
+            <span>{icon}</span>
+            <span>{escape(label)}</span>
+        </a>
+        """
+
+    sections = [
+        (
+            "Executive",
+            [
+                ceo_link("Dashboard", "ceo_dashboard", "/ceo", "🏠"),
+                ceo_link("Monthly Reports", "ceo_monthly_reports", "/ceo/monthly-reports", "📤"),
+                ceo_link("Risks & Mitigations", "ceo_risks", "/ceo/risks", "⚠️"),
+                ceo_link("Goals", "ceo_goals", "/ceo/goals", "🎯"),
+            ]
+        ),
+        (
+            "Finance & Planning",
+            [
+                ceo_link("Budget Plans", "ceo_budget_plans", "/ceo/budget-plans", "💰"),
+                ceo_link("Awards Planning", "ceo_awards", "/ceo/awards", "🏆"),
+            ]
+        ),
+        (
+            "Executive Access",
+            [
+                ceo_link("COO Portal", "coo_dashboard", "/coo", "🧭"),
+                ceo_link("CAO Portal", "cao_dashboard", "/cao", "🎓"),
+            ]
+        ),
+    ]
+
+    section_html = ""
+
+    for title, links in sections:
+        section_html += f"""
+        <details class="ceo-nav-section" open>
+            <summary>{escape(title)}</summary>
+            <div class="ceo-section-links">
+                {''.join(links)}
+            </div>
+        </details>
+        """
+
+    return f"""
+    <style>
+        .ceo-hero {{
+            background:
+                linear-gradient(135deg, rgba(27,94,32,.97), rgba(15,23,42,.94)),
+                radial-gradient(circle at top right, rgba(255,255,255,.22), transparent 35%);
+            color:#fff;
+            border-radius:24px;
+            padding:24px;
+            box-shadow:0 14px 32px rgba(15,23,42,.20);
+            margin:14px 0 20px;
+            overflow:hidden;
+        }}
+
+        .ceo-hero-top {{
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:16px;
+            flex-wrap:wrap;
+        }}
+
+        .ceo-hero h1 {{
+            margin:0;
+            color:#fff;
+            font-size:28px;
+        }}
+
+        .ceo-hero p {{
+            color:rgba(255,255,255,.88);
+            max-width:820px;
+            font-size:14px;
+        }}
+
+        .ceo-role-pill {{
+            background:rgba(255,255,255,.16);
+            border:1px solid rgba(255,255,255,.35);
+            border-radius:999px;
+            padding:9px 14px;
+            font-weight:800;
+            font-size:13px;
+            white-space:nowrap;
+        }}
+
+        .ceo-nav-panel {{
+            margin-top:18px;
+            background:rgba(255,255,255,.96);
+            border-radius:18px;
+            padding:14px;
+        }}
+
+        .ceo-nav-sections {{
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
+            gap:10px;
+        }}
+
+        .ceo-nav-section {{
+            background:#f8fafc;
+            border:1px solid #dbe4ef;
+            border-radius:14px;
+            overflow:hidden;
+        }}
+
+        .ceo-nav-section summary {{
+            cursor:pointer;
+            list-style:none;
+            padding:12px 14px;
+            font-weight:900;
+            color:#0f172a;
+        }}
+
+        .ceo-section-links {{
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+            padding:0 12px 12px;
+        }}
+
+        .ceo-quick-link {{
+            text-decoration:none;
+            color:#1b5e20;
+            background:#fff;
+            border:1px solid rgba(27,94,32,.25);
+            border-radius:999px;
+            padding:8px 11px;
+            font-size:13px;
+            font-weight:800;
+            display:inline-flex;
+            align-items:center;
+            gap:6px;
+        }}
+
+        .ceo-quick-link:hover {{
+            background:#1b5e20;
+            color:#fff;
+        }}
+
+        @media(max-width:768px) {{
+            .ceo-hero {{
+                padding:18px;
+                border-radius:18px;
+            }}
+
+            .ceo-hero h1 {{
+                font-size:22px;
+            }}
+
+            .ceo-nav-sections {{
+                grid-template-columns:1fr;
+            }}
+
+            .ceo-quick-link {{
+                width:100%;
+                border-radius:12px;
+            }}
+        }}
+    </style>
+
+    <section class="ceo-hero">
+        <div class="ceo-hero-top">
+            <div>
+                <h1>Welcome, {escape(ceo_name)}</h1>
+                <p>
+                    CEO Executive Portal for operational oversight, academic performance, finance,
+                    risks, mitigations, goals, budget planning, awards planning and monthly reports.
+                </p>
+            </div>
+
+            <div class="ceo-role-pill">Chief Executive Officer</div>
+        </div>
+
+        <div class="ceo-nav-panel">
+            <div class="ceo-nav-sections">
+                {section_html}
+            </div>
+        </div>
+    </section>
+    """
+    
+    
+@app.get('/ceo/login')
+def ceo_login():
+
+    body = """
+    <section class="card" style="max-width:420px;margin:30px auto">
+        <h1>CEO Login</h1>
+
+        <p class="muted">
+            Chief Executive Officer portal access.
+        </p>
+
+        <form method="post">
+            <label>Phone Number</label>
+            <input name="phone" required>
+
+            <label>PIN</label>
+            <input name="pin" type="password" required>
+
+            <button class="btn success" style="width:100%;margin-top:12px">
+                Login
+            </button>
+        </form>
+    </section>
+    """
+
+    return page("CEO Login", body)
+
+
+@app.post('/ceo/login')
+def ceo_login_post():
+
+    phone = request.form.get("phone", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM ceos
+        WHERE phone=?
+          AND pin=?
+          AND is_active=1
+        LIMIT 1
+    """, (phone, pin))
+
+    ceo = cur.fetchone()
+    conn.close()
+
+    if not ceo:
+        return page("Login Failed", card_msg("Invalid CEO login details or inactive account."))
+
+    session.clear()
+    session["ceo_id"] = ceo["id"]
+    session["ceo_name"] = ceo["full_name"]
+
+    return redirect(url_for("ceo_dashboard"))
+
+
+@app.get('/ceo/logout')
+def ceo_logout():
+
+    session.pop("ceo_id", None)
+    session.pop("ceo_name", None)
+
+    return redirect(url_for("ceo_login"))
+    
+    
+@app.get('/admin/ceos')
+def admin_ceos():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can manage CEO accounts."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM ceos
+        ORDER BY is_active DESC, full_name
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    ceo_rows = ""
+
+    for c in rows:
+        status = "<span class='chip active'>Active</span>" if c["is_active"] == 1 else "<span class='chip lapsed'>Inactive</span>"
+
+        ceo_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(c['full_name'])}</strong>
+                <div class="mini muted">{escape(c['email'] or '—')}</div>
+            </td>
+            <td>{escape(c['phone'])}</td>
+            <td><span class="chip">{escape(c['pin'] or '—')}</span></td>
+            <td>{status}</td>
+            <td>
+                <form method="post" action="{url_for('admin_ceo_toggle', ceo_id=c['id'])}" style="display:inline">
+                    <button class="btn mini secondary">
+                        {'Deactivate' if c['is_active'] == 1 else 'Activate'}
+                    </button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>CEO Management</h1>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px">
+
+            <div class="card soft">
+                <h2>Add CEO</h2>
+
+                <form method="post" action="{url_for('admin_ceo_add')}">
+                    <label>Full Name</label>
+                    <input name="full_name" required>
+
+                    <label>Phone</label>
+                    <input name="phone" required>
+
+                    <label>Email</label>
+                    <input name="email">
+
+                    <label>PIN</label>
+                    <input name="pin" required>
+
+                    <button class="btn success" style="margin-top:10px">
+                        Add CEO
+                    </button>
+                </form>
+            </div>
+
+            <div class="card soft">
+                <h2>Existing CEO Accounts</h2>
+
+                <div class="scroll-x">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>CEO</th>
+                                <th>Phone</th>
+                                <th>PIN</th>
+                                <th>Status</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            {ceo_rows or "<tr><td colspan='5'>No CEO accounts yet.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </section>
+    """
+
+    return page("CEO Management", body)
+
+
+@app.post('/admin/ceos/add')
+def admin_ceo_add():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can add CEO accounts."))
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    email = request.form.get("email", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    if not full_name or not phone or not pin:
+        return page("Missing Information", card_msg("Full name, phone and PIN are required."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            INSERT INTO ceos(
+                full_name, phone, email, pin, is_active, created_at, updated_at
+            )
+            VALUES(?,?,?,?,?,?,?)
+        """, (
+            full_name,
+            phone,
+            email,
+            pin,
+            1,
+            now_utc_iso(),
+            now_utc_iso()
+        ))
+
+        conn.commit()
+
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Duplicate Phone", card_msg("A CEO account with this phone number already exists."))
+
+    conn.close()
+
+    return redirect(url_for("admin_ceos"))
+
+
+@app.post('/admin/ceo/<int:ceo_id>/toggle')
+def admin_ceo_toggle(ceo_id):
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can update CEO accounts."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE ceos
+        SET is_active = CASE WHEN is_active=1 THEN 0 ELSE 1 END,
+            updated_at=?
+        WHERE id=?
+    """, (now_utc_iso(), ceo_id))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_ceos"))
+
+
+@app.get('/ceo')
+def ceo_dashboard():
+
+    r = require_ceo()
+    if r:
+        return r
+
+    month = request.args.get("month") or get_setting("current_month")
+    year = month[:4] if month else str(datetime.date.today().year)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Operational
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,))
+    total_enrollments = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='ACTIVE'", (month,))
+    active_enrollments = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status='PENDING'", (month,))
+    pending_enrollments = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(DISTINCT student_id) AS c FROM enrollments WHERE month=?", (month,))
+    total_students = cur.fetchone()["c"] or 0
+
+    # Academic
+    cur.execute("SELECT COUNT(*) AS c FROM tutors")
+    total_tutors = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM materials WHERE month LIKE ?", (month + "%",))
+    academic_uploads = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM attendance_sessions WHERE month=?", (month,))
+    attendance_logs = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM student_reports WHERE substr(upload_date,1,7)=?", (month,))
+    student_reports = cur.fetchone()["c"] or 0
+
+    # Finance
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=? AND record_type='INCOME'
+    """, (month,))
+    total_income = float(cur.fetchone()["total"] or 0)
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_records
+        WHERE month=? AND record_type='EXPENSE'
+    """, (month,))
+    total_expenses = float(cur.fetchone()["total"] or 0)
+
+    net_position = total_income - total_expenses
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0) AS total
+        FROM finance_payment_schedule
+        WHERE month=? AND status='PENDING'
+    """, (month,))
+    pending_payments = float(cur.fetchone()["total"] or 0)
+
+    # CEO reports
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM ceo_monthly_reports
+        WHERE report_month=?
+    """, (month,))
+    monthly_reports = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM ceo_monthly_reports
+        WHERE report_month=? AND status='SUBMITTED'
+    """, (month,))
+    reports_to_review = cur.fetchone()["c"] or 0
+
+    # Risks and goals
+    cur.execute("SELECT COUNT(*) AS c FROM ceo_risks WHERE status IN ('OPEN','IN_PROGRESS')")
+    open_risks = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM ceo_risks WHERE risk_level IN ('HIGH','CRITICAL') AND status IN ('OPEN','IN_PROGRESS')")
+    high_risks = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM ceo_goals WHERE target_year=? AND status IN ('PLANNED','IN_PROGRESS')", (year,))
+    active_goals = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM ceo_awards_plans WHERE award_year=?", (year,))
+    awards_plans = cur.fetchone()["c"] or 0
+
+    # Chart breakdowns
+    cur.execute("""
+        SELECT status, COUNT(*) AS c
+        FROM enrollments
+        WHERE month=?
+        GROUP BY status
+    """, (month,))
+    enrollment_status_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT risk_level, COUNT(*) AS c
+        FROM ceo_risks
+        WHERE status IN ('OPEN','IN_PROGRESS')
+        GROUP BY risk_level
+    """)
+    risk_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT category, COALESCE(SUM(planned_amount),0) AS planned, COALESCE(SUM(actual_amount),0) AS actual
+        FROM ceo_budget_plans
+        WHERE budget_year=?
+        GROUP BY category
+        ORDER BY planned DESC
+        LIMIT 8
+    """, (year,))
+    budget_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT submitted_by_role, COUNT(*) AS c
+        FROM ceo_monthly_reports
+        WHERE report_month=?
+        GROUP BY submitted_by_role
+    """, (month,))
+    report_rows = cur.fetchall()
+
+    conn.close()
+
+    chart_payload = {
+        "enrollmentStatus": {
+            "labels": [r["status"] or "UNKNOWN" for r in enrollment_status_rows],
+            "values": [r["c"] or 0 for r in enrollment_status_rows]
+        },
+        "finance": {
+            "labels": ["Income", "Expenses", "Net Position", "Pending Payments"],
+            "values": [total_income, total_expenses, net_position, pending_payments]
+        },
+        "academicOps": {
+            "labels": ["Tutors", "Academic Uploads", "Attendance Logs", "Student Reports"],
+            "values": [total_tutors, academic_uploads, attendance_logs, student_reports]
+        },
+        "risks": {
+            "labels": [r["risk_level"] or "UNKNOWN" for r in risk_rows],
+            "values": [r["c"] or 0 for r in risk_rows]
+        },
+        "budget": {
+            "labels": [r["category"] for r in budget_rows],
+            "planned": [float(r["planned"] or 0) for r in budget_rows],
+            "actual": [float(r["actual"] or 0) for r in budget_rows]
+        },
+        "reports": {
+            "labels": [r["submitted_by_role"] or "UNKNOWN" for r in report_rows],
+            "values": [r["c"] or 0 for r in report_rows]
+        }
+    }
+
+    chart_json = json.dumps(chart_payload)
+
+    net_chip = "active" if net_position >= 0 else "lapsed"
+
+    body = f"""
+    {ceo_nav()}
+
+    <section class="card">
+        <h1>CEO Executive Dashboard</h1>
+
+        <p class="muted">
+            A simplified executive view of EBTA operations, academic activity, finance, risks,
+            mitigations, goals, reports and awards planning.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <button class="btn mini">View Month</button>
+        </form>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Current Month", month)}
+            {stat("Total Enrollments", total_enrollments)}
+            {stat("Active Enrollments", active_enrollments)}
+            {stat("Students", total_students)}
+            {stat("Academic Uploads", academic_uploads)}
+            {stat("Attendance Logs", attendance_logs)}
+            {stat("Monthly Reports", monthly_reports)}
+            {stat("Reports to Review", reports_to_review)}
+            {stat("Income", f"R{total_income:,.2f}")}
+            {stat("Expenses", f"R{total_expenses:,.2f}")}
+            {stat("Net Position", f"R{net_position:,.2f}")}
+            {stat("High Risks", high_risks)}
+        </div>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-top:14px">
+            <h2>Executive Snapshot</h2>
+
+            <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+                <div class="card soft">
+                    <h3>Operations</h3>
+                    <p class="muted">Enrollment and student activity for the month.</p>
+                    <span class="chip active">{total_enrollments} enrollment record(s)</span>
+                </div>
+
+                <div class="card soft">
+                    <h3>Finance</h3>
+                    <p class="muted">Income minus expenditure for the selected month.</p>
+                    <span class="chip {net_chip}">Net: R{net_position:,.2f}</span>
+                </div>
+
+                <div class="card soft">
+                    <h3>Risk & Mitigation</h3>
+                    <p class="muted">Open risks requiring leadership attention.</p>
+                    <span class="chip pending">{open_risks} open risk(s)</span>
+                </div>
+
+                <div class="card soft">
+                    <h3>Goals & Awards</h3>
+                    <p class="muted">Active yearly goals and awards preparation.</p>
+                    <span class="chip">{active_goals} goal(s), {awards_plans} award plan(s)</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+            <div class="card soft">
+                <h2>Enrollment Status</h2>
+                <div style="height:280px"><canvas id="ceoEnrollmentChart"></canvas></div>
+            </div>
+
+            <div class="card soft">
+                <h2>Monthly Reports</h2>
+                <div style="height:280px"><canvas id="ceoReportsChart"></canvas></div>
+            </div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+            <div class="card soft">
+                <h2>Finance Analysis</h2>
+                <div style="height:320px"><canvas id="ceoFinanceChart"></canvas></div>
+            </div>
+
+            <div class="card soft">
+                <h2>Academic & Operational Activity</h2>
+                <div style="height:320px"><canvas id="ceoAcademicOpsChart"></canvas></div>
+            </div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+            <div class="card soft">
+                <h2>Risk Levels</h2>
+                <div style="height:300px"><canvas id="ceoRisksChart"></canvas></div>
+            </div>
+
+            <div class="card soft">
+                <h2>Yearly Budget Plan</h2>
+                <div style="height:300px"><canvas id="ceoBudgetChart"></canvas></div>
+            </div>
+        </div>
+    </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        const ceoCharts = {chart_json};
+
+        const ebtaColors = [
+            "#1b5e20", "#2e7d32", "#43a047", "#66bb6a",
+            "#a5d6a7", "#f59e0b", "#64748b", "#0f172a"
+        ];
+
+        function moneyLabel(value) {{
+            return "R" + Number(value || 0).toLocaleString("en-ZA", {{
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }});
+        }}
+
+        function noDataPlugin(message) {{
+            return {{
+                id: "noData_" + Math.random().toString(36).slice(2),
+                afterDraw(chart) {{
+                    const values = chart.data.datasets.flatMap(ds => ds.data || []);
+                    const hasData = values.some(v => Number(v) !== 0);
+
+                    if (!hasData) {{
+                        const ctx = chart.ctx;
+                        ctx.save();
+                        ctx.textAlign = "center";
+                        ctx.textBaseline = "middle";
+                        ctx.font = "13px Arial";
+                        ctx.fillStyle = "#64748b";
+                        ctx.fillText(message || "No data available", chart.width / 2, chart.height / 2);
+                        ctx.restore();
+                    }}
+                }}
+            }};
+        }}
+
+        const commonOptions = {{
+            responsive:true,
+            maintainAspectRatio:false,
+            plugins: {{
+                legend: {{
+                    position:"bottom"
+                }}
+            }}
+        }};
+
+        new Chart(document.getElementById("ceoEnrollmentChart"), {{
+            type:"doughnut",
+            data: {{
+                labels: ceoCharts.enrollmentStatus.labels,
+                datasets:[{{ data: ceoCharts.enrollmentStatus.values, backgroundColor: ebtaColors }}]
+            }},
+            options: commonOptions,
+            plugins:[noDataPlugin("No enrollment data yet")]
+        }});
+
+        new Chart(document.getElementById("ceoReportsChart"), {{
+            type:"pie",
+            data: {{
+                labels: ceoCharts.reports.labels,
+                datasets:[{{ data: ceoCharts.reports.values, backgroundColor: ebtaColors }}]
+            }},
+            options: commonOptions,
+            plugins:[noDataPlugin("No CEO reports yet")]
+        }});
+
+        new Chart(document.getElementById("ceoFinanceChart"), {{
+            type:"bar",
+            data: {{
+                labels: ceoCharts.finance.labels,
+                datasets:[{{
+                    label:"Amount",
+                    data: ceoCharts.finance.values,
+                    backgroundColor:"#1b5e20",
+                    borderRadius:10
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                plugins: {{
+                    legend: {{ display:false }},
+                    tooltip: {{
+                        callbacks: {{
+                            label: function(context) {{
+                                return moneyLabel(context.parsed.y || 0);
+                            }}
+                        }}
+                    }}
+                }},
+                scales: {{
+                    y: {{
+                        ticks: {{
+                            callback: function(value) {{
+                                return moneyLabel(value);
+                            }}
+                        }}
+                    }}
+                }}
+            }},
+            plugins:[noDataPlugin("No finance data yet")]
+        }});
+
+        new Chart(document.getElementById("ceoAcademicOpsChart"), {{
+            type:"bar",
+            data: {{
+                labels: ceoCharts.academicOps.labels,
+                datasets:[{{
+                    label:"Count",
+                    data: ceoCharts.academicOps.values,
+                    backgroundColor:"#2e7d32",
+                    borderRadius:10
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                plugins: {{ legend: {{ display:false }} }},
+                scales: {{
+                    y: {{
+                        beginAtZero:true,
+                        ticks: {{ precision:0 }}
+                    }}
+                }}
+            }},
+            plugins:[noDataPlugin("No activity data yet")]
+        }});
+
+        new Chart(document.getElementById("ceoRisksChart"), {{
+            type:"doughnut",
+            data: {{
+                labels: ceoCharts.risks.labels,
+                datasets:[{{ data: ceoCharts.risks.values, backgroundColor: ebtaColors }}]
+            }},
+            options: commonOptions,
+            plugins:[noDataPlugin("No risk data yet")]
+        }});
+
+        new Chart(document.getElementById("ceoBudgetChart"), {{
+            type:"bar",
+            data: {{
+                labels: ceoCharts.budget.labels,
+                datasets:[
+                    {{
+                        label:"Planned",
+                        data: ceoCharts.budget.planned,
+                        backgroundColor:"#1b5e20",
+                        borderRadius:8
+                    }},
+                    {{
+                        label:"Actual",
+                        data: ceoCharts.budget.actual,
+                        backgroundColor:"#f59e0b",
+                        borderRadius:8
+                    }}
+                ]
+            }},
+            options: {{
+                ...commonOptions,
+                scales: {{
+                    y: {{
+                        beginAtZero:true,
+                        ticks: {{
+                            callback: function(value) {{
+                                return moneyLabel(value);
+                            }}
+                        }}
+                    }}
+                }}
+            }},
+            plugins:[noDataPlugin("No budget data yet")]
+        }});
+    </script>
+    """
+
+    return page("CEO Dashboard", body)
+    
+    
+@app.get('/ceo/monthly-reports/file/<int:rid>')
+def ceo_monthly_report_file(rid):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM ceo_monthly_reports
+        WHERE id=?
+        LIMIT 1
+    """, (rid,))
+
+    report = cur.fetchone()
+    conn.close()
+
+    if not report:
+        return page("Report Not Found", card_msg("The selected monthly report could not be found."))
+
+    allowed = False
+
+    if is_ceo():
+        allowed = True
+
+    if is_admin() and is_high_admin():
+        allowed = True
+
+    if is_coo() and report["submitted_by_role"] == "COO" and int(report["submitted_by_id"]) == int(is_coo()):
+        allowed = True
+
+    if is_cao() and report["submitted_by_role"] == "CAO" and int(report["submitted_by_id"]) == int(is_cao()):
+        allowed = True
+
+    if not allowed:
+        return page("Access Denied", card_msg("You are not allowed to open this monthly report."))
+
+    file_path = Path(report["file_path"]).resolve()
+    reports_root = CEO_REPORTS_DIR.resolve()
+
+    if not str(file_path).startswith(str(reports_root)):
+        return page("Invalid File Path", card_msg("This file is outside the CEO reports folder."))
+
+    if not file_path.exists():
+        return page("File Missing", card_msg("The report file is missing from storage."))
+
+    return send_from_directory(str(file_path.parent), file_path.name, as_attachment=False)
+    
+    
+@app.get('/coo/ceo-reports')
+def coo_ceo_reports():
+
+    r = require_coo()
+    if r:
+        return r
+
+    month = request.args.get("month") or get_setting("current_month")
+    coo_id = is_coo()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM ceo_monthly_reports
+        WHERE submitted_by_role='COO'
+          AND submitted_by_id=?
+          AND report_month=?
+        ORDER BY created_at DESC
+    """, (coo_id, month))
+
+    reports = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for rep in reports:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(rep['report_title'])}</strong>
+                <div class="mini muted">{escape(rep['summary'] or 'No summary provided')[:120]}</div>
+            </td>
+            <td>{escape(rep['report_month'])}</td>
+            <td>{ceo_status_chip(rep['status'])}</td>
+            <td>{escape(rep['file_name'])}</td>
+            <td>{escape((rep['created_at'] or '')[:16].replace('T',' '))}</td>
+            <td>
+                <a class="btn mini secondary" target="_blank"
+                   href="{url_for('ceo_monthly_report_file', rid=rep['id'])}">
+                    Open
+                </a>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Submit Monthly Report to CEO</h1>
+
+        <p class="muted">
+            Upload your monthly COO operational report to the CEO.
+        </p>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px">
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <h2>Upload COO Report</h2>
+
+                <form method="post" action="{url_for('coo_ceo_report_upload')}" enctype="multipart/form-data">
+                    <label>Report Month</label>
+                    <input type="month" name="report_month" value="{escape(month)}" required>
+
+                    <label>Report Title</label>
+                    <input name="report_title" value="COO Operational Monthly Report - {escape(month)}" required>
+
+                    <label>Short Summary</label>
+                    <textarea name="summary" rows="5" placeholder="Admissions, enrollments, finance, secretary, social media, risks and CEO attention points."></textarea>
+
+                    <label>Upload Report File</label>
+                    <input type="file" name="report_file" accept=".pdf,.doc,.docx" required>
+
+                    <button class="btn success" style="margin-top:10px">
+                        Submit Report
+                    </button>
+                </form>
+            </div>
+
+            <div class="card soft">
+                <h2>What to Include</h2>
+                <ul>
+                    <li>Operational highlights</li>
+                    <li>Admissions and enrollments</li>
+                    <li>Finance and payment risks</li>
+                    <li>Secretary and social media updates</li>
+                    <li>CEO decisions needed</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>My Submitted COO Reports</h2>
+
+            <form method="get" class="toolbar">
+                <input type="month" name="month" value="{escape(month)}">
+                <button class="btn mini">View Month</button>
+            </form>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Report</th>
+                            <th>Month</th>
+                            <th>Status</th>
+                            <th>File</th>
+                            <th>Submitted</th>
+                            <th>Open</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='6'>No COO reports submitted for this month yet.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("COO Reports to CEO", body)
+
+
+@app.post('/coo/ceo-reports/upload')
+def coo_ceo_report_upload():
+
+    r = require_coo()
+    if r:
+        return r
+
+    coo_id = is_coo()
+    coo_name = session.get("coo_name", "COO")
+
+    report_month = request.form.get("report_month", "").strip()
+    report_title = request.form.get("report_title", "").strip()
+    summary = request.form.get("summary", "").strip()
+    file = request.files.get("report_file")
+
+    if not report_month or not report_title:
+        return page("Missing Information", card_msg("Report month and title are required."))
+
+    if not file or not file.filename:
+        return page("Missing File", card_msg("Please upload a report file."))
+
+    if not allowed_ceo_report_file(file.filename):
+        return page("Invalid File Type", card_msg("Only PDF, DOC and DOCX files are allowed."))
+
+    original_name = secure_name(file.filename)
+    ext = Path(original_name).suffix.lower()
+    stored_name = f"COO_{coo_id}_{report_month}_{int(time.time())}{ext}"
+    save_path = CEO_REPORTS_DIR / stored_name
+
+    file.save(save_path)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO ceo_monthly_reports(
+            submitted_by_role, submitted_by_id, submitted_by_name,
+            report_month, report_title, report_category, summary,
+            file_path, file_name, file_type, status, created_at, updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        "COO", coo_id, coo_name,
+        report_month, report_title, "Operational", summary,
+        str(save_path), original_name, ext.replace(".", "").upper(),
+        "SUBMITTED", now_utc_iso(), now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("coo_ceo_reports", month=report_month))
+
+
+@app.get('/cao/ceo-reports')
+def cao_ceo_reports():
+
+    r = require_cao()
+    if r:
+        return r
+
+    month = request.args.get("month") or get_setting("current_month")
+    cao_id = is_cao()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM ceo_monthly_reports
+        WHERE submitted_by_role='CAO'
+          AND submitted_by_id=?
+          AND report_month=?
+        ORDER BY created_at DESC
+    """, (cao_id, month))
+
+    reports = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for rep in reports:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(rep['report_title'])}</strong>
+                <div class="mini muted">{escape(rep['summary'] or 'No summary provided')[:120]}</div>
+            </td>
+
+            <td>{escape(rep['report_month'])}</td>
+            <td>{ceo_status_chip(rep['status'])}</td>
+            <td>{escape(rep['file_name'])}</td>
+            <td>{escape((rep['created_at'] or '')[:16].replace('T',' '))}</td>
+
+            <td>
+                <a class="btn mini secondary" target="_blank"
+                   href="{url_for('ceo_monthly_report_file', rid=rep['id'])}">
+                    Open
+                </a>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Submit Monthly Report to CEO</h1>
+
+        <p class="muted">
+            Upload your monthly CAO academic report to the CEO. This section is for academic reporting,
+            tutor performance, learner progress, AQM work, student reports, attendance and academic risks.
+        </p>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px">
+
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <h2>Upload CAO Academic Report</h2>
+
+                <form method="post"
+                      action="{url_for('cao_ceo_report_upload')}"
+                      enctype="multipart/form-data">
+
+                    <label>Report Month</label>
+                    <input type="month" name="report_month" value="{escape(month)}" required>
+
+                    <label>Report Title</label>
+                    <input name="report_title"
+                           value="CAO Academic Monthly Report - {escape(month)}"
+                           required>
+
+                    <label>Short Summary</label>
+                    <textarea name="summary"
+                              rows="5"
+                              placeholder="Summarise tutor performance, learner progress, attendance, student reports, academic risks, AQM findings and CEO attention points."></textarea>
+
+                    <label>Upload Report File</label>
+                    <input type="file" name="report_file" accept=".pdf,.doc,.docx" required>
+
+                    <p class="mini muted">
+                        Recommended format: PDF. Accepted formats: PDF, DOC and DOCX.
+                    </p>
+
+                    <button class="btn success" style="margin-top:10px">
+                        Submit Report
+                    </button>
+                </form>
+            </div>
+
+            <div class="card soft">
+                <h2>What to Include</h2>
+
+                <ul>
+                    <li>Academic highlights for the month</li>
+                    <li>Tutor and tutor manager performance</li>
+                    <li>AQM findings and academic quality concerns</li>
+                    <li>Learner progress, attendance and student reports</li>
+                    <li>High-risk modules and intervention plans</li>
+                    <li>CEO decisions or support needed</li>
+                </ul>
+            </div>
+
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>My Submitted CAO Reports</h2>
+
+            <form method="get" class="toolbar">
+                <input type="month" name="month" value="{escape(month)}">
+                <button class="btn mini">View Month</button>
+                <a class="btn mini secondary" href="{url_for('cao_ceo_reports')}">Current Month</a>
+            </form>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Report</th>
+                            <th>Month</th>
+                            <th>Status</th>
+                            <th>File</th>
+                            <th>Submitted</th>
+                            <th>Open</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='6'>No CAO reports submitted for this month yet.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("CAO Reports to CEO", body)
+    
+    
+@app.post('/cao/ceo-reports/upload')
+def cao_ceo_report_upload():
+
+    r = require_cao()
+    if r:
+        return r
+
+    cao_id = is_cao()
+    cao_name = session.get("cao_name", "CAO")
+
+    report_month = request.form.get("report_month", "").strip()
+    report_title = request.form.get("report_title", "").strip()
+    summary = request.form.get("summary", "").strip()
+    file = request.files.get("report_file")
+
+    if not report_month or not report_title:
+        return page("Missing Information", card_msg("Report month and title are required."))
+
+    if not file or not file.filename:
+        return page("Missing File", card_msg("Please upload a report file."))
+
+    if not allowed_ceo_report_file(file.filename):
+        return page("Invalid File Type", card_msg("Only PDF, DOC and DOCX files are allowed."))
+
+    original_name = secure_name(file.filename)
+    ext = Path(original_name).suffix.lower()
+
+    stored_name = f"CAO_{cao_id}_{report_month}_{int(time.time())}{ext}"
+    save_path = CEO_REPORTS_DIR / stored_name
+
+    file.save(save_path)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO ceo_monthly_reports(
+            submitted_by_role,
+            submitted_by_id,
+            submitted_by_name,
+            report_month,
+            report_title,
+            report_category,
+            summary,
+            file_path,
+            file_name,
+            file_type,
+            status,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        "CAO",
+        cao_id,
+        cao_name,
+        report_month,
+        report_title,
+        "Academic",
+        summary,
+        str(save_path),
+        original_name,
+        ext.replace(".", "").upper(),
+        "SUBMITTED",
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("cao_ceo_reports", month=report_month))
+
+
+@app.get('/ceo/monthly-reports')
+def ceo_monthly_reports():
+
+    r = require_ceo()
+    if r:
+        return r
+
+    month = request.args.get("month", "").strip()
+    role = request.args.get("role", "").strip()
+    status = request.args.get("status", "").strip()
+
+    where = []
+    params = []
+
+    if month:
+        where.append("report_month=?")
+        params.append(month)
+
+    if role:
+        where.append("submitted_by_role=?")
+        params.append(role)
+
+    if status:
+        where.append("status=?")
+        params.append(status)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT *
+        FROM ceo_monthly_reports
+        {where_sql}
+        ORDER BY report_month DESC, created_at DESC
+    """, params)
+
+    reports = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for rep in reports:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(rep['report_title'])}</strong>
+                <div class="mini muted">{escape(rep['summary'] or 'No summary provided')[:140]}</div>
+            </td>
+            <td>
+                {escape(rep['submitted_by_role'])}
+                <div class="mini muted">{escape(rep['submitted_by_name'] or '—')}</div>
+            </td>
+            <td>{escape(rep['report_month'])}</td>
+            <td>{escape(rep['report_category'])}</td>
+            <td>{ceo_status_chip(rep['status'])}</td>
+            <td>{escape(rep['file_name'])}</td>
+            <td>{escape((rep['created_at'] or '')[:16].replace('T',' '))}</td>
+            <td>
+                <a class="btn mini secondary" target="_blank"
+                   href="{url_for('ceo_monthly_report_file', rid=rep['id'])}">
+                    Open
+                </a>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {ceo_nav()}
+
+    <section class="card">
+        <h1>Monthly Reports from COO and CAO</h1>
+
+        <p class="muted">
+            View monthly operational and academic reports submitted by the COO and CAO.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+
+            <select name="role">
+                <option value="">All Roles</option>
+                <option value="COO" {'selected' if role == 'COO' else ''}>COO</option>
+                <option value="CAO" {'selected' if role == 'CAO' else ''}>CAO</option>
+            </select>
+
+            <select name="status">
+                <option value="">All Statuses</option>
+                <option value="SUBMITTED" {'selected' if status == 'SUBMITTED' else ''}>Submitted</option>
+                <option value="REVIEWED" {'selected' if status == 'REVIEWED' else ''}>Reviewed</option>
+                <option value="NEEDS_REVISION" {'selected' if status == 'NEEDS_REVISION' else ''}>Needs Revision</option>
+                <option value="ARCHIVED" {'selected' if status == 'ARCHIVED' else ''}>Archived</option>
+            </select>
+
+            <button class="btn mini">Filter</button>
+            <a class="btn mini secondary" href="{url_for('ceo_monthly_reports')}">Clear</a>
+        </form>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Report</th>
+                        <th>Submitted By</th>
+                        <th>Month</th>
+                        <th>Category</th>
+                        <th>Status</th>
+                        <th>File</th>
+                        <th>Submitted</th>
+                        <th>Open</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {rows or "<tr><td colspan='8'>No monthly reports found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("CEO Monthly Reports", body)
 
 # --- Admin: Analytics dashboard ---
 
