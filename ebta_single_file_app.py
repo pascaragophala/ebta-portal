@@ -2597,6 +2597,28 @@ def ceo_status_chip(status):
         cls = ""
 
     return f"<span class='chip {cls}'>{escape(status)}</span>"
+    
+
+def ceo_safe_int(value, default=0):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def ceo_safe_float(value, default=0):
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def ceo_selected_year():
+    return request.args.get("year", "").strip() or str(datetime.date.today().year)
+
+
+def ceo_selected_month():
+    return request.args.get("month", "").strip() or get_setting("current_month")
 
 
 def ceo_risk_chip(level):
@@ -52035,6 +52057,13 @@ def admin_ceos():
                         {'Deactivate' if c['is_active'] == 1 else 'Activate'}
                     </button>
                 </form>
+
+                <form method="post" action="{url_for('admin_ceo_reset_pin', ceo_id=c['id'])}" style="display:inline">
+                    <button class="btn mini warn"
+                            onclick="return confirm('Reset this CEO PIN?')">
+                        Reset PIN
+                    </button>
+                </form>
             </td>
         </tr>
         """
@@ -52171,6 +52200,57 @@ def admin_ceo_toggle(ceo_id):
 
     return redirect(url_for("admin_ceos"))
 
+
+@app.post('/admin/ceo/<int:ceo_id>/reset-pin')
+def admin_ceo_reset_pin(ceo_id):
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can reset CEO PINs."))
+
+    new_pin = str(random.randint(1000, 999999))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE ceos
+        SET pin=?,
+            updated_at=?
+        WHERE id=?
+    """, (new_pin, now_utc_iso(), ceo_id))
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "CEO PIN Reset",
+        f"""
+        {admin_nav()}
+
+        <section class="card">
+            <h1>CEO PIN Reset</h1>
+
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <h2>New PIN</h2>
+                <p class="muted">The CEO PIN has been reset successfully.</p>
+
+                <div class="stat">
+                    <div class="k">{escape(new_pin)}</div>
+                    <div class="t">New CEO PIN</div>
+                </div>
+
+                <a class="btn secondary" href="{url_for('admin_ceos')}">
+                    Back to CEO Management
+                </a>
+            </div>
+        </section>
+        """
+    )
+    
 
 @app.get('/ceo')
 def ceo_dashboard():
@@ -53175,6 +53255,869 @@ def ceo_monthly_reports():
     """
 
     return page("CEO Monthly Reports", body)
+
+
+@app.get('/ceo/risks')
+def ceo_risks():
+
+    r = require_ceo()
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    risk_area = request.args.get("risk_area", "").strip()
+    risk_level = request.args.get("risk_level", "").strip()
+    status = request.args.get("status", "").strip()
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                risk_title LIKE ?
+                OR description LIKE ?
+                OR mitigation_plan LIKE ?
+                OR owner_role LIKE ?
+            )
+        """)
+        params += [search, search, search, search]
+
+    if risk_area:
+        where.append("risk_area=?")
+        params.append(risk_area)
+
+    if risk_level:
+        where.append("risk_level=?")
+        params.append(risk_level)
+
+    if status:
+        where.append("status=?")
+        params.append(status)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT *
+        FROM ceo_risks
+        {where_sql}
+        ORDER BY
+            CASE risk_level
+                WHEN 'CRITICAL' THEN 1
+                WHEN 'HIGH' THEN 2
+                WHEN 'MEDIUM' THEN 3
+                WHEN 'LOW' THEN 4
+                ELSE 5
+            END,
+            target_date IS NULL,
+            target_date ASC,
+            created_at DESC
+    """, params)
+
+    risks = cur.fetchall()
+
+    cur.execute("""
+        SELECT risk_level, COUNT(*) AS c
+        FROM ceo_risks
+        GROUP BY risk_level
+    """)
+    level_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT status, COUNT(*) AS c
+        FROM ceo_risks
+        GROUP BY status
+    """)
+    status_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT risk_area, COUNT(*) AS c
+        FROM ceo_risks
+        GROUP BY risk_area
+    """)
+    area_rows = cur.fetchall()
+
+    conn.close()
+
+    rows = ""
+
+    for risk in risks:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(risk['risk_title'])}</strong>
+                <div class="mini muted">{escape(risk['description'] or 'No description')[:120]}</div>
+            </td>
+            <td>{escape(risk['risk_area'])}</td>
+            <td>{ceo_risk_chip(risk['risk_level'])}</td>
+            <td>{ceo_status_chip(risk['status'])}</td>
+            <td>{escape(risk['owner_role'] or '—')}</td>
+            <td>{escape(risk['target_date'] or '—')}</td>
+            <td>
+                <div class="mini">{escape(risk['mitigation_plan'] or '—')[:140]}</div>
+            </td>
+            <td>
+                <a class="btn mini secondary" href="{url_for('ceo_risk_edit', risk_id=risk['id'])}">
+                    Edit
+                </a>
+
+                <form method="post"
+                      action="{url_for('ceo_risk_delete', risk_id=risk['id'])}"
+                      style="display:inline">
+                    <button class="btn mini danger"
+                            onclick="return confirm('Delete this risk?')">
+                        Delete
+                    </button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    chart_payload = {
+        "levels": {
+            "labels": [r["risk_level"] or "Unknown" for r in level_rows],
+            "values": [r["c"] or 0 for r in level_rows]
+        },
+        "statuses": {
+            "labels": [r["status"] or "Unknown" for r in status_rows],
+            "values": [r["c"] or 0 for r in status_rows]
+        },
+        "areas": {
+            "labels": [r["risk_area"] or "Unknown" for r in area_rows],
+            "values": [r["c"] or 0 for r in area_rows]
+        }
+    }
+
+    chart_json = json.dumps(chart_payload)
+
+    body = f"""
+    {ceo_nav()}
+
+    <section class="card">
+        <h1>Risks & Mitigations</h1>
+
+        <p class="muted">
+            Track strategic, operational, academic, financial and reputational risks with mitigation plans.
+        </p>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px">
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <h2>Add Risk</h2>
+
+                <form method="post" action="{url_for('ceo_risk_add')}">
+                    <label>Risk Title</label>
+                    <input name="risk_title" required>
+
+                    <label>Risk Area</label>
+                    <select name="risk_area" required>
+                        <option>Operational</option>
+                        <option>Academic</option>
+                        <option>Finance</option>
+                        <option>Reputation</option>
+                        <option>Compliance</option>
+                        <option>Other</option>
+                    </select>
+
+                    <label>Risk Level</label>
+                    <select name="risk_level">
+                        <option>LOW</option>
+                        <option selected>MEDIUM</option>
+                        <option>HIGH</option>
+                        <option>CRITICAL</option>
+                    </select>
+
+                    <label>Status</label>
+                    <select name="status">
+                        <option selected>OPEN</option>
+                        <option>IN_PROGRESS</option>
+                        <option>MITIGATED</option>
+                        <option>CLOSED</option>
+                    </select>
+
+                    <label>Owner Role</label>
+                    <input name="owner_role" placeholder="Example: COO, CAO, Treasurer">
+
+                    <label>Target Date</label>
+                    <input type="date" name="target_date">
+
+                    <label>Description</label>
+                    <textarea name="description" rows="4"></textarea>
+
+                    <label>Mitigation Plan</label>
+                    <textarea name="mitigation_plan" rows="4"></textarea>
+
+                    <button class="btn success" style="margin-top:10px">
+                        Save Risk
+                    </button>
+                </form>
+            </div>
+
+            <div class="card soft">
+                <h2>Risk Visuals</h2>
+
+                <div style="height:240px">
+                    <canvas id="riskLevelChart"></canvas>
+                </div>
+
+                <div style="height:240px;margin-top:12px">
+                    <canvas id="riskAreaChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Filter Risks</h2>
+
+            <form method="get" class="toolbar">
+                <input name="q" value="{escape(q)}" placeholder="Search risk, mitigation or owner">
+
+                <select name="risk_area">
+                    <option value="">All Areas</option>
+                    {''.join(f"<option value='{x}' {'selected' if risk_area == x else ''}>{x}</option>" for x in ['Operational','Academic','Finance','Reputation','Compliance','Other'])}
+                </select>
+
+                <select name="risk_level">
+                    <option value="">All Levels</option>
+                    {''.join(f"<option value='{x}' {'selected' if risk_level == x else ''}>{x}</option>" for x in ['LOW','MEDIUM','HIGH','CRITICAL'])}
+                </select>
+
+                <select name="status">
+                    <option value="">All Statuses</option>
+                    {''.join(f"<option value='{x}' {'selected' if status == x else ''}>{x}</option>" for x in ['OPEN','IN_PROGRESS','MITIGATED','CLOSED'])}
+                </select>
+
+                <button class="btn mini">Filter</button>
+                <a class="btn mini secondary" href="{url_for('ceo_risks')}">Clear</a>
+            </form>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Risk Register</h2>
+
+            <div class="mini muted" style="margin-bottom:10px">
+                Showing {len(risks)} risk record(s).
+            </div>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Risk</th>
+                            <th>Area</th>
+                            <th>Level</th>
+                            <th>Status</th>
+                            <th>Owner</th>
+                            <th>Target</th>
+                            <th>Mitigation</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='8'>No risks found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        const riskCharts = {chart_json};
+        const ebtaColors = ["#1b5e20","#2e7d32","#43a047","#f59e0b","#64748b","#0f172a"];
+
+        new Chart(document.getElementById("riskLevelChart"), {{
+            type: "doughnut",
+            data: {{
+                labels: riskCharts.levels.labels,
+                datasets: [{{ data: riskCharts.levels.values, backgroundColor: ebtaColors }}]
+            }},
+            options: {{ responsive:true, maintainAspectRatio:false, plugins:{{ legend:{{ position:"bottom" }} }} }}
+        }});
+
+        new Chart(document.getElementById("riskAreaChart"), {{
+            type: "bar",
+            data: {{
+                labels: riskCharts.areas.labels,
+                datasets: [{{ label:"Risks", data:riskCharts.areas.values, backgroundColor:"#1b5e20", borderRadius:8 }}]
+            }},
+            options: {{ responsive:true, maintainAspectRatio:false, plugins:{{ legend:{{ display:false }} }}, scales:{{ y:{{ beginAtZero:true, ticks:{{ precision:0 }} }} }} }}
+        }});
+    </script>
+    """
+
+    return page("CEO Risks", body)
+
+
+@app.post('/ceo/risks/add')
+def ceo_risk_add():
+
+    r = require_ceo()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO ceo_risks(
+            risk_title,
+            risk_area,
+            risk_level,
+            description,
+            mitigation_plan,
+            owner_role,
+            target_date,
+            status,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+    """, (
+        request.form.get("risk_title", "").strip(),
+        request.form.get("risk_area", "").strip(),
+        request.form.get("risk_level", "MEDIUM").strip(),
+        request.form.get("description", "").strip(),
+        request.form.get("mitigation_plan", "").strip(),
+        request.form.get("owner_role", "").strip(),
+        request.form.get("target_date", "").strip(),
+        request.form.get("status", "OPEN").strip(),
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("ceo_risks"))
+
+
+@app.get('/ceo/risks/<int:risk_id>/edit')
+def ceo_risk_edit(risk_id):
+
+    r = require_ceo()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM ceo_risks WHERE id=?", (risk_id,))
+    risk = cur.fetchone()
+    conn.close()
+
+    if not risk:
+        return page("Risk Not Found", card_msg("The selected risk could not be found."))
+
+    def opt(value, current):
+        return "selected" if value == current else ""
+
+    body = f"""
+    {ceo_nav()}
+
+    <section class="card">
+        <h1>Edit Risk</h1>
+
+        <form method="post" action="{url_for('ceo_risk_update', risk_id=risk_id)}">
+            <label>Risk Title</label>
+            <input name="risk_title" value="{escape(risk['risk_title'])}" required>
+
+            <label>Risk Area</label>
+            <select name="risk_area">
+                {''.join(f"<option value='{x}' {opt(x, risk['risk_area'])}>{x}</option>" for x in ['Operational','Academic','Finance','Reputation','Compliance','Other'])}
+            </select>
+
+            <label>Risk Level</label>
+            <select name="risk_level">
+                {''.join(f"<option value='{x}' {opt(x, risk['risk_level'])}>{x}</option>" for x in ['LOW','MEDIUM','HIGH','CRITICAL'])}
+            </select>
+
+            <label>Status</label>
+            <select name="status">
+                {''.join(f"<option value='{x}' {opt(x, risk['status'])}>{x}</option>" for x in ['OPEN','IN_PROGRESS','MITIGATED','CLOSED'])}
+            </select>
+
+            <label>Owner Role</label>
+            <input name="owner_role" value="{escape(risk['owner_role'] or '')}">
+
+            <label>Target Date</label>
+            <input type="date" name="target_date" value="{escape(risk['target_date'] or '')}">
+
+            <label>Description</label>
+            <textarea name="description" rows="4">{escape(risk['description'] or '')}</textarea>
+
+            <label>Mitigation Plan</label>
+            <textarea name="mitigation_plan" rows="4">{escape(risk['mitigation_plan'] or '')}</textarea>
+
+            <button class="btn success" style="margin-top:10px">Save Changes</button>
+            <a class="btn secondary" href="{url_for('ceo_risks')}">Cancel</a>
+        </form>
+    </section>
+    """
+
+    return page("Edit Risk", body)
+
+
+@app.post('/ceo/risks/<int:risk_id>/update')
+def ceo_risk_update(risk_id):
+
+    r = require_ceo()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE ceo_risks
+        SET risk_title=?,
+            risk_area=?,
+            risk_level=?,
+            description=?,
+            mitigation_plan=?,
+            owner_role=?,
+            target_date=?,
+            status=?,
+            updated_at=?
+        WHERE id=?
+    """, (
+        request.form.get("risk_title", "").strip(),
+        request.form.get("risk_area", "").strip(),
+        request.form.get("risk_level", "MEDIUM").strip(),
+        request.form.get("description", "").strip(),
+        request.form.get("mitigation_plan", "").strip(),
+        request.form.get("owner_role", "").strip(),
+        request.form.get("target_date", "").strip(),
+        request.form.get("status", "OPEN").strip(),
+        now_utc_iso(),
+        risk_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("ceo_risks"))
+
+
+@app.post('/ceo/risks/<int:risk_id>/delete')
+def ceo_risk_delete(risk_id):
+
+    r = require_ceo()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM ceo_risks WHERE id=?", (risk_id,))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("ceo_risks"))
+    
+    
+@app.get('/ceo/goals')
+def ceo_goals():
+
+    r = require_ceo()
+    if r:
+        return r
+
+    year = request.args.get("year", "").strip() or str(datetime.date.today().year)
+    goal_area = request.args.get("goal_area", "").strip()
+    status = request.args.get("status", "").strip()
+    q = request.args.get("q", "").strip()
+
+    where = ["target_year=?"]
+    params = [year]
+
+    if goal_area:
+        where.append("goal_area=?")
+        params.append(goal_area)
+
+    if status:
+        where.append("status=?")
+        params.append(status)
+
+    if q:
+        search = f"%{q}%"
+        where.append("(goal_title LIKE ? OR success_measure LIKE ? OR notes LIKE ?)")
+        params += [search, search, search]
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT *
+        FROM ceo_goals
+        {where_sql}
+        ORDER BY target_month IS NULL, target_month ASC, created_at DESC
+    """, params)
+
+    goals = cur.fetchall()
+
+    cur.execute("""
+        SELECT status, COUNT(*) AS c
+        FROM ceo_goals
+        WHERE target_year=?
+        GROUP BY status
+    """, (year,))
+    status_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT goal_area, ROUND(AVG(current_progress),1) AS avg_progress
+        FROM ceo_goals
+        WHERE target_year=?
+        GROUP BY goal_area
+    """, (year,))
+    progress_rows = cur.fetchall()
+
+    conn.close()
+
+    rows = ""
+
+    for g in goals:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(g['goal_title'])}</strong>
+                <div class="mini muted">{escape(g['success_measure'] or 'No success measure')[:120]}</div>
+            </td>
+            <td>{escape(g['goal_area'])}</td>
+            <td>{escape(g['target_month'] or '—')}</td>
+            <td>{g['current_progress']}%</td>
+            <td>{ceo_status_chip(g['status'])}</td>
+            <td>{escape(g['notes'] or '—')[:120]}</td>
+            <td>
+                <a class="btn mini secondary" href="{url_for('ceo_goal_edit', goal_id=g['id'])}">Edit</a>
+
+                <form method="post" action="{url_for('ceo_goal_delete', goal_id=g['id'])}" style="display:inline">
+                    <button class="btn mini danger" onclick="return confirm('Delete this goal?')">Delete</button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    chart_json = json.dumps({
+        "statuses": {
+            "labels": [r["status"] or "Unknown" for r in status_rows],
+            "values": [r["c"] or 0 for r in status_rows]
+        },
+        "progress": {
+            "labels": [r["goal_area"] or "Unknown" for r in progress_rows],
+            "values": [float(r["avg_progress"] or 0) for r in progress_rows]
+        }
+    })
+
+    body = f"""
+    {ceo_nav()}
+
+    <section class="card">
+        <h1>CEO Goals</h1>
+
+        <p class="muted">
+            Set yearly or monthly executive goals for academic, operational, finance, growth and awards planning.
+        </p>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px">
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <h2>Add Goal</h2>
+
+                <form method="post" action="{url_for('ceo_goal_add')}">
+                    <label>Goal Title</label>
+                    <input name="goal_title" required>
+
+                    <label>Goal Area</label>
+                    <select name="goal_area">
+                        <option>Academic</option>
+                        <option>Operational</option>
+                        <option>Finance</option>
+                        <option>Growth</option>
+                        <option>Awards</option>
+                        <option>Other</option>
+                    </select>
+
+                    <label>Target Year</label>
+                    <input name="target_year" value="{escape(year)}" required>
+
+                    <label>Target Month</label>
+                    <input type="month" name="target_month">
+
+                    <label>Success Measure</label>
+                    <textarea name="success_measure" rows="3"></textarea>
+
+                    <label>Progress %</label>
+                    <input type="number" name="current_progress" min="0" max="100" value="0">
+
+                    <label>Status</label>
+                    <select name="status">
+                        <option>PLANNED</option>
+                        <option>IN_PROGRESS</option>
+                        <option>ACHIEVED</option>
+                        <option>DELAYED</option>
+                    </select>
+
+                    <label>Notes</label>
+                    <textarea name="notes" rows="3"></textarea>
+
+                    <button class="btn success" style="margin-top:10px">Save Goal</button>
+                </form>
+            </div>
+
+            <div class="card soft">
+                <h2>Goal Visuals</h2>
+
+                <div style="height:240px">
+                    <canvas id="goalStatusChart"></canvas>
+                </div>
+
+                <div style="height:240px;margin-top:12px">
+                    <canvas id="goalProgressChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Filter Goals</h2>
+
+            <form method="get" class="toolbar">
+                <input name="year" value="{escape(year)}" placeholder="Year">
+                <input name="q" value="{escape(q)}" placeholder="Search goal or measure">
+
+                <select name="goal_area">
+                    <option value="">All Areas</option>
+                    {''.join(f"<option value='{x}' {'selected' if goal_area == x else ''}>{x}</option>" for x in ['Academic','Operational','Finance','Growth','Awards','Other'])}
+                </select>
+
+                <select name="status">
+                    <option value="">All Statuses</option>
+                    {''.join(f"<option value='{x}' {'selected' if status == x else ''}>{x}</option>" for x in ['PLANNED','IN_PROGRESS','ACHIEVED','DELAYED'])}
+                </select>
+
+                <button class="btn mini">Filter</button>
+                <a class="btn mini secondary" href="{url_for('ceo_goals')}">Clear</a>
+            </form>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Goal Register</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Goal</th>
+                            <th>Area</th>
+                            <th>Target Month</th>
+                            <th>Progress</th>
+                            <th>Status</th>
+                            <th>Notes</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='7'>No goals found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        const goalCharts = {chart_json};
+        const ebtaColors = ["#1b5e20","#2e7d32","#43a047","#f59e0b","#64748b","#0f172a"];
+
+        new Chart(document.getElementById("goalStatusChart"), {{
+            type:"doughnut",
+            data:{{ labels:goalCharts.statuses.labels, datasets:[{{ data:goalCharts.statuses.values, backgroundColor:ebtaColors }}] }},
+            options:{{ responsive:true, maintainAspectRatio:false, plugins:{{ legend:{{ position:"bottom" }} }} }}
+        }});
+
+        new Chart(document.getElementById("goalProgressChart"), {{
+            type:"bar",
+            data:{{ labels:goalCharts.progress.labels, datasets:[{{ label:"Avg Progress %", data:goalCharts.progress.values, backgroundColor:"#1b5e20", borderRadius:8 }}] }},
+            options:{{ responsive:true, maintainAspectRatio:false, plugins:{{ legend:{{ display:false }} }}, scales:{{ y:{{ beginAtZero:true, max:100, ticks:{{ callback:function(value){{ return value + "%"; }} }} }} }} }}
+        }});
+    </script>
+    """
+
+    return page("CEO Goals", body)
+
+
+@app.post('/ceo/goals/add')
+def ceo_goal_add():
+
+    r = require_ceo()
+    if r:
+        return r
+
+    progress = max(0, min(100, ceo_safe_int(request.form.get("current_progress"), 0)))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO ceo_goals(
+            goal_title,
+            goal_area,
+            target_month,
+            target_year,
+            success_measure,
+            current_progress,
+            status,
+            notes,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+    """, (
+        request.form.get("goal_title", "").strip(),
+        request.form.get("goal_area", "").strip(),
+        request.form.get("target_month", "").strip(),
+        request.form.get("target_year", "").strip(),
+        request.form.get("success_measure", "").strip(),
+        progress,
+        request.form.get("status", "PLANNED").strip(),
+        request.form.get("notes", "").strip(),
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("ceo_goals", year=request.form.get("target_year", "")))
+
+
+@app.get('/ceo/goals/<int:goal_id>/edit')
+def ceo_goal_edit(goal_id):
+
+    r = require_ceo()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM ceo_goals WHERE id=?", (goal_id,))
+    goal = cur.fetchone()
+    conn.close()
+
+    if not goal:
+        return page("Goal Not Found", card_msg("The selected goal could not be found."))
+
+    def opt(value, current):
+        return "selected" if value == current else ""
+
+    body = f"""
+    {ceo_nav()}
+
+    <section class="card">
+        <h1>Edit Goal</h1>
+
+        <form method="post" action="{url_for('ceo_goal_update', goal_id=goal_id)}">
+            <label>Goal Title</label>
+            <input name="goal_title" value="{escape(goal['goal_title'])}" required>
+
+            <label>Goal Area</label>
+            <select name="goal_area">
+                {''.join(f"<option value='{x}' {opt(x, goal['goal_area'])}>{x}</option>" for x in ['Academic','Operational','Finance','Growth','Awards','Other'])}
+            </select>
+
+            <label>Target Year</label>
+            <input name="target_year" value="{escape(goal['target_year'] or '')}" required>
+
+            <label>Target Month</label>
+            <input type="month" name="target_month" value="{escape(goal['target_month'] or '')}">
+
+            <label>Success Measure</label>
+            <textarea name="success_measure" rows="3">{escape(goal['success_measure'] or '')}</textarea>
+
+            <label>Progress %</label>
+            <input type="number" name="current_progress" min="0" max="100" value="{goal['current_progress'] or 0}">
+
+            <label>Status</label>
+            <select name="status">
+                {''.join(f"<option value='{x}' {opt(x, goal['status'])}>{x}</option>" for x in ['PLANNED','IN_PROGRESS','ACHIEVED','DELAYED'])}
+            </select>
+
+            <label>Notes</label>
+            <textarea name="notes" rows="3">{escape(goal['notes'] or '')}</textarea>
+
+            <button class="btn success" style="margin-top:10px">Save Changes</button>
+            <a class="btn secondary" href="{url_for('ceo_goals', year=goal['target_year'] or '')}">Cancel</a>
+        </form>
+    </section>
+    """
+
+    return page("Edit Goal", body)
+
+
+@app.post('/ceo/goals/<int:goal_id>/update')
+def ceo_goal_update(goal_id):
+
+    r = require_ceo()
+    if r:
+        return r
+
+    progress = max(0, min(100, ceo_safe_int(request.form.get("current_progress"), 0)))
+    year = request.form.get("target_year", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE ceo_goals
+        SET goal_title=?,
+            goal_area=?,
+            target_month=?,
+            target_year=?,
+            success_measure=?,
+            current_progress=?,
+            status=?,
+            notes=?,
+            updated_at=?
+        WHERE id=?
+    """, (
+        request.form.get("goal_title", "").strip(),
+        request.form.get("goal_area", "").strip(),
+        request.form.get("target_month", "").strip(),
+        year,
+        request.form.get("success_measure", "").strip(),
+        progress,
+        request.form.get("status", "PLANNED").strip(),
+        request.form.get("notes", "").strip(),
+        now_utc_iso(),
+        goal_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("ceo_goals", year=year))
+
+
+@app.post('/ceo/goals/<int:goal_id>/delete')
+def ceo_goal_delete(goal_id):
+
+    r = require_ceo()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM ceo_goals WHERE id=?", (goal_id,))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("ceo_goals"))
+
 
 # --- Admin: Analytics dashboard ---
 
