@@ -27213,55 +27213,445 @@ def aqm_manual_marks_save_student():
     
 @app.get('/aqm/learners')
 def aqm_learners():
+
     r = require_aqm()
-    if r: return r
+    if r:
+        return r
 
     month = request.args.get("month") or get_setting("current_month")
+    q = request.args.get("q", "").strip()
+    grade_filter = request.args.get("grade", "").strip()
+    progress_filter = request.args.get("progress", "").strip()
 
     try:
         page_num = int(request.args.get("page", 1))
-    except:
+    except Exception:
         page_num = 1
 
     if page_num < 1:
         page_num = 1
 
-    per_page = 10
+    per_page = 12
+    today = datetime.date.today().isoformat()
 
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT 
+    # ================= BASE ACTIVE LEARNERS =================
+
+    where = ["e.month=?", "e.status='ACTIVE'"]
+    params = [month]
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                st.full_name LIKE ?
+                OR st.phone_whatsapp LIKE ?
+                OR st.school LIKE ?
+                OR sub.name LIKE ?
+            )
+        """)
+        params += [search, search, search, search]
+
+    if grade_filter:
+        where.append("st.grade=?")
+        params.append(grade_filter)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT DISTINCT
             st.id,
             st.full_name,
+            st.phone_whatsapp,
             st.grade,
-            st.school,
-            COUNT(DISTINCT e.subject_id) AS subjects_count,
-            ROUND(AVG(am.mark), 1) AS avg_manual_mark,
-            ROUND(AVG(sub.mark), 1) AS avg_assignment_mark
+            st.school
         FROM students st
-        JOIN enrollments e 
-            ON e.student_id = st.id
-        LEFT JOIN aqm_student_marks am
-            ON am.student_id = st.id
-           AND am.month = ?
-        LEFT JOIN submissions sub
-            ON sub.student_id = st.id
-        LEFT JOIN materials m
-            ON m.id = sub.material_id
-           AND m.month = ?
-           AND m.is_assignment = 1
-        WHERE e.month LIKE ?
-          AND e.status = 'ACTIVE'
-        GROUP BY st.id
+        JOIN enrollments e ON e.student_id=st.id
+        JOIN subjects sub ON sub.id=e.subject_id
+        {where_sql}
         ORDER BY st.full_name
-    """, (month, month, month + "%"))
+    """, params)
 
-    all_learners = cur.fetchall()
-    conn.close()
+    base_learners = cur.fetchall()
 
-    total_records = len(all_learners)
+    learner_data = []
+
+    for learner in base_learners:
+
+        student_id = learner["id"]
+
+        # Active subjects for this learner
+        cur.execute("""
+            SELECT DISTINCT
+                e.subject_id,
+                sub.name AS subject_name,
+                sub.grade
+            FROM enrollments e
+            JOIN subjects sub ON sub.id=e.subject_id
+            WHERE e.student_id=?
+              AND e.month=?
+              AND e.status='ACTIVE'
+            ORDER BY sub.grade, sub.name
+        """, (student_id, month))
+
+        subject_rows = cur.fetchall()
+        subject_ids = [str(x["subject_id"]) for x in subject_rows]
+        active_subjects = len(subject_ids)
+
+        # AQM manual marks
+        cur.execute("""
+            SELECT ROUND(AVG(mark), 1) AS avg_mark
+            FROM aqm_student_marks
+            WHERE student_id=?
+              AND month=?
+        """, (student_id, month))
+
+        avg_manual_mark = cur.fetchone()["avg_mark"] or 0
+
+        # Assignment average marks
+        cur.execute("""
+            SELECT ROUND(AVG(sub.mark), 1) AS avg_mark
+            FROM submissions sub
+            JOIN materials m ON m.id=sub.material_id
+            WHERE sub.student_id=?
+              AND m.month LIKE ?
+              AND (m.is_assignment=1 OR m.kind='assignment')
+              AND sub.mark IS NOT NULL
+        """, (student_id, month + "%"))
+
+        avg_assignment_mark = cur.fetchone()["avg_mark"] or 0
+
+        total_materials = 0
+        viewed_materials = 0
+        total_assignments = 0
+        submitted_assignments = 0
+        marked_feedback = 0
+        due_assignments = 0
+        overdue_assignments = 0
+        expected_sessions = 0
+        attended_sessions = 0
+        portal_seconds = 0
+
+        risk_subjects = []
+        improvement_notes = []
+
+        if subject_ids:
+            qmarks = ",".join("?" * len(subject_ids))
+
+            # Materials available
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT id) AS c
+                FROM materials
+                WHERE subject_id IN ({qmarks})
+                  AND month LIKE ?
+            """, subject_ids + [month + "%"])
+
+            total_materials = cur.fetchone()["c"] or 0
+
+            # Materials viewed
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT mv.material_id) AS c
+                FROM material_views mv
+                JOIN materials m ON m.id=mv.material_id
+                WHERE mv.student_id=?
+                  AND m.subject_id IN ({qmarks})
+                  AND m.month LIKE ?
+            """, [student_id] + subject_ids + [month + "%"])
+
+            viewed_materials = cur.fetchone()["c"] or 0
+
+            # Total assignments
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT id) AS c
+                FROM materials
+                WHERE subject_id IN ({qmarks})
+                  AND month LIKE ?
+                  AND (is_assignment=1 OR kind='assignment')
+            """, subject_ids + [month + "%"])
+
+            total_assignments = cur.fetchone()["c"] or 0
+
+            # Submitted assignments
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT sub.id) AS c
+                FROM submissions sub
+                JOIN materials m ON m.id=sub.material_id
+                WHERE sub.student_id=?
+                  AND m.subject_id IN ({qmarks})
+                  AND m.month LIKE ?
+                  AND (m.is_assignment=1 OR m.kind='assignment')
+            """, [student_id] + subject_ids + [month + "%"])
+
+            submitted_assignments = cur.fetchone()["c"] or 0
+
+            # Marked / feedback published
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT sub.id) AS c
+                FROM submissions sub
+                JOIN materials m ON m.id=sub.material_id
+                WHERE sub.student_id=?
+                  AND m.subject_id IN ({qmarks})
+                  AND m.month LIKE ?
+                  AND (m.is_assignment=1 OR m.kind='assignment')
+                  AND sub.is_published=1
+                  AND (
+                        sub.mark IS NOT NULL
+                        OR sub.feedback IS NOT NULL
+                        OR sub.marked_file_path IS NOT NULL
+                  )
+            """, [student_id] + subject_ids + [month + "%"])
+
+            marked_feedback = cur.fetchone()["c"] or 0
+
+            # Due but not submitted
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT m.id) AS c
+                FROM materials m
+                LEFT JOIN submissions sub
+                    ON sub.material_id=m.id
+                   AND sub.student_id=?
+                WHERE m.subject_id IN ({qmarks})
+                  AND m.month LIKE ?
+                  AND (m.is_assignment=1 OR m.kind='assignment')
+                  AND m.due_date IS NOT NULL
+                  AND TRIM(m.due_date) != ''
+                  AND m.due_date >= ?
+                  AND sub.id IS NULL
+            """, [student_id] + subject_ids + [month + "%", today])
+
+            due_assignments = cur.fetchone()["c"] or 0
+
+            # Overdue and not submitted
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT m.id) AS c
+                FROM materials m
+                LEFT JOIN submissions sub
+                    ON sub.material_id=m.id
+                   AND sub.student_id=?
+                WHERE m.subject_id IN ({qmarks})
+                  AND m.month LIKE ?
+                  AND (m.is_assignment=1 OR m.kind='assignment')
+                  AND m.due_date IS NOT NULL
+                  AND TRIM(m.due_date) != ''
+                  AND m.due_date < ?
+                  AND sub.id IS NULL
+            """, [student_id] + subject_ids + [month + "%", today])
+
+            overdue_assignments = cur.fetchone()["c"] or 0
+
+            # Expected attendance sessions
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT ats.id) AS c
+                FROM attendance_sessions ats
+                WHERE ats.subject_id IN ({qmarks})
+                  AND ats.month=?
+            """, subject_ids + [month])
+
+            expected_sessions = cur.fetchone()["c"] or 0
+
+            # Attended sessions
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT ats.id) AS c
+                FROM attendance_sessions ats
+                JOIN attendance a
+                    ON a.session_id=ats.session_id
+                   AND a.date=ats.date
+                   AND a.student_id=?
+                WHERE ats.subject_id IN ({qmarks})
+                  AND ats.month=?
+            """, [student_id] + subject_ids + [month])
+
+            attended_sessions = cur.fetchone()["c"] or 0
+
+            # Subject-level risk view
+            for subject in subject_rows:
+                subject_id = subject["subject_id"]
+                subject_label = f"{grade_label(subject['grade'])} {subject['subject_name']}"
+
+                cur.execute("""
+                    SELECT COUNT(DISTINCT id) AS c
+                    FROM materials
+                    WHERE subject_id=?
+                      AND month LIKE ?
+                """, (subject_id, month + "%"))
+                sm_total = cur.fetchone()["c"] or 0
+
+                cur.execute("""
+                    SELECT COUNT(DISTINCT mv.material_id) AS c
+                    FROM material_views mv
+                    JOIN materials m ON m.id=mv.material_id
+                    WHERE mv.student_id=?
+                      AND m.subject_id=?
+                      AND m.month LIKE ?
+                """, (student_id, subject_id, month + "%"))
+                sm_viewed = cur.fetchone()["c"] or 0
+
+                cur.execute("""
+                    SELECT COUNT(DISTINCT id) AS c
+                    FROM materials
+                    WHERE subject_id=?
+                      AND month LIKE ?
+                      AND (is_assignment=1 OR kind='assignment')
+                """, (subject_id, month + "%"))
+                sa_total = cur.fetchone()["c"] or 0
+
+                cur.execute("""
+                    SELECT COUNT(DISTINCT sub.id) AS c
+                    FROM submissions sub
+                    JOIN materials m ON m.id=sub.material_id
+                    WHERE sub.student_id=?
+                      AND m.subject_id=?
+                      AND m.month LIKE ?
+                      AND (m.is_assignment=1 OR m.kind='assignment')
+                """, (student_id, subject_id, month + "%"))
+                sa_submitted = cur.fetchone()["c"] or 0
+
+                cur.execute("""
+                    SELECT COUNT(DISTINCT ats.id) AS c
+                    FROM attendance_sessions ats
+                    WHERE ats.subject_id=?
+                      AND ats.month=?
+                """, (subject_id, month))
+                satt_total = cur.fetchone()["c"] or 0
+
+                cur.execute("""
+                    SELECT COUNT(DISTINCT ats.id) AS c
+                    FROM attendance_sessions ats
+                    JOIN attendance a
+                        ON a.session_id=ats.session_id
+                       AND a.date=ats.date
+                       AND a.student_id=?
+                    WHERE ats.subject_id=?
+                      AND ats.month=?
+                """, (student_id, subject_id, month))
+                satt_present = cur.fetchone()["c"] or 0
+
+                sm_rate = round((sm_viewed / sm_total) * 100) if sm_total else 100
+                sa_rate = round((sa_submitted / sa_total) * 100) if sa_total else 100
+                satt_rate = round((satt_present / satt_total) * 100) if satt_total else 100
+
+                if sm_rate < 50 or sa_rate < 60 or satt_rate < 60:
+                    risk_subjects.append(subject_label)
+
+        # Portal activity
+        cur.execute("""
+            SELECT COALESCE(SUM(total_seconds),0) AS seconds
+            FROM student_portal_activity
+            WHERE student_id=?
+              AND month=?
+        """, (student_id, month))
+
+        portal_seconds = cur.fetchone()["seconds"] or 0
+        portal_minutes = round(portal_seconds / 60)
+
+        # ================= RATES =================
+
+        material_view_rate = round((viewed_materials / total_materials) * 100) if total_materials else 100
+        assignment_completion_rate = round((submitted_assignments / total_assignments) * 100) if total_assignments else 100
+        marked_feedback_rate = round((marked_feedback / submitted_assignments) * 100) if submitted_assignments else 0
+        attendance_rate = round((attended_sessions / expected_sessions) * 100) if expected_sessions else 100
+
+        progress_parts = [
+            material_view_rate,
+            assignment_completion_rate,
+            attendance_rate
+        ]
+
+        if submitted_assignments:
+            progress_parts.append(marked_feedback_rate)
+
+        overall_progress = round(sum(progress_parts) / len(progress_parts)) if progress_parts else 0
+
+        # ================= QUALITY STATUS =================
+
+        risk_score = 0
+
+        if material_view_rate < 50:
+            risk_score += 1
+            improvement_notes.append("Low material engagement")
+
+        if assignment_completion_rate < 60:
+            risk_score += 1
+            improvement_notes.append("Assignment completion needs attention")
+
+        if attendance_rate < 60:
+            risk_score += 1
+            improvement_notes.append("Attendance needs improvement")
+
+        if overdue_assignments > 0:
+            risk_score += 1
+            improvement_notes.append("Overdue assignments")
+
+        if risk_subjects:
+            risk_score += 1
+            improvement_notes.append("Subject-level academic risk")
+
+        if avg_manual_mark and avg_manual_mark < 50:
+            risk_score += 1
+            improvement_notes.append("Low AQM/manual mark")
+
+        if avg_assignment_mark and avg_assignment_mark < 50:
+            risk_score += 1
+            improvement_notes.append("Low assignment mark")
+
+        if overall_progress >= 75 and risk_score == 0:
+            progress_status = "GOOD"
+            status_class = "active"
+        elif overall_progress >= 50 and risk_score <= 2:
+            progress_status = "WATCH"
+            status_class = "pending"
+        else:
+            progress_status = "HIGH RISK"
+            status_class = "lapsed"
+
+        learner_data.append({
+            "id": student_id,
+            "full_name": learner["full_name"],
+            "phone_whatsapp": learner["phone_whatsapp"],
+            "grade": learner["grade"],
+            "school": learner["school"],
+            "active_subjects": active_subjects,
+
+            "avg_manual_mark": avg_manual_mark,
+            "avg_assignment_mark": avg_assignment_mark,
+
+            "total_materials": total_materials,
+            "viewed_materials": viewed_materials,
+            "material_view_rate": material_view_rate,
+
+            "total_assignments": total_assignments,
+            "submitted_assignments": submitted_assignments,
+            "assignment_completion_rate": assignment_completion_rate,
+
+            "marked_feedback": marked_feedback,
+            "marked_feedback_rate": marked_feedback_rate,
+
+            "due_assignments": due_assignments,
+            "overdue_assignments": overdue_assignments,
+
+            "attendance_rate": attendance_rate,
+            "attended_sessions": attended_sessions,
+            "expected_sessions": expected_sessions,
+
+            "portal_minutes": portal_minutes,
+            "risk_subjects": risk_subjects,
+            "improvement_notes": improvement_notes,
+
+            "overall_progress": overall_progress,
+            "progress_status": progress_status,
+            "status_class": status_class
+        })
+
+    # Filter after calculation because progress status is calculated in Python
+    if progress_filter:
+        learner_data = [
+            x for x in learner_data
+            if x["progress_status"] == progress_filter
+        ]
+
+    total_records = len(learner_data)
     total_pages = (total_records + per_page - 1) // per_page
 
     if total_pages == 0:
@@ -27272,35 +27662,134 @@ def aqm_learners():
 
     start_index = (page_num - 1) * per_page
     end_index = start_index + per_page
-    learners = all_learners[start_index:end_index]
+    learners = learner_data[start_index:end_index]
+
+    # ================= SUMMARY =================
+
+    good_count = len([x for x in learner_data if x["progress_status"] == "GOOD"])
+    watch_count = len([x for x in learner_data if x["progress_status"] == "WATCH"])
+    high_risk_count = len([x for x in learner_data if x["progress_status"] == "HIGH RISK"])
+
+    avg_progress = round(sum([x["overall_progress"] for x in learner_data]) / len(learner_data)) if learner_data else 0
+    avg_material_rate = round(sum([x["material_view_rate"] for x in learner_data]) / len(learner_data)) if learner_data else 0
+    avg_assignment_rate = round(sum([x["assignment_completion_rate"] for x in learner_data]) / len(learner_data)) if learner_data else 0
+    avg_attendance_rate = round(sum([x["attendance_rate"] for x in learner_data]) / len(learner_data)) if learner_data else 0
+    avg_feedback_rate = round(sum([x["marked_feedback_rate"] for x in learner_data]) / len(learner_data)) if learner_data else 0
+
+    total_due = sum([x["due_assignments"] for x in learner_data])
+    total_overdue = sum([x["overdue_assignments"] for x in learner_data])
+
+    # Grade breakdown
+    grade_map = {}
+
+    for x in learner_data:
+        g = grade_label(x["grade"])
+        grade_map.setdefault(g, {"learners": 0, "progress_sum": 0, "risk": 0})
+        grade_map[g]["learners"] += 1
+        grade_map[g]["progress_sum"] += x["overall_progress"]
+
+        if x["progress_status"] == "HIGH RISK":
+            grade_map[g]["risk"] += 1
+
+    grade_labels = []
+    grade_progress = []
+    grade_risk = []
+
+    for g, info in sorted(grade_map.items()):
+        grade_labels.append(g)
+        grade_progress.append(round(info["progress_sum"] / info["learners"]) if info["learners"] else 0)
+        grade_risk.append(info["risk"])
+
+    # ================= TABLE ROWS =================
 
     rows = ""
 
     for x in learners:
-        manual_avg = x["avg_manual_mark"] or 0
-        assignment_avg = x["avg_assignment_mark"] or 0
-        overall = manual_avg if manual_avg else assignment_avg
-
-        if overall >= 80:
-            category = "Top Achiever"
-        elif overall >= 60:
-            category = "At Expected Level"
-        elif overall > 0:
-            category = "Below Expected"
-        else:
-            category = "No marks yet"
+        risk_subjects = ", ".join(x["risk_subjects"][:3]) or "None"
+        notes = ", ".join(x["improvement_notes"][:3]) or "On track"
 
         rows += f"""
         <tr>
-            <td>{x['full_name']}</td>
+            <td>
+                <strong>{escape(x['full_name'] or '—')}</strong>
+                <div class="mini muted">{escape(x['phone_whatsapp'] or '—')}</div>
+                <div class="mini muted">School: {escape(x['school'] or '—')}</div>
+            </td>
+
             <td>{grade_label(x['grade'])}</td>
-            <td>{x['school'] or '—'}</td>
-            <td>{x['subjects_count']}</td>
-            <td>{manual_avg}%</td>
-            <td>{assignment_avg}%</td>
-            <td><span class="chip">{category}</span></td>
+
+            <td>{x['active_subjects']}</td>
+
+            <td>
+                <span class="chip {x['status_class']}">{escape(x['progress_status'])}</span>
+                <div class="mini muted">Overall: {x['overall_progress']}%</div>
+            </td>
+
+            <td>
+                {x['viewed_materials']} / {x['total_materials']}
+                <div class="mini muted">{x['material_view_rate']}% viewed</div>
+            </td>
+
+            <td>
+                {x['submitted_assignments']} / {x['total_assignments']}
+                <div class="mini muted">{x['assignment_completion_rate']}% submitted</div>
+            </td>
+
+            <td>
+                {x['marked_feedback']} published
+                <div class="mini muted">{x['marked_feedback_rate']}% feedback</div>
+            </td>
+
+            <td>
+                {x['attendance_rate']}%
+                <div class="mini muted">{x['attended_sessions']} / {x['expected_sessions']} sessions</div>
+            </td>
+
+            <td>
+                <div class="mini">AQM: {x['avg_manual_mark'] or 0}%</div>
+                <div class="mini muted">Assignments: {x['avg_assignment_mark'] or 0}%</div>
+            </td>
+
+            <td>
+                <span class="chip pending">Due: {x['due_assignments']}</span>
+                <span class="chip lapsed">Overdue: {x['overdue_assignments']}</span>
+            </td>
+
+            <td>
+                {x['portal_minutes']} min
+                <div class="mini muted">Portal activity</div>
+            </td>
+
+            <td>
+                <div class="mini"><strong>Risk modules:</strong> {escape(risk_subjects)}</div>
+                <div class="mini muted"><strong>Improve:</strong> {escape(notes)}</div>
+            </td>
         </tr>
         """
+
+    # ================= FILTER OPTIONS =================
+
+    grade_options = '<option value="">All Grades</option>'
+
+    for g in ["G8", "G9", "G10", "G11", "G12", "G13"]:
+        selected = "selected" if grade_filter == g else ""
+        grade_options += f"<option value='{g}' {selected}>{grade_label(g)}</option>"
+
+    progress_options = f"""
+        <option value="" {'selected' if progress_filter == '' else ''}>All Progress Levels</option>
+        <option value="GOOD" {'selected' if progress_filter == 'GOOD' else ''}>Good</option>
+        <option value="WATCH" {'selected' if progress_filter == 'WATCH' else ''}>Watch</option>
+        <option value="HIGH RISK" {'selected' if progress_filter == 'HIGH RISK' else ''}>High Risk</option>
+    """
+
+    def aqm_learners_page_url(page):
+        return "/aqm/learners?" + urlencode({
+            "month": month,
+            "q": q,
+            "grade": grade_filter,
+            "progress": progress_filter,
+            "page": page
+        })
 
     pagination_html = ""
 
@@ -27310,67 +27799,297 @@ def aqm_learners():
 
         if page_num > 1:
             prev_link = f"""
-            <a class="btn mini secondary"
-               href="/aqm/learners?month={month}&page={page_num - 1}">
+            <a class="btn mini secondary" href="{aqm_learners_page_url(page_num - 1)}">
                 ← Previous
             </a>
             """
 
         if page_num < total_pages:
             next_link = f"""
-            <a class="btn mini secondary"
-               href="/aqm/learners?month={month}&page={page_num + 1}">
+            <a class="btn mini secondary" href="{aqm_learners_page_url(page_num + 1)}">
                 Next →
             </a>
             """
 
         pagination_html = f"""
-        <div class="toolbar" style="margin-top:12px;align-items:center">
-            {prev_link}
-            <span class="chip">Page {page_num} of {total_pages}</span>
-            {next_link}
+        <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin:12px 0;flex-wrap:wrap">
+            <div class="mini muted">
+                Page {page_num} of {total_pages} | Showing {len(learners)} of {total_records} learner(s)
+            </div>
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+                {prev_link}
+                {next_link}
+            </div>
         </div>
         """
+
+    # ================= CHART DATA =================
+
+    chart_payload = {
+        "progressMix": {
+            "labels": ["Good", "Watch", "High Risk"],
+            "values": [good_count, watch_count, high_risk_count]
+        },
+        "academicAreas": {
+            "labels": ["Materials", "Assignments", "Feedback", "Attendance", "Overall"],
+            "values": [avg_material_rate, avg_assignment_rate, avg_feedback_rate, avg_attendance_rate, avg_progress]
+        },
+        "gradeProgress": {
+            "labels": grade_labels,
+            "progress": grade_progress,
+            "risk": grade_risk
+        },
+        "workload": {
+            "labels": ["Due Assignments", "Overdue Assignments"],
+            "values": [total_due, total_overdue]
+        }
+    }
+
+    chart_json = json.dumps(chart_payload)
+
+    conn.close()
 
     body = f"""
     {aqm_nav()}
 
-    <div class="card">
-        <h2>Learner Performance</h2>
+    <section class="card">
+        <h1>AQM Learner Academic Progress Analysis</h1>
 
-        <form method="get" style="max-width:220px;margin-bottom:12px">
-            <label>Month</label>
-            <input type="month" name="month" value="{month}" onchange="this.form.submit()">
+        <p class="muted">
+            This page now analyses the upgraded student progress data: material views, assignment completion,
+            published feedback, attendance, portal activity, AQM marks, overdue work and academic risk.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search learner, phone, school or subject">
+
+            <select name="grade">
+                {grade_options}
+            </select>
+
+            <select name="progress">
+                {progress_options}
+            </select>
+
+            <button class="btn mini success">Search</button>
+            <a class="btn mini secondary" href="{url_for('aqm_learners')}">Clear</a>
         </form>
 
-        <div class="mini muted" style="margin-bottom:10px">
-            Showing {len(learners)} of {total_records} learner records for {month}.
+        <div class="stats" style="margin-top:12px">
+            {stat("Learners Analysed", total_records)}
+            {stat("Average Progress", f"{avg_progress}%")}
+            {stat("Material View Rate", f"{avg_material_rate}%")}
+            {stat("Assignment Completion", f"{avg_assignment_rate}%")}
+            {stat("Published Feedback", f"{avg_feedback_rate}%")}
+            {stat("Attendance Rate", f"{avg_attendance_rate}%")}
+            {stat("Good", good_count)}
+            {stat("Watch", watch_count)}
+            {stat("High Risk", high_risk_count)}
+            {stat("Overdue Work", total_overdue)}
         </div>
 
-        <div class="scroll-x">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Learner</th>
-                        <th>Grade</th>
-                        <th>School</th>
-                        <th>Subjects</th>
-                        <th>Manual Avg</th>
-                        <th>Assignment Avg</th>
-                        <th>Category</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows or '<tr><td colspan="7">No learners found for this month.</td></tr>'}
-                </tbody>
-            </table>
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+            <div class="card soft">
+                <h2>Progress Status Mix</h2>
+                <div style="height:280px">
+                    <canvas id="aqmProgressMixChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Academic Quality Areas</h2>
+                <div style="height:280px">
+                    <canvas id="aqmAcademicAreasChart"></canvas>
+                </div>
+            </div>
         </div>
 
-        {pagination_html}
-    </div>
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+            <div class="card soft">
+                <h2>Progress by Grade</h2>
+                <div style="height:320px">
+                    <canvas id="aqmGradeProgressChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Assignment Workload</h2>
+                <div style="height:320px">
+                    <canvas id="aqmWorkloadChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Detailed Learner Quality Review</h2>
+
+            {pagination_html}
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Learner</th>
+                            <th>Grade</th>
+                            <th>Subjects</th>
+                            <th>Status</th>
+                            <th>Materials</th>
+                            <th>Assignments</th>
+                            <th>Feedback</th>
+                            <th>Attendance</th>
+                            <th>Marks</th>
+                            <th>Pending Work</th>
+                            <th>Portal Time</th>
+                            <th>Risk / Improvement</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='12'>No learner progress records found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+
+            {pagination_html}
+        </div>
+    </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        const aqmLearnerCharts = {chart_json};
+
+        function noDataPlugin(message) {{
+            return {{
+                id: "noData_" + Math.random().toString(36).slice(2),
+                afterDraw(chart) {{
+                    const dataValues = chart.data.datasets.flatMap(ds => ds.data || []);
+                    const hasData = dataValues.some(v => Number(v) > 0);
+
+                    if (!hasData) {{
+                        const ctx = chart.ctx;
+                        ctx.save();
+                        ctx.textAlign = "center";
+                        ctx.textBaseline = "middle";
+                        ctx.font = "13px Arial";
+                        ctx.fillStyle = "#64748b";
+                        ctx.fillText(message || "No data available", chart.width / 2, chart.height / 2);
+                        ctx.restore();
+                    }}
+                }}
+            }};
+        }}
+
+        const commonOptions = {{
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {{
+                legend: {{
+                    position: "bottom"
+                }}
+            }}
+        }};
+
+        new Chart(document.getElementById("aqmProgressMixChart"), {{
+            type: "doughnut",
+            data: {{
+                labels: aqmLearnerCharts.progressMix.labels,
+                datasets: [{{
+                    data: aqmLearnerCharts.progressMix.values,
+                    backgroundColor: ["#1b5e20", "#f59e0b", "#dc2626"]
+                }}]
+            }},
+            options: commonOptions,
+            plugins: [noDataPlugin("No progress status data")]
+        }});
+
+        new Chart(document.getElementById("aqmAcademicAreasChart"), {{
+            type: "bar",
+            data: {{
+                labels: aqmLearnerCharts.academicAreas.labels,
+                datasets: [{{
+                    label: "Average %",
+                    data: aqmLearnerCharts.academicAreas.values,
+                    backgroundColor: "#1b5e20",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonOptions,
+                plugins: {{
+                    legend: {{
+                        display: false
+                    }}
+                }},
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {{
+                            callback: function(value) {{
+                                return value + "%";
+                            }}
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No academic quality data")]
+        }});
+
+        new Chart(document.getElementById("aqmGradeProgressChart"), {{
+            type: "bar",
+            data: {{
+                labels: aqmLearnerCharts.gradeProgress.labels,
+                datasets: [
+                    {{
+                        label: "Average Progress %",
+                        data: aqmLearnerCharts.gradeProgress.progress,
+                        backgroundColor: "#1b5e20",
+                        borderRadius: 8
+                    }},
+                    {{
+                        label: "High Risk Learners",
+                        data: aqmLearnerCharts.gradeProgress.risk,
+                        backgroundColor: "#dc2626",
+                        borderRadius: 8
+                    }}
+                ]
+            }},
+            options: {{
+                ...commonOptions,
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No grade progress data")]
+        }});
+
+        new Chart(document.getElementById("aqmWorkloadChart"), {{
+            type: "pie",
+            data: {{
+                labels: aqmLearnerCharts.workload.labels,
+                datasets: [{{
+                    data: aqmLearnerCharts.workload.values,
+                    backgroundColor: ["#f59e0b", "#dc2626"]
+                }}]
+            }},
+            options: commonOptions,
+            plugins: [noDataPlugin("No due or overdue work")]
+        }});
+    </script>
     """
 
-    return page("Learner Performance", body)
+    return page("AQM Learner Progress Analysis", body)
 
 
 @app.get('/aqm/assignments')
