@@ -2722,6 +2722,31 @@ def secure_name(name):
     return ''.join(ch if ch in keep else '_' for ch in name)
     
     
+def resolve_submission_file_path(saved_path):
+    """
+    Converts a saved submission/marked-script path into a real server file path.
+    Handles both:
+    - /var/data/submissions/file.pdf
+    - /submission-files/file.pdf
+    - file.pdf
+    """
+
+    if not saved_path:
+        return None
+
+    saved_path = str(saved_path).strip()
+
+    if saved_path.startswith("/submission-files/"):
+        return str(SUBMISSIONS_DIR / os.path.basename(saved_path))
+
+    p = Path(saved_path)
+
+    if p.is_absolute():
+        return str(p)
+
+    return str(SUBMISSIONS_DIR / os.path.basename(saved_path)) 
+ 
+    
 def clean_multiline_text(text):
     if not text:
         return ""
@@ -7914,12 +7939,25 @@ def student_home():
 
     # Feedback & Results (graded items)
     feedback_card = ""
-    cur.execute("""SELECT m.title, m.max_points, s2.name AS subject_name, s2.grade,
-                        sub.mark, sub.feedback, sub.evaluated_at
+    cur.execute("""SELECT m.id AS material_id,
+                       m.title,
+                       m.max_points,
+                       s2.name AS subject_name,
+                       s2.grade,
+                       sub.mark,
+                       sub.feedback,
+                       sub.marked_file_path,
+                       sub.evaluated_at
                 FROM submissions sub
                 JOIN materials m ON m.id=sub.material_id
                 JOIN subjects s2 ON s2.id=m.subject_id
-                WHERE sub.student_id=? AND sub.mark IS NOT NULL AND sub.is_published = 1
+                WHERE sub.student_id=?
+                  AND sub.is_published = 1
+                  AND (
+                      sub.mark IS NOT NULL
+                      OR sub.feedback IS NOT NULL
+                      OR sub.marked_file_path IS NOT NULL
+                  )
                 ORDER BY sub.evaluated_at DESC LIMIT 50""", (sid,))
     graded = cur.fetchall()
     if graded:
@@ -7928,11 +7966,26 @@ def student_home():
             when = (g['evaluated_at'] or '')[:16].replace('T',' ')
             maxp = g['max_points'] if g['max_points'] else 100
             fb = f"<div class='muted mini' style='margin-top:4px'>{g['feedback']}</div>" if g['feedback'] else ""
+            marked_btn = ""
+
+            if g["marked_file_path"]:
+                marked_btn = f"""
+                <div style="margin-top:6px">
+                    <a class="btn success mini"
+                       target="_blank"
+                       href="{url_for('student_view_marked_script', mid=g['material_id'])}">
+                        📄 View Marked Script
+                    </a>
+                </div>
+                """
             items.append(
-                f"<div class='feedback-item'><div class='feedback-title'>{g['title']} — "
-                f"{grade_label(g['grade'])} {g['subject_name']}</div>"
-                f"<div>Mark: <span class='badge'>{g['mark']} / {maxp}</span> <span class='muted mini'>• {when}</span></div>"
-                f"{fb}</div>"
+                f"<div class='feedback-item'>"
+                f"<div class='feedback-title'>{escape(g['title'])} — "
+                f"{grade_label(g['grade'])} {escape(g['subject_name'])}</div>"
+                f"<div class='mini'>Mark: {g['mark']}/{maxp}</div>"
+                f"{fb}"
+                f"{marked_btn}"
+                f"</div>"
             )
         feedback_card = f"<div class='card'><h2>Feedback & Results</h2><div class='feedback-list'>{''.join(items)}</div></div>"
 
@@ -8888,14 +8941,14 @@ def student_assignments():
                         action += f"<div class='mini'>Mark: {sub['mark']}</div>"
 
                     if sub['feedback']:
-                        action += f"<div class='mini muted'>{sub['feedback']}</div>"
+                        action += f"<div class='mini muted'>{escape(sub['feedback'])}</div>"
 
                     if sub['marked_file_path']:
                         action += f"""
                         <div style="margin-top:6px">
                             <a class='btn success mini'
                                target='_blank'
-                               href='/student/view_marked_script/{a["id"]}'>
+                               href='{url_for('student_view_marked_script', mid=a["id"])}'>
                                📄 View Marked Script
                             </a>
                         </div>
@@ -9010,7 +9063,8 @@ def student_assignments():
 def student_view_marked_script(mid):
 
     r = require_student()
-    if r: return r
+    if r:
+        return r
 
     sid = is_student()
 
@@ -9018,24 +9072,43 @@ def student_view_marked_script(mid):
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT marked_file_path
-        FROM submissions
-        WHERE material_id = ?
-          AND student_id = ?
-          AND is_published = 1
-          AND marked_file_path IS NOT NULL
-    """, (mid, sid))
+        SELECT 
+            sub.marked_file_path,
+            sub.is_published,
+            m.title,
+            m.subject_id
+        FROM submissions sub
+        JOIN materials m ON m.id = sub.material_id
+        JOIN enrollments e ON e.subject_id = m.subject_id
+        WHERE sub.material_id = ?
+          AND sub.student_id = ?
+          AND e.student_id = ?
+          AND e.status = 'ACTIVE'
+          AND substr(e.month,1,7) = substr(m.month,1,7)
+          AND sub.is_published = 1
+          AND sub.marked_file_path IS NOT NULL
+        LIMIT 1
+    """, (mid, sid, sid))
 
     row = cur.fetchone()
     conn.close()
 
     if not row or not row["marked_file_path"]:
-        return page("Not found", card_msg("Marked script is not available yet."))
+        return page(
+            "Marked Script Not Available",
+            card_msg("The marked script is not available yet. Please check again after your tutor publishes it.")
+        )
 
-    file_path = row["marked_file_path"]
+    file_path = resolve_submission_file_path(row["marked_file_path"])
 
-    if not os.path.exists(file_path):
-        return page("Not found", card_msg("Marked script file was not found."))
+    if not file_path or not os.path.exists(file_path):
+        return page(
+            "Marked Script File Missing",
+            card_msg(
+                "The marked script was published, but the file could not be found on the server. "
+                "Please notify your tutor or admin."
+            )
+        )
 
     return send_from_directory(
         os.path.dirname(file_path),
@@ -12977,22 +13050,46 @@ def tutor_material_views(mid):
 def publish_all_marks(mid):
 
     r = require_tutor()
-    if r: return r
+    if r:
+        return r
+
+    tid = is_tutor()
 
     conn = get_db()
     cur = conn.cursor()
 
+    # Make sure this tutor owns the assignment
+    cur.execute("""
+        SELECT id
+        FROM materials
+        WHERE id=?
+          AND tutor_id=?
+          AND (is_assignment=1 OR kind='assignment')
+        LIMIT 1
+    """, (mid, tid))
+
+    assignment = cur.fetchone()
+
+    if not assignment:
+        conn.close()
+        return page("Access Denied", card_msg("You are not allowed to publish this assignment."))
+
     cur.execute("""
         UPDATE submissions
-        SET is_published = 1
+        SET is_published = 1,
+            evaluated_at = COALESCE(evaluated_at, ?)
         WHERE material_id = ?
-        AND mark IS NOT NULL
-    """, (mid,))
+          AND (
+                mark IS NOT NULL
+                OR feedback IS NOT NULL
+                OR marked_file_path IS NOT NULL
+          )
+    """, (now_utc_iso(), mid))
 
     conn.commit()
     conn.close()
 
-    return redirect(request.referrer or url_for('tutor_home'))
+    return redirect(url_for('tutor_assignment_manage', mid=mid, saved=1))
 
 
 
@@ -13106,7 +13203,11 @@ def tutor_upload_marked_script(mid, sid):
     cur.execute("""
         UPDATE submissions
         SET marked_file_path = ?,
-            evaluated_at = ?
+            evaluated_at = ?,
+            is_published = CASE
+                WHEN mark IS NOT NULL THEN 1
+                ELSE is_published
+            END
         WHERE id = ?
     """, (str(path), now_utc_iso(), sub["id"]))
 
@@ -13389,7 +13490,8 @@ def tutor_assignment_manage(mid: int):
 def tutor_view_marked_script(mid, sid):
 
     r = require_tutor()
-    if r: return r
+    if r:
+        return r
 
     tid = is_tutor()
 
@@ -13404,6 +13506,7 @@ def tutor_view_marked_script(mid, sid):
           AND sub.student_id = ?
           AND m.tutor_id = ?
           AND sub.marked_file_path IS NOT NULL
+        LIMIT 1
     """, (mid, sid, tid))
 
     row = cur.fetchone()
@@ -13412,9 +13515,9 @@ def tutor_view_marked_script(mid, sid):
     if not row or not row["marked_file_path"]:
         return page("Not found", card_msg("Marked script is not available yet."))
 
-    file_path = row["marked_file_path"]
+    file_path = resolve_submission_file_path(row["marked_file_path"])
 
-    if not os.path.exists(file_path):
+    if not file_path or not os.path.exists(file_path):
         return page("Not found", card_msg("Marked script file was not found."))
 
     return send_from_directory(
