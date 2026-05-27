@@ -16721,7 +16721,7 @@ def admin_students():
     except Exception:
         page_num = 1
 
-    limit = 20
+    limit = 12
     offset = (page_num - 1) * limit
 
     # Clean phone expression for SQLite:
