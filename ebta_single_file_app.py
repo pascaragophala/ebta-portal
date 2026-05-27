@@ -6070,7 +6070,9 @@ def home():
                 <span class="mini">I agree to the Terms & Conditions</span>
             </label>
 
-            <button class='btn'>Submit Enrollment</button>
+            <button class="btn success" type="submit">
+                Submit Enrollment
+            </button>
 
             <a class='btn secondary' href='{url_for('student_login')}'>Student login</a>
             <a class='btn secondary' href='{url_for('tutor_login')}'>Tutor login</a>
@@ -6563,6 +6565,33 @@ function showPopup(message, type='info', timeout=4000){
                 total_due: per * count,
                 message: ""
             }, count, per, true);
+            
+            
+            if (!couponCode.trim()) {
+                const subtotal = per * count;
+
+                let bulkDiscount = 0;
+
+                if (count >= 3) {
+                    if (grade === "G13") {
+                        bulkDiscount = Math.round(subtotal * 0.10);
+                    } else {
+                        bulkDiscount = Math.round(subtotal * 0.05);
+                    }
+                }
+
+                renderFeeBox({
+                    subtotal: subtotal,
+                    bulk_discount: bulkDiscount,
+                    coupon_discount: 0,
+                    total_discount: bulkDiscount,
+                    total_due: subtotal - bulkDiscount,
+                    message: ""
+                }, count, per);
+
+                return;
+            }
+            
 
             try {
                 const res = await fetch("/register/discount-preview", {
@@ -6602,7 +6631,7 @@ function showPopup(message, type='info', timeout=4000){
 
         function scheduleFeeUpdate(){
             clearTimeout(feeUpdateTimer);
-            feeUpdateTimer = setTimeout(updateFees, 350);
+            feeUpdateTimer = setTimeout(updateFees, 700);
         }
 
         document.addEventListener('change', function(e){
@@ -6619,6 +6648,81 @@ function showPopup(message, type='info', timeout=4000){
 
         document.addEventListener('DOMContentLoaded', updateFees);
     })();
+    
+    
+    document.addEventListener("DOMContentLoaded", function () {
+        const form = document.querySelector("form[action='/register']");
+
+        if (!form) return;
+
+        form.addEventListener("submit", function () {
+            const submitBtn = form.querySelector("button[type='submit'], button:not([type])");
+
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerText = "Submitting enrollment...";
+            }
+
+            let overlay = document.getElementById("enrollment-loading-overlay");
+
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.id = "enrollment-loading-overlay";
+                overlay.innerHTML = `
+                    <div style="
+                        position:fixed;
+                        inset:0;
+                        background:rgba(15,23,42,.72);
+                        z-index:99999;
+                        display:flex;
+                        align-items:center;
+                        justify-content:center;
+                        padding:20px;
+                    ">
+                        <div style="
+                            background:#ffffff;
+                            border-radius:18px;
+                            padding:24px;
+                            max-width:420px;
+                            width:100%;
+                            text-align:center;
+                            box-shadow:0 20px 40px rgba(0,0,0,.25);
+                        ">
+                            <div style="
+                                width:46px;
+                                height:46px;
+                                border:5px solid #d1fae5;
+                                border-top-color:#1b5e20;
+                                border-radius:50%;
+                                margin:0 auto 14px;
+                                animation:ebtaSpin 1s linear infinite;
+                            "></div>
+
+                            <h2 style="margin:0 0 8px;color:#1b5e20;">
+                                Submitting Enrollment
+                            </h2>
+
+                            <p style="margin:0;color:#475569;font-size:14px;">
+                                Please wait while we upload your proof of payment and submit your enrollment.
+                                Do not refresh or close this page.
+                            </p>
+                        </div>
+                    </div>
+                `;
+
+                const style = document.createElement("style");
+                style.innerHTML = `
+                    @keyframes ebtaSpin {
+                        from { transform:rotate(0deg); }
+                        to { transform:rotate(360deg); }
+                    }
+                `;
+
+                document.head.appendChild(style);
+                document.body.appendChild(overlay);
+            }
+        });
+    });
 
     
     </script>'''
