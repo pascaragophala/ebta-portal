@@ -6405,10 +6405,18 @@ function showPopup(message, type='info', timeout=4000){
             }
         });
 
-        if (totalPopFiles < 1 || totalPopFiles > 2) {
-            e.preventDefault();
-            showPopup('Please upload or take 1 to 2 Proof of Payment files.', 'error');
-            return;
+        if (paid > 0) {
+            if (totalPopFiles < 1 || totalPopFiles > 2) {
+                e.preventDefault();
+                showPopup('Please upload or take 1 to 2 Proof of Payment files.', 'error');
+                return;
+            }
+        } else {
+            if (totalPopFiles > 2) {
+                e.preventDefault();
+                showPopup('You can upload a maximum of 2 Proof of Payment files.', 'error');
+                return;
+            }
         }
     });
     });
@@ -6655,7 +6663,12 @@ function showPopup(message, type='info', timeout=4000){
 
         if (!form) return;
 
-        form.addEventListener("submit", function () {
+        form.addEventListener("submit", function (e) {
+
+            if (e.defaultPrevented) {
+                return;
+            }
+
             const submitBtn = form.querySelector("button[type='submit'], button:not([type])");
 
             if (submitBtn) {
