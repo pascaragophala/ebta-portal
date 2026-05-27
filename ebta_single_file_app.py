@@ -2064,6 +2064,240 @@ def get_subject_fee_map(conn, subject_ids):
     return fee_map
 
 
+def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", student_id=None):
+    """
+    Calculates enrollment fees using the selected subjects.
+
+    Rules:
+    - Each selected subject uses its own grade fee.
+    - Bulk discount still applies when 3+ subjects are selected.
+    - A valid 50% or 100% discount coupon applies to ONE selected subject only.
+    - Referral-only codes do not reduce the total.
+    """
+
+    subject_ids = [str(x) for x in subject_ids if str(x).strip()]
+
+    result = {
+        "valid": True,
+        "message": "",
+        "subtotal": 0,
+        "bulk_discount": 0,
+        "coupon_discount": 0,
+        "total_discount": 0,
+        "total_due": 0,
+        "discounted_subject_fee": 0,
+        "discount_percent": 0,
+        "coupon_result": {
+            "valid": True,
+            "message": "",
+            "code_type": "NONE",
+            "discount_amount": 0,
+            "coupon_id": None,
+            "referral_owner_id": None,
+            "tutor_referrer_id": None
+        }
+    }
+
+    if not subject_ids:
+        result["valid"] = False
+        result["message"] = "No subjects selected."
+        return result
+
+    cur = conn.cursor()
+    placeholders = ",".join("?" * len(subject_ids))
+
+    cur.execute(f"""
+        SELECT id, grade, name
+        FROM subjects
+        WHERE id IN ({placeholders})
+    """, subject_ids)
+
+    subjects = cur.fetchall()
+
+    if not subjects:
+        result["valid"] = False
+        result["message"] = "Invalid subject selection."
+        return result
+
+    fee_map = {}
+
+    for row in subjects:
+        fee_map[str(row["id"])] = fee_for_grade(row["grade"])
+
+    subtotal = sum(fee_map.values())
+    count = len(subject_ids)
+
+    result["subtotal"] = subtotal
+
+    # Existing EBTA bulk discount rule
+    if count >= 3:
+        grades = [row["grade"] for row in subjects]
+
+        if all(g == "G13" for g in grades):
+            result["bulk_discount"] = int(round(subtotal * 0.10))
+        else:
+            result["bulk_discount"] = int(round(subtotal * 0.05))
+
+    coupon_code = (coupon_code or "").strip().upper()
+
+    if coupon_code:
+        if student_id:
+            coupon_result = validate_discount_or_referral_code(
+                conn,
+                coupon_code,
+                student_id,
+                subject_ids,
+                subtotal
+            )
+        else:
+            coupon_result = preview_discount_code_for_subjects(
+                conn,
+                coupon_code,
+                subject_ids,
+                subtotal
+            )
+
+        result["coupon_result"] = coupon_result
+
+        if not coupon_result.get("valid"):
+            result["valid"] = False
+            result["message"] = coupon_result.get("message", "Invalid discount code.")
+            return result
+
+        result["coupon_discount"] = int(coupon_result.get("discount_amount", 0) or 0)
+
+        # Work out visible discount percent for the front page
+        cur.execute("""
+            SELECT discount_percent
+            FROM discount_coupons
+            WHERE UPPER(code)=?
+            LIMIT 1
+        """, (coupon_code,))
+
+        c = cur.fetchone()
+
+        if c:
+            result["discount_percent"] = int(c["discount_percent"] or 0)
+
+    total_discount = result["bulk_discount"] + result["coupon_discount"]
+
+    if total_discount > subtotal:
+        total_discount = subtotal
+
+    result["total_discount"] = total_discount
+    result["total_due"] = subtotal - total_discount
+
+    return result
+    
+    
+def preview_discount_code_for_subjects(conn, code, subject_ids, subtotal):
+    """
+    Used only by the front page to preview discount totals before the student record exists.
+
+    It does not award points and does not mark coupons as used.
+    Backend validation still happens again during final registration.
+    """
+
+    code = (code or "").strip().upper()
+    subject_ids_str = [str(x) for x in subject_ids]
+
+    if not code:
+        return {
+            "valid": True,
+            "message": "",
+            "code_type": "NONE",
+            "discount_amount": 0,
+            "coupon_id": None,
+            "referral_owner_id": None,
+            "tutor_referrer_id": None
+        }
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM discount_coupons
+        WHERE UPPER(code)=?
+          AND status='ACTIVE'
+          AND used_count < max_uses
+        LIMIT 1
+    """, (code,))
+
+    coupon = cur.fetchone()
+
+    if not coupon:
+        return {
+            "valid": False,
+            "message": "Invalid or already used discount code.",
+            "code_type": "INVALID",
+            "discount_amount": 0,
+            "coupon_id": None,
+            "referral_owner_id": None,
+            "tutor_referrer_id": None
+        }
+
+    discount_percent = int(coupon["discount_percent"] or 0)
+
+    if discount_percent not in [50, 100]:
+        return {
+            "valid": False,
+            "message": "Only 50% and 100% discount codes are supported.",
+            "code_type": "INVALID",
+            "discount_amount": 0,
+            "coupon_id": None,
+            "referral_owner_id": None,
+            "tutor_referrer_id": None
+        }
+
+    fee_map = get_subject_fee_map(conn, subject_ids_str)
+
+    if not fee_map:
+        return {
+            "valid": False,
+            "message": "No valid subject selected for this discount code.",
+            "code_type": "INVALID",
+            "discount_amount": 0,
+            "coupon_id": None,
+            "referral_owner_id": None,
+            "tutor_referrer_id": None
+        }
+
+    discount_base = 0
+
+    if coupon["applies_to"] == "SUBJECT":
+        subject_id = str(coupon["subject_id"] or "")
+
+        if subject_id not in subject_ids_str:
+            return {
+                "valid": False,
+                "message": "This code applies to a subject that was not selected.",
+                "code_type": "INVALID",
+                "discount_amount": 0,
+                "coupon_id": None,
+                "referral_owner_id": None,
+                "tutor_referrer_id": None
+            }
+
+        discount_base = fee_map.get(subject_id, 0)
+
+    else:
+        # ALL or ANY_SUBJECT discount codes must only discount ONE selected subject.
+        # We use the highest selected subject fee.
+        discount_base = max(fee_map.values())
+
+    discount_amount = int(round(discount_base * (discount_percent / 100)))
+
+    return {
+        "valid": True,
+        "message": f"{discount_percent}% discount applied to one selected subject.",
+        "code_type": coupon["source"] or "MANUAL",
+        "discount_amount": discount_amount,
+        "coupon_id": coupon["id"],
+        "referral_owner_id": None,
+        "tutor_referrer_id": None
+    }
+
+
 def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subtotal):
     """
     Validates coupon/referral code during registration.
@@ -5593,7 +5827,8 @@ def home():
             <div>
                 <label>Coupon / Referral Code Optional</label>
                 <input name="coupon_code"
-                       placeholder="Enter discount or referral code if you have one">
+                       id="coupon_code"
+                       placeholder="Enter discount code if you have one">
                 <div class="mini muted">
                     Leave this blank if you do not have a code.
                 </div>
@@ -6176,68 +6411,95 @@ function showPopup(message, type='info', timeout=4000){
     });
     });
 
-    // --- Fee calculation: display per-subject fee and total dynamically ---
+    // --- Fee calculation: display subject fees, discount code and total dynamically ---
     (function(){
+
+        let feeUpdateTimer = null;
+
         function feeForGrade(g){
             if(!g) return 0;
-            if(g==='G12') return 250;
-            if(g==='G13') return 350;
-            if(g==='G10' || g==='G11') return 200;
-            if(g==='G8' || g==='G9') return 200;
+            if(g === 'G13') return 350;
+            if(g === 'G12') return 250;
             return 200;
         }
 
-        function updateFees(){
+        function selectedSubjectIds(){
             const grade = document.getElementById('grade_select')?.value || '';
+
             const boxes = Array.from(
                 document.querySelectorAll("input[type='checkbox'][name='subject_ids']")
             );
 
-            const selected = boxes.filter(b =>
-                b.checked &&
-                b.closest('label') &&
-                b.closest('label').getAttribute('data-grade') === grade
-            );
+            return boxes
+                .filter(b =>
+                    b.checked &&
+                    b.closest('label') &&
+                    b.closest('label').getAttribute('data-grade') === grade
+                )
+                .map(b => b.value);
+        }
 
-            const count = selected.length;
-            const per = feeForGrade(grade);
-            const subtotal = per * count;
+        function renderFeeBox(data, selectedCount, perFee, loading=false){
+            const subtotal = Number(data.subtotal || 0);
+            const bulkDiscount = Number(data.bulk_discount || 0);
+            const couponDiscount = Number(data.coupon_discount || 0);
+            const totalDiscount = Number(data.total_discount || 0);
+            const totalDue = Number(data.total_due || 0);
 
-            let discount = 0;
-            let discountLabel = '';
-
-            if (count >= 3) {
-                if (grade === 'G13') {
-                    discount = Math.round(subtotal * 0.10);
-                    discountLabel = `
-                        <div style="color:#065f46; margin-top:4px;">
-                            Multi-subject discount (10%): <strong>-R${discount}</strong>
-                        </div>
-                    `;
-                } else {
-                    discount = Math.round(subtotal * 0.05);
-                    discountLabel = `
-                        <div style="color:#065f46; margin-top:4px;">
-                            Multi-subject discount (5%): <strong>-R${discount}</strong>
-                        </div>
-                    `;
-                }
-            }
-
-            const total = subtotal - discount;
-            window.ebtaTotalDue = total;
+            window.ebtaTotalDue = totalDue;
 
             let feeBox = document.getElementById('fee_summary');
+
             if (!feeBox) {
                 feeBox = document.createElement('div');
                 feeBox.id = 'fee_summary';
                 feeBox.style.marginTop = '10px';
 
                 const anchor = document.getElementById('payment-anchor');
+
                 if (anchor) {
                     feeBox.style.marginBottom = '12px';
                     anchor.appendChild(feeBox);
                 }
+            }
+
+            let bulkLine = "";
+
+            if (bulkDiscount > 0) {
+                bulkLine = `
+                    <div style="color:#065f46; margin-top:4px;">
+                        Multi-subject discount: <strong>-R${bulkDiscount}</strong>
+                    </div>
+                `;
+            }
+
+            let couponLine = "";
+
+            if (couponDiscount > 0) {
+                couponLine = `
+                    <div style="color:#1b5e20; margin-top:4px;">
+                        Discount code applied to 1 subject:
+                        <strong>-R${couponDiscount}</strong>
+                    </div>
+                `;
+            }
+
+            let messageLine = "";
+
+            if (data.message) {
+                messageLine = `
+                    <div class="mini muted" style="margin-top:6px;">
+                        ${data.message}
+                    </div>
+                `;
+            }
+
+            if (loading) {
+                messageLine = `
+                    <div class="mini muted" style="margin-top:6px;">
+                        Checking discount code...
+                    </div>
+                `;
             }
 
             feeBox.innerHTML = `
@@ -6250,23 +6512,108 @@ function showPopup(message, type='info', timeout=4000){
                     border-radius:12px;
                     background:#f0fdf4;
                 ">
-                    Per-subject fee: <strong>R${per}</strong><br>
-                    Subjects selected: <strong>${count}</strong><br>
+                    Per-subject fee: <strong>R${perFee}</strong><br>
+                    Subjects selected: <strong>${selectedCount}</strong><br>
                     Subtotal: <strong>R${subtotal}</strong>
-                    ${discountLabel}
+                    ${bulkLine}
+                    ${couponLine}
+
                     <div style="margin-top:6px;">
                         Total due for this month:
                         <span style="font-size:18px; font-weight:800; color:#1b5e20;">
-                            R${total}
+                            R${totalDue}
                         </span>
                     </div>
+
+                    ${messageLine}
                 </div>
             `;
+
+            const amountHint = document.getElementById("amount_paid_hint");
+
+            if (amountHint) {
+                amountHint.textContent = `Please enter R${totalDue} if this is the amount you paid.`;
+            }
+        }
+
+        async function updateFees(){
+            const grade = document.getElementById('grade_select')?.value || '';
+            const ids = selectedSubjectIds();
+            const count = ids.length;
+            const per = feeForGrade(grade);
+            const couponCode = document.getElementById('coupon_code')?.value || '';
+
+            if (count === 0) {
+                renderFeeBox({
+                    subtotal: 0,
+                    bulk_discount: 0,
+                    coupon_discount: 0,
+                    total_discount: 0,
+                    total_due: 0,
+                    message: "Select at least one subject."
+                }, 0, per);
+                return;
+            }
+
+            renderFeeBox({
+                subtotal: per * count,
+                bulk_discount: 0,
+                coupon_discount: 0,
+                total_discount: 0,
+                total_due: per * count,
+                message: ""
+            }, count, per, true);
+
+            try {
+                const res = await fetch("/register/discount-preview", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        subject_ids: ids,
+                        coupon_code: couponCode
+                    })
+                });
+
+                const data = await res.json();
+
+                if (!data.valid) {
+                    data.coupon_discount = 0;
+                    data.total_discount = data.bulk_discount || 0;
+                    data.total_due = Math.max(0, (data.subtotal || 0) - (data.total_discount || 0));
+                }
+
+                renderFeeBox(data, count, per, false);
+
+            } catch (err) {
+                const subtotal = per * count;
+
+                renderFeeBox({
+                    subtotal: subtotal,
+                    bulk_discount: 0,
+                    coupon_discount: 0,
+                    total_discount: 0,
+                    total_due: subtotal,
+                    message: "Could not check discount code. Please try again."
+                }, count, per);
+            }
+        }
+
+        function scheduleFeeUpdate(){
+            clearTimeout(feeUpdateTimer);
+            feeUpdateTimer = setTimeout(updateFees, 350);
         }
 
         document.addEventListener('change', function(e){
-            if(e.target && (e.target.name==='subject_ids' || e.target.id==='grade_select')){
-                updateFees();
+            if(e.target && (e.target.name === 'subject_ids' || e.target.id === 'grade_select')){
+                scheduleFeeUpdate();
+            }
+        });
+
+        document.addEventListener('input', function(e){
+            if(e.target && e.target.id === 'coupon_code'){
+                scheduleFeeUpdate();
             }
         });
 
@@ -6467,6 +6814,40 @@ function showPopup(message, type='info', timeout=4000){
 
 
 
+@app.post('/register/discount-preview')
+def register_discount_preview():
+
+    data = request.get_json(silent=True) or {}
+
+    subject_ids = data.get("subject_ids", [])
+    coupon_code = data.get("coupon_code", "")
+
+    if not isinstance(subject_ids, list):
+        subject_ids = []
+
+    conn = get_db()
+
+    breakdown = calculate_enrollment_fee_breakdown(
+        conn,
+        subject_ids,
+        coupon_code=coupon_code,
+        student_id=None
+    )
+
+    conn.close()
+
+    return {
+        "valid": breakdown["valid"],
+        "message": breakdown["message"] or breakdown["coupon_result"].get("message", ""),
+        "subtotal": breakdown["subtotal"],
+        "bulk_discount": breakdown["bulk_discount"],
+        "coupon_discount": breakdown["coupon_discount"],
+        "total_discount": breakdown["total_discount"],
+        "total_due": breakdown["total_due"],
+        "discount_percent": breakdown["discount_percent"]
+    }
+
+
 @app.post('/register')
 def register():
     if get_setting('enrollment_open', '1') != '1':
@@ -6602,92 +6983,36 @@ def register():
     
     
     # ================= SERVER-SIDE FEE CALCULATION =================
-    cur.execute(
-        "SELECT grade FROM subjects WHERE id=?",
-        (subject_ids[0],)
+
+    fee_breakdown = calculate_enrollment_fee_breakdown(
+        conn,
+        subject_ids,
+        coupon_code=coupon_code,
+        student_id=sid
     )
 
-    row = cur.fetchone()
-
-    if not row:
+    if not fee_breakdown["valid"]:
         conn.close()
-        return page("Error", card_msg("Invalid subject selection."))
+        return page("Discount Code Error", card_msg(fee_breakdown["message"]))
 
-    grade = row["grade"]
+    subtotal = fee_breakdown["subtotal"]
+    bulk_discount = fee_breakdown["bulk_discount"]
+    coupon_discount = fee_breakdown["coupon_discount"]
+    total_discount = fee_breakdown["total_discount"]
+    total_due = fee_breakdown["total_due"]
+    coupon_result = fee_breakdown["coupon_result"]
 
-    per = fee_for_grade(grade)
-    count = len(subject_ids)
-    subtotal = per * count
-
-    # Existing EBTA bulk discount rule
-    if count >= 3:
-        if grade == "G13":
-            bulk_discount = int(round(subtotal * 0.10))
-        else:
-            bulk_discount = int(round(subtotal * 0.05))
-    else:
-        bulk_discount = 0
-
-    coupon_code_entered = bool(coupon_code and coupon_code.strip())
-
-    coupon_result = {
-        "valid": True,
-        "message": "",
-        "discount_amount": 0,
-        "code_type": None,
-        "coupon_id": None
-    }
-
-    coupon_discount = 0
-
-    if coupon_code_entered:
-        checked_coupon = validate_discount_or_referral_code(
-            conn,
-            coupon_code,
-            sid,
-            subject_ids,
-            subtotal
-        )
-
-        if checked_coupon.get("valid"):
-            coupon_result = checked_coupon
-            coupon_discount = checked_coupon.get("discount_amount", 0) or 0
-        else:
-            # Do not block the parent because of the discount/referral code.
-            # Save it for admin review instead.
-            coupon_result = {
-                "valid": True,
-                "message": checked_coupon.get("message", ""),
-                "discount_amount": 0,
-                "code_type": "UNVERIFIED_CODE",
-                "coupon_id": None
-            }
-            coupon_discount = 0
-
-    total_discount = bulk_discount + coupon_discount
-
-    if total_discount > subtotal:
-        total_discount = subtotal
-
-    total_due = subtotal - total_discount
-
-    # Only enforce exact payment when there is no coupon/referral code.
-    # If a code is entered, accept the parent's entered amount and let admin review it.
-    if not coupon_code_entered:
-        if amount_paid != total_due:
-            conn.close()
-            return page(
-                "Payment error",
-                card_msg(
-                    f"You need to pay R{total_due}. "
-                    f"Subtotal: R{subtotal}, Discount: R{total_discount}."
-                )
+    # The entered amount must match the final calculated total.
+    # If a valid 50% or 100% code is used, total_due is already reduced.
+    if amount_paid != total_due:
+        conn.close()
+        return page(
+            "Payment error",
+            card_msg(
+                f"You need to pay R{total_due}. "
+                f"Subtotal: R{subtotal}, Discount: R{total_discount}."
             )
-
-    # Basic safety only: amount cannot be negative.
-    if amount_paid < 0:
-        conn.close()
-        return page("Payment error", card_msg("Amount paid cannot be negative."))
+        )
 
     # ================= PROOF OF PAYMENT VALIDATION =================
 
