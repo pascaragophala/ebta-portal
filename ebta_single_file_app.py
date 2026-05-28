@@ -24367,14 +24367,14 @@ def manager_tracker():
 
         rows += f"""
         <tr>
-        <td>{i}</td>
-        <td>{t['full_name']}</td>
-        <td>
-        <a class="btn mini success"
-        href="/manager/tracker/edit?tutor_id={t['id']}&date={selected_date}"
-        Log Session
-        </a>
-        </td>
+            <td>{i}</td>
+            <td>{escape(t['full_name'])}</td>
+            <td>
+                <a class="btn mini success"
+                   href="/manager/tracker/edit?tutor_id={t['id']}&date={selected_date}">
+                    Log Session
+                </a>
+            </td>
         </tr>
         """
 
