@@ -24491,77 +24491,241 @@ def manager_dashboard():
     if r:
         return r
 
+    month = manager_get_month()
+    month_selector = manager_month_selector(month, "/manager/dashboard")
+
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-    SELECT COUNT(*) AS total
-    FROM manager_tutors
-    WHERE manager_id=?
-    """,(session["manager_id"],))
+        SELECT t.id, t.full_name
+        FROM tutors t
+        JOIN manager_tutors mt ON mt.tutor_id = t.id
+        WHERE mt.manager_id = ?
+        ORDER BY t.full_name
+    """, (session["manager_id"],))
 
-    total_tutors = cur.fetchone()["total"]
-
-    today = datetime.date.today()
-    week_start = today - datetime.timedelta(days=7)
-
-    cur.execute("""
-    SELECT COUNT(*) AS sessions
-    FROM tutor_weekly_tracker tw
-    JOIN manager_tutors mt ON mt.tutor_id = tw.tutor_id
-    WHERE mt.manager_id=? AND tw.session_date >= ?
-    """,(session["manager_id"], week_start.strftime("%Y-%m-%d")))
-
-    weekly_updates = cur.fetchone()["sessions"]
-
+    tutors = cur.fetchall()
     conn.close()
+
+    total_tutors = len(tutors)
+
+    total_active_learners = 0
+    total_materials = 0
+    total_recordings = 0
+    total_assignments = 0
+    total_views = 0
+    total_unmarked = 0
+    total_progress = 0
+    high_risk_tutors = 0
+
+    tutor_cards = ""
+    todo_rows = ""
+
+    for tutor in tutors:
+
+        progress = tutor_work_progress_data(tutor["id"], month)
+        active_learners = manager_count_active_learners_for_tutor(tutor["id"], month)
+        followups = manager_get_tutor_followups(progress, active_learners)
+
+        status_class, status_label = tutor_work_band(progress["overall_rate"])
+
+        total_active_learners += active_learners
+        total_materials += progress["total_uploads"]
+        total_recordings += progress["recordings_uploaded"]
+        total_assignments += progress["assignments_uploaded"]
+        total_views += progress["material_views"]
+        total_unmarked += progress["unmarked_submissions"]
+        total_progress += progress["overall_rate"]
+
+        if progress["overall_rate"] < 50:
+            high_risk_tutors += 1
+
+        for task in followups[:2]:
+            todo_rows += f"""
+            <tr>
+                <td>{escape(tutor["full_name"])}</td>
+                <td>{escape(task)}</td>
+                <td>
+                    <span class="chip {status_class}">
+                        {progress["overall_rate"]}%
+                    </span>
+                </td>
+            </tr>
+            """
+
+        followup_list = "".join([
+            f"<li>{escape(task)}</li>"
+            for task in followups
+        ])
+
+        tutor_cards += f"""
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:12px">
+
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+                <div>
+                    <h3 style="margin:0">{escape(tutor["full_name"])}</h3>
+                    <div class="mini muted">
+                        {active_learners} active learner(s) under this tutor for {pretty_month_label(month)}
+                    </div>
+                </div>
+
+                <span class="chip {status_class}">
+                    {status_label} · {progress["overall_rate"]}%
+                </span>
+            </div>
+
+            <div class="stats" style="margin-top:12px">
+
+                <div class="stat">
+                    <div class="k">{progress["total_uploads"]}</div>
+                    <div class="t">Materials</div>
+                </div>
+
+                <div class="stat">
+                    <div class="k">{progress["recordings_uploaded"]}</div>
+                    <div class="t">Recordings</div>
+                </div>
+
+                <div class="stat">
+                    <div class="k">{progress["assignments_uploaded"]}</div>
+                    <div class="t">Assignments</div>
+                </div>
+
+                <div class="stat">
+                    <div class="k">{progress["material_views"]}</div>
+                    <div class="t">Learner Views</div>
+                </div>
+
+                <div class="stat">
+                    <div class="k">{progress["attendance_log_rate"]}%</div>
+                    <div class="t">Attendance Logs</div>
+                </div>
+
+                <div class="stat">
+                    <div class="k">{progress["unmarked_submissions"]}</div>
+                    <div class="t">Unmarked</div>
+                </div>
+
+            </div>
+
+            <div class="card" style="margin-top:12px;background:#f8fafc;border:1px solid #e2e8f0">
+                <strong>Things to do</strong>
+                <ul style="margin-bottom:0">
+                    {followup_list}
+                </ul>
+            </div>
+
+            <div class="toolbar" style="margin-top:12px">
+                <a class="btn mini" href="/manager/tutor/{tutor["id"]}?month={month}">
+                    Open Tutor Details
+                </a>
+
+                <a class="btn mini success"
+                   href="/manager/tracker/edit?tutor_id={tutor["id"]}&date={datetime.date.today().strftime('%Y-%m-%d')}">
+                    Log Follow-Up
+                </a>
+            </div>
+
+        </div>
+        """
+
+    average_progress = round(total_progress / total_tutors) if total_tutors else 0
+
+    if not todo_rows:
+        todo_rows = """
+        <tr>
+            <td colspan="3" class="muted">
+                No urgent follow-ups for this month.
+            </td>
+        </tr>
+        """
 
     body = f"""
     {manager_nav()}
 
-    <section class='card'>
+    <section class="card">
 
         <h1>Tutor Manager Dashboard</h1>
 
-        <p class='muted'>
-        Welcome {session.get('manager_name')}
+        <p class="muted">
+            Welcome {escape(session.get("manager_name") or "")}. This dashboard shows tutor work progress,
+            learner engagement, missing work, and follow-up actions for {pretty_month_label(month)}.
         </p>
 
-        <div class='stats'>
+        {month_selector}
 
-            <div class='stat'>
-                <div class='k'>{total_tutors}</div>
-                <div class='t'>Your Tutors</div>
+        <div class="stats" style="margin-top:14px">
+
+            <div class="stat">
+                <div class="k">{total_tutors}</div>
+                <div class="t">Tutors Managed</div>
             </div>
 
-            <div class='stat'>
-                <div class='k'>{weekly_updates}</div>
-                <div class='t'>Sessions Logged This Week</div>
+            <div class="stat">
+                <div class="k">{average_progress}%</div>
+                <div class="t">Average Work Progress</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{total_active_learners}</div>
+                <div class="t">Active Learners</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{total_materials}</div>
+                <div class="t">Materials Uploaded</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{total_recordings}</div>
+                <div class="t">Recordings Posted</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{total_views}</div>
+                <div class="t">Learner Material Views</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{total_unmarked}</div>
+                <div class="t">Unmarked Submissions</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{high_risk_tutors}</div>
+                <div class="t">High Risk Tutors</div>
             </div>
 
         </div>
 
-        <br>
+        <div class="card soft" style="border-left:5px solid #f59e0b;margin-top:16px">
+            <h2>Manager Things To Do</h2>
 
-        <div class='toolbar'>
+            <p class="mini muted">
+                Use this section to follow up where recordings, materials, marking, attendance,
+                or learner engagement is missing.
+            </p>
 
-            <a class='btn success'
-            href="/manager/tracker">
-
-            Open Weekly Tutor Tracker
-
-            </a>
-            
-            <a class='btn' href="/manager/tutors">
-                View Tutors Portal Updates
-            </a>
-
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tutor</th>
+                            <th>Follow-up action</th>
+                            <th>Progress</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {todo_rows}
+                    </tbody>
+                </table>
+            </div>
         </div>
 
-        <div class='muted'>
-
-        Use the tracker to record sessions, attendance and tutor activity.
-
+        <div style="margin-top:16px">
+            <h2>All Tutors Work Progress</h2>
+            {tutor_cards if tutor_cards else "<div class='empty'>No tutors assigned to you yet.</div>"}
         </div>
 
     </section>
@@ -25263,19 +25427,23 @@ def manager_nav():
     <div class="admin-nav">
 
         <a class="btn mini" href="/manager/dashboard">
-        Dashboard
+            Dashboard
+        </a>
+
+        <a class="btn mini" href="/manager/tutors">
+            My Tutors
         </a>
 
         <a class="btn mini" href="/manager/tracker">
-        Weekly Tracker
+            Weekly Tracker
+        </a>
+
+        <a class="btn mini" href="/manager/tracker/history">
+            Session History
         </a>
 
         <a class="btn mini danger" href="/manager/logout">
-        Logout
-        </a>
-        
-        <a class="btn mini" href="/manager/tracker/history">
-        Session History
+            Logout
         </a>
 
     </div>
@@ -25680,11 +25848,140 @@ def require_manager():
     if not is_manager():
         return redirect(url_for("manager_login"))
         
+        
+def manager_get_month():
+    """
+    Returns the selected manager month.
+    Falls back to the current EBTA month.
+    """
+    return request.args.get("month") or get_setting("current_month")
+
+
+def manager_month_selector(month, action_url):
+    """
+    Reusable month selector for Tutor Manager pages.
+    """
+    try:
+        year = int(month.split("-")[0])
+    except Exception:
+        year = datetime.date.today().year
+
+    all_months = all_months_for_year(year)
+
+    options = ""
+
+    for m in all_months:
+        selected = "selected" if m == month else ""
+        options += f"""
+        <option value="{m}" {selected}>
+            {pretty_month_label(m)}
+        </option>
+        """
+
+    return f"""
+    <form method="get"
+          action="{action_url}"
+          style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 15px 0">
+
+        <label class="mini muted">Progress month:</label>
+
+        <select name="month"
+                onchange="this.form.submit()"
+                style="padding:8px;border-radius:8px;border:1px solid #cbd5e1">
+            {options}
+        </select>
+
+    </form>
+    """
+
+
+def manager_count_active_learners_for_tutor(tutor_id, month):
+    """
+    Counts active learners under one tutor for the selected month.
+    It checks learners enrolled for subjects assigned to that tutor.
+    """
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT e.student_id) AS total
+        FROM enrollments e
+        JOIN tutor_subjects ts ON ts.subject_id = e.subject_id
+        WHERE ts.tutor_id = ?
+          AND e.status = 'ACTIVE'
+          AND e.month LIKE ?
+    """, (tutor_id, month + "%"))
+
+    total = cur.fetchone()["total"] or 0
+
+    conn.close()
+    return total
+
+
+def manager_get_tutor_followups(progress, active_learners):
+    """
+    Creates practical follow-up actions for the Tutor Manager.
+    """
+    tasks = []
+
+    if progress["total_uploads"] == 0:
+        tasks.append("Follow up with the tutor because no learning materials have been uploaded for this month.")
+
+    if progress["recordings_uploaded"] == 0:
+        tasks.append("Follow up with the tutor because no class recordings have been posted.")
+
+    if progress["assignments_uploaded"] == 0:
+        tasks.append("Encourage the tutor to upload at least one activity, quiz, assignment, or revision task.")
+
+    if progress["unmarked_submissions"] > 0:
+        tasks.append(f"Ask the tutor to mark {progress['unmarked_submissions']} pending submission(s).")
+
+    if progress["assigned_sessions"] > 0 and progress["attendance_log_rate"] < 75:
+        tasks.append("Ask the tutor to improve attendance logging for their sessions.")
+
+    if active_learners > 0 and progress["total_uploads"] > 0 and progress["material_views"] == 0:
+        tasks.append("Learners are not viewing uploaded materials. Ask the tutor to remind learners to open the portal and check recordings/materials.")
+
+    if active_learners > 0 and progress["recordings_uploaded"] > 0 and progress["material_views"] < active_learners:
+        tasks.append("Learner engagement is low. Encourage the tutor to push learners to watch recordings and use the portal consistently.")
+
+    if not tasks:
+        tasks.append("Progress looks healthy. Continue monitoring uploads, recordings, attendance, marking, and learner engagement.")
+
+    return tasks
+
+
+def manager_check_tutor_access(tutor_id):
+    """
+    Security check.
+    A Tutor Manager must only view tutors assigned to them.
+    """
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 1
+        FROM manager_tutors
+        WHERE manager_id = ?
+          AND tutor_id = ?
+        LIMIT 1
+    """, (session.get("manager_id"), tutor_id))
+
+    allowed = cur.fetchone() is not None
+
+    conn.close()
+    return allowed
+
+        
 @app.get('/manager/tutors')
 def manager_tutors():
 
     r = require_manager()
-    if r: return r
+    if r:
+        return r
+
+    month = manager_get_month()
+    month_selector = manager_month_selector(month, "/manager/tutors")
 
     conn = get_db()
     cur = conn.cursor()
@@ -25693,7 +25990,7 @@ def manager_tutors():
         SELECT t.id, t.full_name
         FROM tutors t
         JOIN manager_tutors mt ON mt.tutor_id = t.id
-        WHERE mt.manager_id=?
+        WHERE mt.manager_id = ?
         ORDER BY t.full_name
     """, (session["manager_id"],))
 
@@ -25702,42 +25999,107 @@ def manager_tutors():
 
     cards = ""
 
-    for t in tutors:
-        cards += f"""
-        <div class="card soft" style="
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            gap:10px;
-        ">
+    for tutor in tutors:
 
-            <div>
-                <div style="font-weight:600;font-size:16px">
-                    {t['full_name']}
+        progress = tutor_work_progress_data(tutor["id"], month)
+        active_learners = manager_count_active_learners_for_tutor(tutor["id"], month)
+        followups = manager_get_tutor_followups(progress, active_learners)
+
+        status_class, status_label = tutor_work_band(progress["overall_rate"])
+
+        main_followup = followups[0] if followups else "Progress looks healthy."
+
+        cards += f"""
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:12px">
+
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+                <div>
+                    <div style="font-weight:700;font-size:17px">
+                        {escape(tutor["full_name"])}
+                    </div>
+                    <div class="mini muted">
+                        {pretty_month_label(month)} tutor work progress
+                    </div>
                 </div>
-                <div class="mini muted">
-                    Tutor profile
-                </div>
+
+                <span class="chip {status_class}">
+                    {status_label} · {progress["overall_rate"]}%
+                </span>
             </div>
 
-            <a href="/manager/tutor/{t['id']}" class="btn mini">
-                View
-            </a>
+            <div class="stats" style="margin-top:12px">
+
+                <div class="stat">
+                    <div class="k">{active_learners}</div>
+                    <div class="t">Learners</div>
+                </div>
+
+                <div class="stat">
+                    <div class="k">{progress["total_uploads"]}</div>
+                    <div class="t">Materials</div>
+                </div>
+
+                <div class="stat">
+                    <div class="k">{progress["recordings_uploaded"]}</div>
+                    <div class="t">Recordings</div>
+                </div>
+
+                <div class="stat">
+                    <div class="k">{progress["assignments_uploaded"]}</div>
+                    <div class="t">Assignments</div>
+                </div>
+
+                <div class="stat">
+                    <div class="k">{progress["material_views"]}</div>
+                    <div class="t">Learner Views</div>
+                </div>
+
+                <div class="stat">
+                    <div class="k">{progress["unmarked_submissions"]}</div>
+                    <div class="t">Unmarked</div>
+                </div>
+
+            </div>
+
+            <div class="mini muted" style="margin-top:10px">
+                <strong>Manager follow-up:</strong> {escape(main_followup)}
+            </div>
+
+            <div class="toolbar" style="margin-top:12px">
+                <a href="/manager/tutor/{tutor["id"]}?month={month}" class="btn mini">
+                    View Details
+                </a>
+
+                <a class="btn mini success"
+                   href="/manager/tracker/edit?tutor_id={tutor["id"]}&date={datetime.date.today().strftime('%Y-%m-%d')}">
+                    Log Follow-Up
+                </a>
+            </div>
 
         </div>
         """
 
     body = f"""
     {manager_nav()}
+
     <section class="grid">
+
         <div class="card">
+
             <h1>Your Tutors</h1>
-            <div class="mini muted">Click a tutor to view activity and reports</div>
+
+            <div class="mini muted">
+                View tutor progress, learner engagement, uploads, recordings, attendance, and marking status.
+            </div>
+
+            {month_selector}
 
             <div class="grid" style="gap:10px">
                 {cards if cards else "<div class='empty'>No tutors found</div>"}
             </div>
+
         </div>
+
     </section>
     """
 
@@ -25748,6 +26110,9 @@ def manager_view_tutor(tid):
 
     r = require_manager()
     if r: return r
+    
+    if not manager_check_tutor_access(tid):
+        return page("Access Denied", card_msg("You are not allowed to view this tutor."))
 
     conn = get_db()
     cur = conn.cursor()
@@ -25941,6 +26306,82 @@ def manager_view_tutor(tid):
 
     conn.close()
 
+    progress = tutor_work_progress_data(tid, month)
+    active_learners = manager_count_active_learners_for_tutor(tid, month)
+    status_class, status_label = tutor_work_band(progress["overall_rate"])
+    followups = manager_get_tutor_followups(progress, active_learners)
+
+    progress_todos_html = "".join([
+        f"<li>{escape(item)}</li>"
+        for item in followups
+    ])
+
+    progress_html = f"""
+    <div class="card soft" style="border-left:5px solid #1b5e20">
+
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+            <div>
+                <h3>Work Progress — {pretty_month_label(month)}</h3>
+                <div class="mini muted">
+                    Progress combines materials, recordings, assignments, attendance logs,
+                    marking, tracker logs, and learner engagement.
+                </div>
+            </div>
+
+            <span class="chip {status_class}">
+                {status_label} · {progress["overall_rate"]}%
+            </span>
+        </div>
+
+        <div class="stats" style="margin-top:12px">
+
+            <div class="stat">
+                <div class="k">{active_learners}</div>
+                <div class="t">Active Learners</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{progress["total_uploads"]}</div>
+                <div class="t">Materials</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{progress["recordings_uploaded"]}</div>
+                <div class="t">Recordings</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{progress["assignments_uploaded"]}</div>
+                <div class="t">Assignments</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{progress["material_views"]}</div>
+                <div class="t">Learner Views</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{progress["attendance_log_rate"]}%</div>
+                <div class="t">Attendance Logs</div>
+            </div>
+
+            <div class="stat">
+                <div class="k">{progress["unmarked_submissions"]}</div>
+                <div class="t">Unmarked</div>
+            </div>
+
+        </div>
+
+        <div class="card" style="margin-top:12px;background:#f8fafc;border:1px solid #e2e8f0">
+            <strong>Manager follow-up</strong>
+            <ul style="margin-bottom:0">
+                {progress_todos_html}
+            </ul>
+        </div>
+
+    </div>
+    """
+
     body = f"""
     {manager_nav()}
     <section class="grid">
@@ -25957,6 +26398,9 @@ def manager_view_tutor(tid):
             <h3>Subjects</h3>
             <div>{subjects_html}</div>
         </div>
+
+
+        {progress_html}
 
         <div class="card soft" style="border-left:5px solid #22c55e">
             <h3>Uploads — {pretty_month_label(month)}</h3>
