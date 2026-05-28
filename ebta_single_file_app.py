@@ -24662,14 +24662,18 @@ def manager_dashboard():
     {manager_compact_ui_styles()}
     {manager_nav()}
 
+    {manager_welcome_hero(month, total_tutors, average_progress, high_risk_tutors)}
+
     <section class="card">
 
-        <h1>Tutor Manager Dashboard</h1>
-
-        <p class="muted">
-            Welcome {escape(session.get("manager_name") or "")}. This dashboard shows tutor progress,
-            learner engagement, missing work, and follow-up actions for {pretty_month_label(month)}.
-        </p>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+            <div>
+                <h2 style="margin-top:0">Tutor Manager Overview</h2>
+                <p class="mini muted" style="margin-top:4px">
+                    Use this section to review assigned tutors, identify missing work, and take follow-up action.
+                </p>
+            </div>
+        </div>
 
         {month_selector}
 
@@ -26186,7 +26190,176 @@ def manager_compact_ui_styles():
         }
     </style>
     """
+    
+    
+def manager_welcome_hero(month, total_tutors=0, average_progress=0, high_risk_tutors=0):
+    """
+    Professional welcome banner for the Tutor Manager portal.
+    Similar style to CEO/COO/CAO dashboard welcome sections.
+    """
 
+    manager_name = session.get("manager_name") or "Tutor Manager"
+
+    return f"""
+    <style>
+        .tm-welcome-hero {{
+            background:linear-gradient(135deg,#0f3d1e,#1b5e20,#2e7d32);
+            color:white;
+            border-radius:20px;
+            padding:22px;
+            margin-bottom:16px;
+            box-shadow:0 14px 35px rgba(15,61,30,.22);
+            position:relative;
+            overflow:hidden;
+        }}
+
+        .tm-welcome-hero:before {{
+            content:"";
+            position:absolute;
+            width:210px;
+            height:210px;
+            right:-70px;
+            top:-80px;
+            background:rgba(255,255,255,.10);
+            border-radius:999px;
+        }}
+
+        .tm-welcome-hero:after {{
+            content:"";
+            position:absolute;
+            width:130px;
+            height:130px;
+            right:70px;
+            bottom:-70px;
+            background:rgba(255,255,255,.08);
+            border-radius:999px;
+        }}
+
+        .tm-welcome-content {{
+            position:relative;
+            z-index:2;
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:16px;
+            flex-wrap:wrap;
+        }}
+
+        .tm-welcome-hero h1 {{
+            margin:0;
+            color:white;
+            font-size:28px;
+            line-height:1.15;
+        }}
+
+        .tm-welcome-hero p {{
+            margin:8px 0 0 0;
+            color:rgba(255,255,255,.88);
+            max-width:760px;
+            line-height:1.5;
+            font-size:14px;
+        }}
+
+        .tm-role-pill {{
+            background:rgba(255,255,255,.16);
+            border:1px solid rgba(255,255,255,.28);
+            color:white;
+            padding:8px 12px;
+            border-radius:999px;
+            font-size:12px;
+            font-weight:800;
+            white-space:nowrap;
+            backdrop-filter:blur(6px);
+        }}
+
+        .tm-welcome-mini-stats {{
+            position:relative;
+            z-index:2;
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+            gap:9px;
+            margin-top:16px;
+        }}
+
+        .tm-welcome-mini-stat {{
+            background:rgba(255,255,255,.13);
+            border:1px solid rgba(255,255,255,.20);
+            border-radius:14px;
+            padding:10px;
+            backdrop-filter:blur(6px);
+        }}
+
+        .tm-welcome-mini-stat .k {{
+            font-size:20px;
+            font-weight:900;
+            line-height:1;
+            color:white;
+        }}
+
+        .tm-welcome-mini-stat .t {{
+            font-size:11px;
+            color:rgba(255,255,255,.82);
+            margin-top:5px;
+        }}
+
+        @media(max-width:700px) {{
+            .tm-welcome-hero {{
+                padding:18px;
+                border-radius:16px;
+            }}
+
+            .tm-welcome-hero h1 {{
+                font-size:23px;
+            }}
+
+            .tm-role-pill {{
+                width:100%;
+                text-align:center;
+            }}
+
+            .tm-welcome-mini-stats {{
+                grid-template-columns:repeat(2,1fr);
+            }}
+        }}
+    </style>
+
+    <section class="tm-welcome-hero">
+        <div class="tm-welcome-content">
+            <div>
+                <h1>Welcome, {escape(manager_name)}</h1>
+
+                <p>
+                    Tutor Manager Portal for monitoring tutor performance, session tracking,
+                    LMS material uploads, recordings, learner engagement, attendance logging,
+                    marking progress and follow-up actions for {pretty_month_label(month)}.
+                </p>
+            </div>
+
+            <div class="tm-role-pill">
+                Tutor Manager
+            </div>
+        </div>
+
+        <div class="tm-welcome-mini-stats">
+
+            <div class="tm-welcome-mini-stat">
+                <div class="k">{total_tutors}</div>
+                <div class="t">Tutors Assigned</div>
+            </div>
+
+            <div class="tm-welcome-mini-stat">
+                <div class="k">{average_progress}%</div>
+                <div class="t">Average Progress</div>
+            </div>
+
+            <div class="tm-welcome-mini-stat">
+                <div class="k">{high_risk_tutors}</div>
+                <div class="t">Needs Attention</div>
+            </div>
+
+        </div>
+    </section>
+    """
    
 @app.get('/manager/tutors')
 def manager_tutors():
