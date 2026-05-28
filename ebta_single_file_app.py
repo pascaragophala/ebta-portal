@@ -10405,6 +10405,39 @@ def percent_value(part, total):
         return round((part / total) * 100)
     except Exception:
         return 0
+        
+
+def ebta_expected_monthly_sessions_for_grade(grade):
+    """
+    EBTA monthly attendance-log target.
+
+    Grade 8 to Grade 12: 4 expected sessions per month.
+    Grade 13: 6 expected sessions per month.
+    """
+    grade = str(grade or "").strip().upper()
+
+    if grade == "G13":
+        return 6
+
+    return 4
+
+
+def ebta_expected_monthly_sessions_for_subjects(subject_rows):
+    """
+    Calculates the expected monthly attendance logs for a tutor
+    based on their assigned subjects.
+
+    If a tutor has:
+    - one Grade 8 to 12 subject, target = 4
+    - one Grade 13 subject, target = 6
+    - multiple subjects, targets are added together
+    """
+    total = 0
+
+    for subject in subject_rows:
+        total += ebta_expected_monthly_sessions_for_grade(subject["grade"])
+
+    return total
 
 
 def student_progress_band(rate):
@@ -14599,15 +14632,11 @@ def tutor_work_progress_data(tutor_id, month):
     assigned_subjects = cur.fetchall()
     assigned_subject_ids = [r["subject_id"] for r in assigned_subjects]
 
-    # Assigned active sessions
-    cur.execute("""
-        SELECT COUNT(*) AS c
-        FROM sessions
-        WHERE tutor_id=?
-          AND active=1
-    """, (tutor_id,))
-
-    assigned_sessions = cur.fetchone()["c"] or 0
+    # Expected monthly attendance logs
+    # EBTA rule:
+    # Grade 8 to Grade 12 = 4 logs per month
+    # Grade 13 = 6 logs per month
+    assigned_sessions = ebta_expected_monthly_sessions_for_subjects(assigned_subjects)
 
     # Uploads
     cur.execute("""
@@ -14849,15 +14878,7 @@ def tutor_work_progress_data(tutor_id, month):
 
         sub_attendance_logs = cur.fetchone()["c"] or 0
 
-        cur.execute("""
-            SELECT COUNT(*) AS c
-            FROM sessions
-            WHERE tutor_id=?
-              AND subject_id=?
-              AND active=1
-        """, (tutor_id, subject_id))
-
-        sub_assigned_sessions = cur.fetchone()["c"] or 0
+        sub_assigned_sessions = ebta_expected_monthly_sessions_for_grade(subject["grade"])
         sub_attendance_rate = percent_value(sub_attendance_logs, sub_assigned_sessions)
 
         risk_points = 0
@@ -14901,6 +14922,7 @@ def tutor_work_progress_data(tutor_id, month):
             "marked": sub_marked,
             "marking_rate": sub_marking_rate,
             "attendance_logs": sub_attendance_logs,
+            "attendance_target": sub_assigned_sessions,
             "attendance_rate": sub_attendance_rate,
             "risk_level": risk_level,
             "focus": ", ".join(focus) if focus else "keep going"
@@ -14943,13 +14965,13 @@ def tutor_work_progress_data(tutor_id, month):
     components.append(min(100, percent_value(total_uploads, 4)))
 
     if assigned_sessions > 0:
-        components.append(attendance_log_rate)
+        components.append(min(100, attendance_log_rate))
 
     if submissions_received > 0:
         components.append(marking_rate)
 
     if tracker_logs > 0 or assigned_sessions > 0:
-        components.append(tracker_completion_rate)
+        components.append(min(100, tracker_completion_rate))
 
     if recordings_uploaded > 0:
         components.append(100)
@@ -15034,7 +15056,10 @@ def tutor_work_progress():
             <td>{row['submissions']}</td>
             <td>{row['marked']}</td>
             <td>{row['marking_rate']}%</td>
-            <td>{row['attendance_rate']}%</td>
+            <td>
+                {row['attendance_logs']} / {row['attendance_target']}
+                <div class="mini muted">{row['attendance_rate']}%</div>
+            </td>
 
             <td>
                 <span class="chip {risk_class}">
@@ -15090,7 +15115,8 @@ def tutor_work_progress():
 
                 <div>
                     <span>Attendance Logs</span>
-                    <strong>{row['attendance_rate']}%</strong>
+                    <strong>{row['attendance_logs']} / {row['attendance_target']}</strong>
+                    <small class="muted">{row['attendance_rate']}%</small>
                 </div>
             </div>
         </div>
