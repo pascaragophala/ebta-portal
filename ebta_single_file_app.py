@@ -24541,18 +24541,24 @@ def manager_dashboard():
         if progress["overall_rate"] < 50:
             high_risk_tutors += 1
 
-        for task in followups[:2]:
-            todo_rows += f"""
-            <tr>
-                <td>{escape(tutor["full_name"])}</td>
-                <td>{escape(task)}</td>
-                <td>
-                    <span class="chip {status_class}">
-                        {progress["overall_rate"]}%
-                    </span>
-                </td>
-            </tr>
-            """
+        main_followup = followups[0] if followups else "Progress looks healthy."
+
+        todo_rows += f"""
+        <tr>
+            <td>{escape(tutor["full_name"])}</td>
+            <td>{escape(main_followup)}</td>
+            <td>
+                <span class="chip {status_class}">
+                    {progress["overall_rate"]}%
+                </span>
+            </td>
+            <td>
+                <a class="btn mini" href="/manager/tutor/{tutor["id"]}?month={month}">
+                    Open
+                </a>
+            </td>
+        </tr>
+        """
 
         followup_list = "".join([
             f"<li>{escape(task)}</li>"
@@ -24560,74 +24566,85 @@ def manager_dashboard():
         ])
 
         tutor_cards += f"""
-        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:12px">
+        <details class="tm-accordion">
 
-            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
-                <div>
-                    <h3 style="margin:0">{escape(tutor["full_name"])}</h3>
-                    <div class="mini muted">
-                        {active_learners} active learner(s) under this tutor for {pretty_month_label(month)}
+            <summary>
+                <div class="tm-tutor-brief">
+                    <div>
+                        <div class="tm-tutor-name">{escape(tutor["full_name"])}</div>
+                        <div class="tm-mini-line">
+                            {active_learners} learner(s) · {progress["total_uploads"]} material(s) · {progress["recordings_uploaded"]} recording(s)
+                        </div>
                     </div>
+
+                    <span class="chip {status_class}">
+                        {status_label} · {progress["overall_rate"]}%
+                    </span>
+                </div>
+            </summary>
+
+            <div class="tm-accordion-body">
+
+                <div class="tm-small-stats">
+
+                    <div class="tm-small-stat">
+                        <div class="k">{active_learners}</div>
+                        <div class="t">Learners</div>
+                    </div>
+
+                    <div class="tm-small-stat">
+                        <div class="k">{progress["total_uploads"]}</div>
+                        <div class="t">LMS Materials</div>
+                    </div>
+
+                    <div class="tm-small-stat">
+                        <div class="k">{progress["recordings_uploaded"]}</div>
+                        <div class="t">Recordings</div>
+                    </div>
+
+                    <div class="tm-small-stat">
+                        <div class="k">{progress["assignments_uploaded"]}</div>
+                        <div class="t">Assignments</div>
+                    </div>
+
+                    <div class="tm-small-stat">
+                        <div class="k">{progress["material_views"]}</div>
+                        <div class="t">Learner Views</div>
+                    </div>
+
+                    <div class="tm-small-stat">
+                        <div class="k">{progress["attendance_log_rate"]}%</div>
+                        <div class="t">Attendance</div>
+                    </div>
+
+                    <div class="tm-small-stat">
+                        <div class="k">{progress["unmarked_submissions"]}</div>
+                        <div class="t">Unmarked</div>
+                    </div>
+
                 </div>
 
-                <span class="chip {status_class}">
-                    {status_label} · {progress["overall_rate"]}%
-                </span>
+                <div class="tm-followup-box">
+                    <strong>Things to do for this tutor</strong>
+                    <ul>
+                        {followup_list}
+                    </ul>
+                </div>
+
+                <div class="tm-actions">
+                    <a class="btn mini" href="/manager/tutor/{tutor["id"]}?month={month}">
+                        Open Full Tutor Details
+                    </a>
+
+                    <a class="btn mini success"
+                       href="/manager/tracker/edit?tutor_id={tutor["id"]}&date={datetime.date.today().strftime('%Y-%m-%d')}">
+                        Log Follow-Up
+                    </a>
+                </div>
+
             </div>
 
-            <div class="stats" style="margin-top:12px">
-
-                <div class="stat">
-                    <div class="k">{progress["total_uploads"]}</div>
-                    <div class="t">Materials</div>
-                </div>
-
-                <div class="stat">
-                    <div class="k">{progress["recordings_uploaded"]}</div>
-                    <div class="t">Recordings</div>
-                </div>
-
-                <div class="stat">
-                    <div class="k">{progress["assignments_uploaded"]}</div>
-                    <div class="t">Assignments</div>
-                </div>
-
-                <div class="stat">
-                    <div class="k">{progress["material_views"]}</div>
-                    <div class="t">Learner Views</div>
-                </div>
-
-                <div class="stat">
-                    <div class="k">{progress["attendance_log_rate"]}%</div>
-                    <div class="t">Attendance Logs</div>
-                </div>
-
-                <div class="stat">
-                    <div class="k">{progress["unmarked_submissions"]}</div>
-                    <div class="t">Unmarked</div>
-                </div>
-
-            </div>
-
-            <div class="card" style="margin-top:12px;background:#f8fafc;border:1px solid #e2e8f0">
-                <strong>Things to do</strong>
-                <ul style="margin-bottom:0">
-                    {followup_list}
-                </ul>
-            </div>
-
-            <div class="toolbar" style="margin-top:12px">
-                <a class="btn mini" href="/manager/tutor/{tutor["id"]}?month={month}">
-                    Open Tutor Details
-                </a>
-
-                <a class="btn mini success"
-                   href="/manager/tracker/edit?tutor_id={tutor["id"]}&date={datetime.date.today().strftime('%Y-%m-%d')}">
-                    Log Follow-Up
-                </a>
-            </div>
-
-        </div>
+        </details>
         """
 
     average_progress = round(total_progress / total_tutors) if total_tutors else 0
@@ -24635,13 +24652,14 @@ def manager_dashboard():
     if not todo_rows:
         todo_rows = """
         <tr>
-            <td colspan="3" class="muted">
+            <td colspan="4" class="muted">
                 No urgent follow-ups for this month.
             </td>
         </tr>
         """
 
     body = f"""
+    {manager_compact_ui_styles()}
     {manager_nav()}
 
     <section class="card">
@@ -24649,84 +24667,97 @@ def manager_dashboard():
         <h1>Tutor Manager Dashboard</h1>
 
         <p class="muted">
-            Welcome {escape(session.get("manager_name") or "")}. This dashboard shows tutor work progress,
+            Welcome {escape(session.get("manager_name") or "")}. This dashboard shows tutor progress,
             learner engagement, missing work, and follow-up actions for {pretty_month_label(month)}.
         </p>
 
         {month_selector}
 
-        <div class="stats" style="margin-top:14px">
+        <div class="tm-top-stats">
 
-            <div class="stat">
+            <div class="tm-stat">
                 <div class="k">{total_tutors}</div>
                 <div class="t">Tutors Managed</div>
             </div>
 
-            <div class="stat">
+            <div class="tm-stat">
                 <div class="k">{average_progress}%</div>
-                <div class="t">Average Work Progress</div>
+                <div class="t">Average Progress</div>
             </div>
 
-            <div class="stat">
+            <div class="tm-stat">
                 <div class="k">{total_active_learners}</div>
                 <div class="t">Active Learners</div>
             </div>
 
-            <div class="stat">
+            <div class="tm-stat">
                 <div class="k">{total_materials}</div>
-                <div class="t">Materials Uploaded</div>
+                <div class="t">Materials</div>
             </div>
 
-            <div class="stat">
+            <div class="tm-stat">
                 <div class="k">{total_recordings}</div>
-                <div class="t">Recordings Posted</div>
+                <div class="t">Recordings</div>
             </div>
 
-            <div class="stat">
+            <div class="tm-stat">
                 <div class="k">{total_views}</div>
-                <div class="t">Learner Material Views</div>
+                <div class="t">Learner Views</div>
             </div>
 
-            <div class="stat">
+            <div class="tm-stat">
                 <div class="k">{total_unmarked}</div>
-                <div class="t">Unmarked Submissions</div>
+                <div class="t">Unmarked</div>
             </div>
 
-            <div class="stat">
+            <div class="tm-stat">
                 <div class="k">{high_risk_tutors}</div>
                 <div class="t">High Risk Tutors</div>
             </div>
 
         </div>
 
-        <div class="card soft" style="border-left:5px solid #f59e0b;margin-top:16px">
-            <h2>Manager Things To Do</h2>
+        <details class="tm-accordion" open>
+            <summary>
+                <span>Manager Things To Do</span>
+            </summary>
 
-            <p class="mini muted">
-                Use this section to follow up where recordings, materials, marking, attendance,
-                or learner engagement is missing.
-            </p>
+            <div class="tm-accordion-body">
+                <p class="mini muted">
+                    This section gives the manager the most important follow-up action for each tutor.
+                </p>
 
-            <div class="scroll-x">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Tutor</th>
-                            <th>Follow-up action</th>
-                            <th>Progress</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {todo_rows}
-                    </tbody>
-                </table>
+                <div class="scroll-x">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Tutor</th>
+                                <th>Main Follow-up Action</th>
+                                <th>Progress</th>
+                                <th>Open</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {todo_rows}
+                        </tbody>
+                    </table>
+                </div>
             </div>
-        </div>
+        </details>
 
-        <div style="margin-top:16px">
-            <h2>All Tutors Work Progress</h2>
-            {tutor_cards if tutor_cards else "<div class='empty'>No tutors assigned to you yet.</div>"}
-        </div>
+        <details class="tm-accordion">
+            <summary>
+                <span>All Tutors Work Progress</span>
+            </summary>
+
+            <div class="tm-accordion-body">
+                <p class="mini muted">
+                    Open a tutor below to view their full monthly progress, missing work, and learner engagement.
+                </p>
+
+                {tutor_cards if tutor_cards else "<div class='empty'>No tutors assigned to you yet.</div>"}
+            </div>
+        </details>
 
     </section>
     """
@@ -25972,7 +26003,191 @@ def manager_check_tutor_access(tutor_id):
     conn.close()
     return allowed
 
-        
+   
+def manager_compact_ui_styles():
+    """
+    Compact UI styles for Tutor Manager pages.
+    Keeps dashboard readable when many tutors are assigned.
+    """
+    return """
+    <style>
+        .tm-top-stats {
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+            gap:8px;
+            margin-top:12px;
+        }
+
+        .tm-stat {
+            background:#f8fafc;
+            border:1px solid #e2e8f0;
+            border-radius:12px;
+            padding:9px 10px;
+            min-height:64px;
+        }
+
+        .tm-stat .k {
+            font-size:20px;
+            font-weight:800;
+            line-height:1.1;
+            color:#0f172a;
+        }
+
+        .tm-stat .t {
+            font-size:11px;
+            color:#64748b;
+            margin-top:3px;
+            line-height:1.2;
+        }
+
+        .tm-accordion {
+            border:1px solid #e2e8f0;
+            border-radius:14px;
+            background:#fff;
+            margin-top:14px;
+            overflow:hidden;
+        }
+
+        .tm-accordion summary {
+            cursor:pointer;
+            padding:13px 15px;
+            font-weight:800;
+            background:#f8fafc;
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:10px;
+            list-style:none;
+        }
+
+        .tm-accordion summary::-webkit-details-marker {
+            display:none;
+        }
+
+        .tm-accordion summary:after {
+            content:"Open";
+            font-size:11px;
+            font-weight:700;
+            color:#166534;
+            background:#dcfce7;
+            border:1px solid #bbf7d0;
+            padding:4px 8px;
+            border-radius:999px;
+        }
+
+        .tm-accordion[open] summary:after {
+            content:"Close";
+            color:#92400e;
+            background:#fef3c7;
+            border-color:#fde68a;
+        }
+
+        .tm-accordion-body {
+            padding:12px;
+        }
+
+        .tm-tutor-brief {
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:10px;
+            flex-wrap:wrap;
+            width:100%;
+        }
+
+        .tm-tutor-name {
+            font-weight:800;
+            color:#0f172a;
+        }
+
+        .tm-mini-line {
+            font-size:12px;
+            color:#64748b;
+            margin-top:2px;
+        }
+
+        .tm-small-stats {
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(90px,1fr));
+            gap:7px;
+            margin-top:10px;
+        }
+
+        .tm-small-stat {
+            background:#f8fafc;
+            border:1px solid #e2e8f0;
+            border-radius:10px;
+            padding:7px 8px;
+            min-height:52px;
+        }
+
+        .tm-small-stat .k {
+            font-size:17px;
+            font-weight:800;
+            line-height:1;
+            color:#0f172a;
+        }
+
+        .tm-small-stat .t {
+            font-size:10px;
+            color:#64748b;
+            margin-top:4px;
+            line-height:1.15;
+        }
+
+        .tm-tutor-grid {
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+            gap:10px;
+        }
+
+        .tm-followup-box {
+            background:#f8fafc;
+            border:1px solid #e2e8f0;
+            border-radius:12px;
+            padding:10px;
+            margin-top:10px;
+        }
+
+        .tm-followup-box ul {
+            margin-top:6px;
+            margin-bottom:0;
+            padding-left:18px;
+        }
+
+        .tm-followup-box li {
+            margin-bottom:5px;
+            font-size:13px;
+        }
+
+        .tm-actions {
+            display:flex;
+            gap:8px;
+            flex-wrap:wrap;
+            margin-top:10px;
+        }
+
+        @media(max-width:700px) {
+            .tm-top-stats {
+                grid-template-columns:repeat(2,1fr);
+            }
+
+            .tm-small-stats {
+                grid-template-columns:repeat(3,1fr);
+            }
+
+            .tm-stat .k {
+                font-size:18px;
+            }
+
+            .tm-small-stat .k {
+                font-size:16px;
+            }
+        }
+    </style>
+    """
+
+   
 @app.get('/manager/tutors')
 def manager_tutors():
 
@@ -26010,62 +26225,62 @@ def manager_tutors():
         main_followup = followups[0] if followups else "Progress looks healthy."
 
         cards += f"""
-        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:12px">
+        <div class="card soft" style="border-left:4px solid #1b5e20;padding:12px;margin-bottom:0">
 
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
                 <div>
-                    <div style="font-weight:700;font-size:17px">
+                    <div style="font-weight:800;font-size:15px">
                         {escape(tutor["full_name"])}
                     </div>
                     <div class="mini muted">
-                        {pretty_month_label(month)} tutor work progress
+                        {pretty_month_label(month)} progress
                     </div>
                 </div>
 
                 <span class="chip {status_class}">
-                    {status_label} · {progress["overall_rate"]}%
+                    {progress["overall_rate"]}%
                 </span>
             </div>
 
-            <div class="stats" style="margin-top:12px">
+            <div class="tm-small-stats">
 
-                <div class="stat">
+                <div class="tm-small-stat">
                     <div class="k">{active_learners}</div>
                     <div class="t">Learners</div>
                 </div>
 
-                <div class="stat">
+                <div class="tm-small-stat">
                     <div class="k">{progress["total_uploads"]}</div>
-                    <div class="t">Materials</div>
+                    <div class="t">LMS Materials</div>
                 </div>
 
-                <div class="stat">
+                <div class="tm-small-stat">
                     <div class="k">{progress["recordings_uploaded"]}</div>
                     <div class="t">Recordings</div>
                 </div>
 
-                <div class="stat">
+                <div class="tm-small-stat">
                     <div class="k">{progress["assignments_uploaded"]}</div>
                     <div class="t">Assignments</div>
                 </div>
 
-                <div class="stat">
+                <div class="tm-small-stat">
                     <div class="k">{progress["material_views"]}</div>
                     <div class="t">Learner Views</div>
                 </div>
 
-                <div class="stat">
+                <div class="tm-small-stat">
                     <div class="k">{progress["unmarked_submissions"]}</div>
                     <div class="t">Unmarked</div>
                 </div>
 
             </div>
 
-            <div class="mini muted" style="margin-top:10px">
-                <strong>Manager follow-up:</strong> {escape(main_followup)}
+            <div class="mini muted" style="margin-top:8px;line-height:1.35">
+                <strong>Follow-up:</strong> {escape(main_followup)}
             </div>
 
-            <div class="toolbar" style="margin-top:12px">
+            <div class="tm-actions">
                 <a href="/manager/tutor/{tutor["id"]}?month={month}" class="btn mini">
                     View Details
                 </a>
@@ -26080,24 +26295,21 @@ def manager_tutors():
         """
 
     body = f"""
+    {manager_compact_ui_styles()}
     {manager_nav()}
 
-    <section class="grid">
+    <section class="card">
 
-        <div class="card">
+        <h1>Your Tutors</h1>
 
-            <h1>Your Tutors</h1>
+        <div class="mini muted">
+            Compact view of tutor progress, learner engagement, uploads, recordings, assignments, and marking.
+        </div>
 
-            <div class="mini muted">
-                View tutor progress, learner engagement, uploads, recordings, attendance, and marking status.
-            </div>
+        {month_selector}
 
-            {month_selector}
-
-            <div class="grid" style="gap:10px">
-                {cards if cards else "<div class='empty'>No tutors found</div>"}
-            </div>
-
+        <div class="tm-tutor-grid">
+            {cards if cards else "<div class='empty'>No tutors found</div>"}
         </div>
 
     </section>
