@@ -2956,6 +2956,70 @@ def secure_name(name):
     return ''.join(ch if ch in keep else '_' for ch in name)
     
     
+def save_uploaded_files_as_single_file(files, target_dir, prefix, public_url_prefix=None):
+    """
+    Saves one or multiple uploaded files.
+
+    If one file is uploaded:
+    - Saves the file normally.
+
+    If multiple files are uploaded:
+    - Bundles them into one ZIP file.
+
+    Returns:
+    - saved_path
+    - file_count
+
+    If public_url_prefix is provided, it returns a URL path.
+    If public_url_prefix is not provided, it returns the real server file path.
+    """
+
+    clean_files = []
+
+    for f in files:
+        if f and f.filename and f.filename.strip():
+            clean_files.append(f)
+
+    if not clean_files:
+        return None, 0
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = int(time.time())
+    unique_token = secrets.token_hex(4)
+    prefix = secure_name(str(prefix))
+
+    # One file only
+    if len(clean_files) == 1:
+        original_name = secure_name(clean_files[0].filename)
+        saved_name = f"{timestamp}_{unique_token}_{prefix}_{original_name}"
+        destination = target_dir / saved_name
+
+        clean_files[0].save(destination)
+
+        if public_url_prefix:
+            return f"{public_url_prefix}/{saved_name}", 1
+
+        return str(destination), 1
+
+    # Multiple files, bundle into ZIP
+    zip_name = f"{timestamp}_{unique_token}_{prefix}_multiple_files.zip"
+    zip_path = target_dir / zip_name
+
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for index, f in enumerate(clean_files, start=1):
+            original_name = secure_name(f.filename)
+            inside_zip_name = f"{index}_{original_name}"
+
+            file_bytes = f.read()
+            zf.writestr(inside_zip_name, file_bytes)
+
+    if public_url_prefix:
+        return f"{public_url_prefix}/{zip_name}", len(clean_files)
+
+    return str(zip_path), len(clean_files)
+    
+    
 def resolve_submission_file_path(saved_path):
     """
     Converts a saved submission/marked-script path into a real server file path.
@@ -8294,6 +8358,7 @@ def student_home():
                             <input type='file'
                                    name='file'
                                    accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                                   multiple
                                    style="max-width:120px;font-size:12px">
 
                             <input type='file'
@@ -8309,7 +8374,7 @@ def student_home():
 
                         </div>
 
-                        <div class="mini muted">Upload or take photo</div>
+                        <div class="mini muted">Upload one or more files, or take one photo</div>
 
                     </form>
                     """
@@ -8327,6 +8392,7 @@ def student_home():
                         <input type='file'
                                name='file'
                                accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                               multiple
                                style="max-width:120px;font-size:12px">
 
                         <input type='file'
@@ -8342,7 +8408,7 @@ def student_home():
 
                     </div>
 
-                    <div class="mini muted">Upload or take photo</div>
+                    <div class="mini muted">Upload one or more files, or take one photo</div>
                 </form>
                 """
 
@@ -8967,79 +9033,115 @@ def student_home():
 def student_submit(mid):
 
     r = require_student()
-    if r: return r
+    if r:
+        return r
 
     sid = is_student()
 
     conn = get_db()
     cur = conn.cursor()
 
-    # 🔥 Get assignment due date
-    cur.execute("SELECT due_date FROM materials WHERE id=?", (mid,))
+    # Get assignment and validate it
+    cur.execute("""
+        SELECT id, subject_id, month, due_date, is_assignment, kind
+        FROM materials
+        WHERE id=?
+    """, (mid,))
+
     mat = cur.fetchone()
 
-    # If assignment not found
     if not mat:
         conn.close()
         return redirect(url_for("student_home"))
 
+    if mat["kind"] != "assignment" and mat["is_assignment"] != 1:
+        conn.close()
+        return page("Error", card_msg("Invalid assignment."))
+
+    # Check learner was active for this subject and month
+    cur.execute("""
+        SELECT 1
+        FROM enrollments
+        WHERE student_id=?
+          AND subject_id=?
+          AND month=?
+          AND status='ACTIVE'
+        LIMIT 1
+    """, (sid, mat["subject_id"], mat["month"]))
+
+    enrolled = cur.fetchone()
+
+    if not enrolled:
+        conn.close()
+        return page("Error", card_msg(
+            f"You were not enrolled for this subject in {pretty_month_label(mat['month'])}."
+        ))
+
+    # Check due date
     due_date = mat["due_date"]
 
-    # 🔥 Check if due date passed
     if due_date:
-        today = datetime.date.today()
-        due = datetime.datetime.strptime(due_date, "%Y-%m-%d").date()
+        try:
+            today = datetime.date.today()
+            due = datetime.datetime.strptime(due_date, "%Y-%m-%d").date()
 
-        if today > due:
-            conn.close()
-            return page(
-                "Submission Closed",
-                "<div class='card'>⛔ Submission deadline has passed. You can no longer resubmit.</div>"
-            )
+            if today > due:
+                conn.close()
+                return page(
+                    "Submission Closed",
+                    "<div class='card'>Submission deadline has passed. You can no longer resubmit.</div>"
+                )
+        except Exception:
+            pass
 
-    # 🔥 Continue with upload
     files = request.files.getlist("file")
 
-    f = None
+    path, file_count = save_uploaded_files_as_single_file(
+        files=files,
+        target_dir=SUBMISSIONS_DIR,
+        prefix=f"student_{sid}_assignment_{mid}",
+        public_url_prefix=None
+    )
 
-    for uploaded_file in files:
-        if uploaded_file and uploaded_file.filename != "":
-            f = uploaded_file
-            break
-
-    if not f:
+    if not path:
         conn.close()
-        return redirect(url_for("student_home"))
+        return page("Error", card_msg("Please select at least one file."))
 
-    filename = secure_name(f.filename)
-
-    path = SUBMISSIONS_DIR / f"{sid}_{mid}_{filename}"
-    f.save(path)
-
-    # 🔥 Optional: delete old file (clean storage)
+    # Delete old submitted file if the learner is replacing an existing submission
     cur.execute("""
-        SELECT file_path FROM submissions
+        SELECT file_path
+        FROM submissions
         WHERE material_id=? AND student_id=?
     """, (mid, sid))
+
     old = cur.fetchone()
 
     if old and old["file_path"]:
-        try:
-            os.remove(old["file_path"])
-        except:
-            pass
+        old_path = old["file_path"]
 
-    # 🔥 Save (override)
+        if old_path.startswith("/submission-files/"):
+            old_path = str(SUBMISSIONS_DIR / os.path.basename(old_path))
+
+        try:
+            if os.path.exists(old_path):
+                os.remove(old_path)
+        except Exception as e:
+            print("Old submission delete error:", e)
+
+    # Save submission
     cur.execute("""
         INSERT OR REPLACE INTO submissions
         (material_id, student_id, file_path, submitted_at)
         VALUES (?, ?, ?, ?)
-    """, (mid, sid, str(path), now_utc_iso()))
+    """, (mid, sid, path, now_utc_iso()))
 
     conn.commit()
     conn.close()
 
-    return redirect(url_for("student_home"))
+    if file_count > 1:
+        return page("Submitted", card_msg(f"Assignment submitted successfully. {file_count} files were saved as one ZIP file."))
+
+    return page("Submitted", card_msg("Assignment submitted successfully."))
 
 
 @app.get('/student/material/<int:mid>/open')
@@ -9338,6 +9440,7 @@ def student_assignments():
                                        id="resubmit_upload_input_{a["id"]}"
                                        name="file"
                                        accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                                       multiple
                                        style="display:none;">
 
                                 <input type="file"
@@ -9366,7 +9469,7 @@ def student_assignments():
                             </div>
 
                             <div class="mini muted" style="margin-top:4px">
-                                Upload or take photo
+                                Upload one or more files, or take one photo
                             </div>
 
                         </div>
@@ -9414,6 +9517,7 @@ def student_assignments():
                                        id="upload_input_{a["id"]}"
                                        name="file"
                                        accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                                       multiple
                                        style="display:none;">
 
                                 <input type="file"
@@ -9442,7 +9546,7 @@ def student_assignments():
                             </div>
 
                             <div class="mini muted" style="margin-top:4px">
-                                Upload or take photo
+                                Upload one or more files, or take one photo
                             </div>
 
                         </div>
@@ -10113,10 +10217,6 @@ def student_submit_assignment(mid:int):
         return r
 
     sid = is_student()
-    file = request.files.get('file')
-
-    if not file or not file.filename:
-        return page("Error", card_msg("Please select a file."))
 
     conn = get_db()
     cur = conn.cursor()
@@ -10128,25 +10228,25 @@ def student_submit_assignment(mid:int):
         FROM materials
         WHERE id=?
     """, (mid,))
+
     m = cur.fetchone()
 
-    # Validate assignment exists and is assignment
-    if not m or (m['kind'] != 'assignment' and m['is_assignment'] != 1):
+    if not m or (m["kind"] != "assignment" and m["is_assignment"] != 1):
         conn.close()
         return page("Error", card_msg("Invalid assignment."))
 
-    assignment_month = m['month']
+    assignment_month = m["month"]
 
     # Check student was ACTIVE in that assignment month
     cur.execute("""
         SELECT 1
         FROM enrollments
         WHERE student_id=?
-        AND subject_id=?
-        AND month=?
-        AND status='ACTIVE'
+          AND subject_id=?
+          AND month=?
+          AND status='ACTIVE'
         LIMIT 1
-    """, (sid, m['subject_id'], assignment_month))
+    """, (sid, m["subject_id"], assignment_month))
 
     enrolled = cur.fetchone()
 
@@ -10156,33 +10256,33 @@ def student_submit_assignment(mid:int):
             f"You were not enrolled for this subject in {pretty_month_label(assignment_month)}."
         ))
 
-    # Check due date ONLY (NOT system month)
-    if m['due_date']:
+    # Check due date
+    if m["due_date"]:
         try:
             end = datetime.datetime.fromisoformat(
-                m['due_date'] + "T23:59:59+00:00"
+                m["due_date"] + "T23:59:59+00:00"
             )
-            now = datetime.datetime.now(datetime.timezone.utc)
+            now_dt = datetime.datetime.now(datetime.timezone.utc)
 
-            if now > end:
+            if now_dt > end:
                 conn.close()
                 return page("Closed", card_msg("Submission window has closed."))
 
         except Exception:
             pass
 
-    # Save submission
-    safe = f"{int(datetime.datetime.now().timestamp())}_{sid}_{secure_name(file.filename)}"
+    files = request.files.getlist("file")
 
-    dest = SUBMISSIONS_DIR / safe
+    path, file_count = save_uploaded_files_as_single_file(
+        files=files,
+        target_dir=SUBMISSIONS_DIR,
+        prefix=f"student_{sid}_assignment_{mid}",
+        public_url_prefix=None
+    )
 
-    # Make sure the submissions folder exists before saving
-    SUBMISSIONS_DIR.mkdir(parents=True, exist_ok=True)
-
-    file.save(dest)
-
-    # Store the real server path, not the URL path
-    path = str(dest)
+    if not path:
+        conn.close()
+        return page("Error", card_msg("Please select at least one file."))
 
     now = now_utc_iso()
 
@@ -10198,7 +10298,6 @@ def student_submit_assignment(mid:int):
     if old and old["file_path"]:
         old_path = old["file_path"]
 
-        # Support both old URL-style paths and real server paths
         if old_path.startswith("/submission-files/"):
             old_path = str(SUBMISSIONS_DIR / os.path.basename(old_path))
 
@@ -10216,6 +10315,9 @@ def student_submit_assignment(mid:int):
 
     conn.commit()
     conn.close()
+
+    if file_count > 1:
+        return page("Submitted", card_msg(f"Assignment submitted successfully. {file_count} files were saved as one ZIP file."))
 
     return page("Submitted", card_msg("Assignment submitted successfully."))
 
@@ -12158,12 +12260,13 @@ def tutor_home():
                 </div>
 
                 <div class="mini muted" style="margin-bottom:8px">
-                    Upload slides, notes, worksheets, or resources
+                    Upload one or more slides, notes, worksheets, scripts, or resources. Multiple files will be saved as one ZIP file.
                 </div>
 
                 <input type='file'
                        name='file'
                        accept='.pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.ppt,.pptx'
+                       multiple
                        style="width:100%">
             </div>
 
@@ -13570,25 +13673,42 @@ def publish_all_marks(mid):
 
 @app.post('/tutor/upload')
 def tutor_upload():
-    r=require_tutor()
-    if r: return r
-    tid=is_tutor(); month = get_active_month('tutor')
-    subject_id=request.form.get('subject_id','').strip()
-    title=request.form.get('title','').strip()
-    youtube=request.form.get('youtube','').strip()
-    file=request.files.get('file')
-    is_assignment=1 if request.form.get('is_assignment')=='on' else 0
-    due=request.form.get('due','').strip() or None
-    max_points = request.form.get('max_points','').strip()
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    month = get_active_month('tutor')
+
+    subject_id = request.form.get('subject_id', '').strip()
+    title = request.form.get('title', '').strip()
+    youtube = request.form.get('youtube', '').strip()
+
+    files = request.files.getlist('file')
+
+    is_assignment = 1 if request.form.get('is_assignment') == 'on' else 0
+    due = request.form.get('due', '').strip() or None
+
+    max_points = request.form.get('max_points', '').strip()
+
     try:
         max_points = int(max_points) if max_points else 100
     except Exception:
         max_points = 100
-    if max_points < 1: max_points = 1
-    if max_points > 1000: max_points = 1000
-    if not (subject_id and title): return page("Error", card_msg("Subject and title required."))
 
-    conn=get_db(); cur=conn.cursor()
+    if max_points < 1:
+        max_points = 1
+
+    if max_points > 1000:
+        max_points = 1000
+
+    if not subject_id or not title:
+        return page("Error", card_msg("Subject and title required."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
     cur.execute("""
         SELECT s.uploads_locked
         FROM tutor_subjects ts
@@ -13609,19 +13729,64 @@ def tutor_upload():
             card_msg("Uploads and assignments are currently locked for this subject. Contact Admin.")
         )
 
-    file_path=None
-    if file and file.filename:
-        safe=f"{int(datetime.datetime.now().timestamp())}_{secure_name(file.filename)}"
-        dest=MATERIALS_DIR/safe; file.save(dest); file_path=f"/materials-files/{safe}"
-    if not (file_path or youtube):
-        conn.close(); return page("Error", card_msg("Attach a file or provide a YouTube link."))
+    file_path, file_count = save_uploaded_files_as_single_file(
+        files=files,
+        target_dir=MATERIALS_DIR,
+        prefix=f"tutor_{tid}_subject_{subject_id}",
+        public_url_prefix="/materials-files"
+    )
 
-    now=now_utc_iso()
-    kind = 'assignment' if is_assignment else ('file' if file_path else 'youtube')
-    cur.execute("""INSERT INTO materials(subject_id,tutor_id,month,title,kind,file_path,youtube_url,created_at,is_assignment,due_date,max_points)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                (subject_id, tid, month, title, kind, file_path, youtube if youtube else None, now, is_assignment, due, max_points))
-    conn.commit(); conn.close()
+    if not file_path and not youtube:
+        conn.close()
+        return page("Error", card_msg("Attach at least one file or provide a recording/link."))
+
+    now = now_utc_iso()
+
+    if is_assignment:
+        kind = "assignment"
+    elif file_path:
+        kind = "file"
+    else:
+        kind = "youtube"
+
+    # If many files were uploaded, make the title clearer
+    saved_title = title
+
+    if file_count > 1:
+        saved_title = f"{title} ({file_count} files)"
+
+    cur.execute("""
+        INSERT INTO materials(
+            subject_id,
+            tutor_id,
+            month,
+            title,
+            kind,
+            file_path,
+            youtube_url,
+            created_at,
+            is_assignment,
+            due_date,
+            max_points
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        subject_id,
+        tid,
+        month,
+        saved_title,
+        kind,
+        file_path,
+        youtube if youtube else None,
+        now,
+        is_assignment,
+        due,
+        max_points
+    ))
+
+    conn.commit()
+    conn.close()
+
     return redirect(url_for('tutor_home'))
     
     
@@ -13632,9 +13797,14 @@ def tutor_upload_marked_script(mid, sid):
     if r: return r
 
     tid = is_tutor()
-    f = request.files.get("marked_file")
+    files = request.files.getlist("marked_file")
 
-    if not f or not f.filename:
+    valid_files = [
+        f for f in files
+        if f and f.filename and f.filename.strip()
+    ]
+
+    if not valid_files:
         return redirect(url_for("tutor_assignment_manage", mid=mid))
 
     conn = get_db()
@@ -13669,11 +13839,16 @@ def tutor_upload_marked_script(mid, sid):
         conn.close()
         return page("Error", card_msg("This learner has not submitted yet."))
 
-    filename = secure_name(f.filename)
-    marked_filename = f"marked_{mid}_{sid}_{int(time.time())}_{filename}"
-    path = SUBMISSIONS_DIR / marked_filename
-
-    f.save(path)
+    path, file_count = save_uploaded_files_as_single_file(
+        files=valid_files,
+        target_dir=SUBMISSIONS_DIR,
+        prefix=f"marked_{mid}_{sid}",
+        public_url_prefix=None
+    )
+    
+    if not path:
+        conn.close()
+        return redirect(url_for("tutor_assignment_manage", mid=mid))
 
     cur.execute("""
         UPDATE submissions
@@ -13815,6 +13990,7 @@ def tutor_assignment_manage(mid: int):
                 <input type="file"
                        name="marked_file"
                        accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                       multiple
                        required
                        class="mini">
 
