@@ -3424,16 +3424,48 @@ def month_last_day(year:int, month:int) -> int:
     return calendar.monthrange(year, month)[1]
 
 def rating_window_open(current_month: str) -> bool:
-    """Open from the 24th to the last day of current_month (server date)."""
-    today = datetime.date.today()
+    """
+    Rating window:
+    Opens on the 24th of the selected month.
+    Closes on the 5th of the following month.
+
+    Example:
+    2026-05 ratings open from 24 May 2026 to 5 June 2026.
+    """
     try:
-        y, m = map(int, current_month.split('-'))
+        y, m = map(int, current_month.split("-")[:2])
     except Exception:
         return False
-    last = month_last_day(y, m)
-    if today.year == y and today.month == m and 24 <= today.day <= last:
-        return True
-    return False
+
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date()
+
+    start_date = datetime.date(y, m, 24)
+
+    if m == 12:
+        end_date = datetime.date(y + 1, 1, 5)
+    else:
+        end_date = datetime.date(y, m + 1, 5)
+
+    return start_date <= today <= end_date
+    
+def rating_window_label(current_month: str) -> str:
+    """
+    Shows the rating period in a friendly format.
+    Example: 24 May 2026 to 5 June 2026.
+    """
+    try:
+        y, m = map(int, current_month.split("-")[:2])
+    except Exception:
+        return "24th to the 5th of the next month"
+
+    start_date = datetime.date(y, m, 24)
+
+    if m == 12:
+        end_date = datetime.date(y + 1, 1, 5)
+    else:
+        end_date = datetime.date(y, m + 1, 5)
+
+    return f"{start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')}"
         
 
 def enrollment_exists(conn, student_id, subject_id, month):
@@ -8892,7 +8924,7 @@ def student_home():
         </div>
         """
 
-    # ===== Ratings block (24th to month-end) =====
+    # ===== Ratings block (24th to 5th of next month) =====
     rate_card = ""
     if rating_window_open(month) and active_sub_ids:
         # Fetch existing ratings this month for prefill
@@ -8924,8 +8956,12 @@ def student_home():
         rate_card = f"""
         <div class='card'>
             <h2>Rate your classes for {month}</h2>
-            <p class='muted mini'>This is open from the 24th to the end of the month. 1 ★ (poor) → 5 ★ (excellent).</p>
+            <p class='muted mini'>
+                This rating period is open from {rating_window_label(month)}.
+                1 ★ (poor) → 5 ★ (excellent).
+            </p>
             <form method='post' action='{url_for('student_submit_ratings')}'>
+            <input type="hidden" name="month" value="{escape(month)}">
             <div class="scroll-x">
                 <table>
                     <thead><tr><th>Subject</th><th>Rating</th><th>Comment</th></tr></thead>
@@ -10407,9 +10443,15 @@ def student_submit_ratings():
     r = require_student()
     if r: return r
     sid = is_student()
-    month = get_setting('current_month')
+    month = request.form.get("month", "").strip() or get_active_month("student") or get_setting("current_month")
     if not rating_window_open(month):
-        return page("Closed", card_msg("The rating window is not open."))
+        return page(
+            "Closed",
+            card_msg(
+                f"The rating window for {pretty_month_label(month)} is not open. "
+                f"It opens from {rating_window_label(month)}."
+            )
+        )
     conn = get_db(); cur = conn.cursor()
     cur.execute("""SELECT subject_id FROM enrollments
                 WHERE student_id=? AND month=? AND status='ACTIVE'""", (sid, month))
