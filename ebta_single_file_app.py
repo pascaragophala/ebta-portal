@@ -26848,10 +26848,544 @@ def aqm_nav():
         <a class="btn mini" href="/aqm/manual-marks">Manual Marks</a>
         <a class="btn mini" href="/aqm/attendance">Attendance Trends</a>
         <a class="btn mini" href="/aqm/assignments">Assignment Completion</a>
-        <a class="btn mini" href="/aqm/tutors">Tutor Quality</a>
+        <a class="btn mini" href="/aqm/tutors">Tutor Work Progress</a>
         <a class="btn mini" href="/aqm/awards">Awards</a>
         <a class="btn mini danger" href="/aqm/logout">Logout</a>
     </div>
+    """
+
+
+def aqm_dashboard_styles():
+    """
+    Compact professional styling for the AQM dashboard.
+    """
+    return """
+    <style>
+        .aqm-hero {
+            background:linear-gradient(135deg,#0f3d1e,#1b5e20,#2e7d32);
+            color:white;
+            border-radius:20px;
+            padding:22px;
+            margin-bottom:16px;
+            box-shadow:0 14px 35px rgba(15,61,30,.22);
+            position:relative;
+            overflow:hidden;
+        }
+
+        .aqm-hero:before {
+            content:"";
+            position:absolute;
+            width:220px;
+            height:220px;
+            right:-80px;
+            top:-90px;
+            border-radius:999px;
+            background:rgba(255,255,255,.10);
+        }
+
+        .aqm-hero:after {
+            content:"";
+            position:absolute;
+            width:130px;
+            height:130px;
+            right:70px;
+            bottom:-70px;
+            border-radius:999px;
+            background:rgba(255,255,255,.08);
+        }
+
+        .aqm-hero-content {
+            position:relative;
+            z-index:2;
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:16px;
+            flex-wrap:wrap;
+        }
+
+        .aqm-hero h1 {
+            margin:0;
+            color:white;
+            font-size:28px;
+            line-height:1.15;
+        }
+
+        .aqm-hero p {
+            margin:8px 0 0 0;
+            color:rgba(255,255,255,.88);
+            max-width:780px;
+            line-height:1.5;
+            font-size:14px;
+        }
+
+        .aqm-role-pill {
+            background:rgba(255,255,255,.16);
+            border:1px solid rgba(255,255,255,.28);
+            color:white;
+            padding:8px 12px;
+            border-radius:999px;
+            font-size:12px;
+            font-weight:800;
+            white-space:nowrap;
+        }
+
+        .aqm-hero-stats {
+            position:relative;
+            z-index:2;
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+            gap:9px;
+            margin-top:16px;
+        }
+
+        .aqm-hero-stat {
+            background:rgba(255,255,255,.13);
+            border:1px solid rgba(255,255,255,.20);
+            border-radius:14px;
+            padding:10px;
+        }
+
+        .aqm-hero-stat .k {
+            font-size:20px;
+            font-weight:900;
+            line-height:1;
+            color:white;
+        }
+
+        .aqm-hero-stat .t {
+            font-size:11px;
+            color:rgba(255,255,255,.82);
+            margin-top:5px;
+        }
+
+        .aqm-section {
+            border:1px solid #e2e8f0;
+            border-radius:14px;
+            background:#fff;
+            margin-top:14px;
+            overflow:hidden;
+        }
+
+        .aqm-section summary {
+            cursor:pointer;
+            padding:13px 15px;
+            font-weight:800;
+            background:#f8fafc;
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:10px;
+            list-style:none;
+        }
+
+        .aqm-section summary::-webkit-details-marker {
+            display:none;
+        }
+
+        .aqm-section summary:after {
+            content:"Open";
+            font-size:11px;
+            font-weight:700;
+            color:#166534;
+            background:#dcfce7;
+            border:1px solid #bbf7d0;
+            padding:4px 8px;
+            border-radius:999px;
+        }
+
+        .aqm-section[open] summary:after {
+            content:"Close";
+            color:#92400e;
+            background:#fef3c7;
+            border-color:#fde68a;
+        }
+
+        .aqm-section-body {
+            padding:12px;
+        }
+
+        .aqm-small-note {
+            font-size:12px;
+            color:#64748b;
+            margin-top:4px;
+        }
+
+        .aqm-actions {
+            display:flex;
+            gap:8px;
+            flex-wrap:wrap;
+            margin-top:10px;
+        }
+
+        @media(max-width:700px) {
+            .aqm-hero {
+                padding:18px;
+                border-radius:16px;
+            }
+
+            .aqm-hero h1 {
+                font-size:23px;
+            }
+
+            .aqm-role-pill {
+                width:100%;
+                text-align:center;
+            }
+
+            .aqm-hero-stats {
+                grid-template-columns:repeat(2,1fr);
+            }
+        }
+    </style>
+    """
+
+
+def aqm_student_progress_snapshot(month, limit=12):
+    """
+    Builds a dashboard snapshot of learner academic progress.
+    Uses active enrollments, material views, submissions, marks, reports and portal activity.
+    """
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            s.id,
+            s.full_name,
+            s.phone_whatsapp,
+            s.grade,
+            COALESCE(s.school, '') AS school,
+            COUNT(DISTINCT e.subject_id) AS active_subjects
+        FROM students s
+        JOIN enrollments e ON e.student_id = s.id
+        WHERE e.status='ACTIVE'
+          AND e.month LIKE ?
+        GROUP BY s.id
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.full_name
+    """, (month + "%",))
+
+    learners_raw = cur.fetchall()
+
+    learner_items = []
+
+    for learner in learners_raw:
+        student_id = learner["id"]
+
+        cur.execute("""
+            SELECT DISTINCT subject_id
+            FROM enrollments
+            WHERE student_id=?
+              AND status='ACTIVE'
+              AND month LIKE ?
+        """, (student_id, month + "%"))
+
+        subject_ids = [str(r["subject_id"]) for r in cur.fetchall()]
+
+        total_materials = 0
+        viewed_materials = 0
+        total_assignments = 0
+        submitted_assignments = 0
+        avg_assignment_mark = 0
+        avg_manual_mark = 0
+        reports_uploaded = 0
+        portal_minutes = 0
+
+        if subject_ids:
+            placeholders = ",".join("?" * len(subject_ids))
+
+            cur.execute(f"""
+                SELECT COUNT(*) AS c
+                FROM materials
+                WHERE subject_id IN ({placeholders})
+                  AND month LIKE ?
+            """, subject_ids + [month + "%"])
+
+            total_materials = cur.fetchone()["c"] or 0
+
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT mv.material_id) AS c
+                FROM material_views mv
+                JOIN materials m ON m.id = mv.material_id
+                WHERE mv.student_id=?
+                  AND m.subject_id IN ({placeholders})
+                  AND m.month LIKE ?
+            """, [student_id] + subject_ids + [month + "%"])
+
+            viewed_materials = cur.fetchone()["c"] or 0
+
+            cur.execute(f"""
+                SELECT COUNT(*) AS c
+                FROM materials
+                WHERE subject_id IN ({placeholders})
+                  AND month LIKE ?
+                  AND (is_assignment=1 OR kind='assignment')
+            """, subject_ids + [month + "%"])
+
+            total_assignments = cur.fetchone()["c"] or 0
+
+            cur.execute(f"""
+                SELECT COUNT(sub.id) AS c
+                FROM submissions sub
+                JOIN materials m ON m.id = sub.material_id
+                WHERE sub.student_id=?
+                  AND m.subject_id IN ({placeholders})
+                  AND m.month LIKE ?
+                  AND (m.is_assignment=1 OR m.kind='assignment')
+            """, [student_id] + subject_ids + [month + "%"])
+
+            submitted_assignments = cur.fetchone()["c"] or 0
+
+            cur.execute(f"""
+                SELECT ROUND(AVG(sub.mark),1) AS avg_mark
+                FROM submissions sub
+                JOIN materials m ON m.id = sub.material_id
+                WHERE sub.student_id=?
+                  AND m.subject_id IN ({placeholders})
+                  AND m.month LIKE ?
+                  AND sub.mark IS NOT NULL
+            """, [student_id] + subject_ids + [month + "%"])
+
+            avg_assignment_mark = cur.fetchone()["avg_mark"] or 0
+
+            cur.execute(f"""
+                SELECT ROUND(AVG(mark),1) AS avg_mark
+                FROM aqm_student_marks
+                WHERE student_id=?
+                  AND subject_id IN ({placeholders})
+                  AND month=?
+            """, [student_id] + subject_ids + [month])
+
+            avg_manual_mark = cur.fetchone()["avg_mark"] or 0
+
+        cur.execute("""
+            SELECT COUNT(*) AS c
+            FROM student_reports
+            WHERE student_id=?
+              AND substr(upload_date,1,7)=?
+        """, (student_id, month))
+
+        reports_uploaded = cur.fetchone()["c"] or 0
+
+        cur.execute("""
+            SELECT COALESCE(SUM(total_seconds),0) AS seconds
+            FROM student_portal_activity
+            WHERE student_id=?
+              AND month=?
+        """, (student_id, month))
+
+        portal_minutes = int((cur.fetchone()["seconds"] or 0) // 60)
+
+        material_rate = percent_value(viewed_materials, total_materials)
+        assignment_rate = percent_value(submitted_assignments, total_assignments)
+
+        components = []
+
+        if total_materials > 0:
+            components.append(material_rate)
+
+        if total_assignments > 0:
+            components.append(assignment_rate)
+
+        if avg_manual_mark:
+            components.append(avg_manual_mark)
+
+        if avg_assignment_mark:
+            components.append(avg_assignment_mark)
+
+        if reports_uploaded > 0:
+            components.append(100)
+
+        overall_progress = round(sum(components) / len(components)) if components else 0
+
+        if overall_progress >= 75:
+            progress_status = "GOOD"
+            status_class = "active"
+        elif overall_progress >= 50:
+            progress_status = "WATCH"
+            status_class = "pending"
+        else:
+            progress_status = "HIGH RISK"
+            status_class = "lapsed"
+
+        learner_items.append({
+            "id": student_id,
+            "full_name": learner["full_name"],
+            "phone_whatsapp": learner["phone_whatsapp"],
+            "grade": learner["grade"],
+            "school": learner["school"],
+            "active_subjects": learner["active_subjects"] or 0,
+            "total_materials": total_materials,
+            "viewed_materials": viewed_materials,
+            "material_rate": material_rate,
+            "total_assignments": total_assignments,
+            "submitted_assignments": submitted_assignments,
+            "assignment_rate": assignment_rate,
+            "avg_assignment_mark": avg_assignment_mark,
+            "avg_manual_mark": avg_manual_mark,
+            "reports_uploaded": reports_uploaded,
+            "portal_minutes": portal_minutes,
+            "overall_progress": overall_progress,
+            "progress_status": progress_status,
+            "status_class": status_class
+        })
+
+    conn.close()
+
+    good_count = len([x for x in learner_items if x["progress_status"] == "GOOD"])
+    watch_count = len([x for x in learner_items if x["progress_status"] == "WATCH"])
+    high_risk_count = len([x for x in learner_items if x["progress_status"] == "HIGH RISK"])
+
+    avg_progress = round(sum([x["overall_progress"] for x in learner_items]) / len(learner_items)) if learner_items else 0
+    avg_material_rate = round(sum([x["material_rate"] for x in learner_items]) / len(learner_items)) if learner_items else 0
+    avg_assignment_rate = round(sum([x["assignment_rate"] for x in learner_items]) / len(learner_items)) if learner_items else 0
+
+    learner_items = sorted(
+        learner_items,
+        key=lambda x: (x["overall_progress"], x["full_name"] or "")
+    )
+
+    return {
+        "total_learners": len(learner_items),
+        "good_count": good_count,
+        "watch_count": watch_count,
+        "high_risk_count": high_risk_count,
+        "avg_progress": avg_progress,
+        "avg_material_rate": avg_material_rate,
+        "avg_assignment_rate": avg_assignment_rate,
+        "items": learner_items[:limit]
+    }
+
+
+def aqm_tutor_work_snapshot(month, limit=12):
+    """
+    Builds a dashboard snapshot of tutor work progress using the existing tutor work progress engine.
+    """
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, full_name
+        FROM tutors
+        ORDER BY full_name
+    """)
+
+    tutors = cur.fetchall()
+    conn.close()
+
+    tutor_items = []
+
+    for tutor in tutors:
+        progress = tutor_work_progress_data(tutor["id"], month)
+
+        if progress["overall_rate"] >= 75:
+            status = "GOOD"
+            status_class = "active"
+        elif progress["overall_rate"] >= 50:
+            status = "WATCH"
+            status_class = "pending"
+        else:
+            status = "HIGH RISK"
+            status_class = "lapsed"
+
+        tutor_items.append({
+            "id": tutor["id"],
+            "full_name": tutor["full_name"],
+            "overall_rate": progress["overall_rate"],
+            "status": status,
+            "status_class": status_class,
+            "uploads": progress["total_uploads"],
+            "recordings": progress["recordings_uploaded"],
+            "assignments": progress["assignments_uploaded"],
+            "material_views": progress["material_views"],
+            "attendance_logs": progress["attendance_logs"],
+            "attendance_target": progress["assigned_sessions"],
+            "marking_rate": progress["marking_rate"],
+            "unmarked": progress["unmarked_submissions"],
+            "tracker_logs": progress["tracker_logs"],
+            "avg_rating": progress["avg_manager_rating"] if progress["avg_manager_rating"] is not None else "—"
+        })
+
+    good_count = len([x for x in tutor_items if x["status"] == "GOOD"])
+    watch_count = len([x for x in tutor_items if x["status"] == "WATCH"])
+    high_risk_count = len([x for x in tutor_items if x["status"] == "HIGH RISK"])
+
+    avg_progress = round(sum([x["overall_rate"] for x in tutor_items]) / len(tutor_items)) if tutor_items else 0
+
+    tutor_items = sorted(
+        tutor_items,
+        key=lambda x: (x["overall_rate"], x["full_name"] or "")
+    )
+
+    return {
+        "total_tutors": len(tutor_items),
+        "good_count": good_count,
+        "watch_count": watch_count,
+        "high_risk_count": high_risk_count,
+        "avg_progress": avg_progress,
+        "items": tutor_items[:limit]
+    }
+
+
+def aqm_welcome_hero(month, learner_snapshot, tutor_snapshot):
+    """
+    Professional welcome banner for the Academic Quality Manager portal.
+    """
+
+    aqm_name = session.get("aqm_name") or "Academic Quality Manager"
+
+    return f"""
+    <section class="aqm-hero">
+        <div class="aqm-hero-content">
+            <div>
+                <h1>Welcome, {escape(aqm_name)}</h1>
+
+                <p>
+                    Academic Quality Manager Portal for monitoring learner academic progress,
+                    student reports, assignment completion, material engagement, tutor work progress,
+                    recordings, attendance logging, marking and overall academic quality for {pretty_month_label(month)}.
+                </p>
+            </div>
+
+            <div class="aqm-role-pill">
+                Academic Quality Manager
+            </div>
+        </div>
+
+        <div class="aqm-hero-stats">
+            <div class="aqm-hero-stat">
+                <div class="k">{learner_snapshot["total_learners"]}</div>
+                <div class="t">Active Learners</div>
+            </div>
+
+            <div class="aqm-hero-stat">
+                <div class="k">{learner_snapshot["avg_progress"]}%</div>
+                <div class="t">Learner Avg Progress</div>
+            </div>
+
+            <div class="aqm-hero-stat">
+                <div class="k">{learner_snapshot["high_risk_count"]}</div>
+                <div class="t">High Risk Learners</div>
+            </div>
+
+            <div class="aqm-hero-stat">
+                <div class="k">{tutor_snapshot["total_tutors"]}</div>
+                <div class="t">Tutors Monitored</div>
+            </div>
+
+            <div class="aqm-hero-stat">
+                <div class="k">{tutor_snapshot["avg_progress"]}%</div>
+                <div class="t">Tutor Avg Progress</div>
+            </div>
+
+            <div class="aqm-hero-stat">
+                <div class="k">{tutor_snapshot["high_risk_count"]}</div>
+                <div class="t">Tutors Needing Attention</div>
+            </div>
+        </div>
+    </section>
     """
 
 
@@ -26915,96 +27449,224 @@ def aqm_logout():
 def aqm_dashboard():
 
     r = require_aqm()
-    if r: return r
+    if r:
+        return r
 
     month = request.args.get("month") or get_setting("current_month")
 
-    conn = get_db()
-    cur = conn.cursor()
+    learner_snapshot = aqm_student_progress_snapshot(month, limit=12)
+    tutor_snapshot = aqm_tutor_work_snapshot(month, limit=12)
 
-    cur.execute("""
-        SELECT COUNT(DISTINCT student_id) AS total
-        FROM enrollments
-        WHERE month LIKE ? AND status='ACTIVE'
-    """, (month + "%",))
-    active_learners = cur.fetchone()["total"]
+    learner_rows = ""
 
-    cur.execute("""
-        SELECT COUNT(*) AS total
-        FROM student_reports
-        WHERE substr(upload_date,1,7)=?
-    """, (month,))
-    reports_uploaded = cur.fetchone()["total"]
+    for learner in learner_snapshot["items"]:
+        learner_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(learner["full_name"] or "—")}</strong>
+                <div class="mini muted">{escape(learner["phone_whatsapp"] or "—")}</div>
+            </td>
 
-    cur.execute("""
-        SELECT COUNT(*) AS total
-        FROM materials
-        WHERE is_assignment=1 AND month=?
-    """, (month,))
-    total_assignments = cur.fetchone()["total"]
+            <td>{grade_label(learner["grade"])}</td>
 
-    cur.execute("""
-        SELECT COUNT(*) AS total
-        FROM submissions sub
-        JOIN materials m ON m.id=sub.material_id
-        WHERE m.is_assignment=1 AND m.month=?
-    """, (month,))
-    submitted_assignments = cur.fetchone()["total"]
+            <td>
+                <span class="chip {learner["status_class"]}">
+                    {escape(learner["progress_status"])}
+                </span>
+                <div class="mini muted">{learner["overall_progress"]}% overall</div>
+            </td>
 
-    cur.execute("""
-        SELECT ROUND(AVG(mark),1) AS avg_mark
-        FROM submissions sub
-        JOIN materials m ON m.id=sub.material_id
-        WHERE m.is_assignment=1
-        AND m.month=?
-        AND sub.mark IS NOT NULL
-    """, (month,))
-    avg_mark = cur.fetchone()["avg_mark"] or 0
+            <td>
+                {learner["viewed_materials"]} / {learner["total_materials"]}
+                <div class="mini muted">{learner["material_rate"]}% viewed</div>
+            </td>
 
-    conn.close()
+            <td>
+                {learner["submitted_assignments"]} / {learner["total_assignments"]}
+                <div class="mini muted">{learner["assignment_rate"]}% submitted</div>
+            </td>
 
-    completion_rate = 0
-    if total_assignments and active_learners:
-        expected = total_assignments * active_learners
-        completion_rate = round((submitted_assignments / expected) * 100, 1)
+            <td>
+                <div class="mini">AQM: {learner["avg_manual_mark"] or 0}%</div>
+                <div class="mini muted">Assignments: {learner["avg_assignment_mark"] or 0}%</div>
+            </td>
+
+            <td>
+                {learner["reports_uploaded"]}
+                <div class="mini muted">report(s)</div>
+            </td>
+
+            <td>
+                {learner["portal_minutes"]} min
+                <div class="mini muted">portal time</div>
+            </td>
+        </tr>
+        """
+
+    tutor_rows = ""
+
+    for tutor in tutor_snapshot["items"]:
+        tutor_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(tutor["full_name"] or "—")}</strong>
+            </td>
+
+            <td>
+                <span class="chip {tutor["status_class"]}">
+                    {escape(tutor["status"])}
+                </span>
+                <div class="mini muted">{tutor["overall_rate"]}% overall</div>
+            </td>
+
+            <td>{tutor["uploads"]}</td>
+            <td>{tutor["recordings"]}</td>
+            <td>{tutor["assignments"]}</td>
+            <td>{tutor["material_views"]}</td>
+
+            <td>
+                {tutor["attendance_logs"]} / {tutor["attendance_target"]}
+            </td>
+
+            <td>{tutor["marking_rate"]}%</td>
+            <td>{tutor["unmarked"]}</td>
+            <td>{tutor["tracker_logs"]}</td>
+            <td>{tutor["avg_rating"]}</td>
+        </tr>
+        """
 
     body = f"""
+    {aqm_dashboard_styles()}
     {aqm_nav()}
 
+    {aqm_welcome_hero(month, learner_snapshot, tutor_snapshot)}
+
     <section class="card">
-        <h1>Academic Quality Manager Dashboard</h1>
+
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+            <div>
+                <h2 style="margin-top:0">Academic Quality Overview</h2>
+                <p class="mini muted" style="margin-top:4px">
+                    Review learner progress and tutor delivery quality for the selected month.
+                </p>
+            </div>
+        </div>
 
         <form method="get" style="margin:10px 0;max-width:220px">
             <label>Viewing month</label>
-            <input type="month" name="month" value="{month}" onchange="this.form.submit()">
+            <input type="month" name="month" value="{escape(month)}" onchange="this.form.submit()">
         </form>
 
-        <div class="stats">
-            <div class="stat">
-                <div class="k">{active_learners}</div>
-                <div class="t">Active Learners</div>
-            </div>
-
-            <div class="stat">
-                <div class="k">{reports_uploaded}</div>
-                <div class="t">Reports Uploaded</div>
-            </div>
-
-            <div class="stat">
-                <div class="k">{submitted_assignments}</div>
-                <div class="t">Assignments Submitted</div>
-            </div>
-
-            <div class="stat">
-                <div class="k">{completion_rate}%</div>
-                <div class="t">Completion Rate</div>
-            </div>
-
-            <div class="stat">
-                <div class="k">{avg_mark}%</div>
-                <div class="t">Average Assignment Mark</div>
-            </div>
+        <div class="stats" style="margin-top:12px">
+            {stat("Active Learners", learner_snapshot["total_learners"])}
+            {stat("Learner Avg Progress", str(learner_snapshot["avg_progress"]) + "%")}
+            {stat("Material View Rate", str(learner_snapshot["avg_material_rate"]) + "%")}
+            {stat("Assignment Completion", str(learner_snapshot["avg_assignment_rate"]) + "%")}
+            {stat("Good Learners", learner_snapshot["good_count"])}
+            {stat("Watch Learners", learner_snapshot["watch_count"])}
+            {stat("High Risk Learners", learner_snapshot["high_risk_count"])}
+            {stat("Tutors Monitored", tutor_snapshot["total_tutors"])}
+            {stat("Tutor Avg Progress", str(tutor_snapshot["avg_progress"]) + "%")}
+            {stat("Tutors Needing Attention", tutor_snapshot["high_risk_count"])}
         </div>
+
+        <details class="aqm-section" open>
+            <summary>
+                <span>Student Academic Progress</span>
+            </summary>
+
+            <div class="aqm-section-body">
+                <p class="aqm-small-note">
+                    This preview shows learners who need attention first. Open the full learner performance page for the complete academic progress analysis.
+                </p>
+
+                <div class="aqm-actions">
+                    <a class="btn mini success" href="/aqm/learners?month={escape(month)}">
+                        Open Full Learner Academic Progress
+                    </a>
+
+                    <a class="btn mini secondary" href="/aqm/reports?month={escape(month)}">
+                        View Student Reports
+                    </a>
+
+                    <a class="btn mini secondary" href="/aqm/manual-marks?month={escape(month)}">
+                        Capture / Review AQM Marks
+                    </a>
+                </div>
+
+                <div class="scroll-x" style="margin-top:12px">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Learner</th>
+                                <th>Grade</th>
+                                <th>Status</th>
+                                <th>Materials</th>
+                                <th>Assignments</th>
+                                <th>Marks</th>
+                                <th>Reports</th>
+                                <th>Portal Time</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            {learner_rows or "<tr><td colspan='8'>No learner academic progress found for this month.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </details>
+
+        <details class="aqm-section" open>
+            <summary>
+                <span>Tutor Work Progress</span>
+            </summary>
+
+            <div class="aqm-section-body">
+                <p class="aqm-small-note">
+                    This preview shows tutors who need attention first. It uses uploads, recordings, assignments, learner views, attendance logs, marking and tracker activity.
+                </p>
+
+                <div class="aqm-actions">
+                    <a class="btn mini success" href="/aqm/tutors?month={escape(month)}">
+                        Open Full Tutor Work Progress
+                    </a>
+
+                    <a class="btn mini secondary" href="/aqm/attendance?month={escape(month)}">
+                        View Attendance Trends
+                    </a>
+
+                    <a class="btn mini secondary" href="/aqm/assignments?month={escape(month)}">
+                        View Assignment Completion
+                    </a>
+                </div>
+
+                <div class="scroll-x" style="margin-top:12px">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Tutor</th>
+                                <th>Status</th>
+                                <th>Uploads</th>
+                                <th>Recordings</th>
+                                <th>Assignments</th>
+                                <th>Learner Views</th>
+                                <th>Attendance Logs</th>
+                                <th>Marking</th>
+                                <th>Unmarked</th>
+                                <th>Tracker Logs</th>
+                                <th>Avg Rating</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            {tutor_rows or "<tr><td colspan='11'>No tutor work progress found for this month.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </details>
+
     </section>
     """
 
