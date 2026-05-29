@@ -27017,6 +27017,35 @@ def aqm_dashboard_styles():
             flex-wrap:wrap;
             margin-top:10px;
         }
+        
+        
+        .aqm-section .toolbar {
+            display:flex;
+            gap:8px;
+            flex-wrap:wrap;
+            align-items:center;
+        }
+
+        .aqm-section .toolbar input,
+        .aqm-section .toolbar select {
+            min-width:180px;
+            flex:1;
+        }
+
+        @media(max-width:700px) {
+            .aqm-section .toolbar {
+                display:grid;
+                grid-template-columns:1fr;
+            }
+
+            .aqm-section .toolbar input,
+            .aqm-section .toolbar select,
+            .aqm-section .toolbar button,
+            .aqm-section .toolbar a {
+                width:100%;
+            }
+        }
+        
 
         @media(max-width:700px) {
             .aqm-hero {
@@ -27041,16 +27070,42 @@ def aqm_dashboard_styles():
     """
 
 
-def aqm_student_progress_snapshot(month, limit=12):
+def aqm_student_progress_snapshot(month, limit=12, q="", grade_filter="", progress_filter=""):
     """
     Builds a dashboard snapshot of learner academic progress.
     Uses active enrollments, material views, submissions, marks, reports and portal activity.
     """
 
-    conn = get_db()
-    cur = conn.cursor()
+    where = [
+        "e.status='ACTIVE'",
+        "e.month LIKE ?"
+    ]
 
-    cur.execute("""
+    params = [month + "%"]
+
+    q = (q or "").strip()
+    grade_filter = (grade_filter or "").strip()
+    progress_filter = (progress_filter or "").strip()
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR COALESCE(s.school, '') LIKE ?
+                OR sub.name LIKE ?
+            )
+        """)
+        params += [search, search, search, search]
+
+    if grade_filter:
+        where.append("s.grade=?")
+        params.append(grade_filter)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
         SELECT
             s.id,
             s.full_name,
@@ -27060,11 +27115,11 @@ def aqm_student_progress_snapshot(month, limit=12):
             COUNT(DISTINCT e.subject_id) AS active_subjects
         FROM students s
         JOIN enrollments e ON e.student_id = s.id
-        WHERE e.status='ACTIVE'
-          AND e.month LIKE ?
+        JOIN subjects sub ON sub.id = e.subject_id
+        {where_sql}
         GROUP BY s.id
         ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.full_name
-    """, (month + "%",))
+    """, params)
 
     learners_raw = cur.fetchall()
 
@@ -27232,6 +27287,12 @@ def aqm_student_progress_snapshot(month, limit=12):
         })
 
     conn.close()
+    
+    if progress_filter:
+        learner_items = [
+            x for x in learner_items
+            if x["progress_status"] == progress_filter
+        ]
 
     good_count = len([x for x in learner_items if x["progress_status"] == "GOOD"])
     watch_count = len([x for x in learner_items if x["progress_status"] == "WATCH"])
@@ -27453,9 +27514,43 @@ def aqm_dashboard():
         return r
 
     month = request.args.get("month") or get_setting("current_month")
+    q = request.args.get("q", "").strip()
+    grade_filter = request.args.get("grade", "").strip()
+    progress_filter = request.args.get("progress", "").strip()
 
-    learner_snapshot = aqm_student_progress_snapshot(month, limit=12)
+    learner_snapshot = aqm_student_progress_snapshot(
+        month,
+        limit=25,
+        q=q,
+        grade_filter=grade_filter,
+        progress_filter=progress_filter
+    )
+
     tutor_snapshot = aqm_tutor_work_snapshot(month, limit=12)
+    
+    grade_options = """
+    <option value="">All Grades</option>
+    """
+
+    for g in ["G8", "G9", "G10", "G11", "G12", "G13"]:
+        selected = "selected" if grade_filter == g else ""
+        grade_options += f"""
+        <option value="{g}" {selected}>
+            {grade_label(g)}
+        </option>
+        """
+
+    progress_options = """
+    <option value="">All Progress Statuses</option>
+    """
+
+    for status in ["GOOD", "WATCH", "HIGH RISK"]:
+        selected = "selected" if progress_filter == status else ""
+        progress_options += f"""
+        <option value="{status}" {selected}>
+            {status}
+        </option>
+        """
 
     learner_rows = ""
 
@@ -27572,16 +27667,47 @@ def aqm_dashboard():
 
         <details class="aqm-section" open>
             <summary>
-                <span>Student Academic Progress</span>
+                <span>Detailed Learner Quality Review</span>
             </summary>
 
             <div class="aqm-section-body">
                 <p class="aqm-small-note">
-                    This preview shows learners who need attention first. Open the full learner performance page for the complete academic progress analysis.
+                    Search and filter learner academic quality by name, phone, school, subject, grade and progress status.
                 </p>
 
+                <form method="get"
+                      action="/aqm/dashboard"
+                      class="toolbar"
+                      style="margin-top:10px">
+
+                    <input type="month"
+                           name="month"
+                           value="{escape(month)}">
+
+                    <input name="q"
+                           value="{escape(q)}"
+                           placeholder="Search learner, phone, school or subject">
+
+                    <select name="grade">
+                        {grade_options}
+                    </select>
+
+                    <select name="progress">
+                        {progress_options}
+                    </select>
+
+                    <button class="btn mini success">
+                        Search
+                    </button>
+
+                    <a class="btn mini secondary" href="/aqm/dashboard?month={escape(month)}">
+                        Clear
+                    </a>
+                </form>
+
                 <div class="aqm-actions">
-                    <a class="btn mini success" href="/aqm/learners?month={escape(month)}">
+                    <a class="btn mini success"
+                       href="/aqm/learners?month={escape(month)}&q={escape(q)}&grade={escape(grade_filter)}&progress={escape(progress_filter)}">
                         Open Full Learner Academic Progress
                     </a>
 
@@ -27594,8 +27720,13 @@ def aqm_dashboard():
                     </a>
                 </div>
 
+                <div class="mini muted" style="margin-top:10px">
+                    Showing {learner_snapshot["total_learners"]} learner(s)
+                    {f"matching '{escape(q)}'" if q else ""}
+                </div>
+
                 <div class="scroll-x" style="margin-top:12px">
-                    <table>
+                                    <table>
                         <thead>
                             <tr>
                                 <th>Learner</th>
