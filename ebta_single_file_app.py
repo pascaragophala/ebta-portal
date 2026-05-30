@@ -1151,6 +1151,10 @@ def init_db():
     
     ensure_column(conn, "tutors", "profile_picture_path", "TEXT")
     ensure_column(conn, "tutors", "profile_picture_uploaded_at", "TEXT")
+    
+    ensure_column(conn, "tutors", "qualification", "TEXT")
+    ensure_column(conn, "tutors", "achievements", "TEXT")
+    ensure_column(conn, "tutors", "about", "TEXT")
 
     ensure_column(conn, "enrollments", "coupon_code", "TEXT")
     ensure_column(conn, "enrollments", "coupon_discount_amount", "REAL NOT NULL DEFAULT 0")
@@ -15177,6 +15181,9 @@ def tutor_profile_page():
             referral_earnings_total,
             profile_picture_path,
             profile_picture_uploaded_at,
+            qualification,
+            achievements,
+            about,
             created_at
         FROM tutors
         WHERE id=?
@@ -15282,7 +15289,7 @@ def tutor_profile_page():
             </div>
 
             <div class="card soft" style="border-left:5px solid #3b82f6">
-                <h2>Editable Details</h2>
+                <h2>Editable Profile Details</h2>
 
                 <form method="post"
                       action="{url_for('tutor_update_profile')}"
@@ -15296,13 +15303,34 @@ def tutor_profile_page():
                                required>
                     </div>
 
+                    <div>
+                        <label>Qualification</label>
+                        <input name="qualification"
+                               value="{escape(tutor['qualification'] or '')}"
+                               placeholder="Example: BSc Computer Science, BEd, Diploma in Education">
+                    </div>
+
+                    <div>
+                        <label>Achievements</label>
+                        <textarea name="achievements"
+                                  rows="4"
+                                  placeholder="Example: Distinctions, awards, tutoring experience, leadership roles">{escape(tutor['achievements'] or '')}</textarea>
+                    </div>
+
+                    <div>
+                        <label>About Me</label>
+                        <textarea name="about"
+                                  rows="5"
+                                  placeholder="Write a short professional introduction that students can see.">{escape(tutor['about'] or '')}</textarea>
+                    </div>
+
                     <button class="btn success">
-                        Save Name
+                        Save Profile
                     </button>
                 </form>
 
                 <p class="mini muted" style="margin-top:10px">
-                    Tutors may only update their display name and profile picture.
+                    Tutors may update their display name, profile picture, qualification, achievements and about section.
                     Phone number, assigned subjects and PIN must be changed by EBTA Admin.
                 </p>
             </div>
@@ -15352,7 +15380,11 @@ def tutor_update_profile():
         return r
 
     tid = is_tutor()
+
     full_name = request.form.get("full_name", "").strip()
+    qualification = request.form.get("qualification", "").strip()
+    achievements = request.form.get("achievements", "").strip()
+    about = request.form.get("about", "").strip()
 
     if not full_name:
         return page("Missing Name", card_msg("Full name is required."))
@@ -15362,9 +15394,18 @@ def tutor_update_profile():
 
     cur.execute("""
         UPDATE tutors
-        SET full_name=?
+        SET full_name=?,
+            qualification=?,
+            achievements=?,
+            about=?
         WHERE id=?
-    """, (full_name, tid))
+    """, (
+        full_name,
+        qualification,
+        achievements,
+        about,
+        tid
+    ))
 
     conn.commit()
     conn.close()
@@ -15618,6 +15659,9 @@ def student_view_tutor_profile(tutor_id):
             referral_code,
             profile_picture_path,
             profile_picture_uploaded_at,
+            qualification,
+            achievements,
+            about,
             created_at
         FROM tutors
         WHERE id=?
@@ -15682,6 +15726,30 @@ def student_view_tutor_profile(tutor_id):
         </div>
 
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px">
+
+            <div class="card soft">
+                <h2>Qualification</h2>
+
+                <p style="white-space:pre-wrap">
+                    {escape(tutor['qualification'] or 'No qualification added yet.')}
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>Achievements</h2>
+
+                <p style="white-space:pre-wrap">
+                    {escape(tutor['achievements'] or 'No achievements added yet.')}
+                </p>
+            </div>
+
+            <div class="card soft" style="grid-column:1/-1">
+                <h2>About This Tutor</h2>
+
+                <p style="white-space:pre-wrap">
+                    {escape(tutor['about'] or 'No tutor introduction added yet.')}
+                </p>
+            </div>
 
             <div class="card soft">
                 <h2>Subjects With This Tutor</h2>
@@ -22776,6 +22844,9 @@ def admin_tutors():
             t.full_name,
             t.phone,
             t.pin,
+            t.qualification,
+            t.achievements,
+            t.about,
             MIN(CAST(SUBSTR(s.grade,2) AS INTEGER)) AS grade_order
         FROM tutors t
         LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
@@ -22851,9 +22922,36 @@ def admin_tutors():
 
         trs.append(f"""
         <tr>
-            <td>
-                {escape(t['full_name'])}
+            <td style="min-width:260px">
+                <strong>{escape(t['full_name'])}</strong>
                 <div class='muted mini'>{escape(t['phone'])}</div>
+
+                <div class="mini" style="margin-top:6px">
+                    <strong>Qualification:</strong>
+                    {escape(t['qualification'] or 'Not added')}
+                </div>
+
+                <div class="mini muted" style="
+                    margin-top:4px;
+                    max-width:260px;
+                    white-space:nowrap;
+                    overflow:hidden;
+                    text-overflow:ellipsis;
+                " title="{escape(t['achievements'] or '')}">
+                    <strong>Achievements:</strong>
+                    {escape(t['achievements'] or 'Not added')}
+                </div>
+
+                <div class="mini muted" style="
+                    margin-top:4px;
+                    max-width:260px;
+                    white-space:nowrap;
+                    overflow:hidden;
+                    text-overflow:ellipsis;
+                " title="{escape(t['about'] or '')}">
+                    <strong>About:</strong>
+                    {escape(t['about'] or 'Not added')}
+                </div>
             </td>
 
             <td>{pin}</td>
@@ -23035,6 +23133,22 @@ def admin_tutor_edit(tid: int):
                 <label>Phone</label>
                 <input name='phone' value="{tutor['phone']}" required>
             </div>
+            
+            <div style="grid-column:1/-1">
+                <label>Qualification</label>
+                <textarea rows="2" readonly>{escape(tutor['qualification'] or 'Not added')}</textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Achievements</label>
+                <textarea rows="4" readonly>{escape(tutor['achievements'] or 'Not added')}</textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>About Tutor</label>
+                <textarea rows="5" readonly>{escape(tutor['about'] or 'Not added')}</textarea>
+            </div>
+            
             <div>
                 <button class='btn'>Update Tutor</button>
                 <a href='{url_for('admin_tutors')}' class='btn secondary'>Cancel</a>
