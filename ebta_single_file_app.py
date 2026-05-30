@@ -27295,6 +27295,9 @@ def aqm_student_progress_snapshot(month, limit=12, q="", grade_filter="", progre
     Uses active enrollments, material views, submissions, marks, reports and portal activity.
     """
 
+    conn = get_db()
+    cur = conn.cursor()
+
     where = [
         "e.status='ACTIVE'",
         "e.month LIKE ?"
