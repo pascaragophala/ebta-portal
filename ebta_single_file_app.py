@@ -18788,7 +18788,6 @@ def admin_nav():
                     ("Application Settings", "admin_application_settings", "/admin/application-settings"),
                     ("AQ Manager", "admin_academic_quality_managers", "/admin/academic-quality-managers"),
                     ("Student Reports", "admin_reports", "/admin/reports"),
-                    ("Assessment Delete Locks", "admin_assessment_delete_locks", "/admin/assessment-delete-locks"),
                 ],
                 False
             ),
@@ -18802,6 +18801,7 @@ def admin_nav():
                     ("Uploads Control", "admin_uploads_control", "/admin/uploads-control"),
                     ("Unlock Uploads", "admin_materials", "/admin/materials"),
                     ("Analytics", "admin_analytics", "/admin/analytics"),
+                    ("Assessment Delete Locks", "admin_assessment_delete_locks", "/admin/assessment-delete-locks"),
                 ],
                 False
             ),
