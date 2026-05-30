@@ -5595,6 +5595,631 @@ body.role-tutor span{
     }
 }
 
+/* =========================================================
+   STUDENT PORTAL MOBILE FRIENDLY UPGRADE
+   Safe: only affects pages when body has class role-student
+   ========================================================= */
+
+body.role-student{
+    overflow-x:hidden;
+}
+
+body.role-student *{
+    box-sizing:border-box;
+}
+
+body.role-student .wrap,
+body.role-student .layout,
+body.role-student .dashboard-main,
+body.role-student main,
+body.role-student section,
+body.role-student .card,
+body.role-student .soft{
+    max-width:100%;
+    min-width:0;
+}
+
+body.role-student img,
+body.role-student video,
+body.role-student iframe,
+body.role-student canvas{
+    max-width:100%;
+}
+
+body.role-student pre,
+body.role-student code{
+    white-space:pre-wrap;
+    word-break:break-word;
+}
+
+/* Prevent long names, links, messages and file names from pushing content off-screen */
+body.role-student .card,
+body.role-student .soft,
+body.role-student td,
+body.role-student th,
+body.role-student p,
+body.role-student div,
+body.role-student span,
+body.role-student a{
+    overflow-wrap:anywhere;
+}
+
+/* Student sidebar polish */
+body.role-student .sidebar{
+    border:1px solid rgba(27,94,32,.18);
+    background:
+        linear-gradient(180deg,#ffffff 0%,#f8fff9 100%);
+}
+
+body.role-student .sidebar .role{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    color:#1b5e20;
+    background:#e8f5e9;
+    border:1px solid rgba(27,94,32,.18);
+    border-radius:999px;
+    padding:6px 10px;
+    font-size:12px;
+    margin-bottom:8px;
+}
+
+body.role-student .sidebar .user{
+    font-size:15px;
+    font-weight:800;
+    color:#0f172a;
+    margin-bottom:12px;
+}
+
+body.role-student .side-links a{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+    border:1px solid rgba(27,94,32,.14);
+    background:#ffffff;
+    color:#0f172a;
+}
+
+body.role-student .side-links a:hover{
+    background:#f0fdf4;
+    color:#1b5e20;
+    border-color:#1b5e20;
+}
+
+/* Student cards and stats */
+body.role-student .stats,
+body.role-student .stats-mini{
+    gap:10px;
+}
+
+body.role-student .stats-mini .s,
+body.role-student .stat{
+    background:linear-gradient(180deg,#ffffff,#f8fff9);
+    border:1px solid rgba(27,94,32,.14);
+}
+
+body.role-student .stats-mini .s .k,
+body.role-student .stat .k{
+    color:#1b5e20;
+}
+
+/* Forms */
+body.role-student form{
+    max-width:100%;
+}
+
+body.role-student input,
+body.role-student select,
+body.role-student textarea{
+    max-width:100%;
+}
+
+/* Tables */
+body.role-student .scroll-x{
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+    width:100%;
+}
+
+body.role-student table{
+    width:100%;
+}
+
+/* =========================================================
+   MOBILE STUDENT LAYOUT
+   ========================================================= */
+@media (max-width:768px){
+
+    body.role-student{
+        overflow-x:hidden;
+        background:#f8fafc;
+    }
+
+    body.role-student .wrap{
+        width:100%;
+        max-width:100%;
+        margin:12px auto;
+        padding-left:10px;
+        padding-right:10px;
+    }
+
+    body.role-student .layout{
+        display:block !important;
+        grid-template-columns:1fr !important;
+        width:100%;
+        max-width:100%;
+    }
+
+    body.role-student .dashboard-main{
+        display:block;
+        width:100%;
+        max-width:100%;
+        min-width:0;
+    }
+
+    /* Header */
+    body.role-student .header{
+        position:sticky;
+        top:0;
+        z-index:50;
+        width:100%;
+        max-width:100%;
+    }
+
+    body.role-student .nav{
+        width:100%;
+        max-width:100%;
+        padding:10px;
+        gap:10px;
+    }
+
+    body.role-student .brand{
+        width:100%;
+        max-width:100%;
+        min-width:0;
+    }
+
+    body.role-student .brand-logo{
+        width:38px;
+        height:38px;
+        border-radius:12px;
+    }
+
+    body.role-student .brand .title{
+        font-size:16px;
+        line-height:1.2;
+        overflow-wrap:anywhere;
+    }
+
+    body.role-student .links{
+        width:100%;
+        max-width:100%;
+        display:flex;
+        overflow-x:auto;
+        gap:8px;
+        padding-bottom:4px;
+        -webkit-overflow-scrolling:touch;
+    }
+
+    body.role-student .links a,
+    body.role-student .links button{
+        flex:0 0 auto;
+        width:auto;
+        margin-left:0;
+        white-space:nowrap;
+        font-size:12px;
+        padding:7px 10px;
+        border-radius:999px;
+    }
+
+    /* Sidebar becomes a mobile profile/navigation card */
+    body.role-student .sidebar{
+        width:100%;
+        max-width:100%;
+        position:relative;
+        top:auto;
+        max-height:none;
+        margin:0 0 12px;
+        padding:12px;
+        border-radius:18px;
+        overflow:visible;
+        box-shadow:0 8px 20px rgba(15,23,42,.08);
+        background:
+            linear-gradient(135deg,rgba(27,94,32,.08),rgba(255,255,255,.96)),
+            #ffffff;
+    }
+
+    body.role-student .sidebar .role{
+        margin-bottom:6px;
+    }
+
+    body.role-student .sidebar .user{
+        font-size:16px;
+        margin-bottom:10px;
+    }
+
+    /* Student nav links as horizontal chips */
+    body.role-student .side-links{
+        width:100%;
+        max-width:100%;
+        display:flex;
+        gap:8px;
+        overflow-x:auto;
+        padding:4px 0 10px;
+        margin:4px 0 10px;
+        scroll-snap-type:x mandatory;
+        -webkit-overflow-scrolling:touch;
+    }
+
+    body.role-student .side-links a{
+        flex:0 0 auto;
+        width:auto;
+        min-width:128px;
+        justify-content:center;
+        text-align:center;
+        padding:10px 12px;
+        border-radius:999px;
+        font-size:13px;
+        white-space:nowrap;
+        scroll-snap-align:start;
+        box-shadow:0 2px 8px rgba(15,23,42,.05);
+    }
+
+    body.role-student .side-links a[href*="logout"]{
+        color:#991b1b;
+        border-color:#fecaca;
+        background:#fff7f7;
+    }
+
+    /* Student sidebar mini stats */
+    body.role-student .stats-mini{
+        display:grid !important;
+        grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+        gap:8px !important;
+    }
+
+    body.role-student .stats-mini .s{
+        min-width:0;
+        width:100%;
+        padding:10px;
+        border-radius:14px;
+    }
+
+    body.role-student .stats-mini .s .k{
+        font-size:19px;
+        line-height:1.2;
+    }
+
+    body.role-student .stats-mini .s .t{
+        font-size:11px;
+        line-height:1.25;
+    }
+
+    /* Cards */
+    body.role-student .card,
+    body.role-student .soft{
+        width:100%;
+        max-width:100%;
+        overflow:visible;
+        padding:14px;
+        border-radius:18px;
+        margin-bottom:12px;
+        transform:none !important;
+        box-shadow:0 4px 14px rgba(15,23,42,.06);
+    }
+
+    body.role-student .card:hover{
+        transform:none !important;
+    }
+
+    body.role-student h1{
+        font-size:21px;
+        line-height:1.2;
+    }
+
+    body.role-student h2{
+        font-size:18px;
+        line-height:1.25;
+    }
+
+    body.role-student h3{
+        font-size:15px;
+    }
+
+    body.role-student .mini{
+        font-size:12px;
+    }
+
+    /* Force student grids to fit */
+    body.role-student .grid,
+    body.role-student .stats{
+        display:grid !important;
+        grid-template-columns:1fr !important;
+        width:100% !important;
+        max-width:100% !important;
+        gap:10px !important;
+    }
+
+    body.role-student .stats{
+        grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+    }
+
+    body.role-student .stat{
+        min-width:0;
+        width:100%;
+        padding:12px;
+        border-radius:14px;
+    }
+
+    body.role-student .stat .k{
+        font-size:18px;
+        line-height:1.2;
+        word-break:break-word;
+    }
+
+    body.role-student .stat .t{
+        font-size:11px;
+        line-height:1.25;
+    }
+
+    /* Forms and profile update */
+    body.role-student form,
+    body.role-student .toolbar,
+    body.role-student .inlineform{
+        width:100%;
+        max-width:100%;
+        display:grid !important;
+        grid-template-columns:1fr !important;
+        gap:8px !important;
+        align-items:stretch !important;
+    }
+
+    body.role-student label{
+        width:100%;
+        max-width:100%;
+        font-size:12px;
+    }
+
+    body.role-student input,
+    body.role-student select,
+    body.role-student textarea{
+        width:100% !important;
+        max-width:100% !important;
+        min-width:0 !important;
+        font-size:16px;
+        padding:13px;
+        border-radius:14px;
+    }
+
+    body.role-student textarea{
+        min-height:110px;
+    }
+
+    body.role-student input[type="file"]{
+        width:100%;
+        max-width:100%;
+        white-space:normal;
+        padding:10px;
+        background:#fff;
+    }
+
+    body.role-student input::file-selector-button{
+        display:block;
+        width:100%;
+        margin:0 0 8px 0;
+        padding:10px;
+        border-radius:12px;
+    }
+
+    /* Buttons */
+    body.role-student .btn,
+    body.role-student button,
+    body.role-student input[type="submit"]{
+        max-width:100%;
+        white-space:normal;
+        text-align:center;
+        justify-content:center;
+    }
+
+    body.role-student .card > .btn,
+    body.role-student .card > button,
+    body.role-student form .btn,
+    body.role-student form button{
+        width:100%;
+        min-height:42px;
+        border-radius:14px;
+    }
+
+    body.role-student .btn.mini,
+    body.role-student button.mini{
+        min-height:36px;
+    }
+
+    body.role-student td .btn,
+    body.role-student td button{
+        width:auto;
+        max-width:100%;
+        margin:2px 0;
+        white-space:nowrap;
+    }
+
+    /* Tables must scroll instead of hiding */
+    body.role-student .scroll-x{
+        display:block;
+        width:100%;
+        max-width:100%;
+        overflow-x:auto !important;
+        overflow-y:visible;
+        -webkit-overflow-scrolling:touch;
+        border:1px solid #e5e7eb;
+        border-radius:14px;
+        background:#fff;
+    }
+
+    body.role-student .scroll-x table{
+        width:max-content;
+        min-width:700px;
+        max-width:none;
+    }
+
+    body.role-student table{
+        border-collapse:collapse;
+    }
+
+    body.role-student th,
+    body.role-student td{
+        white-space:normal;
+        vertical-align:top;
+        padding:10px;
+    }
+
+    body.role-student table:not(.no-mobile-scroll){
+        display:block;
+        width:100%;
+        max-width:100%;
+        overflow-x:auto;
+        -webkit-overflow-scrolling:touch;
+    }
+
+    body.role-student table:not(.no-mobile-scroll) thead,
+    body.role-student table:not(.no-mobile-scroll) tbody,
+    body.role-student table:not(.no-mobile-scroll) tr{
+        width:100%;
+    }
+
+    /* Student academic tracker extra protection */
+    body.role-student .student-progress-page{
+        width:100%;
+        max-width:100%;
+    }
+
+    body.role-student .student-progress-toolbar{
+        display:grid !important;
+        grid-template-columns:1fr !important;
+        gap:8px !important;
+    }
+
+    body.role-student .student-progress-toolbar .btn{
+        width:100%;
+    }
+
+    body.role-student .student-chart-grid,
+    body.role-student .student-progress-mini-grid{
+        grid-template-columns:1fr !important;
+        width:100%;
+        max-width:100%;
+    }
+
+    body.role-student .student-chart-box,
+    body.role-student .student-chart-box-large{
+        width:100%;
+        max-width:100%;
+        overflow:hidden;
+    }
+
+    body.role-student canvas{
+        width:100% !important;
+        max-width:100% !important;
+    }
+
+    /* Student messages/chat */
+    body.role-student .chat-layout{
+        display:grid !important;
+        grid-template-columns:1fr !important;
+        width:100% !important;
+        max-width:100% !important;
+        min-width:0 !important;
+        height:auto !important;
+        max-height:none !important;
+        border-radius:16px;
+    }
+
+    body.role-student .chat-list,
+    body.role-student .chat-window,
+    body.role-student .chat-messages,
+    body.role-student .chat-input{
+        width:100%;
+        max-width:100%;
+        min-width:0;
+    }
+
+    body.role-student .chat-list{
+        max-height:180px;
+        overflow-y:auto;
+        border-right:0;
+        border-bottom:1px solid #e5e7eb;
+    }
+
+    body.role-student .chat-messages{
+        max-height:420px;
+        overflow-y:auto;
+    }
+
+    body.role-student .bubble{
+        max-width:90%;
+        overflow-wrap:anywhere;
+    }
+
+    body.role-student .chat-input form{
+        display:grid !important;
+        gap:8px !important;
+    }
+
+    /* Any inline flex or inline grid must not hide content */
+    body.role-student [style*="display:flex"],
+    body.role-student [style*="display: flex"]{
+        flex-wrap:wrap !important;
+        max-width:100% !important;
+    }
+
+    body.role-student [style*="grid-template-columns"]{
+        grid-template-columns:1fr !important;
+    }
+
+    /* Report upload / camera areas */
+    body.role-student #report_camera_input,
+    body.role-student #report_file_upload{
+        width:100%;
+    }
+}
+
+@media (max-width:420px){
+
+    body.role-student .wrap{
+        padding-left:8px;
+        padding-right:8px;
+    }
+
+    body.role-student .stats,
+    body.role-student .stats-mini{
+        grid-template-columns:1fr !important;
+    }
+
+    body.role-student h1{
+        font-size:20px;
+    }
+
+    body.role-student h2{
+        font-size:17px;
+    }
+
+    body.role-student .side-links a{
+        min-width:115px;
+        font-size:12px;
+        padding:9px 10px;
+    }
+
+    body.role-student .scroll-x table{
+        min-width:660px;
+    }
+
+    body.role-student .card,
+    body.role-student .soft{
+        padding:12px;
+    }
+}
+
 </style>
 """
 
@@ -6107,16 +6732,16 @@ def page(title, body_html, extra_head="", extra_js=""):
             unread = cur.fetchone()[0] or 0
             role_title, user_name = "Student", session.get('student_name','Student')
             links = [
-                ("Dashboard", url_for('student_home')),
-                ("Academic Progress", url_for('student_academic_progress')),
-                ("My Profile", url_for('student_profile_page')),
-                ("Status", "#status"),
-                ("Assignments", url_for('student_assignments')),
-                ("Learning Materials", url_for('student_materials')),
-                ("Messages", "#messages"),
-                ("Upload Report", url_for('student_upload_report')),
-                ("My Reports", url_for('student_my_reports')),
-                ("Logout", url_for('student_logout'))
+                ("🏠 Dashboard", url_for('student_home')),
+                ("📊 Academic Progress", url_for('student_academic_progress')),
+                ("👤 My Profile", url_for('student_profile_page')),
+                ("✅ Status", "#status"),
+                ("📝 Assignments", url_for('student_assignments')),
+                ("📚 Learning Materials", url_for('student_materials')),
+                ("💬 Messages", "#messages"),
+                ("📤 Upload Report", url_for('student_upload_report')),
+                ("📄 My Reports", url_for('student_my_reports')),
+                ("🚪 Logout", url_for('student_logout'))
             ]
             stats_grid = f"""
             <div class='stats-mini'>
@@ -10974,19 +11599,21 @@ def student_my_reports():
 
         <h2>My Uploaded Reports</h2>
 
-        <table>
-            <thead>
-                <tr>
-                    <th>File</th>
-                    <th>Term</th>
-                    <th>Date</th>
-                    <th>Action</th>
-                </tr>
-            </thead>
-            <tbody>
-                {html or "<tr><td colspan='4'>No reports uploaded</td></tr>"}
-            </tbody>
-        </table>
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Term</th>
+                        <th>Date</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {html or "<tr><td colspan='4'>No reports uploaded</td></tr>"}
+                </tbody>
+            </table>
+        </div>
     </div>
     """
 
