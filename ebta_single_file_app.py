@@ -1661,6 +1661,34 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_assessments_month ON assessments(month)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_assessment_attempts_student ON assessment_attempts(student_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_assessment_attempts_assessment ON assessment_attempts(assessment_id)")
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS assessment_delete_locks(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        lock_scope TEXT NOT NULL,
+        -- ALL | GRADE | SUBJECT | TUTOR_SUBJECT
+
+        grade TEXT,
+        subject_id INTEGER,
+        tutor_id INTEGER,
+
+        reason TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_assessment_delete_locks_scope ON assessment_delete_locks(lock_scope)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_assessment_delete_locks_subject ON assessment_delete_locks(subject_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_assessment_delete_locks_tutor ON assessment_delete_locks(tutor_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_assessment_delete_locks_active ON assessment_delete_locks(is_active)")
 
     # Enrollment control defaults
     cur.execute("SELECT value FROM settings WHERE key='enrollment_open'")
@@ -18740,6 +18768,7 @@ def admin_nav():
             ("Follow-Ups", "admin_followups", "/admin/followups"),
             ("Direct Messages", "admin_direct_messages", "/admin/direct-messages"),
             ("Parents Information", "admin_parents_notifications", "/admin/parents-notifications"),
+            
         ],
         True
     ))
@@ -18759,6 +18788,7 @@ def admin_nav():
                     ("Application Settings", "admin_application_settings", "/admin/application-settings"),
                     ("AQ Manager", "admin_academic_quality_managers", "/admin/academic-quality-managers"),
                     ("Student Reports", "admin_reports", "/admin/reports"),
+                    ("Assessment Delete Locks", "admin_assessment_delete_locks", "/admin/assessment-delete-locks"),
                 ],
                 False
             ),
@@ -23512,6 +23542,298 @@ def admin_uploads_unlock(subject_id):
     conn.close()
 
     return redirect(url_for('admin_uploads_control'))
+    
+    
+@app.get('/admin/assessment-delete-locks')
+def admin_assessment_delete_locks():
+
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
+    """)
+
+    subjects = cur.fetchall()
+
+    cur.execute("""
+        SELECT id, full_name
+        FROM tutors
+        ORDER BY full_name
+    """)
+
+    tutors = cur.fetchall()
+
+    cur.execute("""
+        SELECT
+            l.*,
+            s.name AS subject_name,
+            s.grade AS subject_grade,
+            t.full_name AS tutor_name
+        FROM assessment_delete_locks l
+        LEFT JOIN subjects s ON s.id = l.subject_id
+        LEFT JOIN tutors t ON t.id = l.tutor_id
+        WHERE l.is_active=1
+        ORDER BY l.created_at DESC
+    """)
+
+    locks = cur.fetchall()
+    conn.close()
+
+    subject_options = '<option value="">Select subject where needed</option>'
+
+    for s in subjects:
+        subject_options += f"""
+        <option value="{s['id']}">
+            {grade_label(s['grade'])} - {escape(s['name'])}
+        </option>
+        """
+
+    tutor_options = '<option value="">Select tutor where needed</option>'
+
+    for t in tutors:
+        tutor_options += f"""
+        <option value="{t['id']}">
+            {escape(t['full_name'])}
+        </option>
+        """
+
+    grade_options = '<option value="">Select grade where needed</option>'
+
+    for g in ["G8", "G9", "G10", "G11", "G12", "G13"]:
+        grade_options += f"""
+        <option value="{g}">
+            {grade_label(g)}
+        </option>
+        """
+
+    rows = ""
+
+    for l in locks:
+
+        target = "All Subjects"
+
+        if l["lock_scope"] == "GRADE":
+            target = grade_label(l["grade"] or "")
+
+        elif l["lock_scope"] == "SUBJECT":
+            target = f"{grade_label(l['subject_grade'] or '')} - {escape(l['subject_name'] or 'Subject')}"
+
+        elif l["lock_scope"] == "TUTOR_SUBJECT":
+            target = f"{escape(l['tutor_name'] or 'Tutor')} | {grade_label(l['subject_grade'] or '')} - {escape(l['subject_name'] or 'Subject')}"
+
+        rows += f"""
+        <tr>
+            <td>{escape(l['lock_scope'])}</td>
+            <td>{target}</td>
+            <td>{escape(l['reason'] or 'No reason added.')}</td>
+            <td>{escape((l['created_at'] or '')[:16].replace('T',' '))}</td>
+            <td>
+                <form method="post"
+                      action="/admin/assessment-delete-locks/{l['id']}/remove"
+                      onsubmit="return confirm('Remove this assessment delete lock?')">
+                    <button class="btn mini danger">
+                        Remove Lock
+                    </button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Assessment Delete Locks</h1>
+
+        <p class="muted">
+            Control whether tutors are allowed to delete assessments. You can lock deletion for all subjects,
+            a grade, a subject, or a specific tutor for a specific subject.
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-top:14px">
+            <h2>Add Delete Lock</h2>
+
+            <form method="post"
+                  action="/admin/assessment-delete-locks"
+                  class="grid"
+                  style="grid-template-columns:1fr 1fr;gap:12px">
+
+                <div>
+                    <label>Lock Scope</label>
+                    <select name="lock_scope" required>
+                        <option value="ALL">All Subjects</option>
+                        <option value="GRADE">Certain Grade</option>
+                        <option value="SUBJECT">Certain Subject</option>
+                        <option value="TUTOR_SUBJECT">Certain Tutor + Certain Subject</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Grade</label>
+                    <select name="grade">
+                        {grade_options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Subject</label>
+                    <select name="subject_id">
+                        {subject_options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Tutor</label>
+                    <select name="tutor_id">
+                        {tutor_options}
+                    </select>
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <label>Reason / Message shown to tutor</label>
+                    <textarea name="reason" rows="3"
+                              placeholder="Example: Assessment deletion has been locked by Admin while submissions are being reviewed."></textarea>
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <button class="btn success">
+                        Save Delete Lock
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Active Delete Locks</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Scope</th>
+                            <th>Target</th>
+                            <th>Reason</th>
+                            <th>Created</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='5'>No active delete locks.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("Assessment Delete Locks", body)
+
+
+@app.post('/admin/assessment-delete-locks')
+def admin_assessment_delete_locks_create():
+
+    r = require_admin()
+    if r:
+        return r
+
+    lock_scope = request.form.get("lock_scope", "").strip().upper()
+    grade = request.form.get("grade", "").strip()
+    subject_id = request.form.get("subject_id", "").strip()
+    tutor_id = request.form.get("tutor_id", "").strip()
+    reason = request.form.get("reason", "").strip()
+
+    if lock_scope not in ["ALL", "GRADE", "SUBJECT", "TUTOR_SUBJECT"]:
+        return page("Error", card_msg("Invalid lock scope."))
+
+    if lock_scope == "GRADE" and not grade:
+        return page("Error", card_msg("Please select a grade for a grade lock."))
+
+    if lock_scope == "SUBJECT" and not subject_id:
+        return page("Error", card_msg("Please select a subject for a subject lock."))
+
+    if lock_scope == "TUTOR_SUBJECT" and (not tutor_id or not subject_id):
+        return page("Error", card_msg("Please select both tutor and subject for a tutor-subject lock."))
+
+    if lock_scope == "ALL":
+        grade = None
+        subject_id = None
+        tutor_id = None
+
+    elif lock_scope == "GRADE":
+        subject_id = None
+        tutor_id = None
+
+    elif lock_scope == "SUBJECT":
+        grade = None
+        tutor_id = None
+
+    elif lock_scope == "TUTOR_SUBJECT":
+        grade = None
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO assessment_delete_locks(
+            lock_scope,
+            grade,
+            subject_id,
+            tutor_id,
+            reason,
+            is_active,
+            created_by,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?)
+    """, (
+        lock_scope,
+        grade,
+        subject_id or None,
+        tutor_id or None,
+        reason,
+        1,
+        session.get("admin_username", "admin"),
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_assessment_delete_locks"))
+
+
+@app.post('/admin/assessment-delete-locks/<int:lock_id>/remove')
+def admin_assessment_delete_locks_remove(lock_id):
+
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE assessment_delete_locks
+        SET is_active=0,
+            updated_at=?
+        WHERE id=?
+    """, (now_utc_iso(), lock_id))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_assessment_delete_locks"))
+
     
 @app.get('/admin/materials')
 @require_high_admin
@@ -65285,6 +65607,110 @@ def tutor_owns_assessment(tutor_id, assessment_id):
 
     conn.close()
     return allowed
+    
+def assessment_delete_lock_reason(tutor_id, subject_id):
+    """
+    Returns a lock reason if the tutor is not allowed to delete assessments
+    for the selected tutor/subject combination.
+    Returns None if deletion is allowed.
+    """
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT grade
+        FROM subjects
+        WHERE id=?
+        LIMIT 1
+    """, (subject_id,))
+
+    subject = cur.fetchone()
+
+    grade = subject["grade"] if subject else ""
+
+    # 1. All subjects locked
+    cur.execute("""
+        SELECT reason
+        FROM assessment_delete_locks
+        WHERE is_active=1
+          AND lock_scope='ALL'
+        ORDER BY id DESC
+        LIMIT 1
+    """)
+
+    row = cur.fetchone()
+
+    if row:
+        conn.close()
+        return row["reason"] or "Assessment deletion is locked for all subjects."
+
+    # 2. Specific tutor + subject locked
+    cur.execute("""
+        SELECT reason
+        FROM assessment_delete_locks
+        WHERE is_active=1
+          AND lock_scope='TUTOR_SUBJECT'
+          AND tutor_id=?
+          AND subject_id=?
+        ORDER BY id DESC
+        LIMIT 1
+    """, (tutor_id, subject_id))
+
+    row = cur.fetchone()
+
+    if row:
+        conn.close()
+        return row["reason"] or "Assessment deletion is locked for this tutor and subject."
+
+    # 3. Specific subject locked
+    cur.execute("""
+        SELECT reason
+        FROM assessment_delete_locks
+        WHERE is_active=1
+          AND lock_scope='SUBJECT'
+          AND subject_id=?
+        ORDER BY id DESC
+        LIMIT 1
+    """, (subject_id,))
+
+    row = cur.fetchone()
+
+    if row:
+        conn.close()
+        return row["reason"] or "Assessment deletion is locked for this subject."
+
+    # 4. Grade locked
+    cur.execute("""
+        SELECT reason
+        FROM assessment_delete_locks
+        WHERE is_active=1
+          AND lock_scope='GRADE'
+          AND grade=?
+        ORDER BY id DESC
+        LIMIT 1
+    """, (grade,))
+
+    row = cur.fetchone()
+
+    conn.close()
+
+    if row:
+        return row["reason"] or f"Assessment deletion is locked for {grade_label(grade)}."
+
+    return None
+
+
+def assessment_attempt_count(conn, assessment_id):
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM assessment_attempts
+        WHERE assessment_id=?
+    """, (assessment_id,))
+
+    return cur.fetchone()["c"] or 0
 
 
 def assessment_total_points(conn, assessment_id):
@@ -65352,6 +65778,34 @@ def tutor_assessments():
     for a in rows:
         publish_label = "Published" if a["is_published"] else "Draft"
         publish_class = "active" if a["is_published"] else "pending"
+        
+        lock_reason = assessment_delete_lock_reason(tid, a["subject_id"])
+
+        delete_button = ""
+
+        if lock_reason:
+            delete_button = f"""
+            <button class="btn mini danger" disabled title="{escape(lock_reason)}">
+                Delete Locked
+            </button>
+            """
+        elif int(a["attempt_count"] or 0) > 0:
+            delete_button = """
+            <button class="btn mini danger" disabled title="This assessment already has learner attempts.">
+                Cannot Delete
+            </button>
+            """
+        else:
+            delete_button = f"""
+            <form method="post"
+                  action="/tutor/assessments/{a['id']}/delete"
+                  style="display:inline"
+                  onsubmit="return confirm('Delete this assessment permanently?')">
+                <button class="btn mini danger">
+                    Delete
+                </button>
+            </form>
+            """
 
         trs += f"""
         <tr>
@@ -65381,6 +65835,8 @@ def tutor_assessments():
                 <a class="btn mini" href="/tutor/assessments/{a['id']}/submissions">
                     Submissions
                 </a>
+
+                {delete_button}
             </td>
         </tr>
         """
@@ -65671,6 +66127,10 @@ def tutor_assessment_builder(assessment_id):
     """, (assessment_id,))
 
     questions = cur.fetchall()
+
+    attempts = assessment_attempt_count(conn, assessment_id)
+    lock_reason = assessment_delete_lock_reason(tid, a["subject_id"])
+
     conn.close()
 
     question_rows = ""
@@ -65714,6 +66174,35 @@ def tutor_assessment_builder(assessment_id):
             </button>
         </form>
         """
+        
+    delete_button = ""
+
+    if lock_reason:
+        delete_button = f"""
+        <button class="btn mini danger" disabled title="{escape(lock_reason)}">
+            Delete Locked
+        </button>
+        """
+
+    elif attempts > 0:
+        delete_button = """
+        <button class="btn mini danger" disabled title="This assessment already has learner attempts.">
+            Cannot Delete
+        </button>
+        """
+
+    else:
+        delete_button = f"""
+        <form method="post"
+              action="/tutor/assessments/{assessment_id}/delete"
+              style="display:inline"
+              onsubmit="return confirm('Delete this assessment permanently?')">
+            <button class="btn mini danger">
+                Delete Assessment
+            </button>
+        </form>
+        """
+    
 
     body = f"""
     <section class="card">
@@ -65723,6 +66212,7 @@ def tutor_assessment_builder(assessment_id):
             </a>
 
             {publish_button}
+            {delete_button}
         </div>
 
         <h1>{escape(a['title'])}</h1>
@@ -65958,6 +66448,59 @@ def tutor_publish_assessment(assessment_id):
     conn.close()
 
     return redirect(url_for("tutor_assessment_builder", assessment_id=assessment_id))
+    
+    
+@app.post('/tutor/assessments/<int:assessment_id>/delete')
+def tutor_delete_assessment(assessment_id):
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM assessments
+        WHERE id=?
+          AND tutor_id=?
+        LIMIT 1
+    """, (assessment_id, tid))
+
+    assessment = cur.fetchone()
+
+    if not assessment:
+        conn.close()
+        return page("Not Found", card_msg("Assessment not found or not owned by you."))
+
+    lock_reason = assessment_delete_lock_reason(tid, assessment["subject_id"])
+
+    if lock_reason:
+        conn.close()
+        return page("Delete Locked", card_msg(escape(lock_reason)))
+
+    attempts = assessment_attempt_count(conn, assessment_id)
+
+    if attempts > 0:
+        conn.close()
+        return page(
+            "Cannot Delete",
+            card_msg("This assessment already has learner attempts or submissions, so it cannot be deleted.")
+        )
+
+    cur.execute("""
+        DELETE FROM assessments
+        WHERE id=?
+          AND tutor_id=?
+    """, (assessment_id, tid))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("tutor_assessments"))
     
     
 @app.get('/student/assessments')
