@@ -4767,6 +4767,460 @@ background:#fff;
     white-space:nowrap;
 }
 
+
+/* =========================================================
+   TUTOR PORTAL MOBILE FRIENDLY UPGRADE
+   Safe: only affects pages when body has class role-tutor
+   ========================================================= */
+
+.role-tutor .dashboard-main{
+    min-width:0;
+}
+
+.role-tutor .card{
+    overflow:visible;
+}
+
+.role-tutor .layout{
+    align-items:start;
+}
+
+/* Desktop tutor sidebar polish */
+.role-tutor .sidebar{
+    border:1px solid rgba(27,94,32,.18);
+    background:
+        linear-gradient(180deg,#ffffff 0%,#f8fff9 100%);
+}
+
+.role-tutor .sidebar .role{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    color:#1b5e20;
+    background:#e8f5e9;
+    border:1px solid rgba(27,94,32,.18);
+    border-radius:999px;
+    padding:6px 10px;
+    font-size:12px;
+    margin-bottom:8px;
+}
+
+.role-tutor .sidebar .user{
+    font-size:15px;
+    font-weight:800;
+    color:#0f172a;
+    margin-bottom:12px;
+}
+
+.role-tutor .side-links a{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+    border:1px solid rgba(27,94,32,.14);
+    background:#ffffff;
+    color:#0f172a;
+}
+
+.role-tutor .side-links a:hover{
+    background:#f0fdf4;
+    color:#1b5e20;
+    border-color:#1b5e20;
+}
+
+/* Tutor cards and grids */
+.role-tutor .stats,
+.role-tutor .stats-mini{
+    gap:10px;
+}
+
+.role-tutor .stats-mini .s{
+    background:linear-gradient(180deg,#ffffff,#f8fff9);
+    border:1px solid rgba(27,94,32,.14);
+}
+
+.role-tutor .stats-mini .s .k{
+    color:#1b5e20;
+}
+
+/* Tutor forms */
+.role-tutor form{
+    max-width:100%;
+}
+
+.role-tutor input,
+.role-tutor select,
+.role-tutor textarea{
+    max-width:100%;
+}
+
+/* Make tutor action buttons wrap nicely */
+.role-tutor .btn,
+.role-tutor button,
+.role-tutor .links{
+    max-width:100%;
+}
+
+.role-tutor .toolbar{
+    align-items:center;
+}
+
+/* Keep tutor tables readable */
+.role-tutor .scroll-x{
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+    width:100%;
+}
+
+.role-tutor table{
+    width:100%;
+}
+
+/* Mobile tutor layout */
+@media (max-width: 768px){
+
+    .role-tutor body{
+        overflow-x:hidden;
+    }
+
+    .role-tutor .wrap{
+        margin:12px auto;
+        padding:0 10px;
+        width:100%;
+        max-width:100%;
+    }
+
+    .role-tutor .layout{
+        display:block;
+        width:100%;
+    }
+
+    .role-tutor .dashboard-main{
+        width:100%;
+        min-width:0;
+    }
+
+    /* Header */
+    .role-tutor .header{
+        position:sticky;
+        top:0;
+        z-index:50;
+    }
+
+    .role-tutor .nav{
+        padding:10px;
+        gap:10px;
+    }
+
+    .role-tutor .brand{
+        width:100%;
+    }
+
+    .role-tutor .brand-logo{
+        width:38px;
+        height:38px;
+        border-radius:12px;
+    }
+
+    .role-tutor .brand .title{
+        font-size:17px;
+    }
+
+    .role-tutor .links{
+        width:100%;
+        display:flex;
+        overflow-x:auto;
+        gap:8px;
+        padding-bottom:4px;
+        -webkit-overflow-scrolling:touch;
+    }
+
+    .role-tutor .links a,
+    .role-tutor .links button{
+        flex:0 0 auto;
+        margin-left:0;
+        white-space:nowrap;
+        font-size:12px;
+        padding:7px 10px;
+        border-radius:999px;
+    }
+
+    /* Sidebar becomes a neat mobile navigation card */
+    .role-tutor .sidebar{
+        position:relative;
+        top:auto;
+        max-height:none;
+        margin:0 0 12px;
+        padding:12px;
+        border-radius:18px;
+        box-shadow:0 8px 20px rgba(15,23,42,.08);
+        background:
+            linear-gradient(135deg,rgba(27,94,32,.08),rgba(255,255,255,.96)),
+            #ffffff;
+    }
+
+    .role-tutor .sidebar .role{
+        margin-bottom:6px;
+    }
+
+    .role-tutor .sidebar .user{
+        font-size:16px;
+        margin-bottom:10px;
+    }
+
+    /* Mobile tutor nav links as horizontal chips */
+    .role-tutor .side-links{
+        display:flex;
+        gap:8px;
+        overflow-x:auto;
+        padding:4px 0 10px;
+        margin:4px 0 10px;
+        scroll-snap-type:x mandatory;
+        -webkit-overflow-scrolling:touch;
+    }
+
+    .role-tutor .side-links a{
+        flex:0 0 auto;
+        min-width:135px;
+        justify-content:center;
+        text-align:center;
+        padding:10px 12px;
+        border-radius:999px;
+        font-size:13px;
+        scroll-snap-align:start;
+        box-shadow:0 2px 8px rgba(15,23,42,.05);
+    }
+
+    .role-tutor .side-links a[href*="logout"]{
+        color:#991b1b;
+        border-color:#fecaca;
+        background:#fff7f7;
+    }
+
+    /* Sidebar stats */
+    .role-tutor .stats-mini{
+        grid-template-columns:repeat(2,minmax(0,1fr));
+        gap:8px;
+    }
+
+    .role-tutor .stats-mini .s{
+        padding:10px;
+        border-radius:14px;
+    }
+
+    .role-tutor .stats-mini .s .k{
+        font-size:19px;
+    }
+
+    .role-tutor .stats-mini .s .t{
+        font-size:11px;
+        line-height:1.25;
+    }
+
+    /* Cards */
+    .role-tutor .card{
+        border-radius:18px;
+        padding:14px;
+        margin-bottom:12px;
+        transform:none !important;
+        box-shadow:0 4px 14px rgba(15,23,42,.06);
+    }
+
+    .role-tutor .card:hover{
+        transform:none !important;
+    }
+
+    .role-tutor h1{
+        font-size:21px;
+        line-height:1.2;
+    }
+
+    .role-tutor h2{
+        font-size:18px;
+        line-height:1.25;
+    }
+
+    .role-tutor h3{
+        font-size:15px;
+    }
+
+    .role-tutor .mini{
+        font-size:12px;
+    }
+
+    /* Main stats on tutor pages */
+    .role-tutor .stats{
+        grid-template-columns:repeat(2,minmax(0,1fr));
+        gap:8px;
+    }
+
+    .role-tutor .stat{
+        padding:12px;
+        border-radius:14px;
+    }
+
+    .role-tutor .stat .k{
+        font-size:18px;
+        line-height:1.2;
+    }
+
+    /* Forms */
+    .role-tutor .toolbar{
+        display:grid;
+        grid-template-columns:1fr;
+        gap:8px;
+    }
+
+    .role-tutor .inlineform{
+        display:grid;
+        grid-template-columns:1fr;
+        width:100%;
+    }
+
+    .role-tutor label{
+        font-size:12px;
+    }
+
+    .role-tutor input,
+    .role-tutor select,
+    .role-tutor textarea{
+        font-size:16px;
+        padding:13px;
+        border-radius:14px;
+    }
+
+    .role-tutor textarea{
+        min-height:110px;
+    }
+
+    .role-tutor .btn,
+    .role-tutor button{
+        width:100%;
+        justify-content:center;
+        min-height:42px;
+        border-radius:14px;
+    }
+
+    .role-tutor .btn.mini,
+    .role-tutor button.mini{
+        min-height:36px;
+        width:auto;
+        display:inline-flex;
+    }
+
+    /* Tables on tutor pages stay as real tables but scroll horizontally */
+    .role-tutor .scroll-x{
+        border:1px solid #e2e8f0;
+        border-radius:14px;
+        background:#fff;
+    }
+
+    .role-tutor table{
+        min-width:760px;
+        border-radius:14px;
+    }
+
+    .role-tutor table thead{
+        display:table-header-group !important;
+    }
+
+    .role-tutor table tr{
+        display:table-row !important;
+        margin-bottom:0 !important;
+    }
+
+    .role-tutor table th,
+    .role-tutor table td{
+        display:table-cell !important;
+        padding:10px !important;
+        white-space:normal;
+        vertical-align:top;
+    }
+
+    .role-tutor table td::before{
+        content:none !important;
+    }
+
+    .role-tutor table td .btn,
+    .role-tutor table td button,
+    .role-tutor table td .links{
+        width:auto;
+        margin:2px 0;
+        white-space:nowrap;
+    }
+
+    /* Chat/message layout for tutor */
+    .role-tutor .chat-layout{
+        grid-template-columns:1fr !important;
+        height:75vh;
+        max-height:75vh;
+        border-radius:16px;
+    }
+
+    .role-tutor .chat-list{
+        width:100% !important;
+        max-height:160px;
+        border-right:0;
+        border-bottom:1px solid #e5e7eb;
+    }
+
+    .role-tutor .chat-window{
+        min-height:0;
+    }
+
+    .role-tutor .chat-messages{
+        min-height:0;
+    }
+
+    .role-tutor .bubble{
+        max-width:88%;
+    }
+
+    .role-tutor .chat-input form{
+        display:grid;
+        gap:8px;
+    }
+
+    /* Upload/input areas */
+    .role-tutor input[type="file"]{
+        padding:10px;
+        background:#fff;
+    }
+
+    .role-tutor input::file-selector-button{
+        width:100%;
+        margin:0 0 8px 0;
+        padding:10px;
+    }
+}
+
+/* Small phones */
+@media (max-width: 420px){
+
+    .role-tutor .wrap{
+        padding:0 8px;
+    }
+
+    .role-tutor .stats,
+    .role-tutor .stats-mini{
+        grid-template-columns:1fr 1fr;
+    }
+
+    .role-tutor .side-links a{
+        min-width:125px;
+        font-size:12px;
+        padding:9px 10px;
+    }
+
+    .role-tutor .card{
+        padding:12px;
+    }
+
+    .role-tutor table{
+        min-width:700px;
+    }
+}
+
 </style>
 """
 
@@ -5177,6 +5631,26 @@ def page(title, body_html, extra_head="", extra_js=""):
             ]
             
     right = " ".join(auth)
+    
+    body_class = ""
+
+    if is_student():
+        body_class = "role-student"
+
+    elif is_tutor():
+        body_class = "role-tutor"
+
+    elif is_admin():
+        body_class = "role-admin"
+
+    elif is_coo():
+        body_class = "role-coo"
+
+    elif is_cao():
+        body_class = "role-cao"
+
+    elif is_ceo():
+        body_class = "role-ceo"
 
     # Build role-aware sidebar with compact stats
     sidebar_html = ""
@@ -5301,14 +5775,14 @@ def page(title, body_html, extra_head="", extra_js=""):
             unread = cur.fetchone()[0] or 0
             role_title, user_name = "Tutor", session.get('tutor_name','Tutor')
             links = [
-                ("Dashboard", url_for('tutor_home')),
-                ("Work Progress", url_for('tutor_work_progress')),
-                ("Upload Material", url_for('tutor_home') + "#upload"),
-                ("My Library", url_for('tutor_uploads_library')),
-                ("Assignments", url_for('tutor_home') + "#assignments"),
-                ("Messages", url_for('tutor_home') + "#messages"),
-                ("Students", url_for('tutor_home') + "#students"),
-                ("Logout", url_for('tutor_logout'))
+                ("🏠 Dashboard", url_for('tutor_home')),
+                ("📊 Work Progress", url_for('tutor_work_progress')),
+                ("⬆️ Upload Material", url_for('tutor_home') + "#upload"),
+                ("📚 My Library", url_for('tutor_uploads_library')),
+                ("📝 Assignments", url_for('tutor_home') + "#assignments"),
+                ("💬 Messages", url_for('tutor_home') + "#messages"),
+                ("👥 Students", url_for('tutor_home') + "#students"),
+                ("🚪 Logout", url_for('tutor_logout'))
             ]
 
             stats_grid = f"""
@@ -5552,7 +6026,7 @@ def page(title, body_html, extra_head="", extra_js=""):
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
     {GOOGLE_FONTS}{BASE_CSS}{BASE_JS}{extra_head}
-    </head><body>
+    </head><body class="{body_class}">
     <header class='header'>
         <div class='nav'>
         <div class='brand'>
