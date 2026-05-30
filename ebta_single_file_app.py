@@ -1729,6 +1729,35 @@ def set_setting(key, value):
 
 def grade_label(g): return g.replace("G","Grade ")
 
+def short_display_name(full_name, max_len=18):
+    """
+    Shortens long learner names for tables.
+    Example:
+    'Ahlumile Mathongo' -> 'Ahlumile M.'
+    'NYAMUFWIIMAKHADO@GMAIL.COM' -> 'NYAMUFWIIMAKHADO...'
+    """
+
+    full_name = str(full_name or "Learner").strip()
+
+    if not full_name:
+        return "Learner"
+
+    # If it looks like an email or one very long word, use dots
+    if "@" in full_name or len(full_name.split()) == 1:
+        return full_name if len(full_name) <= max_len else full_name[:max_len - 3] + "..."
+
+    parts = full_name.split()
+
+    first_name = parts[0]
+    initials = " ".join([p[0].upper() + "." for p in parts[1:3] if p])
+
+    shortened = f"{first_name} {initials}".strip()
+
+    if len(shortened) > max_len:
+        shortened = shortened[:max_len - 3] + "..."
+
+    return shortened
+
 def fee_for_grade(g):
     """
     EBTA subject fee based on grade.
@@ -14606,7 +14635,16 @@ def tutor_home():
                         {student_profile_image_html(st['id'], st['full_name'], 42)}
 
                         <div>
-                            <strong>{escape(st['full_name'] or 'Learner')}</strong>
+                            <strong title="{escape(st['full_name'] or 'Learner')}"
+                                    style="
+                                        display:block;
+                                        max-width:135px;
+                                        white-space:nowrap;
+                                        overflow:hidden;
+                                        text-overflow:ellipsis;
+                                    ">
+                                {escape(short_display_name(st['full_name'], 18))}
+                            </strong>
                             <div class='mini muted'>{escape(st['phone_whatsapp'] or '—')}</div>
                             <a class="btn mini secondary"
                                href="/tutor/student-profile/{st['id']}">
@@ -14616,8 +14654,8 @@ def tutor_home():
                     </div>
                 </td>
 
-                <td>
-                    {st['phone_whatsapp'] or '—'}
+                <td style="white-space:nowrap">
+                    {escape(st['phone_whatsapp'] or '—')}
                 </td>
 
                 <td>
