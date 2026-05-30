@@ -51166,6 +51166,7 @@ def coo_nav():
                 coo_link("Reports to CEO", "coo_ceo_reports", icon="📤"),
                 coo_link("Operational Team", "coo_team_profiles", "coo_employee_profiles_enabled", icon="👥"),
                 coo_link("Enrollments", "coo_enrollments", "coo_enrollments_enabled", icon="📝"),
+                coo_link("All Students", "coo_students", "coo_enrollments_enabled", icon="🎓"),
                 coo_link("Follow-Ups", "coo_followups", "coo_duty_admin_enabled", icon="📌"),
             ]
         ),
@@ -51540,6 +51541,9 @@ def coo_dashboard():
 
     cur.execute("SELECT COUNT(DISTINCT student_id) AS c FROM enrollments WHERE month=?", (month,))
     total_students = cur.fetchone()["c"] or 0
+    
+    cur.execute("SELECT COUNT(*) AS c FROM students")
+    all_students_total = cur.fetchone()["c"] or 0
 
     # ================= OPERATIONAL TEAM COUNTS =================
 
@@ -51739,6 +51743,7 @@ def coo_dashboard():
             {stat("Pending Enrollments", pending_enrollments)}
             {stat("Active Enrollments", active_enrollments)}
             {stat("Students This Month", total_students)}
+            {stat("All Students", all_students_total)}
             {stat("Pending Payments", f"R{pending_payments:,.2f}")}
             {stat("Secretary Action Items", pending_action_items)}
             {stat("Open Social Media Issues", open_crisis_logs)}
@@ -51860,7 +51865,13 @@ def coo_dashboard():
         </div>
 
         <div class="card soft" style="margin-top:14px">
-            <h2>Recent Enrollments</h2>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+                <h2 style="margin:0">Recent Enrollments</h2>
+
+                <a class="btn mini success" href="{url_for('coo_students')}?month={escape(month)}">
+                    View All Students
+                </a>
+            </div>
 
             <div class="scroll-x">
                 <table>
@@ -52830,6 +52841,374 @@ def coo_enrollments():
     """
 
     return page("COO Enrollments", body)
+
+
+@app.get('/coo/students')
+def coo_students():
+
+    r = require_coo_permission("coo_enrollments_enabled", "students")
+    if r:
+        return r
+
+    month = coo_selected_month()
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+    status = request.args.get("status", "").strip()
+    page_num = coo_page_num()
+
+    per_page = 20
+    offset = (page_num - 1) * per_page
+
+    where = ["1=1"]
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                st.full_name LIKE ?
+                OR st.phone_whatsapp LIKE ?
+                OR st.guardian_name LIKE ?
+                OR st.guardian_phone LIKE ?
+                OR st.email LIKE ?
+                OR st.school LIKE ?
+                OR st.province LIKE ?
+                OR sub.name LIKE ?
+            )
+        """)
+        params += [
+            search,
+            search,
+            search,
+            search,
+            search,
+            search,
+            search,
+            search
+        ]
+
+    if grade:
+        where.append("st.grade = ?")
+        params.append(grade)
+
+    if status == "NO_ENROLLMENT":
+        where.append("""
+            NOT EXISTS (
+                SELECT 1
+                FROM enrollments e2
+                WHERE e2.student_id = st.id
+                  AND e2.month = ?
+            )
+        """)
+        params.append(month)
+
+    elif status:
+        where.append("""
+            EXISTS (
+                SELECT 1
+                FROM enrollments e2
+                WHERE e2.student_id = st.id
+                  AND e2.month = ?
+                  AND e2.status = ?
+            )
+        """)
+        params += [month, status]
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(DISTINCT st.id) AS c
+        FROM students st
+        LEFT JOIN enrollments e
+               ON e.student_id = st.id
+              AND e.month = ?
+        LEFT JOIN subjects sub
+               ON sub.id = e.subject_id
+        {where_sql}
+    """, [month] + params)
+
+    total = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    query_params = [month] + params + [per_page, offset]
+
+    cur.execute(f"""
+        SELECT
+            st.id,
+            st.full_name,
+            st.phone_whatsapp,
+            st.guardian_name,
+            st.guardian_phone,
+            st.email,
+            st.grade,
+            COALESCE(st.school, '') AS school,
+            COALESCE(st.province, '') AS province,
+            st.created_at,
+
+            COUNT(DISTINCT e.id) AS enrollment_count,
+
+            SUM(
+                CASE
+                    WHEN e.status = 'ACTIVE' THEN 1
+                    ELSE 0
+                END
+            ) AS active_count,
+
+            SUM(
+                CASE
+                    WHEN e.status = 'PENDING' THEN 1
+                    ELSE 0
+                END
+            ) AS pending_count,
+
+            SUM(
+                CASE
+                    WHEN e.status = 'LAPSED' THEN 1
+                    ELSE 0
+                END
+            ) AS lapsed_count,
+
+            GROUP_CONCAT(
+                DISTINCT
+                CASE
+                    WHEN sub.id IS NOT NULL THEN sub.grade || ' - ' || sub.name || ' (' || e.status || ')'
+                    ELSE NULL
+                END
+            ) AS subjects_list
+
+        FROM students st
+        LEFT JOIN enrollments e
+               ON e.student_id = st.id
+              AND e.month = ?
+        LEFT JOIN subjects sub
+               ON sub.id = e.subject_id
+
+        {where_sql}
+
+        GROUP BY st.id
+        ORDER BY st.created_at DESC, st.full_name ASC
+        LIMIT ? OFFSET ?
+    """, query_params)
+
+    rows = cur.fetchall()
+
+    cur.execute("SELECT COUNT(*) AS c FROM students")
+    all_students_total = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT grade, COUNT(*) AS c
+        FROM students
+        GROUP BY grade
+        ORDER BY CAST(REPLACE(grade, 'G', '') AS INTEGER)
+    """)
+
+    grade_stats = cur.fetchall()
+
+    conn.close()
+
+    grade_options = ""
+
+    for g in ["G8", "G9", "G10", "G11", "G12", "G13"]:
+        selected = "selected" if grade == g else ""
+        grade_options += f"""
+        <option value="{g}" {selected}>
+            {grade_label(g)}
+        </option>
+        """
+
+    status_options = ""
+
+    for s in ["ACTIVE", "PENDING", "LAPSED", "DECLINED", "NO_ENROLLMENT"]:
+        selected = "selected" if status == s else ""
+
+        label = s
+
+        if s == "NO_ENROLLMENT":
+            label = "No Enrollment This Month"
+
+        status_options += f"""
+        <option value="{s}" {selected}>
+            {label}
+        </option>
+        """
+
+    grade_stats_html = "".join([
+        stat(grade_label(r["grade"]), r["c"])
+        for r in grade_stats
+    ])
+
+    trs = ""
+
+    for st in rows:
+
+        month_status = "No Enrollment"
+
+        active_count = int(st["active_count"] or 0)
+        pending_count = int(st["pending_count"] or 0)
+        lapsed_count = int(st["lapsed_count"] or 0)
+        enrollment_count = int(st["enrollment_count"] or 0)
+
+        if active_count > 0:
+            month_status = "ACTIVE"
+        elif pending_count > 0:
+            month_status = "PENDING"
+        elif lapsed_count > 0:
+            month_status = "LAPSED"
+        elif enrollment_count > 0:
+            month_status = "OTHER"
+
+        if month_status == "No Enrollment":
+            status_html = "<span class='chip'>No Enrollment</span>"
+        else:
+            status_html = coo_status_chip(month_status)
+
+        subjects = st["subjects_list"] or "No subjects for selected month"
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(st['full_name'] or '—')}</strong>
+                <div class="mini muted">Student ID: {st['id']}</div>
+                <div class="mini muted">Joined: {escape((st['created_at'] or '')[:16].replace('T', ' '))}</div>
+            </td>
+
+            <td>
+                <div>{escape(st['phone_whatsapp'] or '—')}</div>
+                <div class="mini muted">Email: {escape(st['email'] or '—')}</div>
+            </td>
+
+            <td>
+                <div>{escape(st['guardian_name'] or '—')}</div>
+                <div class="mini muted">{escape(st['guardian_phone'] or '—')}</div>
+            </td>
+
+            <td>{grade_label(st['grade'] or '')}</td>
+
+            <td>
+                <div>{escape(st['school'] or '—')}</div>
+                <div class="mini muted">{escape(st['province'] or '—')}</div>
+            </td>
+
+            <td>{status_html}</td>
+
+            <td style="min-width:260px">
+                {escape(subjects)}
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+            <div>
+                <h1>All Students</h1>
+
+                <p class="muted">
+                    View all learners registered on the EBTA portal, including their contact details,
+                    guardian details, school information and enrollment status for {pretty_month_label(month)}.
+                </p>
+            </div>
+
+            <span class="chip active">
+                COO View
+            </span>
+        </div>
+
+        <form method="get" class="toolbar" style="margin-top:12px">
+            <input type="month" name="month" value="{escape(month)}">
+
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search student, phone, guardian, email, school, province or subject">
+
+            <select name="grade">
+                <option value="">All Grades</option>
+                {grade_options}
+            </select>
+
+            <select name="status">
+                <option value="">All Month Statuses</option>
+                {status_options}
+            </select>
+
+            <button class="btn mini">
+                Search
+            </button>
+
+            <a class="btn mini secondary" href="{url_for('coo_students')}">
+                Clear
+            </a>
+        </form>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("All Students", all_students_total)}
+            {stat("Filtered Results", total)}
+            {stat("Selected Month", month)}
+            {grade_stats_html}
+        </div>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} student(s).
+        </div>
+
+        {pagination_controls(
+            "/coo/students",
+            page_num,
+            total_pages,
+            {
+                "month": month,
+                "q": q,
+                "grade": grade,
+                "status": status
+            }
+        )}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Contact</th>
+                        <th>Guardian</th>
+                        <th>Grade</th>
+                        <th>School</th>
+                        <th>Month Status</th>
+                        <th>Subjects for Month</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No students found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls(
+            "/coo/students",
+            page_num,
+            total_pages,
+            {
+                "month": month,
+                "q": q,
+                "grade": grade,
+                "status": status
+            }
+        )}
+
+    </section>
+    """
+
+    return page("COO All Students", body)
 
 
 # ---------------- COO FOLLOW-UPS ----------------
