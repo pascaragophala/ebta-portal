@@ -39489,6 +39489,10 @@ def secretary_minutes():
                 <a class="btn mini" href="/secretary/minutes/{m['id']}">
                     View
                 </a>
+
+                <a class="btn mini secondary" href="/secretary/minutes/{m['id']}/edit">
+                    Edit
+                </a>
             </td>
         </tr>
         """
@@ -39720,6 +39724,11 @@ def secretary_view_minutes(minutes_id):
             <td>{escape(a['deadline'] or '—')}</td>
             <td>{escape(a['followup_date'] or '—')}</td>
             <td><span class="chip">{escape(a['status'])}</span></td>
+            <td>
+                <a class="btn mini secondary" href="/secretary/action/{a['id']}/edit">
+                    Edit
+                </a>
+            </td>
         </tr>
         """
 
@@ -39727,7 +39736,13 @@ def secretary_view_minutes(minutes_id):
     {secretary_nav()}
 
     <section class="card">
-        <a class="btn mini secondary" href="/secretary/minutes">← Back</a>
+        <div class="toolbar">
+            <a class="btn mini secondary" href="/secretary/minutes">← Back</a>
+
+            <a class="btn mini success" href="/secretary/minutes/{minutes_id}/edit">
+                Edit Meeting Notes
+            </a>
+        </div>
 
         <h1 style="margin-top:12px">{escape(m['meeting_type'])}</h1>
 
@@ -39795,10 +39810,11 @@ def secretary_view_minutes(minutes_id):
                             <th>Deadline</th>
                             <th>Follow-Up</th>
                             <th>Status</th>
+                            <th>Action</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {action_rows or "<tr><td colspan='5'>No action items yet.</td></tr>"}
+                        {action_rows or "<tr><td colspan='6'>No action items yet.</td></tr>"}
                     </tbody>
                 </table>
             </div>
@@ -39808,6 +39824,180 @@ def secretary_view_minutes(minutes_id):
     """
 
     return page("Meeting Minutes", body)
+    
+    
+@app.get('/secretary/minutes/<int:minutes_id>/edit')
+def secretary_edit_minutes(minutes_id):
+
+    r = require_secretary()
+    if r:
+        return r
+
+    sid = is_secretary()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM secretary_meeting_minutes
+        WHERE id=?
+          AND secretary_id=?
+    """, (minutes_id, sid))
+
+    m = cur.fetchone()
+    conn.close()
+
+    if not m:
+        return page("Not Found", card_msg("Meeting minutes not found."))
+
+    status_options = ""
+
+    for status in ["DRAFT", "SUBMITTED", "SHARED", "ARCHIVED"]:
+        selected = "selected" if m["status"] == status else ""
+        status_options += f"""
+        <option value="{status}" {selected}>{status}</option>
+        """
+
+    meeting_type_options = ""
+
+    for meeting_type in ["Management Meeting", "All-Staff Meeting", "Operations Meeting", "Other"]:
+        selected = "selected" if m["meeting_type"] == meeting_type else ""
+        meeting_type_options += f"""
+        <option value="{meeting_type}" {selected}>{meeting_type}</option>
+        """
+
+    body = f"""
+    {secretary_nav()}
+
+    <section class="card">
+        <div class="toolbar">
+            <a class="btn mini secondary" href="/secretary/minutes/{minutes_id}">
+                ← Back
+            </a>
+        </div>
+
+        <h1>Edit Meeting Notes</h1>
+
+        <form method="post"
+              action="/secretary/minutes/{minutes_id}/edit"
+              class="grid"
+              style="grid-template-columns:1fr 1fr;gap:12px">
+
+            <div>
+                <label>Meeting Type</label>
+                <select name="meeting_type" required>
+                    {meeting_type_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Meeting Date</label>
+                <input type="date"
+                       name="meeting_date"
+                       value="{escape(m['meeting_date'] or '')}"
+                       required>
+            </div>
+
+            <div>
+                <label>Led By</label>
+                <input name="led_by"
+                       value="{escape(m['led_by'] or '')}">
+            </div>
+
+            <div>
+                <label>Status</label>
+                <select name="status">
+                    {status_options}
+                </select>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Attendees</label>
+                <input name="attendees"
+                       value="{escape(m['attendees'] or '')}">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Decisions Made</label>
+                <textarea name="decisions" rows="4">{escape(m['decisions'] or '')}</textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Blockers / Risks</label>
+                <textarea name="blockers" rows="4">{escape(m['blockers'] or '')}</textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Full Minutes</label>
+                <textarea name="minutes_body" rows="10">{escape(m['minutes_body'] or '')}</textarea>
+            </div>
+
+            <button class="btn success">
+                Save Changes
+            </button>
+        </form>
+    </section>
+    """
+
+    return page("Edit Meeting Notes", body)
+
+
+@app.post('/secretary/minutes/<int:minutes_id>/edit')
+def secretary_update_minutes(minutes_id):
+
+    r = require_secretary()
+    if r:
+        return r
+
+    sid = is_secretary()
+
+    meeting_type = request.form.get("meeting_type", "").strip()
+    meeting_date = request.form.get("meeting_date", "").strip()
+    led_by = request.form.get("led_by", "").strip()
+    attendees = request.form.get("attendees", "").strip()
+    decisions = request.form.get("decisions", "").strip()
+    blockers = request.form.get("blockers", "").strip()
+    minutes_body = request.form.get("minutes_body", "").strip()
+    status = request.form.get("status", "DRAFT").strip()
+
+    if status not in ["DRAFT", "SUBMITTED", "SHARED", "ARCHIVED"]:
+        status = "DRAFT"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE secretary_meeting_minutes
+        SET meeting_type=?,
+            meeting_date=?,
+            led_by=?,
+            attendees=?,
+            decisions=?,
+            blockers=?,
+            minutes_body=?,
+            status=?,
+            updated_at=?
+        WHERE id=?
+          AND secretary_id=?
+    """, (
+        meeting_type,
+        meeting_date,
+        led_by,
+        attendees,
+        decisions,
+        blockers,
+        minutes_body,
+        status,
+        now_utc_iso(),
+        minutes_id,
+        sid
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("secretary_view_minutes", minutes_id=minutes_id))
     
     
 @app.post('/secretary/minutes/<int:minutes_id>/action/add')
@@ -39928,10 +40118,14 @@ def secretary_action_items():
         if current_status == "PENDING" and a["deadline"] and a["deadline"] < today:
             current_status = "OVERDUE"
 
-        done_button = ""
+        done_button = f"""
+        <a class="btn mini secondary" href="/secretary/action/{a['id']}/edit">
+            Edit
+        </a>
+        """
 
         if current_status != "DONE":
-            done_button = f"""
+            done_button += f"""
             <form method="post"
                   action="/secretary/action/{a['id']}/done"
                   style="display:inline">
@@ -39941,7 +40135,11 @@ def secretary_action_items():
             </form>
             """
         else:
-            done_button = "<span class='mini muted'>Completed</span>"
+            done_button += """
+            <span class='mini muted' style="margin-left:6px">
+                Completed
+            </span>
+            """
 
         trs += f"""
         <tr>
@@ -39990,6 +40188,172 @@ def secretary_action_items():
     """
 
     return page("Action Items", body)
+
+
+@app.get('/secretary/action/<int:action_id>/edit')
+def secretary_edit_action_item(action_id):
+
+    r = require_secretary()
+    if r:
+        return r
+
+    sid = is_secretary()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM secretary_action_items
+        WHERE id=?
+          AND secretary_id=?
+    """, (action_id, sid))
+
+    a = cur.fetchone()
+    conn.close()
+
+    if not a:
+        return page("Not Found", card_msg("Action item not found."))
+
+    status_options = ""
+
+    for status in ["PENDING", "DONE", "OVERDUE"]:
+        selected = "selected" if a["status"] == status else ""
+        status_options += f"""
+        <option value="{status}" {selected}>{status}</option>
+        """
+
+    back_url = f"/secretary/minutes/{a['minutes_id']}" if a["minutes_id"] else "/secretary/action-items"
+
+    body = f"""
+    {secretary_nav()}
+
+    <section class="card">
+        <div class="toolbar">
+            <a class="btn mini secondary" href="{back_url}">
+                ← Back
+            </a>
+        </div>
+
+        <h1>Edit Action Note</h1>
+
+        <form method="post"
+              action="/secretary/action/{action_id}/edit"
+              class="grid"
+              style="grid-template-columns:1fr 1fr;gap:12px">
+
+            <div style="grid-column:1/-1">
+                <label>Task / Action Note</label>
+                <textarea name="task" rows="4" required>{escape(a['task'] or '')}</textarea>
+            </div>
+
+            <div>
+                <label>Responsible Person</label>
+                <input name="responsible_person"
+                       value="{escape(a['responsible_person'] or '')}">
+            </div>
+
+            <div>
+                <label>Status</label>
+                <select name="status">
+                    {status_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Deadline</label>
+                <input type="date"
+                       name="deadline"
+                       value="{escape(a['deadline'] or '')}">
+            </div>
+
+            <div>
+                <label>Follow-Up Date</label>
+                <input type="date"
+                       name="followup_date"
+                       value="{escape(a['followup_date'] or '')}">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Notes</label>
+                <textarea name="notes" rows="5">{escape(a['notes'] or '')}</textarea>
+            </div>
+
+            <button class="btn success">
+                Save Action Note
+            </button>
+        </form>
+    </section>
+    """
+
+    return page("Edit Action Note", body)
+
+
+@app.post('/secretary/action/<int:action_id>/edit')
+def secretary_update_action_item(action_id):
+
+    r = require_secretary()
+    if r:
+        return r
+
+    sid = is_secretary()
+
+    task = request.form.get("task", "").strip()
+    responsible_person = request.form.get("responsible_person", "").strip()
+    deadline = request.form.get("deadline", "").strip()
+    followup_date = request.form.get("followup_date", "").strip()
+    status = request.form.get("status", "PENDING").strip()
+    notes = request.form.get("notes", "").strip()
+
+    if status not in ["PENDING", "DONE", "OVERDUE"]:
+        status = "PENDING"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT minutes_id
+        FROM secretary_action_items
+        WHERE id=?
+          AND secretary_id=?
+    """, (action_id, sid))
+
+    existing = cur.fetchone()
+
+    if not existing:
+        conn.close()
+        return page("Not Found", card_msg("Action item not found."))
+
+    cur.execute("""
+        UPDATE secretary_action_items
+        SET task=?,
+            responsible_person=?,
+            deadline=?,
+            followup_date=?,
+            status=?,
+            notes=?,
+            updated_at=?
+        WHERE id=?
+          AND secretary_id=?
+    """, (
+        task,
+        responsible_person,
+        deadline,
+        followup_date,
+        status,
+        notes,
+        now_utc_iso(),
+        action_id,
+        sid
+    ))
+
+    conn.commit()
+    conn.close()
+
+    if existing["minutes_id"]:
+        return redirect(url_for("secretary_view_minutes", minutes_id=existing["minutes_id"]))
+
+    return redirect(url_for("secretary_action_items"))
 
 
 @app.post('/secretary/action/<int:action_id>/done')
@@ -53784,6 +54148,11 @@ def coo_secretary_minutes():
             <td>{escape(m['led_by'] or '—')}</td>
             <td>{coo_status_chip(m['status'])}</td>
             <td>{escape((m['created_at'] or '')[:16].replace('T',' '))}</td>
+            <td>
+                <a class="btn mini" href="/coo/secretary/minutes/{m['id']}">
+                    View
+                </a>
+            </td>
         </tr>
         """
 
@@ -53808,11 +54177,12 @@ def coo_secretary_minutes():
                         <th>Led By</th>
                         <th>Status</th>
                         <th>Created</th>
+                        <th>Action</th>
                     </tr>
                 </thead>
 
                 <tbody>
-                    {trs or "<tr><td colspan='5'>No meeting minutes found.</td></tr>"}
+                    {trs or "<tr><td colspan='6'>No meeting minutes found.</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -53825,6 +54195,128 @@ def coo_secretary_minutes():
 
 
 # ---------------- COO ACTION ITEMS ----------------
+
+@app.get('/coo/secretary/minutes/<int:minutes_id>')
+def coo_secretary_minutes_view(minutes_id):
+
+    r = require_coo_permission("coo_secretary_enabled", "meeting minutes")
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT m.*, s.full_name AS secretary_name
+        FROM secretary_meeting_minutes m
+        JOIN secretaries s ON s.id=m.secretary_id
+        WHERE m.id=?
+    """, (minutes_id,))
+
+    m = cur.fetchone()
+
+    if not m:
+        conn.close()
+        return page("Not Found", card_msg("Meeting minutes not found."))
+
+    cur.execute("""
+        SELECT a.*, s.full_name AS secretary_name
+        FROM secretary_action_items a
+        JOIN secretaries s ON s.id=a.secretary_id
+        WHERE a.minutes_id=?
+        ORDER BY a.deadline ASC, a.created_at DESC
+    """, (minutes_id,))
+
+    actions = cur.fetchall()
+    conn.close()
+
+    action_rows = ""
+
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date().isoformat()
+
+    for a in actions:
+        current_status = a["status"]
+
+        if current_status == "PENDING" and a["deadline"] and a["deadline"] < today:
+            current_status = "OVERDUE"
+
+        action_rows += f"""
+        <tr>
+            <td style="min-width:260px">{escape(a['task'] or '—')}</td>
+            <td>{escape(a['responsible_person'] or '—')}</td>
+            <td>{escape(a['deadline'] or '—')}</td>
+            <td>{escape(a['followup_date'] or '—')}</td>
+            <td>{coo_status_chip(current_status)}</td>
+            <td>{escape(a['notes'] or '—')}</td>
+            <td>
+                <a class="btn mini secondary" href="/coo/secretary/actions/{a['id']}/edit">
+                    Update
+                </a>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <div class="toolbar">
+            <a class="btn mini secondary" href="/coo/secretary/minutes">
+                ← Back to Meeting Minutes
+            </a>
+        </div>
+
+        <h1 style="margin-top:12px">{escape(m['meeting_type'] or 'Meeting Minutes')}</h1>
+
+        <div class="stats">
+            {stat("Meeting Date", escape(m["meeting_date"] or "—"))}
+            {stat("Secretary", escape(m["secretary_name"] or "—"))}
+            {stat("Led By", escape(m["led_by"] or "—"))}
+            {stat("Status", escape(m["status"] or "—"))}
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Attendees</h2>
+            <p>{escape(m['attendees'] or '—')}</p>
+
+            <h2>Decisions Made</h2>
+            <p style="white-space:pre-wrap">{escape(m['decisions'] or '—')}</p>
+
+            <h2>Blockers / Risks</h2>
+            <p style="white-space:pre-wrap">{escape(m['blockers'] or '—')}</p>
+
+            <h2>Full Meeting Notes</h2>
+            <p style="white-space:pre-wrap">{escape(m['minutes_body'] or '—')}</p>
+        </div>
+
+        <div class="card soft" style="margin-top:14px;border-left:5px solid #1b5e20">
+            <h2>Action Notes</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Task</th>
+                            <th>Responsible</th>
+                            <th>Deadline</th>
+                            <th>Follow-Up</th>
+                            <th>Status</th>
+                            <th>Notes</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {action_rows or "<tr><td colspan='7'>No action notes linked to this meeting.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("COO Meeting Minutes", body)
+
 
 @app.get('/coo/secretary/actions')
 def coo_secretary_actions():
@@ -53902,6 +54394,11 @@ def coo_secretary_actions():
             <td>{escape(a['followup_date'] or '—')}</td>
             <td>{coo_status_chip(current_status)}</td>
             <td>{escape(a['notes'] or '—')}</td>
+            <td>
+                <a class="btn mini secondary" href="/coo/secretary/actions/{a['id']}/edit">
+                    Update
+                </a>
+            </td>
         </tr>
         """
 
@@ -53943,11 +54440,12 @@ def coo_secretary_actions():
                         <th>Follow-Up</th>
                         <th>Status</th>
                         <th>Notes</th>
+                        <th>Action</th>
                     </tr>
                 </thead>
 
                 <tbody>
-                    {trs or "<tr><td colspan='7'>No action items found.</td></tr>"}
+                    {trs or "<tr><td colspan='8'>No action items found.</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -53957,6 +54455,168 @@ def coo_secretary_actions():
     """
 
     return page("Secretary Action Items", body)
+    
+@app.get('/coo/secretary/actions/<int:action_id>/edit')
+def coo_secretary_action_edit(action_id):
+
+    r = require_coo_permission("coo_secretary_enabled", "secretary action items")
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT a.*, s.full_name AS secretary_name
+        FROM secretary_action_items a
+        JOIN secretaries s ON s.id=a.secretary_id
+        WHERE a.id=?
+    """, (action_id,))
+
+    a = cur.fetchone()
+    conn.close()
+
+    if not a:
+        return page("Not Found", card_msg("Action item not found."))
+
+    status_options = ""
+
+    for status in ["PENDING", "DONE", "OVERDUE"]:
+        selected = "selected" if a["status"] == status else ""
+        status_options += f"""
+        <option value="{status}" {selected}>{status}</option>
+        """
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <div class="toolbar">
+            <a class="btn mini secondary" href="/coo/secretary/actions">
+                ← Back to Action Items
+            </a>
+
+            {f'<a class="btn mini" href="/coo/secretary/minutes/{a["minutes_id"]}">Open Meeting Minutes</a>' if a["minutes_id"] else ''}
+        </div>
+
+        <h1>Update Secretary Action Note</h1>
+
+        <p class="muted">
+            Captured by {escape(a["secretary_name"] or "Secretary")}. COO can update follow-up notes and status.
+        </p>
+
+        <form method="post"
+              action="/coo/secretary/actions/{action_id}/edit"
+              class="grid"
+              style="grid-template-columns:1fr 1fr;gap:12px">
+
+            <div style="grid-column:1/-1">
+                <label>Task / Action Note</label>
+                <textarea name="task" rows="4" required>{escape(a['task'] or '')}</textarea>
+            </div>
+
+            <div>
+                <label>Responsible Person</label>
+                <input name="responsible_person"
+                       value="{escape(a['responsible_person'] or '')}">
+            </div>
+
+            <div>
+                <label>Status</label>
+                <select name="status">
+                    {status_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Deadline</label>
+                <input type="date"
+                       name="deadline"
+                       value="{escape(a['deadline'] or '')}">
+            </div>
+
+            <div>
+                <label>Follow-Up Date</label>
+                <input type="date"
+                       name="followup_date"
+                       value="{escape(a['followup_date'] or '')}">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>COO / Follow-Up Notes</label>
+                <textarea name="notes" rows="5">{escape(a['notes'] or '')}</textarea>
+            </div>
+
+            <button class="btn success">
+                Save Update
+            </button>
+        </form>
+    </section>
+    """
+
+    return page("Update Action Note", body)
+
+
+@app.post('/coo/secretary/actions/<int:action_id>/edit')
+def coo_secretary_action_update(action_id):
+
+    r = require_coo_permission("coo_secretary_enabled", "secretary action items")
+    if r:
+        return r
+
+    task = request.form.get("task", "").strip()
+    responsible_person = request.form.get("responsible_person", "").strip()
+    deadline = request.form.get("deadline", "").strip()
+    followup_date = request.form.get("followup_date", "").strip()
+    status = request.form.get("status", "PENDING").strip()
+    notes = request.form.get("notes", "").strip()
+
+    if status not in ["PENDING", "DONE", "OVERDUE"]:
+        status = "PENDING"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT minutes_id
+        FROM secretary_action_items
+        WHERE id=?
+    """, (action_id,))
+
+    existing = cur.fetchone()
+
+    if not existing:
+        conn.close()
+        return page("Not Found", card_msg("Action item not found."))
+
+    cur.execute("""
+        UPDATE secretary_action_items
+        SET task=?,
+            responsible_person=?,
+            deadline=?,
+            followup_date=?,
+            status=?,
+            notes=?,
+            updated_at=?
+        WHERE id=?
+    """, (
+        task,
+        responsible_person,
+        deadline,
+        followup_date,
+        status,
+        notes,
+        now_utc_iso(),
+        action_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+    if existing["minutes_id"]:
+        return redirect(url_for("coo_secretary_minutes_view", minutes_id=existing["minutes_id"]))
+
+    return redirect(url_for("coo_secretary_actions"))
 
 
 # ---------------- COO SMS DASHBOARD ----------------
