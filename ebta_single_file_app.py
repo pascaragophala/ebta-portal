@@ -57249,123 +57249,607 @@ def cao_tutor_performance():
 
     month = cao_selected_month()
     q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+    subject_id = request.args.get("subject_id", "").strip()
+    progress_filter = request.args.get("progress", "").strip()
     page_num = cao_page_num()
 
     per_page = 15
     offset = (page_num - 1) * per_page
 
-    where = []
-    params = [month + "%", month]
+    where = ["1=1"]
+    params = []
 
     if q:
         search = f"%{q}%"
-        where.append("(t.full_name LIKE ? OR t.phone LIKE ?)")
-        params += [search, search]
+        where.append("""
+            (
+                t.full_name LIKE ?
+                OR t.phone LIKE ?
+                OR s.name LIKE ?
+                OR s.grade LIKE ?
+            )
+        """)
+        params += [search, search, search, search]
 
-    where_sql = "WHERE " + " AND ".join(where) if where else ""
+    if grade:
+        where.append("s.grade=?")
+        params.append(grade)
+
+    if subject_id:
+        where.append("s.id=?")
+        params.append(subject_id)
+
+    where_sql = "WHERE " + " AND ".join(where)
 
     conn = get_db()
     cur = conn.cursor()
 
-    count_params = params[2:] if q else []
-
+    # Get matching tutors first.
     cur.execute(f"""
-        SELECT COUNT(*) AS c
-        FROM tutors t
-        {where_sql}
-    """, count_params)
-
-    total = cur.fetchone()["c"] or 0
-    total_pages = max(1, (total + per_page - 1) // per_page)
-
-    data_params = list(params)
-    data_params.extend([per_page, offset])
-
-    cur.execute(f"""
-        SELECT
+        SELECT DISTINCT
             t.id,
             t.full_name,
-            t.phone,
-            COUNT(DISTINCT m.id) AS uploads,
-            COUNT(DISTINCT CASE WHEN m.youtube_url IS NOT NULL AND TRIM(m.youtube_url) != '' THEN m.id END) AS recordings,
-            COUNT(DISTINCT CASE WHEN m.is_assignment=1 OR m.kind='assignment' THEN m.id END) AS assignments,
-            COUNT(DISTINCT subm.id) AS submissions_received,
-            COUNT(DISTINCT twt.id) AS tracker_logs,
-            ROUND(AVG(twt.manager_rating), 1) AS avg_manager_rating
+            t.phone
         FROM tutors t
-        LEFT JOIN materials m ON m.tutor_id=t.id AND m.month LIKE ?
-        LEFT JOIN submissions subm ON subm.material_id=m.id AND substr(subm.submitted_at,1,7)=?
-        LEFT JOIN tutor_weekly_tracker twt ON twt.tutor_id=t.id AND substr(twt.session_date,1,7)=?
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        LEFT JOIN subjects s ON s.id=ts.subject_id
         {where_sql}
-        GROUP BY t.id
-        ORDER BY uploads DESC, recordings DESC, assignments DESC, t.full_name
-        LIMIT ? OFFSET ?
-    """, data_params[:1] + [month, month] + data_params[2:])
+        ORDER BY t.full_name
+    """, params)
 
-    rows_data = cur.fetchall()
+    tutor_rows = cur.fetchall()
+
+    # Subject filter options
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
+    """)
+
+    subjects = cur.fetchall()
     conn.close()
+
+    tutor_data = []
+
+    for tutor in tutor_rows:
+
+        progress = tutor_work_progress_data(tutor["id"], month)
+
+        status_label = progress["overall_status"]
+        status_class = progress["overall_class"]
+
+        if progress_filter and status_label != progress_filter:
+            continue
+
+        risk_subjects = [
+            x for x in progress["subject_rows"]
+            if x["risk_level"] == "HIGH"
+        ]
+
+        medium_subjects = [
+            x for x in progress["subject_rows"]
+            if x["risk_level"] == "MEDIUM"
+        ]
+
+        subject_list = []
+
+        for sub in progress["assigned_subjects"]:
+            subject_list.append(
+                f"{grade_label(sub['grade'])} - {sub['subject_name']}"
+            )
+
+        tutor_data.append({
+            "id": tutor["id"],
+            "full_name": tutor["full_name"],
+            "phone": tutor["phone"],
+            "overall_rate": progress["overall_rate"],
+            "overall_status": status_label,
+            "status_class": status_class,
+            "assigned_subjects": len(progress["assigned_subjects"]),
+            "subject_list": ", ".join(subject_list) if subject_list else "No assigned subjects",
+            "total_uploads": progress["total_uploads"],
+            "recordings_uploaded": progress["recordings_uploaded"],
+            "assignments_uploaded": progress["assignments_uploaded"],
+            "material_views": progress["material_views"],
+            "submissions_received": progress["submissions_received"],
+            "marked_submissions": progress["marked_submissions"],
+            "unmarked_submissions": progress["unmarked_submissions"],
+            "marking_rate": progress["marking_rate"],
+            "attendance_logs": progress["attendance_logs"],
+            "assigned_sessions": progress["assigned_sessions"],
+            "attendance_log_rate": progress["attendance_log_rate"],
+            "tracker_logs": progress["tracker_logs"],
+            "tracker_completion_rate": progress["tracker_completion_rate"],
+            "avg_manager_rating": progress["avg_manager_rating"],
+            "messages_sent": progress["messages_sent"],
+            "portal_hours_label": progress["portal_hours_label"],
+            "high_risk_subjects": risk_subjects,
+            "medium_subjects": medium_subjects,
+            "recommendations": progress["recommendations"]
+        })
+
+    # Sort weak tutors first, like learner performance shows risks clearly.
+    tutor_data = sorted(
+        tutor_data,
+        key=lambda x: (x["overall_rate"], x["full_name"] or "")
+    )
+
+    total = len(tutor_data)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    tutors = tutor_data[offset:offset + per_page]
+
+    # Summary calculations
+    on_track_count = len([x for x in tutor_data if x["overall_status"] == "On Track"])
+    attention_count = len([x for x in tutor_data if x["overall_status"] == "Needs Attention"])
+    high_risk_count = len([x for x in tutor_data if x["overall_status"] == "High Risk"])
+
+    avg_progress = round(sum([x["overall_rate"] for x in tutor_data]) / len(tutor_data)) if tutor_data else 0
+    avg_attendance_logs = round(sum([min(100, x["attendance_log_rate"]) for x in tutor_data]) / len(tutor_data)) if tutor_data else 0
+    avg_marking_rate = round(sum([x["marking_rate"] for x in tutor_data]) / len(tutor_data)) if tutor_data else 0
+    avg_tracker_rate = round(sum([min(100, x["tracker_completion_rate"]) for x in tutor_data]) / len(tutor_data)) if tutor_data else 0
+
+    total_uploads = sum([x["total_uploads"] for x in tutor_data])
+    total_recordings = sum([x["recordings_uploaded"] for x in tutor_data])
+    total_assignments = sum([x["assignments_uploaded"] for x in tutor_data])
+    total_views = sum([x["material_views"] for x in tutor_data])
+    total_unmarked = sum([x["unmarked_submissions"] for x in tutor_data])
+    total_tracker_logs = sum([x["tracker_logs"] for x in tutor_data])
+
+    # Subject risk summary
+    subject_risk_map = {}
+
+    for tutor in tutor_data:
+        for sub in tutor["high_risk_subjects"]:
+            label = f"{grade_label(sub['grade'])} - {sub['subject_name']}"
+            subject_risk_map[label] = subject_risk_map.get(label, 0) + 1
+
+    subject_risk_labels = list(subject_risk_map.keys())[:8]
+    subject_risk_values = [subject_risk_map[x] for x in subject_risk_labels]
 
     rows = ""
 
-    for t in rows_data:
+    for t in tutors:
+
+        risk_subjects = ", ".join([
+            f"{grade_label(x['grade'])} {x['subject_name']}"
+            for x in t["high_risk_subjects"][:3]
+        ]) or "None"
+
+        recommendations = ", ".join(t["recommendations"][:3]) or "On track"
+
+        avg_rating = t["avg_manager_rating"] if t["avg_manager_rating"] is not None else "—"
+
         rows += f"""
         <tr>
             <td>
-                <strong>{escape(t['full_name'])}</strong>
+                <strong>{escape(t['full_name'] or '—')}</strong>
                 <div class="mini muted">{escape(t['phone'] or '—')}</div>
+                <div class="mini muted">Subjects: {escape(t['subject_list'])}</div>
             </td>
-            <td>{t['uploads'] or 0}</td>
-            <td>{t['recordings'] or 0}</td>
-            <td>{t['assignments'] or 0}</td>
-            <td>{t['submissions_received'] or 0}</td>
-            <td>{t['tracker_logs'] or 0}</td>
-            <td>{t['avg_manager_rating'] or '—'}</td>
+
+            <td>
+                <span class="chip {t['status_class']}">
+                    {escape(t['overall_status'])}
+                </span>
+                <div class="mini muted">Overall: {t['overall_rate']}%</div>
+            </td>
+
+            <td>
+                {t['total_uploads']}
+                <div class="mini muted">
+                    {t['recordings_uploaded']} recordings · {t['assignments_uploaded']} assignments
+                </div>
+            </td>
+
+            <td>
+                {t['material_views']}
+                <div class="mini muted">Learner material views</div>
+            </td>
+
+            <td>
+                {t['marked_submissions']} / {t['submissions_received']}
+                <div class="mini muted">{t['marking_rate']}% marking rate</div>
+            </td>
+
+            <td>
+                {t['attendance_logs']} / {t['assigned_sessions']}
+                <div class="mini muted">{t['attendance_log_rate']}% attendance logs</div>
+            </td>
+
+            <td>
+                {t['tracker_logs']}
+                <div class="mini muted">{t['tracker_completion_rate']}% tracker completion</div>
+            </td>
+
+            <td>
+                {escape(str(avg_rating))}
+                <div class="mini muted">Manager rating</div>
+            </td>
+
+            <td>
+                {escape(t['portal_hours_label'])}
+                <div class="mini muted">{t['messages_sent']} message(s)</div>
+            </td>
+
+            <td>
+                <div class="mini"><strong>Risk subjects:</strong> {escape(risk_subjects)}</div>
+                <div class="mini muted"><strong>Improve:</strong> {escape(recommendations)}</div>
+            </td>
         </tr>
         """
+
+    grade_options = '<option value="">All Grades</option>'
+
+    for g in ["G8", "G9", "G10", "G11", "G12", "G13"]:
+        selected = "selected" if grade == g else ""
+        grade_options += f"""
+        <option value="{g}" {selected}>
+            {grade_label(g)}
+        </option>
+        """
+
+    subject_options = '<option value="">All Subjects</option>'
+
+    for sub in subjects:
+        selected = "selected" if subject_id == str(sub["id"]) else ""
+        subject_options += f"""
+        <option value="{sub["id"]}" {selected}>
+            {grade_label(sub["grade"])} - {escape(sub["name"])}
+        </option>
+        """
+
+    progress_options = f"""
+        <option value="" {'selected' if progress_filter == '' else ''}>All Progress Levels</option>
+        <option value="On Track" {'selected' if progress_filter == 'On Track' else ''}>On Track</option>
+        <option value="Needs Attention" {'selected' if progress_filter == 'Needs Attention' else ''}>Needs Attention</option>
+        <option value="High Risk" {'selected' if progress_filter == 'High Risk' else ''}>High Risk</option>
+    """
+
+    chart_payload = {
+        "progressMix": {
+            "labels": ["On Track", "Needs Attention", "High Risk"],
+            "values": [on_track_count, attention_count, high_risk_count]
+        },
+        "workAreas": {
+            "labels": ["Uploads", "Recordings", "Assignments", "Learner Views", "Tracker Logs"],
+            "values": [total_uploads, total_recordings, total_assignments, total_views, total_tracker_logs]
+        },
+        "qualityAreas": {
+            "labels": ["Overall Progress", "Attendance Logs", "Marking Rate", "Tracker Completion"],
+            "values": [avg_progress, avg_attendance_logs, avg_marking_rate, avg_tracker_rate]
+        },
+        "subjectRisks": {
+            "labels": subject_risk_labels,
+            "values": subject_risk_values
+        },
+        "markingLoad": {
+            "labels": ["Marked", "Unmarked"],
+            "values": [
+                sum([x["marked_submissions"] for x in tutor_data]),
+                total_unmarked
+            ]
+        }
+    }
+
+    chart_json = json.dumps(chart_payload)
 
     body = f"""
     {cao_nav()}
 
     <section class="card">
-        <h1>Tutor Performance</h1>
+        <h1>Tutor Work Progress Analytics</h1>
+
+        <p class="muted">
+            This view uses the upgraded tutor work progress data: LMS materials, recordings,
+            assignments, learner engagement, marking progress, attendance logs, tracker logs,
+            manager ratings, portal activity and risk subjects.
+        </p>
 
         <form method="get" class="toolbar">
             <input type="month" name="month" value="{escape(month)}">
-            <input name="q" value="{escape(q)}" placeholder="Search tutor name or phone">
+
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search tutor, phone, subject or grade">
+
+            <select name="grade">
+                {grade_options}
+            </select>
+
+            <select name="subject_id">
+                {subject_options}
+            </select>
+
+            <select name="progress">
+                {progress_options}
+            </select>
+
             <button class="btn mini">Search</button>
-            <a class="btn mini secondary" href="{url_for('cao_tutor_performance')}">Clear</a>
+
+            <a class="btn mini secondary" href="{url_for('cao_tutor_performance')}">
+                Clear
+            </a>
         </form>
 
-        <div class="mini muted" style="margin:10px 0">
-            Showing {len(rows_data)} of {total} tutor performance record(s).
+        <div class="stats" style="margin-top:12px">
+            {stat("Tutors Analysed", total)}
+            {stat("Average Progress", f"{avg_progress}%")}
+            {stat("Attendance Logs", f"{avg_attendance_logs}%")}
+            {stat("Marking Rate", f"{avg_marking_rate}%")}
+            {stat("Tracker Completion", f"{avg_tracker_rate}%")}
+            {stat("On Track", on_track_count)}
+            {stat("Needs Attention", attention_count)}
+            {stat("High Risk", high_risk_count)}
+            {stat("Total Uploads", total_uploads)}
+            {stat("Recordings", total_recordings)}
+            {stat("Assignments", total_assignments)}
+            {stat("Unmarked Scripts", total_unmarked)}
         </div>
 
-        {pagination_controls("/cao/tutor-performance", page_num, total_pages, {"month": month, "q": q})}
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
 
-        <div class="scroll-x">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Tutor</th>
-                        <th>Uploads</th>
-                        <th>Recordings</th>
-                        <th>Assignments</th>
-                        <th>Submissions</th>
-                        <th>Tracker Logs</th>
-                        <th>Avg Rating</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows or "<tr><td colspan='7'>No tutor performance data found.</td></tr>"}
-                </tbody>
-            </table>
+            <div class="card soft">
+                <h2>Progress Status Mix</h2>
+                <p class="mini muted">On track, needs attention and high-risk tutor split.</p>
+                <div style="height:280px">
+                    <canvas id="caoTutorProgressMixChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Academic Delivery Areas</h2>
+                <p class="mini muted">Uploads, recordings, assignments, views and tracker logs.</p>
+                <div style="height:280px">
+                    <canvas id="caoTutorWorkAreasChart"></canvas>
+                </div>
+            </div>
+
         </div>
 
-        {pagination_controls("/cao/tutor-performance", page_num, total_pages, {"month": month, "q": q})}
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft">
+                <h2>Quality Progress Areas</h2>
+                <p class="mini muted">Average progress across quality indicators.</p>
+                <div style="height:320px">
+                    <canvas id="caoTutorQualityAreasChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Marking Load</h2>
+                <p class="mini muted">Marked versus unmarked learner submissions.</p>
+                <div style="height:320px">
+                    <canvas id="caoTutorMarkingLoadChart"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>High-Risk Subjects</h2>
+            <p class="mini muted">
+                Subjects where tutors may need support with uploads, recordings, assignments,
+                marking or attendance logging.
+            </p>
+
+            <div style="height:320px">
+                <canvas id="caoTutorSubjectRiskChart"></canvas>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Detailed Tutor Work Progress Table</h2>
+
+            <div class="mini muted" style="margin:10px 0">
+                Showing {len(tutors)} of {total} tutor(s).
+            </div>
+
+            {pagination_controls("/cao/tutor-performance", page_num, total_pages, {
+                "month": month,
+                "q": q,
+                "grade": grade,
+                "subject_id": subject_id,
+                "progress": progress_filter
+            })}
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tutor</th>
+                            <th>Status</th>
+                            <th>LMS Work</th>
+                            <th>Learner Views</th>
+                            <th>Marking</th>
+                            <th>Attendance Logs</th>
+                            <th>Tracker Logs</th>
+                            <th>Avg Rating</th>
+                            <th>Portal Activity</th>
+                            <th>Risk / Improvement</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='10'>No tutor performance records found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+
+            {pagination_controls("/cao/tutor-performance", page_num, total_pages, {
+                "month": month,
+                "q": q,
+                "grade": grade,
+                "subject_id": subject_id,
+                "progress": progress_filter
+            })}
+        </div>
     </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        const tutorPerformanceCharts = {chart_json};
+
+        function noDataPlugin(message) {{
+            return {{
+                id: "noData_" + Math.random().toString(36).slice(2),
+                afterDraw(chart) {{
+                    const dataValues = chart.data.datasets.flatMap(ds => ds.data || []);
+                    const hasData = dataValues.some(v => Number(v) > 0);
+
+                    if (!hasData) {{
+                        const ctx = chart.ctx;
+                        ctx.save();
+                        ctx.textAlign = "center";
+                        ctx.textBaseline = "middle";
+                        ctx.font = "13px Arial";
+                        ctx.fillStyle = "#64748b";
+                        ctx.fillText(message || "No data available", chart.width / 2, chart.height / 2);
+                        ctx.restore();
+                    }}
+                }}
+            }};
+        }}
+
+        const commonTutorOptions = {{
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {{
+                legend: {{
+                    position: "bottom"
+                }}
+            }}
+        }};
+
+        new Chart(document.getElementById("caoTutorProgressMixChart"), {{
+            type: "doughnut",
+            data: {{
+                labels: tutorPerformanceCharts.progressMix.labels,
+                datasets: [{{
+                    data: tutorPerformanceCharts.progressMix.values,
+                    backgroundColor: ["#1b5e20", "#f59e0b", "#dc2626"]
+                }}]
+            }},
+            options: commonTutorOptions,
+            plugins: [noDataPlugin("No tutor progress status data")]
+        }});
+
+        new Chart(document.getElementById("caoTutorWorkAreasChart"), {{
+            type: "bar",
+            data: {{
+                labels: tutorPerformanceCharts.workAreas.labels,
+                datasets: [{{
+                    label: "Total",
+                    data: tutorPerformanceCharts.workAreas.values,
+                    backgroundColor: "#1b5e20",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonTutorOptions,
+                plugins: {{
+                    legend: {{
+                        display: false
+                    }}
+                }},
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No tutor work data")]
+        }});
+
+        new Chart(document.getElementById("caoTutorQualityAreasChart"), {{
+            type: "bar",
+            data: {{
+                labels: tutorPerformanceCharts.qualityAreas.labels,
+                datasets: [{{
+                    label: "Average %",
+                    data: tutorPerformanceCharts.qualityAreas.values,
+                    backgroundColor: "#1b5e20",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonTutorOptions,
+                plugins: {{
+                    legend: {{
+                        display: false
+                    }}
+                }},
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {{
+                            callback: function(value) {{
+                                return value + "%";
+                            }}
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No quality progress data")]
+        }});
+
+        new Chart(document.getElementById("caoTutorMarkingLoadChart"), {{
+            type: "pie",
+            data: {{
+                labels: tutorPerformanceCharts.markingLoad.labels,
+                datasets: [{{
+                    data: tutorPerformanceCharts.markingLoad.values,
+                    backgroundColor: ["#1b5e20", "#dc2626"]
+                }}]
+            }},
+            options: commonTutorOptions,
+            plugins: [noDataPlugin("No marking data")]
+        }});
+
+        new Chart(document.getElementById("caoTutorSubjectRiskChart"), {{
+            type: "bar",
+            data: {{
+                labels: tutorPerformanceCharts.subjectRisks.labels,
+                datasets: [{{
+                    label: "High-Risk Tutor Count",
+                    data: tutorPerformanceCharts.subjectRisks.values,
+                    backgroundColor: "#dc2626",
+                    borderRadius: 10
+                }}]
+            }},
+            options: {{
+                ...commonTutorOptions,
+                plugins: {{
+                    legend: {{
+                        display: false
+                    }}
+                }},
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        ticks: {{
+                            precision: 0
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [noDataPlugin("No high-risk subject data")]
+        }});
+    </script>
     """
 
-    return page("CAO Tutor Performance", body)    
+    return page("CAO Tutor Work Progress Analytics", body)   
     
     
 @app.get('/cao/sessions')
