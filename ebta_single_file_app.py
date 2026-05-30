@@ -65218,17 +65218,16 @@ def assessment_status_chip(status):
 
 def assessment_is_open(assessment):
     """
-    Checks if assessment is currently open.
-    Uses local South African time.
+    Checks if assessment is currently open using South African local time.
     """
-    now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))
+    now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).replace(tzinfo=None)
 
     opens_at = assessment["opens_at"]
     closes_at = assessment["closes_at"]
 
     if opens_at:
         try:
-            open_dt = datetime.datetime.fromisoformat(opens_at)
+            open_dt = datetime.datetime.fromisoformat(opens_at).replace(tzinfo=None)
             if now < open_dt:
                 return False
         except Exception:
@@ -65236,7 +65235,7 @@ def assessment_is_open(assessment):
 
     if closes_at:
         try:
-            close_dt = datetime.datetime.fromisoformat(closes_at)
+            close_dt = datetime.datetime.fromisoformat(closes_at).replace(tzinfo=None)
             if now > close_dt:
                 return False
         except Exception:
@@ -66353,6 +66352,49 @@ def student_submit_assessment(assessment_id):
     if attempt["status"] in ["SUBMITTED", "MARKED"]:
         conn.close()
         return page("Already Submitted", card_msg("This assessment was already submitted."))
+        
+    cur.execute("""
+        SELECT duration_minutes
+        FROM assessments
+        WHERE id=?
+    """, (assessment_id,))
+
+    assessment_row = cur.fetchone()
+
+    try:
+        started_at = datetime.datetime.fromisoformat(
+            str(attempt["started_at"]).replace("Z", "+00:00")
+        ).replace(tzinfo=None)
+
+        now_local = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).replace(tzinfo=None)
+
+        duration_minutes = int(assessment_row["duration_minutes"] or 30)
+        deadline = started_at + datetime.timedelta(minutes=duration_minutes)
+
+        if now_local > deadline:
+            cur.execute("""
+                UPDATE assessment_attempts
+                SET submitted_at=?,
+                    status='SUBMITTED',
+                    flags_json=?
+                WHERE id=?
+            """, (
+                now_utc_iso(),
+                security_events,
+                attempt_id
+            ))
+
+            conn.commit()
+            conn.close()
+
+            return page(
+                "Time Expired",
+                card_msg("Your assessment time has expired. The attempt has been submitted.")
+            )
+
+    except Exception as e:
+        print("Assessment time check error:", e)    
+    
 
     cur.execute("""
         SELECT *
@@ -66809,7 +66851,7 @@ def export_remove_list():
     if r:
         return r
 
-        month = get_admin_active_month()
+    month = get_admin_active_month()
     y, m = map(int, month.split('-'))
     ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
     next_month = f"{ny:04d}-{nm:02d}"
