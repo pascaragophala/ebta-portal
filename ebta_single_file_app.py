@@ -7213,10 +7213,7 @@ def page(title, body_html, extra_head="", extra_js=""):
 
         role_photo_html = ""
 
-        if is_student():
-            role_photo_html = student_sidebar_photo
-
-        elif is_tutor():
+        if is_tutor():
             role_photo_html = tutor_sidebar_photo
 
         sidebar_html = f"""
