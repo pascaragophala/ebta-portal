@@ -15510,14 +15510,6 @@ def tutor_view_student_profile(student_id):
                         <span class="chip">
                             WhatsApp: {escape(student['phone_whatsapp'] or '—')}
                         </span>
-
-                        <span class="chip">
-                            School: {escape(student['school'] or '—')}
-                        </span>
-
-                        <span class="chip">
-                            Province: {escape(student['province'] or '—')}
-                        </span>
                     </div>
                 </div>
             </div>
