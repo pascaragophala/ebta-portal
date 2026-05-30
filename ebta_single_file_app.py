@@ -1551,6 +1551,116 @@ def init_db():
         FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
     );
     """)
+    
+    # ================= ASSESSMENTS / ONLINE QUIZZES =================
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS assessments(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        subject_id INTEGER NOT NULL,
+        tutor_id INTEGER NOT NULL,
+        month TEXT NOT NULL,
+
+        title TEXT NOT NULL,
+        description TEXT,
+        instructions TEXT,
+
+        duration_minutes INTEGER NOT NULL DEFAULT 30,
+        opens_at TEXT,
+        closes_at TEXT,
+
+        is_published INTEGER NOT NULL DEFAULT 0,
+        shuffle_questions INTEGER NOT NULL DEFAULT 1,
+        show_results INTEGER NOT NULL DEFAULT 0,
+        lockdown_required INTEGER NOT NULL DEFAULT 1,
+
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS assessment_questions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        assessment_id INTEGER NOT NULL,
+        question_type TEXT NOT NULL DEFAULT 'MCQ',
+        -- MCQ | LONG
+
+        question_text TEXT NOT NULL,
+        options_json TEXT,
+        correct_index INTEGER,
+        memo TEXT,
+
+        points INTEGER NOT NULL DEFAULT 1,
+        question_order INTEGER NOT NULL DEFAULT 1,
+
+        created_at TEXT NOT NULL,
+
+        FOREIGN KEY(assessment_id) REFERENCES assessments(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS assessment_attempts(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        assessment_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+
+        started_at TEXT NOT NULL,
+        submitted_at TEXT,
+
+        status TEXT NOT NULL DEFAULT 'IN_PROGRESS',
+        -- IN_PROGRESS | SUBMITTED | MARKED
+
+        auto_score REAL NOT NULL DEFAULT 0,
+        manual_score REAL NOT NULL DEFAULT 0,
+        total_score REAL NOT NULL DEFAULT 0,
+        total_points REAL NOT NULL DEFAULT 0,
+
+        flags_json TEXT,
+        detail_json TEXT,
+
+        UNIQUE(assessment_id, student_id),
+
+        FOREIGN KEY(assessment_id) REFERENCES assessments(id) ON DELETE CASCADE,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS assessment_answers(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        attempt_id INTEGER NOT NULL,
+        question_id INTEGER NOT NULL,
+
+        selected_index INTEGER,
+        answer_text TEXT,
+
+        auto_mark REAL,
+        manual_mark REAL,
+        feedback TEXT,
+
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        UNIQUE(attempt_id, question_id),
+
+        FOREIGN KEY(attempt_id) REFERENCES assessment_attempts(id) ON DELETE CASCADE,
+        FOREIGN KEY(question_id) REFERENCES assessment_questions(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_assessments_subject ON assessments(subject_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_assessments_tutor ON assessments(tutor_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_assessments_month ON assessments(month)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_assessment_attempts_student ON assessment_attempts(student_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_assessment_attempts_assessment ON assessment_attempts(assessment_id)")
 
     # Enrollment control defaults
     cur.execute("SELECT value FROM settings WHERE key='enrollment_open'")
@@ -6968,6 +7078,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("👤 My Profile", url_for('student_profile_page')),
                 ("✅ Status", "#status"),
                 ("📝 Assignments", url_for('student_assignments')),
+                ("🧪 Assessments", url_for('student_assessments')),
                 ("📚 Learning Materials", url_for('student_materials')),
                 ("💬 Messages", "#messages"),
                 ("📤 Upload Report", url_for('student_upload_report')),
@@ -7058,6 +7169,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("⬆️ Upload Material", url_for('tutor_home') + "#upload"),
                 ("📚 My Library", url_for('tutor_uploads_library')),
                 ("📝 Assignments", url_for('tutor_home') + "#assignments"),
+                ("🧪 Assessments", url_for('tutor_assessments')),
                 ("💬 Messages", url_for('tutor_home') + "#messages"),
                 ("👥 Students", url_for('tutor_home') + "#students"),
                 ("🚪 Logout", url_for('tutor_logout'))
@@ -65087,6 +65199,1606 @@ def admin_analytics():
     """
 
     return page("Analytics Dashboard", body)
+    
+    
+def assessment_status_chip(status):
+    status = (status or "").upper()
+
+    if status == "MARKED":
+        return "<span class='chip active'>Marked</span>"
+
+    if status == "SUBMITTED":
+        return "<span class='chip pending'>Submitted</span>"
+
+    if status == "IN_PROGRESS":
+        return "<span class='chip'>In Progress</span>"
+
+    return f"<span class='chip'>{escape(status or 'Unknown')}</span>"
+
+
+def assessment_is_open(assessment):
+    """
+    Checks if assessment is currently open.
+    Uses local South African time.
+    """
+    now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))
+
+    opens_at = assessment["opens_at"]
+    closes_at = assessment["closes_at"]
+
+    if opens_at:
+        try:
+            open_dt = datetime.datetime.fromisoformat(opens_at)
+            if now < open_dt:
+                return False
+        except Exception:
+            pass
+
+    if closes_at:
+        try:
+            close_dt = datetime.datetime.fromisoformat(closes_at)
+            if now > close_dt:
+                return False
+        except Exception:
+            pass
+
+    return True
+
+
+def student_can_access_assessment(student_id, assessment_id):
+    """
+    Student can only access assessments for active enrolled subjects.
+    """
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 1
+        FROM assessments a
+        JOIN enrollments e ON e.subject_id = a.subject_id
+        WHERE a.id=?
+          AND e.student_id=?
+          AND e.status='ACTIVE'
+          AND e.month = a.month
+          AND a.is_published=1
+        LIMIT 1
+    """, (assessment_id, student_id))
+
+    allowed = cur.fetchone() is not None
+
+    conn.close()
+    return allowed
+
+
+def tutor_owns_assessment(tutor_id, assessment_id):
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 1
+        FROM assessments
+        WHERE id=?
+          AND tutor_id=?
+        LIMIT 1
+    """, (assessment_id, tutor_id))
+
+    allowed = cur.fetchone() is not None
+
+    conn.close()
+    return allowed
+
+
+def assessment_total_points(conn, assessment_id):
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COALESCE(SUM(points),0) AS total
+        FROM assessment_questions
+        WHERE assessment_id=?
+    """, (assessment_id,))
+
+    return float(cur.fetchone()["total"] or 0)
+
+
+def parse_datetime_local(value):
+    """
+    Converts datetime-local input to ISO string.
+    Empty values stay None.
+    """
+    value = (value or "").strip()
+
+    if not value:
+        return None
+
+    try:
+        return datetime.datetime.fromisoformat(value).isoformat()
+    except Exception:
+        return value    
+
+@app.get('/tutor/assessments')
+def tutor_assessments():
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    month = get_active_month("tutor")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            a.*,
+            s.name AS subject_name,
+            s.grade,
+            COUNT(DISTINCT q.id) AS question_count,
+            COUNT(DISTINCT at.id) AS attempt_count
+        FROM assessments a
+        JOIN subjects s ON s.id = a.subject_id
+        LEFT JOIN assessment_questions q ON q.assessment_id = a.id
+        LEFT JOIN assessment_attempts at ON at.assessment_id = a.id
+        WHERE a.tutor_id=?
+          AND a.month=?
+        GROUP BY a.id
+        ORDER BY a.created_at DESC
+    """, (tid, month))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for a in rows:
+        publish_label = "Published" if a["is_published"] else "Draft"
+        publish_class = "active" if a["is_published"] else "pending"
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(a['title'])}</strong>
+                <div class="mini muted">{escape(a['description'] or '')}</div>
+            </td>
+
+            <td>{grade_label(a['grade'])} - {escape(a['subject_name'])}</td>
+
+            <td>{a['duration_minutes']} min</td>
+
+            <td>
+                <span class="chip {publish_class}">
+                    {publish_label}
+                </span>
+            </td>
+
+            <td>{a['question_count']}</td>
+            <td>{a['attempt_count']}</td>
+
+            <td>
+                <a class="btn mini secondary" href="/tutor/assessments/{a['id']}/builder">
+                    Build
+                </a>
+
+                <a class="btn mini" href="/tutor/assessments/{a['id']}/submissions">
+                    Submissions
+                </a>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    <section class="card">
+        <div class="toolbar">
+            <a class="btn mini success" href="/tutor/assessments/new">
+                Create Assessment
+            </a>
+        </div>
+
+        <h1>Assessments</h1>
+
+        <p class="muted">
+            Create online assessments with multiple-choice questions and long questions.
+            Multiple-choice questions are auto-marked, while long questions are marked manually.
+        </p>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Assessment</th>
+                        <th>Subject</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                        <th>Questions</th>
+                        <th>Attempts</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No assessments created yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Tutor Assessments", body)
+
+
+@app.get('/tutor/assessments/new')
+def tutor_new_assessment():
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    month = get_active_month("tutor")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT s.id, s.name, s.grade
+        FROM tutor_subjects ts
+        JOIN subjects s ON s.id = ts.subject_id
+        WHERE ts.tutor_id=?
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.name
+    """, (tid,))
+
+    subjects = cur.fetchall()
+    conn.close()
+
+    subject_options = ""
+
+    for s in subjects:
+        subject_options += f"""
+        <option value="{s['id']}">
+            {grade_label(s['grade'])} - {escape(s['name'])}
+        </option>
+        """
+
+    body = f"""
+    <section class="card">
+        <div class="toolbar">
+            <a class="btn mini secondary" href="/tutor/assessments">
+                ← Back
+            </a>
+        </div>
+
+        <h1>Create Assessment</h1>
+
+        <form method="post"
+              action="/tutor/assessments/new"
+              class="grid"
+              style="grid-template-columns:1fr 1fr;gap:12px">
+
+            <div>
+                <label>Subject</label>
+                <select name="subject_id" required>
+                    {subject_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Month</label>
+                <input type="month" name="month" value="{escape(month)}" required>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Title</label>
+                <input name="title" required placeholder="Example: Algebra Quiz 1">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Description</label>
+                <textarea name="description" rows="3"></textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Instructions</label>
+                <textarea name="instructions" rows="4"
+                          placeholder="Explain rules, allowed resources and submission expectations."></textarea>
+            </div>
+
+            <div>
+                <label>Duration in minutes</label>
+                <input type="number" name="duration_minutes" value="30" min="5" max="240">
+            </div>
+
+            <div>
+                <label>Opens At</label>
+                <input type="datetime-local" name="opens_at">
+            </div>
+
+            <div>
+                <label>Closes At</label>
+                <input type="datetime-local" name="closes_at">
+            </div>
+
+            <div>
+                <label>
+                    <input type="checkbox" name="shuffle_questions" checked>
+                    Shuffle questions
+                </label>
+            </div>
+
+            <div>
+                <label>
+                    <input type="checkbox" name="lockdown_required" checked>
+                    Lockdown-style monitoring
+                </label>
+            </div>
+
+            <div>
+                <label>
+                    <input type="checkbox" name="show_results">
+                    Show results to learners after submission
+                </label>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <button class="btn success">
+                    Create Assessment
+                </button>
+            </div>
+        </form>
+    </section>
+    """
+
+    return page("Create Assessment", body)
+
+
+@app.post('/tutor/assessments/new')
+def tutor_create_assessment():
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    subject_id = request.form.get("subject_id", "").strip()
+    month = request.form.get("month", "").strip()
+    title = request.form.get("title", "").strip()
+    description = request.form.get("description", "").strip()
+    instructions = request.form.get("instructions", "").strip()
+
+    try:
+        duration_minutes = int(request.form.get("duration_minutes", 30))
+    except Exception:
+        duration_minutes = 30
+
+    if duration_minutes < 5:
+        duration_minutes = 5
+
+    opens_at = parse_datetime_local(request.form.get("opens_at"))
+    closes_at = parse_datetime_local(request.form.get("closes_at"))
+
+    shuffle_questions = 1 if request.form.get("shuffle_questions") else 0
+    lockdown_required = 1 if request.form.get("lockdown_required") else 0
+    show_results = 1 if request.form.get("show_results") else 0
+
+    if not subject_id or not month or not title:
+        return page("Error", card_msg("Subject, month and title are required."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 1
+        FROM tutor_subjects
+        WHERE tutor_id=? AND subject_id=?
+        LIMIT 1
+    """, (tid, subject_id))
+
+    if not cur.fetchone():
+        conn.close()
+        return page("Error", card_msg("This subject is not assigned to you."))
+
+    cur.execute("""
+        INSERT INTO assessments(
+            subject_id,
+            tutor_id,
+            month,
+            title,
+            description,
+            instructions,
+            duration_minutes,
+            opens_at,
+            closes_at,
+            shuffle_questions,
+            show_results,
+            lockdown_required,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        subject_id,
+        tid,
+        month,
+        title,
+        description,
+        instructions,
+        duration_minutes,
+        opens_at,
+        closes_at,
+        shuffle_questions,
+        show_results,
+        lockdown_required,
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    assessment_id = cur.lastrowid
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("tutor_assessment_builder", assessment_id=assessment_id))
+    
+   
+@app.get('/tutor/assessments/<int:assessment_id>/builder')
+def tutor_assessment_builder(assessment_id):
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    if not tutor_owns_assessment(tid, assessment_id):
+        return page("Access Denied", card_msg("You cannot manage this assessment."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT a.*, s.name AS subject_name, s.grade
+        FROM assessments a
+        JOIN subjects s ON s.id=a.subject_id
+        WHERE a.id=?
+    """, (assessment_id,))
+
+    a = cur.fetchone()
+
+    cur.execute("""
+        SELECT *
+        FROM assessment_questions
+        WHERE assessment_id=?
+        ORDER BY question_order ASC, id ASC
+    """, (assessment_id,))
+
+    questions = cur.fetchall()
+    conn.close()
+
+    question_rows = ""
+
+    for q in questions:
+        options_html = ""
+
+        if q["question_type"] == "MCQ":
+            try:
+                options = json.loads(q["options_json"] or "[]")
+            except Exception:
+                options = []
+
+            option_lines = []
+
+            for i, opt in enumerate(options):
+                correct = "✅" if q["correct_index"] == i else ""
+                option_lines.append(f"{chr(65+i)}. {escape(opt)} {correct}")
+
+            options_html = "<br>".join(option_lines)
+        else:
+            options_html = f"<span class='muted'>Long question. Tutor marks manually.</span>"
+
+        question_rows += f"""
+        <tr>
+            <td>{q['question_order']}</td>
+            <td>{escape(q['question_type'])}</td>
+            <td style="min-width:260px">{escape(q['question_text'])}</td>
+            <td>{options_html}</td>
+            <td>{q['points']}</td>
+        </tr>
+        """
+
+    publish_button = ""
+
+    if questions:
+        publish_button = f"""
+        <form method="post" action="/tutor/assessments/{assessment_id}/publish" style="display:inline">
+            <button class="btn mini success">
+                {"Unpublish" if a["is_published"] else "Publish"}
+            </button>
+        </form>
+        """
+
+    body = f"""
+    <section class="card">
+        <div class="toolbar">
+            <a class="btn mini secondary" href="/tutor/assessments">
+                ← Back
+            </a>
+
+            {publish_button}
+        </div>
+
+        <h1>{escape(a['title'])}</h1>
+
+        <p class="muted">
+            {grade_label(a['grade'])} - {escape(a['subject_name'])} |
+            Duration: {a['duration_minutes']} minutes |
+            Status: {"Published" if a["is_published"] else "Draft"}
+        </p>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Add Question</h2>
+
+            <form method="post"
+                  action="/tutor/assessments/{assessment_id}/question/add"
+                  class="grid"
+                  style="grid-template-columns:1fr 1fr;gap:12px">
+
+                <div>
+                    <label>Question Type</label>
+                    <select name="question_type" required>
+                        <option value="MCQ">Multiple Choice</option>
+                        <option value="LONG">Long Question</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Points</label>
+                    <input type="number" name="points" value="1" min="1" max="100">
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <label>Question</label>
+                    <textarea name="question_text" rows="4" required></textarea>
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <label>MCQ Options</label>
+                    <p class="mini muted">
+                        For multiple-choice questions only. Put each option on a new line.
+                        The first line is option A, second line is option B, and so on.
+                    </p>
+                    <textarea name="options_text" rows="5"
+                              placeholder="Option A&#10;Option B&#10;Option C&#10;Option D"></textarea>
+                </div>
+
+                <div>
+                    <label>Correct Option for MCQ</label>
+                    <select name="correct_index">
+                        <option value="0">A</option>
+                        <option value="1">B</option>
+                        <option value="2">C</option>
+                        <option value="3">D</option>
+                        <option value="4">E</option>
+                    </select>
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <label>Memo / Marking Guide</label>
+                    <textarea name="memo" rows="4"></textarea>
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <button class="btn success">
+                        Add Question
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Questions</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Type</th>
+                            <th>Question</th>
+                            <th>Options / Details</th>
+                            <th>Points</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {question_rows or "<tr><td colspan='5'>No questions added yet.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("Assessment Builder", body)
+
+
+@app.post('/tutor/assessments/<int:assessment_id>/question/add')
+def tutor_add_assessment_question(assessment_id):
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    if not tutor_owns_assessment(tid, assessment_id):
+        return page("Access Denied", card_msg("You cannot edit this assessment."))
+
+    question_type = request.form.get("question_type", "MCQ").strip().upper()
+    question_text = request.form.get("question_text", "").strip()
+    options_text = request.form.get("options_text", "").strip()
+    memo = request.form.get("memo", "").strip()
+
+    try:
+        points = int(request.form.get("points", 1))
+    except Exception:
+        points = 1
+
+    try:
+        correct_index = int(request.form.get("correct_index", 0))
+    except Exception:
+        correct_index = 0
+
+    if points < 1:
+        points = 1
+
+    if question_type not in ["MCQ", "LONG"]:
+        question_type = "MCQ"
+
+    if not question_text:
+        return page("Error", card_msg("Question text is required."))
+
+    options_json = None
+
+    if question_type == "MCQ":
+        options = [
+            x.strip()
+            for x in options_text.splitlines()
+            if x.strip()
+        ]
+
+        if len(options) < 2:
+            return page("Error", card_msg("Multiple-choice questions need at least two options."))
+
+        if correct_index < 0 or correct_index >= len(options):
+            correct_index = 0
+
+        options_json = json.dumps(options)
+    else:
+        correct_index = None
+        options_json = None
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COALESCE(MAX(question_order),0) + 1 AS next_order
+        FROM assessment_questions
+        WHERE assessment_id=?
+    """, (assessment_id,))
+
+    question_order = cur.fetchone()["next_order"] or 1
+
+    cur.execute("""
+        INSERT INTO assessment_questions(
+            assessment_id,
+            question_type,
+            question_text,
+            options_json,
+            correct_index,
+            memo,
+            points,
+            question_order,
+            created_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?)
+    """, (
+        assessment_id,
+        question_type,
+        question_text,
+        options_json,
+        correct_index,
+        memo,
+        points,
+        question_order,
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("tutor_assessment_builder", assessment_id=assessment_id))
+
+
+@app.post('/tutor/assessments/<int:assessment_id>/publish')
+def tutor_publish_assessment(assessment_id):
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    if not tutor_owns_assessment(tid, assessment_id):
+        return page("Access Denied", card_msg("You cannot publish this assessment."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT is_published
+        FROM assessments
+        WHERE id=?
+    """, (assessment_id,))
+
+    a = cur.fetchone()
+
+    if not a:
+        conn.close()
+        return page("Not Found", card_msg("Assessment not found."))
+
+    new_status = 0 if a["is_published"] else 1
+
+    cur.execute("""
+        UPDATE assessments
+        SET is_published=?,
+            updated_at=?
+        WHERE id=?
+    """, (new_status, now_utc_iso(), assessment_id))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("tutor_assessment_builder", assessment_id=assessment_id))
+    
+    
+@app.get('/student/assessments')
+def student_assessments():
+
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+    month = get_active_month("student")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            a.*,
+            s.name AS subject_name,
+            s.grade,
+            t.full_name AS tutor_name,
+            at.status AS attempt_status,
+            at.total_score,
+            at.total_points,
+            at.submitted_at
+        FROM assessments a
+        JOIN subjects s ON s.id = a.subject_id
+        JOIN tutors t ON t.id = a.tutor_id
+        JOIN enrollments e ON e.subject_id = a.subject_id
+        LEFT JOIN assessment_attempts at 
+               ON at.assessment_id = a.id
+              AND at.student_id = e.student_id
+        WHERE e.student_id=?
+          AND e.status='ACTIVE'
+          AND e.month = a.month
+          AND a.month=?
+          AND a.is_published=1
+        ORDER BY a.created_at DESC
+    """, (sid, month))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = ""
+
+    for a in rows:
+        result_text = "—"
+
+        if a["attempt_status"] in ["SUBMITTED", "MARKED"] and a["total_points"]:
+            result_text = f"{a['total_score']} / {a['total_points']}"
+
+        action = f"""
+        <a class="btn mini success" href="/student/assessment/{a['id']}/take">
+            Start / Continue
+        </a>
+        """
+
+        if a["attempt_status"] in ["SUBMITTED", "MARKED"]:
+            action = "<span class='mini muted'>Submitted</span>"
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(a['title'])}</strong>
+                <div class="mini muted">{escape(a['description'] or '')}</div>
+            </td>
+
+            <td>{grade_label(a['grade'])} - {escape(a['subject_name'])}</td>
+            <td>{escape(a['tutor_name'])}</td>
+            <td>{a['duration_minutes']} min</td>
+            <td>{assessment_status_chip(a['attempt_status'] or 'NOT STARTED')}</td>
+            <td>{result_text}</td>
+            <td>{action}</td>
+        </tr>
+        """
+
+    body = f"""
+    <section class="card">
+        <h1>Assessments</h1>
+
+        <p class="muted">
+            Complete your online quizzes and assessments here. Some questions are auto-marked,
+            while long questions are marked by your tutor.
+        </p>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Assessment</th>
+                        <th>Subject</th>
+                        <th>Tutor</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                        <th>Result</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='7'>No assessments available yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Student Assessments", body)
+
+
+@app.get('/student/assessment/<int:assessment_id>/take')
+def student_take_assessment(assessment_id):
+
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+
+    if not student_can_access_assessment(sid, assessment_id):
+        return page("Access Denied", card_msg("You are not allowed to access this assessment."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT a.*, s.name AS subject_name, s.grade, t.full_name AS tutor_name
+        FROM assessments a
+        JOIN subjects s ON s.id=a.subject_id
+        JOIN tutors t ON t.id=a.tutor_id
+        WHERE a.id=?
+    """, (assessment_id,))
+
+    a = cur.fetchone()
+
+    if not a:
+        conn.close()
+        return page("Not Found", card_msg("Assessment not found."))
+
+    if not assessment_is_open(a):
+        conn.close()
+        return page("Closed", card_msg("This assessment is not currently open."))
+
+    cur.execute("""
+        SELECT *
+        FROM assessment_attempts
+        WHERE assessment_id=?
+          AND student_id=?
+    """, (assessment_id, sid))
+
+    attempt = cur.fetchone()
+
+    if attempt and attempt["status"] in ["SUBMITTED", "MARKED"]:
+        conn.close()
+        return page("Already Submitted", card_msg("You have already submitted this assessment."))
+
+    if not attempt:
+        total_points = assessment_total_points(conn, assessment_id)
+
+        cur.execute("""
+            INSERT INTO assessment_attempts(
+                assessment_id,
+                student_id,
+                started_at,
+                status,
+                total_points,
+                flags_json,
+                detail_json
+            )
+            VALUES(?,?,?,?,?,?,?)
+        """, (
+            assessment_id,
+            sid,
+            now_utc_iso(),
+            "IN_PROGRESS",
+            total_points,
+            "{}",
+            "{}"
+        ))
+
+        attempt_id = cur.lastrowid
+    else:
+        attempt_id = attempt["id"]
+
+    cur.execute("""
+        SELECT *
+        FROM assessment_questions
+        WHERE assessment_id=?
+        ORDER BY question_order ASC, id ASC
+    """, (assessment_id,))
+
+    questions = cur.fetchall()
+
+    conn.commit()
+    conn.close()
+
+    questions_list = list(questions)
+
+    if a["shuffle_questions"]:
+        random.shuffle(questions_list)
+
+    q_html = ""
+
+    for i, q in enumerate(questions_list, start=1):
+
+        if q["question_type"] == "MCQ":
+            try:
+                options = json.loads(q["options_json"] or "[]")
+            except Exception:
+                options = []
+
+            options_html = ""
+
+            for index, opt in enumerate(options):
+                options_html += f"""
+                <label style="display:block;margin:6px 0;padding:8px;border:1px solid #e5e7eb;border-radius:10px">
+                    <input type="radio"
+                           name="q_{q['id']}"
+                           value="{index}">
+                    {escape(opt)}
+                </label>
+                """
+
+            answer_html = options_html
+
+        else:
+            answer_html = f"""
+            <textarea name="q_{q['id']}"
+                      rows="6"
+                      placeholder="Type your answer here..."
+                      style="width:100%"></textarea>
+            """
+
+        q_html += f"""
+        <div class="card soft assessment-question">
+            <h3>Question {i} <span class="mini muted">({q['points']} mark(s))</span></h3>
+
+            <p style="white-space:pre-wrap">{escape(q['question_text'])}</p>
+
+            {answer_html}
+        </div>
+        """
+
+    lockdown_script = ""
+
+    if a["lockdown_required"]:
+        lockdown_script = """
+        <script>
+            let securityEvents = {
+                tab_switches: 0,
+                window_blurs: 0,
+                copy_events: 0,
+                paste_events: 0,
+                right_clicks: 0,
+                fullscreen_exits: 0,
+                started_at: new Date().toISOString()
+            };
+
+            function updateSecurityField() {
+                const field = document.getElementById("security_events");
+                if (field) {
+                    field.value = JSON.stringify(securityEvents);
+                }
+            }
+
+            function requestAssessmentFullscreen() {
+                const el = document.documentElement;
+                if (el.requestFullscreen) {
+                    el.requestFullscreen().catch(() => {});
+                }
+            }
+
+            document.addEventListener("visibilitychange", function() {
+                if (document.hidden) {
+                    securityEvents.tab_switches += 1;
+                    updateSecurityField();
+                    alert("Warning: leaving the assessment tab is recorded.");
+                }
+            });
+
+            window.addEventListener("blur", function() {
+                securityEvents.window_blurs += 1;
+                updateSecurityField();
+            });
+
+            document.addEventListener("copy", function(e) {
+                securityEvents.copy_events += 1;
+                updateSecurityField();
+                e.preventDefault();
+            });
+
+            document.addEventListener("paste", function(e) {
+                securityEvents.paste_events += 1;
+                updateSecurityField();
+                e.preventDefault();
+            });
+
+            document.addEventListener("contextmenu", function(e) {
+                securityEvents.right_clicks += 1;
+                updateSecurityField();
+                e.preventDefault();
+            });
+
+            document.addEventListener("fullscreenchange", function() {
+                if (!document.fullscreenElement) {
+                    securityEvents.fullscreen_exits += 1;
+                    updateSecurityField();
+                }
+            });
+
+            window.addEventListener("load", function() {
+                requestAssessmentFullscreen();
+                updateSecurityField();
+            });
+        </script>
+        """
+
+    body = f"""
+    <section class="card">
+        <h1>{escape(a['title'])}</h1>
+
+        <p class="muted">
+            {grade_label(a['grade'])} - {escape(a['subject_name'])} |
+            Tutor: {escape(a['tutor_name'])} |
+            Duration: {a['duration_minutes']} minutes
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #dc2626">
+            <h2>Assessment Rules</h2>
+
+            <p style="white-space:pre-wrap">
+                {escape(a['instructions'] or 'Answer all questions. Do not leave the assessment tab while writing.')}
+            </p>
+
+            <p class="mini muted">
+                Security monitoring may record tab switching, window switching, copy/paste, right-clicks and fullscreen exits.
+            </p>
+        </div>
+
+        <form method="post" action="/student/assessment/{assessment_id}/submit">
+            <input type="hidden" name="attempt_id" value="{attempt_id}">
+            <input type="hidden" name="security_events" id="security_events" value="{{}}">
+
+            {q_html}
+
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <button class="btn success" onclick="return confirm('Are you sure you want to submit this assessment?')">
+                    Submit Assessment
+                </button>
+            </div>
+        </form>
+    </section>
+
+    {lockdown_script}
+    """
+
+    return page("Take Assessment", body)
+    
+    
+@app.post('/student/assessment/<int:assessment_id>/submit')
+def student_submit_assessment(assessment_id):
+
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+
+    if not student_can_access_assessment(sid, assessment_id):
+        return page("Access Denied", card_msg("You are not allowed to submit this assessment."))
+
+    attempt_id = request.form.get("attempt_id", "").strip()
+    security_events = request.form.get("security_events", "{}")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM assessment_attempts
+        WHERE id=?
+          AND assessment_id=?
+          AND student_id=?
+    """, (attempt_id, assessment_id, sid))
+
+    attempt = cur.fetchone()
+
+    if not attempt:
+        conn.close()
+        return page("Error", card_msg("Assessment attempt not found."))
+
+    if attempt["status"] in ["SUBMITTED", "MARKED"]:
+        conn.close()
+        return page("Already Submitted", card_msg("This assessment was already submitted."))
+
+    cur.execute("""
+        SELECT *
+        FROM assessment_questions
+        WHERE assessment_id=?
+    """, (assessment_id,))
+
+    questions = cur.fetchall()
+
+    auto_score = 0
+    total_points = 0
+
+    for q in questions:
+        total_points += float(q["points"] or 0)
+
+        field_name = f"q_{q['id']}"
+        answer_value = request.form.get(field_name, "").strip()
+
+        selected_index = None
+        answer_text = None
+        auto_mark = None
+
+        if q["question_type"] == "MCQ":
+            try:
+                selected_index = int(answer_value)
+            except Exception:
+                selected_index = None
+
+            if selected_index is not None and selected_index == q["correct_index"]:
+                auto_mark = float(q["points"] or 0)
+            else:
+                auto_mark = 0
+
+            auto_score += auto_mark
+
+        else:
+            answer_text = answer_value
+            auto_mark = None
+
+        cur.execute("""
+            INSERT OR REPLACE INTO assessment_answers(
+                attempt_id,
+                question_id,
+                selected_index,
+                answer_text,
+                auto_mark,
+                manual_mark,
+                feedback,
+                created_at,
+                updated_at
+            )
+            VALUES(
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                COALESCE(
+                    (SELECT manual_mark FROM assessment_answers WHERE attempt_id=? AND question_id=?),
+                    NULL
+                ),
+                COALESCE(
+                    (SELECT feedback FROM assessment_answers WHERE attempt_id=? AND question_id=?),
+                    NULL
+                ),
+                COALESCE(
+                    (SELECT created_at FROM assessment_answers WHERE attempt_id=? AND question_id=?),
+                    ?
+                ),
+                ?
+            )
+        """, (
+            attempt_id,
+            q["id"],
+            selected_index,
+            answer_text,
+            auto_mark,
+            attempt_id,
+            q["id"],
+            attempt_id,
+            q["id"],
+            attempt_id,
+            q["id"],
+            now_utc_iso(),
+            now_utc_iso()
+        ))
+
+    cur.execute("""
+        UPDATE assessment_attempts
+        SET submitted_at=?,
+            status='SUBMITTED',
+            auto_score=?,
+            total_score=?,
+            total_points=?,
+            flags_json=?
+        WHERE id=?
+    """, (
+        now_utc_iso(),
+        auto_score,
+        auto_score,
+        total_points,
+        security_events,
+        attempt_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return page("Submitted", card_msg("Assessment submitted successfully."))
+
+
+@app.get('/tutor/assessments/<int:assessment_id>/submissions')
+def tutor_assessment_submissions(assessment_id):
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    if not tutor_owns_assessment(tid, assessment_id):
+        return page("Access Denied", card_msg("You cannot view this assessment."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT a.*, s.name AS subject_name, s.grade
+        FROM assessments a
+        JOIN subjects s ON s.id=a.subject_id
+        WHERE a.id=?
+    """, (assessment_id,))
+
+    assessment = cur.fetchone()
+
+    cur.execute("""
+        SELECT 
+            at.*,
+            st.full_name AS student_name,
+            st.phone_whatsapp
+        FROM assessment_attempts at
+        JOIN students st ON st.id = at.student_id
+        WHERE at.assessment_id=?
+        ORDER BY at.submitted_at DESC
+    """, (assessment_id,))
+
+    attempts = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for at in attempts:
+        flag_text = at["flags_json"] or "{}"
+
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(at['student_name'])}</strong>
+                <div class="mini muted">{escape(at['phone_whatsapp'] or '—')}</div>
+            </td>
+
+            <td>{assessment_status_chip(at['status'])}</td>
+
+            <td>{at['total_score']} / {at['total_points']}</td>
+
+            <td>{escape((at['submitted_at'] or '')[:16].replace('T',' '))}</td>
+
+            <td style="max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+                title="{escape(flag_text)}">
+                {escape(flag_text)}
+            </td>
+
+            <td>
+                <a class="btn mini secondary" href="/tutor/assessment-attempt/{at['id']}/mark">
+                    Mark / View
+                </a>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    <section class="card">
+        <div class="toolbar">
+            <a class="btn mini secondary" href="/tutor/assessments/{assessment_id}/builder">
+                ← Back
+            </a>
+        </div>
+
+        <h1>Assessment Submissions</h1>
+
+        <p class="muted">
+            {escape(assessment['title'])} |
+            {grade_label(assessment['grade'])} - {escape(assessment['subject_name'])}
+        </p>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Status</th>
+                        <th>Score</th>
+                        <th>Submitted</th>
+                        <th>Security Flags</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {rows or "<tr><td colspan='6'>No submissions yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Assessment Submissions", body)
+    
+    
+@app.get('/tutor/assessment-attempt/<int:attempt_id>/mark')
+def tutor_mark_assessment_attempt(attempt_id):
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            at.*,
+            a.title,
+            a.tutor_id,
+            st.full_name AS student_name
+        FROM assessment_attempts at
+        JOIN assessments a ON a.id = at.assessment_id
+        JOIN students st ON st.id = at.student_id
+        WHERE at.id=?
+    """, (attempt_id,))
+
+    attempt = cur.fetchone()
+
+    if not attempt:
+        conn.close()
+        return page("Not Found", card_msg("Attempt not found."))
+
+    if attempt["tutor_id"] != tid:
+        conn.close()
+        return page("Access Denied", card_msg("You cannot mark this attempt."))
+
+    cur.execute("""
+        SELECT 
+            ans.id AS answer_id,
+            ans.selected_index,
+            ans.answer_text,
+            ans.auto_mark,
+            ans.manual_mark,
+            ans.feedback,
+            q.question_text,
+            q.question_type,
+            q.options_json,
+            q.correct_index,
+            q.memo,
+            q.points
+        FROM assessment_answers ans
+        JOIN assessment_questions q ON q.id = ans.question_id
+        WHERE ans.attempt_id=?
+        ORDER BY q.question_order ASC, q.id ASC
+    """, (attempt_id,))
+
+    answers = cur.fetchall()
+    conn.close()
+
+    answer_cards = ""
+
+    for ans in answers:
+        answer_display = ""
+
+        if ans["question_type"] == "MCQ":
+            try:
+                options = json.loads(ans["options_json"] or "[]")
+            except Exception:
+                options = []
+
+            selected = ans["selected_index"]
+
+            selected_text = "No answer"
+
+            if selected is not None and 0 <= selected < len(options):
+                selected_text = options[selected]
+
+            correct_text = "—"
+
+            if ans["correct_index"] is not None and 0 <= ans["correct_index"] < len(options):
+                correct_text = options[ans["correct_index"]]
+
+            answer_display = f"""
+            <p><strong>Selected:</strong> {escape(selected_text)}</p>
+            <p><strong>Correct:</strong> {escape(correct_text)}</p>
+            <p><strong>Auto Mark:</strong> {ans['auto_mark']} / {ans['points']}</p>
+            """
+
+        else:
+            manual_value = "" if ans["manual_mark"] is None else ans["manual_mark"]
+
+            answer_display = f"""
+            <p style="white-space:pre-wrap;border:1px solid #e5e7eb;padding:10px;border-radius:10px">
+                {escape(ans['answer_text'] or 'No answer')}
+            </p>
+
+            <label>Manual Mark out of {ans['points']}</label>
+            <input type="number"
+                   name="mark_{ans['answer_id']}"
+                   value="{manual_value}"
+                   min="0"
+                   max="{ans['points']}"
+                   step="0.5">
+
+            <label>Feedback</label>
+            <textarea name="feedback_{ans['answer_id']}" rows="3">{escape(ans['feedback'] or '')}</textarea>
+            """
+
+        answer_cards += f"""
+        <div class="card soft">
+            <h3>{escape(ans['question_type'])} Question ({ans['points']} mark(s))</h3>
+
+            <p style="white-space:pre-wrap">{escape(ans['question_text'])}</p>
+
+            {answer_display}
+
+            <p class="mini muted" style="white-space:pre-wrap">
+                Memo: {escape(ans['memo'] or 'No memo added.')}
+            </p>
+        </div>
+        """
+
+    body = f"""
+    <section class="card">
+        <h1>Mark Assessment</h1>
+
+        <p class="muted">
+            Assessment: {escape(attempt['title'])}<br>
+            Learner: {escape(attempt['student_name'])}<br>
+            Auto Score: {attempt['auto_score']} / {attempt['total_points']}
+        </p>
+
+        <form method="post" action="/tutor/assessment-attempt/{attempt_id}/mark">
+            {answer_cards}
+
+            <button class="btn success">
+                Save Marks
+            </button>
+        </form>
+    </section>
+    """
+
+    return page("Mark Assessment", body)
+
+
+@app.post('/tutor/assessment-attempt/<int:attempt_id>/mark')
+def tutor_save_assessment_marks(attempt_id):
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT at.*, a.tutor_id
+        FROM assessment_attempts at
+        JOIN assessments a ON a.id = at.assessment_id
+        WHERE at.id=?
+    """, (attempt_id,))
+
+    attempt = cur.fetchone()
+
+    if not attempt:
+        conn.close()
+        return page("Not Found", card_msg("Attempt not found."))
+
+    if attempt["tutor_id"] != tid:
+        conn.close()
+        return page("Access Denied", card_msg("You cannot mark this attempt."))
+
+    cur.execute("""
+        SELECT ans.id, q.points
+        FROM assessment_answers ans
+        JOIN assessment_questions q ON q.id = ans.question_id
+        WHERE ans.attempt_id=?
+          AND q.question_type='LONG'
+    """, (attempt_id,))
+
+    long_answers = cur.fetchall()
+
+    manual_score = 0
+
+    for ans in long_answers:
+        raw_mark = request.form.get(f"mark_{ans['id']}", "").strip()
+        feedback = request.form.get(f"feedback_{ans['id']}", "").strip()
+
+        try:
+            mark = float(raw_mark)
+        except Exception:
+            mark = 0
+
+        max_points = float(ans["points"] or 0)
+
+        if mark < 0:
+            mark = 0
+
+        if mark > max_points:
+            mark = max_points
+
+        manual_score += mark
+
+        cur.execute("""
+            UPDATE assessment_answers
+            SET manual_mark=?,
+                feedback=?,
+                updated_at=?
+            WHERE id=?
+        """, (mark, feedback, now_utc_iso(), ans["id"]))
+
+    total_score = float(attempt["auto_score"] or 0) + manual_score
+
+    cur.execute("""
+        UPDATE assessment_attempts
+        SET manual_score=?,
+            total_score=?,
+            status='MARKED'
+        WHERE id=?
+    """, (manual_score, total_score, attempt_id))
+
+    assessment_id = attempt["assessment_id"]
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("tutor_assessment_submissions", assessment_id=assessment_id))
 
 
 # --- Export remove list ---
