@@ -4879,7 +4879,7 @@ background:#fff;
 /* Mobile tutor layout */
 @media (max-width: 768px){
 
-    .role-tutor body{
+    body.role-tutor{
         overflow-x:hidden;
     }
 
@@ -5218,6 +5218,380 @@ background:#fff;
 
     .role-tutor table{
         min-width:700px;
+    }
+}
+
+/* =========================================================
+   TUTOR PORTAL MOBILE FIX 2
+   Fixes hidden content, wide grids, wide tables and overflowing forms.
+   Safe: only affects tutor portal pages.
+   ========================================================= */
+
+body.role-tutor{
+    overflow-x:hidden;
+}
+
+body.role-tutor *{
+    box-sizing:border-box;
+}
+
+body.role-tutor .wrap,
+body.role-tutor .layout,
+body.role-tutor .dashboard-main,
+body.role-tutor main,
+body.role-tutor section,
+body.role-tutor .card,
+body.role-tutor .soft{
+    max-width:100%;
+    min-width:0;
+}
+
+body.role-tutor img,
+body.role-tutor video,
+body.role-tutor iframe,
+body.role-tutor canvas{
+    max-width:100%;
+}
+
+body.role-tutor pre,
+body.role-tutor code{
+    white-space:pre-wrap;
+    word-break:break-word;
+}
+
+/* Make sure long text does not push cards off-screen */
+body.role-tutor .card,
+body.role-tutor .soft,
+body.role-tutor td,
+body.role-tutor th,
+body.role-tutor p,
+body.role-tutor div,
+body.role-tutor span{
+    overflow-wrap:anywhere;
+}
+
+/* Fix all tutor grids, including inline grid styles */
+@media (max-width: 768px){
+
+    body.role-tutor .wrap{
+        width:100%;
+        max-width:100%;
+        padding-left:10px;
+        padding-right:10px;
+        margin-left:auto;
+        margin-right:auto;
+    }
+
+    body.role-tutor .layout{
+        display:block !important;
+        grid-template-columns:1fr !important;
+        width:100%;
+        max-width:100%;
+    }
+
+    body.role-tutor .dashboard-main{
+        display:block;
+        width:100%;
+        max-width:100%;
+        min-width:0;
+    }
+
+    body.role-tutor .grid,
+    body.role-tutor .stats,
+    body.role-tutor .stats-mini{
+        display:grid !important;
+        grid-template-columns:1fr !important;
+        width:100% !important;
+        max-width:100% !important;
+        gap:10px !important;
+    }
+
+    body.role-tutor .stats{
+        grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+    }
+
+    body.role-tutor .stats-mini{
+        grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+    }
+
+    body.role-tutor .stat,
+    body.role-tutor .stats-mini .s{
+        min-width:0;
+        width:100%;
+    }
+
+    /* Cards must not cut content */
+    body.role-tutor .card,
+    body.role-tutor .soft{
+        width:100%;
+        max-width:100%;
+        overflow:visible;
+        padding:14px;
+        border-radius:18px;
+    }
+
+    /* Forms must stay inside the screen */
+    body.role-tutor form,
+    body.role-tutor .toolbar,
+    body.role-tutor .inlineform{
+        width:100%;
+        max-width:100%;
+        display:grid !important;
+        grid-template-columns:1fr !important;
+        gap:8px !important;
+        align-items:stretch !important;
+    }
+
+    body.role-tutor label{
+        width:100%;
+        max-width:100%;
+    }
+
+    body.role-tutor input,
+    body.role-tutor select,
+    body.role-tutor textarea{
+        width:100% !important;
+        max-width:100% !important;
+        min-width:0 !important;
+        font-size:16px;
+    }
+
+    body.role-tutor input[type="file"]{
+        width:100%;
+        max-width:100%;
+        white-space:normal;
+    }
+
+    body.role-tutor input::file-selector-button{
+        display:block;
+        width:100%;
+        margin:0 0 8px 0;
+        padding:10px;
+        border-radius:12px;
+    }
+
+    /* Buttons must wrap nicely */
+    body.role-tutor .btn,
+    body.role-tutor button,
+    body.role-tutor input[type="submit"]{
+        max-width:100%;
+        white-space:normal;
+        text-align:center;
+        justify-content:center;
+    }
+
+    body.role-tutor .card > .btn,
+    body.role-tutor .card > button,
+    body.role-tutor form .btn,
+    body.role-tutor form button{
+        width:100%;
+    }
+
+    body.role-tutor td .btn,
+    body.role-tutor td button{
+        width:auto;
+        max-width:100%;
+        margin:2px 0;
+    }
+
+    /* Tables must scroll, not disappear */
+    body.role-tutor .scroll-x{
+        display:block;
+        width:100%;
+        max-width:100%;
+        overflow-x:auto !important;
+        overflow-y:visible;
+        -webkit-overflow-scrolling:touch;
+        border:1px solid #e5e7eb;
+        border-radius:14px;
+        background:#fff;
+    }
+
+    body.role-tutor .scroll-x table{
+        width:max-content;
+        min-width:720px;
+        max-width:none;
+    }
+
+    body.role-tutor table{
+        border-collapse:collapse;
+    }
+
+    body.role-tutor th,
+    body.role-tutor td{
+        white-space:normal;
+        vertical-align:top;
+        padding:10px;
+    }
+
+    /* If a table is not inside .scroll-x, still allow screen scrolling */
+    body.role-tutor table:not(.no-mobile-scroll){
+        display:block;
+        width:100%;
+        max-width:100%;
+        overflow-x:auto;
+        -webkit-overflow-scrolling:touch;
+    }
+
+    body.role-tutor table:not(.no-mobile-scroll) thead,
+    body.role-tutor table:not(.no-mobile-scroll) tbody,
+    body.role-tutor table:not(.no-mobile-scroll) tr{
+        width:100%;
+    }
+
+    /* Header fixes */
+    body.role-tutor .header{
+        width:100%;
+        max-width:100%;
+    }
+
+    body.role-tutor .nav{
+        width:100%;
+        max-width:100%;
+        padding:10px;
+    }
+
+    body.role-tutor .brand{
+        min-width:0;
+        max-width:100%;
+    }
+
+    body.role-tutor .brand .title{
+        font-size:16px;
+        line-height:1.2;
+        overflow-wrap:anywhere;
+    }
+
+    body.role-tutor .links{
+        width:100%;
+        max-width:100%;
+        overflow-x:auto;
+        display:flex;
+        gap:8px;
+        padding-bottom:4px;
+        -webkit-overflow-scrolling:touch;
+    }
+
+    body.role-tutor .links a,
+    body.role-tutor .links button{
+        flex:0 0 auto;
+        width:auto;
+        white-space:nowrap;
+    }
+
+    /* Sidebar as mobile nav */
+    body.role-tutor .sidebar{
+        width:100%;
+        max-width:100%;
+        position:relative;
+        top:auto;
+        margin-bottom:12px;
+        overflow:visible;
+    }
+
+    body.role-tutor .side-links{
+        width:100%;
+        max-width:100%;
+        display:flex;
+        gap:8px;
+        overflow-x:auto;
+        padding-bottom:8px;
+        -webkit-overflow-scrolling:touch;
+    }
+
+    body.role-tutor .side-links a{
+        flex:0 0 auto;
+        width:auto;
+        min-width:125px;
+        white-space:nowrap;
+        text-align:center;
+        justify-content:center;
+    }
+
+    /* Charts and visual sections */
+    body.role-tutor canvas{
+        width:100% !important;
+        max-width:100% !important;
+    }
+
+    body.role-tutor [style*="height"] canvas{
+        max-height:100%;
+    }
+
+    /* Chat/message sections */
+    body.role-tutor .chat-layout{
+        display:grid !important;
+        grid-template-columns:1fr !important;
+        width:100% !important;
+        max-width:100% !important;
+        min-width:0 !important;
+        height:auto !important;
+        max-height:none !important;
+    }
+
+    body.role-tutor .chat-list,
+    body.role-tutor .chat-window,
+    body.role-tutor .chat-messages,
+    body.role-tutor .chat-input{
+        width:100%;
+        max-width:100%;
+        min-width:0;
+    }
+
+    body.role-tutor .chat-list{
+        max-height:180px;
+        overflow-y:auto;
+    }
+
+    body.role-tutor .chat-messages{
+        max-height:420px;
+        overflow-y:auto;
+    }
+
+    body.role-tutor .bubble{
+        max-width:90%;
+        overflow-wrap:anywhere;
+    }
+
+    /* Any inline flex sections must wrap instead of hiding */
+    body.role-tutor [style*="display:flex"],
+    body.role-tutor [style*="display: flex"]{
+        flex-wrap:wrap !important;
+        max-width:100% !important;
+    }
+
+    body.role-tutor [style*="grid-template-columns"]{
+        grid-template-columns:1fr !important;
+    }
+}
+
+@media (max-width: 420px){
+
+    body.role-tutor .wrap{
+        padding-left:8px;
+        padding-right:8px;
+    }
+
+    body.role-tutor .stats,
+    body.role-tutor .stats-mini{
+        grid-template-columns:1fr !important;
+    }
+
+    body.role-tutor h1{
+        font-size:20px;
+    }
+
+    body.role-tutor h2{
+        font-size:17px;
+    }
+
+    body.role-tutor .scroll-x table{
+        min-width:680px;
+    }
+
+    body.role-tutor .side-links a{
+        min-width:115px;
+        font-size:12px;
     }
 }
 
