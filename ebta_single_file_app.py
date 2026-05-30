@@ -27067,6 +27067,7 @@ def aqm_nav():
         <a class="btn mini" href="/aqm/attendance">Attendance Trends</a>
         <a class="btn mini" href="/aqm/assignments">Assignment Completion</a>
         <a class="btn mini" href="/aqm/tutors">Tutor Work Progress</a>
+        <a class="btn mini" href="/aqm/ratings">Student Ratings</a>
         <a class="btn mini" href="/aqm/awards">Awards</a>
         <a class="btn mini danger" href="/aqm/logout">Logout</a>
     </div>
@@ -27724,6 +27725,55 @@ def aqm_logout():
     return redirect(url_for("aqm_login"))
     
     
+    
+def rating_stars(value):
+    """
+    Returns a simple star display for ratings.
+    Example: ★★★★☆ (4/5)
+    """
+    try:
+        value = int(value)
+    except Exception:
+        value = 0
+
+    if value < 0:
+        value = 0
+
+    if value > 5:
+        value = 5
+
+    return "★" * value + "☆" * (5 - value) + f" ({value}/5)"
+
+
+def aqm_rating_snapshot(month):
+    """
+    Summary of student ratings for the selected month.
+    Used on the AQM dashboard.
+    """
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            COUNT(*) AS total_ratings,
+            ROUND(AVG(rating), 1) AS avg_rating,
+            SUM(CASE WHEN rating <= 2 THEN 1 ELSE 0 END) AS low_ratings,
+            SUM(CASE WHEN comment IS NOT NULL AND TRIM(comment) <> '' THEN 1 ELSE 0 END) AS comments_count
+        FROM lesson_ratings
+        WHERE month=?
+    """, (month,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    return {
+        "total_ratings": row["total_ratings"] or 0,
+        "avg_rating": row["avg_rating"] or 0,
+        "low_ratings": row["low_ratings"] or 0,
+        "comments_count": row["comments_count"] or 0
+    }
+    
+    
 @app.get('/aqm/dashboard')
 def aqm_dashboard():
 
@@ -27745,6 +27795,7 @@ def aqm_dashboard():
     )
 
     tutor_snapshot = aqm_tutor_work_snapshot(month, limit=12)
+    rating_snapshot = aqm_rating_snapshot(month)
     
     grade_options = """
     <option value="">All Grades</option>
@@ -27881,6 +27932,9 @@ def aqm_dashboard():
             {stat("Tutors Monitored", tutor_snapshot["total_tutors"])}
             {stat("Tutor Avg Progress", str(tutor_snapshot["avg_progress"]) + "%")}
             {stat("Tutors Needing Attention", tutor_snapshot["high_risk_count"])}
+            {stat("Student Ratings", rating_snapshot["total_ratings"])}
+            {stat("Avg Lesson Rating", str(rating_snapshot["avg_rating"]) + "/5")}
+            {stat("Rating Comments", rating_snapshot["comments_count"])}
         </div>
 
         <details class="aqm-section" open>
@@ -27966,6 +28020,33 @@ def aqm_dashboard():
             </div>
         </details>
 
+        
+        <details class="aqm-section">
+            <summary>
+                <span>Student Ratings & Comments</span>
+            </summary>
+
+            <div class="aqm-section-body">
+                <p class="aqm-small-note">
+                    Review learner ratings and comments submitted for lesson quality, subject experience and tutor delivery.
+                </p>
+
+                <div class="stats" style="margin-top:12px">
+                    {stat("Total Ratings", rating_snapshot["total_ratings"])}
+                    {stat("Average Rating", str(rating_snapshot["avg_rating"]) + "/5")}
+                    {stat("Low Ratings", rating_snapshot["low_ratings"])}
+                    {stat("Comments", rating_snapshot["comments_count"])}
+                </div>
+
+                <div class="aqm-actions">
+                    <a class="btn mini success" href="/aqm/ratings?month={escape(month)}">
+                        Open Student Ratings & Comments
+                    </a>
+                </div>
+            </div>
+        </details>
+
+
         <details class="aqm-section" open>
             <summary>
                 <span>Tutor Work Progress</span>
@@ -28020,6 +28101,327 @@ def aqm_dashboard():
     """
 
     return page("AQM Dashboard", body)
+    
+ 
+ 
+@app.get('/aqm/ratings')
+def aqm_student_ratings():
+
+    r = require_aqm()
+    if r:
+        return r
+
+    month = request.args.get("month") or get_setting("current_month")
+    q = request.args.get("q", "").strip()
+    grade_filter = request.args.get("grade", "").strip()
+    subject_filter = request.args.get("subject_id", "").strip()
+    tutor_filter = request.args.get("tutor_id", "").strip()
+    rating_filter = request.args.get("rating", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Subject filter options
+    cur.execute("""
+        SELECT DISTINCT sub.id, sub.name, sub.grade
+        FROM lesson_ratings lr
+        JOIN subjects sub ON sub.id = lr.subject_id
+        WHERE lr.month=?
+        ORDER BY CAST(REPLACE(sub.grade,'G','') AS INTEGER), sub.name
+    """, (month,))
+
+    subjects = cur.fetchall()
+
+    subject_options = '<option value="">All Subjects</option>'
+
+    for sub in subjects:
+        selected = "selected" if subject_filter == str(sub["id"]) else ""
+        subject_options += f"""
+        <option value="{sub["id"]}" {selected}>
+            {grade_label(sub["grade"])} - {escape(sub["name"])}
+        </option>
+        """
+
+    # Tutor filter options
+    cur.execute("""
+        SELECT DISTINCT t.id, t.full_name
+        FROM lesson_ratings lr
+        JOIN tutor_subjects ts ON ts.subject_id = lr.subject_id
+        JOIN tutors t ON t.id = ts.tutor_id
+        WHERE lr.month=?
+        ORDER BY t.full_name
+    """, (month,))
+
+    tutors = cur.fetchall()
+
+    tutor_options = '<option value="">All Tutors</option>'
+
+    for tutor in tutors:
+        selected = "selected" if tutor_filter == str(tutor["id"]) else ""
+        tutor_options += f"""
+        <option value="{tutor["id"]}" {selected}>
+            {escape(tutor["full_name"])}
+        </option>
+        """
+
+    grade_options = '<option value="">All Grades</option>'
+
+    for g in ["G8", "G9", "G10", "G11", "G12", "G13"]:
+        selected = "selected" if grade_filter == g else ""
+        grade_options += f"""
+        <option value="{g}" {selected}>
+            {grade_label(g)}
+        </option>
+        """
+
+    rating_options = '<option value="">All Ratings</option>'
+
+    for value in ["5", "4", "3", "2", "1"]:
+        selected = "selected" if rating_filter == value else ""
+        rating_options += f"""
+        <option value="{value}" {selected}>
+            {value} Star
+        </option>
+        """
+
+    where = ["lr.month = ?"]
+    params = [month]
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                st.full_name LIKE ?
+                OR st.phone_whatsapp LIKE ?
+                OR sub.name LIKE ?
+                OR COALESCE(lr.comment, '') LIKE ?
+                OR COALESCE(t.full_name, '') LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search]
+
+    if grade_filter:
+        where.append("st.grade = ?")
+        params.append(grade_filter)
+
+    if subject_filter:
+        where.append("lr.subject_id = ?")
+        params.append(subject_filter)
+
+    if tutor_filter:
+        where.append("ts.tutor_id = ?")
+        params.append(tutor_filter)
+
+    if rating_filter:
+        where.append("lr.rating = ?")
+        params.append(rating_filter)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT
+            lr.id,
+            lr.month,
+            lr.rating,
+            COALESCE(lr.comment, '') AS comment,
+            lr.created_at,
+
+            st.full_name AS student_name,
+            st.phone_whatsapp,
+            st.grade AS student_grade,
+
+            sub.name AS subject_name,
+            sub.grade AS subject_grade,
+
+            COALESCE(GROUP_CONCAT(DISTINCT t.full_name), 'Unassigned') AS tutor_names
+
+        FROM lesson_ratings lr
+        JOIN students st ON st.id = lr.student_id
+        JOIN subjects sub ON sub.id = lr.subject_id
+        LEFT JOIN tutor_subjects ts ON ts.subject_id = lr.subject_id
+        LEFT JOIN tutors t ON t.id = ts.tutor_id
+
+        {where_sql}
+
+        GROUP BY lr.id
+        ORDER BY lr.created_at DESC
+    """, params)
+
+    ratings = cur.fetchall()
+    conn.close()
+
+    total_ratings = len(ratings)
+
+    avg_rating = 0
+    low_ratings = 0
+    comments_count = 0
+
+    if ratings:
+        avg_rating = round(sum([int(x["rating"] or 0) for x in ratings]) / len(ratings), 1)
+        low_ratings = len([x for x in ratings if int(x["rating"] or 0) <= 2])
+        comments_count = len([x for x in ratings if (x["comment"] or "").strip()])
+
+    rows = ""
+
+    for item in ratings:
+
+        comment_html = escape(item["comment"] or "")
+
+        if not comment_html:
+            comment_html = "<span class='muted'>No comment provided</span>"
+
+        rating_class = "active"
+
+        if int(item["rating"] or 0) <= 2:
+            rating_class = "lapsed"
+        elif int(item["rating"] or 0) == 3:
+            rating_class = "pending"
+
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(item["student_name"] or "—")}</strong>
+                <div class="mini muted">{escape(item["phone_whatsapp"] or "—")}</div>
+            </td>
+
+            <td>{grade_label(item["student_grade"] or "")}</td>
+
+            <td>
+                {grade_label(item["subject_grade"] or "")} - {escape(item["subject_name"] or "—")}
+            </td>
+
+            <td>
+                {escape(item["tutor_names"] or "Unassigned")}
+            </td>
+
+            <td>
+                <span class="chip {rating_class}">
+                    {rating_stars(item["rating"])}
+                </span>
+            </td>
+
+            <td style="min-width:260px">
+                {comment_html}
+            </td>
+
+            <td>
+                {format_chat_datetime(item["created_at"])}
+            </td>
+        </tr>
+        """
+
+    if not rows:
+        rows = """
+        <tr>
+            <td colspan="7" class="muted">
+                No student ratings found for the selected filters.
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {aqm_dashboard_styles()}
+    {aqm_nav()}
+
+    <section class="card">
+
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+            <div>
+                <h1 style="margin-top:0">Student Ratings & Comments</h1>
+                <p class="muted">
+                    View learner feedback on classes, tutors, subjects and overall lesson experience for {pretty_month_label(month)}.
+                </p>
+            </div>
+
+            <span class="chip active">
+                Academic Quality Manager
+            </span>
+        </div>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Total Ratings", total_ratings)}
+            {stat("Average Rating", str(avg_rating) + "/5")}
+            {stat("Low Ratings", low_ratings)}
+            {stat("Comments Submitted", comments_count)}
+        </div>
+
+        <details class="aqm-section" open>
+            <summary>
+                <span>Filter Ratings & Comments</span>
+            </summary>
+
+            <div class="aqm-section-body">
+
+                <form method="get"
+                      action="/aqm/ratings"
+                      class="toolbar"
+                      style="margin-top:10px">
+
+                    <input type="month"
+                           name="month"
+                           value="{escape(month)}">
+
+                    <input name="q"
+                           value="{escape(q)}"
+                           placeholder="Search learner, phone, tutor, subject or comment">
+
+                    <select name="grade">
+                        {grade_options}
+                    </select>
+
+                    <select name="subject_id">
+                        {subject_options}
+                    </select>
+
+                    <select name="tutor_id">
+                        {tutor_options}
+                    </select>
+
+                    <select name="rating">
+                        {rating_options}
+                    </select>
+
+                    <button class="btn mini success">
+                        Search
+                    </button>
+
+                    <a class="btn mini secondary" href="/aqm/ratings?month={escape(month)}">
+                        Clear
+                    </a>
+
+                </form>
+
+            </div>
+        </details>
+
+        <div class="mini muted" style="margin-top:12px">
+            Showing {total_ratings} rating(s) for {pretty_month_label(month)}.
+        </div>
+
+        <div class="scroll-x" style="margin-top:12px">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Tutor</th>
+                        <th>Rating</th>
+                        <th>Comment</th>
+                        <th>Submitted</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>
+
+    </section>
+    """
+
+    return page("AQM Student Ratings", body)
     
     
     
