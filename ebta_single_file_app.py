@@ -7206,15 +7206,52 @@ def page(title, body_html, extra_head="", extra_js=""):
             </div>
             """
         else:
-            profile_sidebar_html = f"""
-            <div class='role'>{role_title}</div>
-            <div class='user'>{user_name}</div>
-            """
+            if role_title == "Tutor":
+                profile_sidebar_html = f"""
+                <div style="
+                    display:flex;
+                    gap:10px;
+                    align-items:center;
+                    margin-bottom:14px;
+                    padding:10px;
+                    border:1px solid #dbe4ef;
+                    border-radius:14px;
+                    background:#ffffff;
+                ">
+                    {tutor_sidebar_photo}
+
+                    <div style="min-width:0">
+                        <div class="mini muted" style="font-weight:700">
+                            Tutor
+                        </div>
+
+                        <div style="
+                            font-weight:800;
+                            color:#111827;
+                            line-height:1.2;
+                            white-space:nowrap;
+                            overflow:hidden;
+                            text-overflow:ellipsis;
+                            max-width:150px;
+                        ">
+                            {escape(user_name)}
+                        </div>
+
+                        <a class="mini"
+                           href="{url_for('tutor_profile_page')}"
+                           style="color:#1b5e20;font-weight:700;text-decoration:none">
+                            View Profile
+                        </a>
+                    </div>
+                </div>
+                """
+            else:
+                profile_sidebar_html = f"""
+                <div class='role'>{role_title}</div>
+                <div class='user'>{user_name}</div>
+                """
 
         role_photo_html = ""
-
-        if is_tutor():
-            role_photo_html = tutor_sidebar_photo
 
         sidebar_html = f"""
         <aside class='sidebar'>
@@ -10354,7 +10391,9 @@ def student_home():
                 {c['tutor_name']}
             </div>
             
-            <a class="btn mini secondary" href="/student/tutor-profile/{r['tutor_id']}">
+            <a class="btn mini secondary"
+               href="/student/tutor-profile/{c['tutor_id']}"
+               onclick="event.stopPropagation();">
                 View Tutor Profile
             </a>
             
