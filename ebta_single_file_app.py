@@ -15238,8 +15238,8 @@ def tutor_profile_page():
                     </h1>
 
                     <div class="mini muted" style="margin-bottom:10px">
-                        Manage your tutor profile picture and display name.
-                        Phone number and PIN are managed by EBTA Admin.
+                        Manage your tutor profile picture, display name, qualification, achievements and about section.
+                        Phone number, assigned subjects and PIN are managed by EBTA Admin.
                     </div>
 
                     <div style="display:flex;gap:8px;flex-wrap:wrap">
