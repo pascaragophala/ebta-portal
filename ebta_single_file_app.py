@@ -3431,7 +3431,14 @@ def is_valid_report(filename):
     ext = os.path.splitext(filename.lower())[1]
     return ext in ALLOWED_REPORT_EXTENSIONS
 
-ALLOWED_PROFILE_PIC_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
+ALLOWED_PROFILE_PIC_EXTENSIONS = {
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.webp',
+    '.gif',
+    '.bmp'
+}
 
 def is_valid_profile_picture(filename):
     ext = os.path.splitext(filename.lower())[1]
@@ -3631,6 +3638,40 @@ def view_tutor_profile_picture(tutor_id):
     return send_from_directory(
         os.path.dirname(row["profile_picture_path"]),
         os.path.basename(row["profile_picture_path"])
+    )
+
+
+@app.get('/admin/tutors/<int:tutor_id>/profile-picture/download')
+def admin_download_tutor_profile_picture(tutor_id):
+
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT full_name, profile_picture_path
+        FROM tutors
+        WHERE id=?
+        LIMIT 1
+    """, (tutor_id,))
+
+    tutor = cur.fetchone()
+    conn.close()
+
+    if not tutor or not tutor["profile_picture_path"] or not os.path.exists(tutor["profile_picture_path"]):
+        return page("Not Found", card_msg("Tutor profile picture not found."))
+
+    ext = os.path.splitext(tutor["profile_picture_path"])[1].lower()
+    safe_name = secure_name(tutor["full_name"] or "Tutor")
+
+    return send_from_directory(
+        os.path.dirname(tutor["profile_picture_path"]),
+        os.path.basename(tutor["profile_picture_path"]),
+        as_attachment=True,
+        download_name=f"{safe_name}_profile_picture{ext}"
     )
 
 
@@ -15415,7 +15456,7 @@ def tutor_profile_page():
 
                     <input type="file"
                            name="profile_picture"
-                           accept=".png,.jpg,.jpeg,.webp,image/*"
+                           accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,image/*"
                            required>
 
                     <button class="btn success">
@@ -15569,7 +15610,7 @@ def tutor_upload_profile_picture():
         return redirect(url_for("tutor_profile_page"))
 
     if not is_valid_profile_picture(file.filename):
-        return page("Invalid File", card_msg("Please upload a JPG, PNG, JPEG, or WEBP image."))
+        return page("Invalid File", card_msg("Please upload a PNG, JPG, JPEG, WEBP, GIF, or BMP image."))
 
     conn = get_db()
     cur = conn.cursor()
@@ -23261,11 +23302,55 @@ def admin_tutor_edit(tid: int):
 
     if not tutor:
         return page("Error", card_msg("Tutor not found."))
+        
+    tutor_profile_picture_html = """
+    <div class="card soft" style="border-left:5px solid #9ca3af">
+        <h2>Profile Picture</h2>
+        <p class="muted mini">No profile picture uploaded yet.</p>
+    </div>
+    """
+
+    if tutor["profile_picture_path"] and os.path.exists(tutor["profile_picture_path"]):
+        tutor_profile_picture_html = f"""
+        <div class="card soft" style="border-left:5px solid #1b5e20">
+            <h2>Profile Picture</h2>
+
+            <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+                <img src="/tutor-profile-picture/{tid}"
+                     style="
+                        width:120px;
+                        height:120px;
+                        border-radius:50%;
+                        object-fit:cover;
+                        border:4px solid #1b5e20;
+                        box-shadow:0 8px 18px rgba(0,0,0,.12);
+                     ">
+
+                <div>
+                    <p class="mini muted" style="margin-top:0">
+                        Admin can view and download the tutor's uploaded profile picture.
+                    </p>
+
+                    <a class="btn mini success"
+                       href="/tutor-profile-picture/{tid}"
+                       target="_blank">
+                        View Picture
+                    </a>
+
+                    <a class="btn mini secondary"
+                       href="/admin/tutors/{tid}/profile-picture/download">
+                        Download Picture
+                    </a>
+                </div>
+            </div>
+        </div>
+        """
 
     body = f"""
     {admin_nav()}
     <section class='card small'>
         <h1>Edit Tutor</h1>
+        {tutor_profile_picture_html}
         <form method='post' action='{url_for('admin_tutor_update', tid=tid)}' class='grid'>
             <div>
                 <label>Full Name</label>
@@ -34770,7 +34855,7 @@ def student_profile_page():
 
                     <input type="file"
                            name="profile_picture"
-                           accept=".png,.jpg,.jpeg,.webp,image/*"
+                           accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,image/*"
                            required>
 
                     <button class="btn success">
@@ -35046,7 +35131,7 @@ def student_upload_profile_picture():
         return redirect(url_for("student_home"))
 
     if not is_valid_profile_picture(file.filename):
-        return page("Invalid file", card_msg("Please upload a JPG, PNG, JPEG, or WEBP image."))
+        return page("Invalid file", card_msg("Please upload a PNG, JPG, JPEG, WEBP, GIF, or BMP image."))
 
     conn = get_db()
     cur = conn.cursor()
