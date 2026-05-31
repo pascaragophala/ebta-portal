@@ -54502,12 +54502,14 @@ def coo_students():
                 OR st.guardian_name LIKE ?
                 OR st.guardian_phone LIKE ?
                 OR st.email LIKE ?
+                OR st.pin LIKE ?
                 OR st.school LIKE ?
                 OR st.province LIKE ?
                 OR sub.name LIKE ?
             )
         """)
         params += [
+            search,
             search,
             search,
             search,
@@ -54578,6 +54580,7 @@ def coo_students():
             st.guardian_name,
             st.guardian_phone,
             st.email,
+            st.pin,
             st.grade,
             COALESCE(st.school, '') AS school,
             COALESCE(st.province, '') AS province,
@@ -54707,7 +54710,17 @@ def coo_students():
             <td>
                 <strong>{escape(st['full_name'] or '—')}</strong>
                 <div class="mini muted">Student ID: {st['id']}</div>
-                <div class="mini muted">Joined: {escape((st['created_at'] or '')[:16].replace('T', ' '))}</div>
+
+                <div class="mini" style="margin-top:4px">
+                    <strong>PIN:</strong>
+                    <span class="chip" style="font-weight:800">
+                        {escape(st['pin'] or '—')}
+                    </span>
+                </div>
+
+                <div class="mini muted">
+                    Joined: {escape((st['created_at'] or '')[:16].replace('T', ' '))}
+                </div>
             </td>
 
             <td>
