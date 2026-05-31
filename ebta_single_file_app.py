@@ -51070,17 +51070,28 @@ def admission_discount_delete(coupon_id):
         conn.close()
         return page("Not Found", card_msg("Discount code not found."))
 
-    if int(coupon["used_count"] or 0) > 0:
-        conn.close()
-        return page(
-            "Cannot Delete Used Code",
-            card_msg("This discount code has already been used, so it cannot be deleted. It can remain as a record.")
-        )
+    coupon_code = (coupon["code"] or "").strip().upper()
 
+    # Clear discount details from enrollments that used this coupon.
+    cur.execute("""
+        UPDATE enrollments
+        SET coupon_code=NULL,
+            coupon_discount_amount=0,
+            coupon_type=NULL
+        WHERE UPPER(IFNULL(coupon_code, ''))=?
+    """, (coupon_code,))
+
+    # Clear referral code usage if this deleted code was also stored there.
+    cur.execute("""
+        UPDATE enrollments
+        SET referral_code_used=NULL
+        WHERE UPPER(IFNULL(referral_code_used, ''))=?
+    """, (coupon_code,))
+
+    # Force delete the discount coupon even if it was already used.
     cur.execute("""
         DELETE FROM discount_coupons
         WHERE id=?
-          AND used_count=0
     """, (coupon_id,))
 
     conn.commit()
