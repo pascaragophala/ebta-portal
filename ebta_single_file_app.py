@@ -2544,7 +2544,18 @@ def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subt
         subject_ids_str = [str(x) for x in subject_ids]
         fee_map = get_subject_fee_map(conn, subject_ids_str)
 
-        discount_base = subtotal
+        if not fee_map:
+            return {
+                "valid": False,
+                "message": "No valid subject was selected for this discount code.",
+                "code_type": "INVALID",
+                "discount_amount": 0,
+                "coupon_id": None,
+                "referral_owner_id": None,
+                "tutor_referrer_id": None
+            }
+
+        discount_base = 0
 
         if coupon["applies_to"] == "SUBJECT":
             subject_id = str(coupon["subject_id"] or "")
@@ -2562,20 +2573,9 @@ def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subt
 
             discount_base = fee_map.get(subject_id, 0)
 
-        elif coupon["applies_to"] == "ANY_SUBJECT":
-            # Referral reward codes apply to one selected subject only.
-            # If the learner selects many subjects, discount one subject amount.
-            if not fee_map:
-                return {
-                    "valid": False,
-                    "message": "No valid subject was selected for this reward code.",
-                    "code_type": "INVALID",
-                    "discount_amount": 0,
-                    "coupon_id": None,
-                    "referral_owner_id": None,
-                    "tutor_referrer_id": None
-                }
-
+        else:
+            # ALL or ANY_SUBJECT must discount ONE selected subject only.
+            # This matches the front-page preview logic.
             discount_base = max(fee_map.values())
 
         discount_amount = int(round(discount_base * (discount_percent / 100)))
@@ -9567,6 +9567,8 @@ def register():
     
     created = []
     
+    coupon_saved_on_enrollment = False
+    
     # Check if this learner is completely new before this enrollment is created.
     # Tutor referral rewards must only count new students.
     cur.execute("""
@@ -9587,6 +9589,21 @@ def register():
         first_pop = saved_paths[0] if saved_paths else None
 
         # 1️⃣ Insert enrollment FIRST
+        coupon_code_for_row = None
+        coupon_discount_for_row = 0
+        coupon_type_for_row = None
+        referral_code_for_row = None
+
+        # Save coupon details on only ONE enrollment row.
+        # This prevents the admin side from showing the same discount multiple times.
+        if coupon_code and not coupon_saved_on_enrollment:
+            coupon_code_for_row = coupon_code
+            coupon_discount_for_row = coupon_discount
+            coupon_type_for_row = coupon_result["code_type"]
+
+            if coupon_result["code_type"] in ["REFERRAL_ONLY", "TUTOR_REFERRAL"]:
+                referral_code_for_row = coupon_code
+
         cur.execute("""
         INSERT INTO enrollments(
             student_id,
@@ -9614,13 +9631,16 @@ def register():
             None,
             first_pop,
             amount_paid,
-            coupon_code if coupon_code else None,
-            coupon_discount,
-            coupon_result["code_type"],
-            coupon_code if coupon_result["code_type"] in ["REFERRAL_ONLY", "TUTOR_REFERRAL"] else None,
+            coupon_code_for_row,
+            coupon_discount_for_row,
+            coupon_type_for_row,
+            referral_code_for_row,
             token,
             now_utc_iso()
         ))
+
+        if coupon_code and not coupon_saved_on_enrollment:
+            coupon_saved_on_enrollment = True
 
         # 2️⃣ Now eid is valid
         eid = cur.lastrowid
