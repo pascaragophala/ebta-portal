@@ -18,7 +18,7 @@ from html import escape
 from functools import wraps
 
 
-from flask import Flask, request, redirect, url_for, render_template_string, send_from_directory, session, flash, make_response
+from flask import Flask, request, redirect, url_for, render_template_string, send_from_directory, send_file, session, flash, make_response
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('EBTA_SECRET_KEY', 'ebta-dev-secret')
@@ -59555,6 +59555,12 @@ def cao_tutor_performance():
             <a class="btn mini secondary" href="{url_for('cao_tutor_performance')}">
                 Clear
             </a>
+            
+            <a class="btn mini success"
+               href="/cao/tutor-performance/export?month={escape(month)}&q={quote_from_bytes(q.encode())}&grade={escape(grade)}&subject_id={escape(subject_id)}&progress={quote_from_bytes(progress_filter.encode())}">
+                Export Excel
+            </a>
+            
         </form>
 
         <div class="stats" style="margin-top:12px">
@@ -59830,6 +59836,391 @@ def cao_tutor_performance():
     """
 
     return page("CAO Tutor Work Progress Analytics", body)   
+    
+    
+@app.get('/cao/tutor-performance/export')
+def cao_tutor_performance_export():
+
+    r = require_cao_permission("cao_performance_enabled", "tutor performance export")
+    if r:
+        return r
+
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except Exception:
+        return page(
+            "Export Error",
+            card_msg("openpyxl is not installed. Please add openpyxl to requirements.txt and redeploy.")
+        )
+
+    month = request.args.get("month", "").strip() or cao_selected_month()
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+    subject_id = request.args.get("subject_id", "").strip()
+    progress_filter = request.args.get("progress", "").strip()
+
+    where = ["1=1"]
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                t.full_name LIKE ?
+                OR t.phone LIKE ?
+                OR s.name LIKE ?
+                OR s.grade LIKE ?
+            )
+        """)
+        params += [search, search, search, search]
+
+    if grade:
+        where.append("s.grade=?")
+        params.append(grade)
+
+    if subject_id:
+        where.append("s.id=?")
+        params.append(subject_id)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT DISTINCT
+            t.id,
+            t.full_name,
+            t.phone
+        FROM tutors t
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        LEFT JOIN subjects s ON s.id=ts.subject_id
+        {where_sql}
+        ORDER BY t.full_name
+    """, params)
+
+    tutor_rows = cur.fetchall()
+    conn.close()
+
+    export_rows = []
+
+    for tutor in tutor_rows:
+
+        progress = tutor_work_progress_data(tutor["id"], month)
+
+        status_label = progress["overall_status"]
+
+        if progress_filter and status_label != progress_filter:
+            continue
+
+        subject_list = []
+
+        for sub in progress["assigned_subjects"]:
+            subject_list.append(
+                f"{grade_label(sub['grade'])} - {sub['subject_name']}"
+            )
+
+        risk_subjects = [
+            f"{grade_label(x['grade'])} {x['subject_name']}"
+            for x in progress["subject_rows"]
+            if x["risk_level"] == "HIGH"
+        ]
+
+        medium_subjects = [
+            f"{grade_label(x['grade'])} {x['subject_name']}"
+            for x in progress["subject_rows"]
+            if x["risk_level"] == "MEDIUM"
+        ]
+
+        recommendations = progress["recommendations"] or []
+
+        export_rows.append({
+            "Tutor Name": tutor["full_name"] or "",
+            "Phone": tutor["phone"] or "",
+            "Month": month,
+            "Assigned Subjects Count": len(progress["assigned_subjects"]),
+            "Assigned Subjects": ", ".join(subject_list) if subject_list else "No assigned subjects",
+            "Overall Progress %": progress["overall_rate"],
+            "Overall Status": progress["overall_status"],
+            "Total Uploads": progress["total_uploads"],
+            "Recordings Uploaded": progress["recordings_uploaded"],
+            "Assignments Uploaded": progress["assignments_uploaded"],
+            "Learner Material Views": progress["material_views"],
+            "Submissions Received": progress["submissions_received"],
+            "Marked Submissions": progress["marked_submissions"],
+            "Unmarked Submissions": progress["unmarked_submissions"],
+            "Marking Rate %": progress["marking_rate"],
+            "Attendance Logs": progress["attendance_logs"],
+            "Assigned Sessions": progress["assigned_sessions"],
+            "Attendance Log Rate %": progress["attendance_log_rate"],
+            "Tracker Logs": progress["tracker_logs"],
+            "Tracker Completion Rate %": progress["tracker_completion_rate"],
+            "Average Manager Rating": progress["avg_manager_rating"] if progress["avg_manager_rating"] is not None else "",
+            "Messages Sent": progress["messages_sent"],
+            "Portal Activity": progress["portal_hours_label"],
+            "High Risk Subjects": ", ".join(risk_subjects) if risk_subjects else "None",
+            "Medium Risk Subjects": ", ".join(medium_subjects) if medium_subjects else "None",
+            "Recommendations": ", ".join(recommendations) if recommendations else "On track"
+        })
+
+    export_rows = sorted(
+        export_rows,
+        key=lambda x: (x["Overall Progress %"], x["Tutor Name"])
+    )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Tutor Work Progress"
+
+    title = f"Detailed Tutor Work Progress - {month}"
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=26)
+    ws.cell(row=1, column=1).value = title
+    ws.cell(row=1, column=1).font = Font(size=14, bold=True, color="FFFFFF")
+    ws.cell(row=1, column=1).fill = PatternFill("solid", fgColor="1B5E20")
+    ws.cell(row=1, column=1).alignment = Alignment(horizontal="center")
+
+    filter_text = f"Filters: Search={q or 'All'} | Grade={grade or 'All'} | Subject={subject_id or 'All'} | Progress={progress_filter or 'All'}"
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=26)
+    ws.cell(row=2, column=1).value = filter_text
+    ws.cell(row=2, column=1).font = Font(italic=True, color="64748B")
+    ws.cell(row=2, column=1).alignment = Alignment(horizontal="center")
+
+    headers = [
+        "Tutor Name",
+        "Phone",
+        "Month",
+        "Assigned Subjects Count",
+        "Assigned Subjects",
+        "Overall Progress %",
+        "Overall Status",
+        "Total Uploads",
+        "Recordings Uploaded",
+        "Assignments Uploaded",
+        "Learner Material Views",
+        "Submissions Received",
+        "Marked Submissions",
+        "Unmarked Submissions",
+        "Marking Rate %",
+        "Attendance Logs",
+        "Assigned Sessions",
+        "Attendance Log Rate %",
+        "Tracker Logs",
+        "Tracker Completion Rate %",
+        "Average Manager Rating",
+        "Messages Sent",
+        "Portal Activity",
+        "High Risk Subjects",
+        "Medium Risk Subjects",
+        "Recommendations"
+    ]
+
+    header_row = 4
+
+    for col, header in enumerate(headers, start=1):
+        cell = ws.cell(row=header_row, column=col)
+        cell.value = header
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="166534")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for row_index, row_data in enumerate(export_rows, start=5):
+        for col_index, header in enumerate(headers, start=1):
+            cell = ws.cell(row=row_index, column=col_index)
+            cell.value = row_data.get(header, "")
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+            if header == "Overall Status":
+                status = str(row_data.get(header, ""))
+
+                if status == "On Track":
+                    cell.fill = PatternFill("solid", fgColor="DCFCE7")
+                elif status == "Needs Attention":
+                    cell.fill = PatternFill("solid", fgColor="FEF3C7")
+                elif status == "High Risk":
+                    cell.fill = PatternFill("solid", fgColor="FEE2E2")
+
+    thin = Side(border_style="thin", color="CBD5E1")
+
+    for row in ws.iter_rows(min_row=4, max_row=ws.max_row, min_col=1, max_col=len(headers)):
+        for cell in row:
+            cell.border = Border(top=thin, left=thin, right=thin, bottom=thin)
+
+    column_widths = {
+        1: 24,
+        2: 18,
+        3: 12,
+        4: 18,
+        5: 42,
+        6: 18,
+        7: 18,
+        8: 14,
+        9: 18,
+        10: 18,
+        11: 20,
+        12: 20,
+        13: 20,
+        14: 20,
+        15: 18,
+        16: 16,
+        17: 16,
+        18: 20,
+        19: 16,
+        20: 22,
+        21: 22,
+        22: 16,
+        23: 18,
+        24: 36,
+        25: 36,
+        26: 45
+    }
+
+    for col_index, width in column_widths.items():
+        ws.column_dimensions[get_column_letter(col_index)].width = width
+
+    ws.freeze_panes = "A5"
+    ws.auto_filter.ref = f"A4:{get_column_letter(len(headers))}{ws.max_row}"
+    
+    # ================= TOP 10 SUMMARY SHEET =================
+    top_ws = wb.create_sheet("Top 10 Summary")
+
+    top_ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+    top_ws.cell(row=1, column=1).value = f"Top 10 Tutor Work Progress Summary - {month}"
+    top_ws.cell(row=1, column=1).font = Font(size=14, bold=True, color="FFFFFF")
+    top_ws.cell(row=1, column=1).fill = PatternFill("solid", fgColor="1B5E20")
+    top_ws.cell(row=1, column=1).alignment = Alignment(horizontal="center")
+
+    # Top 10 best performing tutors
+    top_performers = sorted(
+        export_rows,
+        key=lambda x: (
+            -int(x.get("Overall Progress %") or 0),
+            -int(x.get("Marking Rate %") or 0),
+            -int(x.get("Attendance Log Rate %") or 0),
+            x.get("Tutor Name") or ""
+        )
+    )[:10]
+
+    # Top 10 tutors needing support
+    support_needed = sorted(
+        export_rows,
+        key=lambda x: (
+            int(x.get("Overall Progress %") or 0),
+            int(x.get("Marking Rate %") or 0),
+            int(x.get("Attendance Log Rate %") or 0),
+            x.get("Tutor Name") or ""
+        )
+    )[:10]
+
+    def write_top10_section(sheet, start_row, title, data_rows):
+        sheet.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=8)
+        sheet.cell(row=start_row, column=1).value = title
+        sheet.cell(row=start_row, column=1).font = Font(size=12, bold=True, color="FFFFFF")
+        sheet.cell(row=start_row, column=1).fill = PatternFill("solid", fgColor="166534")
+        sheet.cell(row=start_row, column=1).alignment = Alignment(horizontal="center")
+
+        headers_top = [
+            "Rank",
+            "Tutor Name",
+            "Overall Progress %",
+            "Status",
+            "Assigned Subjects",
+            "Marking Rate %",
+            "Attendance Log Rate %",
+            "Recommendation"
+        ]
+
+        header_row = start_row + 1
+
+        for col, header in enumerate(headers_top, start=1):
+            cell = sheet.cell(row=header_row, column=col)
+            cell.value = header
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="1B5E20")
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        for i, row_data in enumerate(data_rows, start=1):
+            row_num = header_row + i
+
+            recommendation = row_data.get("Recommendations") or "On track"
+
+            sheet.cell(row=row_num, column=1).value = i
+            sheet.cell(row=row_num, column=2).value = row_data.get("Tutor Name", "")
+            sheet.cell(row=row_num, column=3).value = row_data.get("Overall Progress %", "")
+            sheet.cell(row=row_num, column=4).value = row_data.get("Overall Status", "")
+            sheet.cell(row=row_num, column=5).value = row_data.get("Assigned Subjects", "")
+            sheet.cell(row=row_num, column=6).value = row_data.get("Marking Rate %", "")
+            sheet.cell(row=row_num, column=7).value = row_data.get("Attendance Log Rate %", "")
+            sheet.cell(row=row_num, column=8).value = recommendation
+
+            status_cell = sheet.cell(row=row_num, column=4)
+            status = str(row_data.get("Overall Status", ""))
+
+            if status == "On Track":
+                status_cell.fill = PatternFill("solid", fgColor="DCFCE7")
+            elif status == "Needs Attention":
+                status_cell.fill = PatternFill("solid", fgColor="FEF3C7")
+            elif status == "High Risk":
+                status_cell.fill = PatternFill("solid", fgColor="FEE2E2")
+
+        thin = Side(border_style="thin", color="CBD5E1")
+
+        for row in sheet.iter_rows(
+            min_row=header_row,
+            max_row=header_row + len(data_rows),
+            min_col=1,
+            max_col=8
+        ):
+            for cell in row:
+                cell.border = Border(top=thin, left=thin, right=thin, bottom=thin)
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+        return header_row + len(data_rows) + 3
+
+    next_row = write_top10_section(
+        top_ws,
+        3,
+        "Top 10 Performing Tutors",
+        top_performers
+    )
+
+    write_top10_section(
+        top_ws,
+        next_row,
+        "Top 10 Tutors Needing Support",
+        support_needed
+    )
+
+    top_widths = {
+        1: 8,
+        2: 26,
+        3: 18,
+        4: 18,
+        5: 45,
+        6: 18,
+        7: 22,
+        8: 50
+    }
+
+    for col_index, width in top_widths.items():
+        top_ws.column_dimensions[get_column_letter(col_index)].width = width
+
+    top_ws.freeze_panes = "A5"
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    safe_month = month.replace("-", "_")
+    filename = f"CAO_Tutor_Work_Progress_{safe_month}.xlsx"
+
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )    
     
     
 @app.get('/cao/sessions')
