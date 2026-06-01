@@ -17551,83 +17551,18 @@ def tutor_message_admin():
     conn.commit(); conn.close()
     return redirect(url_for('tutor_home'))
 
-# Tutor: manual attendance
-@app.route('/tutor/session/<int:sid>/attendance', methods=['GET', 'POST'])
+# Tutor: manual attendance (fixes missing route)
+@app.route('/tutor/session/<int:sid>/attendance', methods=['GET','POST'])
 def tutor_session_attendance(sid: int):
-
     r = require_tutor()
     if r:
         return r
 
     tid = is_tutor()
-
     conn = get_db()
     cur = conn.cursor()
 
-    # This is the EBTA academic month selected by the tutor.
-    # Learners must be loaded from this month, even if the session date falls early in the next month.
-    attendance_month = get_active_month('tutor')
-
-    today_obj = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date()
-    today = today_obj.isoformat()
-
-    # Build the allowed date window for the selected academic month.
-    # Example:
-    # May 2026 academic month allows attendance from 2026-05-01 to 2026-06-07.
-    try:
-        y, m = map(int, attendance_month.split("-")[:2])
-
-        month_start = datetime.date(y, m, 1)
-        month_end = datetime.date(y, m, calendar.monthrange(y, m)[1])
-
-        # Grace period: allow sessions from the selected month to end in the first week of the next month.
-        grace_end = month_end + datetime.timedelta(days=7)
-
-    except Exception:
-        conn.close()
-        return page("Invalid Month", card_msg("Invalid selected attendance month."))
-
-    # Default date:
-    # If today falls within the academic month window, use today.
-    # Otherwise, use the last day of the selected month.
-    if month_start <= today_obj <= grace_end:
-        default_date = today
-    else:
-        default_date = month_end.isoformat()
-
-    date_str = (
-        request.form.get("date", "").strip()
-        if request.method == "POST"
-        else request.args.get("date", default_date).strip()
-    )
-
-    if not date_str:
-        date_str = default_date
-
-    try:
-        selected_date_obj = datetime.date.fromisoformat(date_str)
-    except Exception:
-        conn.close()
-        return page("Invalid Date", card_msg("Please select a valid attendance date."))
-
-    # Do not allow future attendance.
-    if selected_date_obj > today_obj:
-        conn.close()
-        return page(
-            "Invalid Date",
-            card_msg("You cannot mark attendance for a future date.")
-        )
-
-    # Allow selected month + first 7 days of the next month.
-    if selected_date_obj < month_start or selected_date_obj > grace_end:
-        conn.close()
-        return page(
-            "Invalid Date",
-            card_msg(
-                f"Attendance for {pretty_month_label(attendance_month)} can be captured "
-                f"from {month_start.strftime('%d %b %Y')} to {grace_end.strftime('%d %b %Y')}."
-            )
-        )
+    month = get_active_month('tutor')
 
     cur.execute("""
         SELECT se.*, s.name AS subject_name, s.grade
@@ -17644,9 +17579,6 @@ def tutor_session_attendance(sid: int):
         conn.close()
         return page("Not found", card_msg("Session not found."))
 
-    # IMPORTANT:
-    # Learners are loaded from the selected academic month, not the calendar month of the date.
-    # Example: 1 June can still load May learners if the selected tutor month is May.
     cur.execute("""
         SELECT st.id, st.full_name, st.phone_whatsapp
         FROM enrollments e
@@ -17655,33 +17587,47 @@ def tutor_session_attendance(sid: int):
           AND e.month = ?
           AND e.status = 'ACTIVE'
         ORDER BY st.full_name
-    """, (se["subject_id"], attendance_month))
+    """, (se["subject_id"], month))
 
     studs = cur.fetchall()
 
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date().isoformat()
+
+    date_str = (
+        request.form.get("date", "").strip()
+        if request.method == "POST"
+        else request.args.get("date", today).strip()
+    )
+
+    if not date_str:
+        date_str = today
+
+    # Safety: attendance date must belong to selected tutor month
+    if date_str[:7] != month:
+        conn.close()
+        return page(
+            "Invalid Date",
+            card_msg(f"Attendance date must be within {pretty_month_label(month)}.")
+        )
+
+    # Safety: do not allow future dates
+    if date_str > today:
+        conn.close()
+        return page(
+            "Invalid Date",
+            card_msg("You cannot mark attendance for a future date.")
+        )
+
     if request.method == "POST":
-
-        if not studs:
-            conn.close()
-            return page(
-                "No Learners Found",
-                card_msg(
-                    f"No active learners were found for {escape(se['subject_name'])} "
-                    f"in {pretty_month_label(attendance_month)}. "
-                    f"Please switch to the correct academic month first."
-                )
-            )
-
         present_ids = set()
 
         for value in request.form.getlist("present"):
             try:
                 present_ids.add(int(value))
-            except Exception:
+            except:
                 pass
 
-        # Record that this class happened.
-        # The actual date can be in the next month, but the academic month remains attendance_month.
+        # Record that this class actually happened
         cur.execute("""
             INSERT INTO attendance_sessions(
                 session_id,
@@ -17695,19 +17641,18 @@ def tutor_session_attendance(sid: int):
             VALUES(?,?,?,?,?,?,?)
             ON CONFLICT(session_id, date)
             DO UPDATE SET
-                updated_at = excluded.updated_at,
-                month = excluded.month
+                updated_at = excluded.updated_at
         """, (
             sid,
             se["subject_id"],
             tid,
             date_str,
-            attendance_month,
+            month,
             now_utc_iso(),
             now_utc_iso()
         ))
 
-        # Reset attendance for this class date before saving again.
+        # Reset attendance for this class date
         cur.execute("""
             DELETE FROM attendance
             WHERE session_id = ?
@@ -17738,7 +17683,7 @@ def tutor_session_attendance(sid: int):
 
         return redirect(url_for("tutor_home"))
 
-    # GET: load existing present learners for this selected date
+    # GET: load existing present learners for this date
     cur.execute("""
         SELECT student_id
         FROM attendance
@@ -17748,14 +17693,14 @@ def tutor_session_attendance(sid: int):
 
     already = {row["student_id"] for row in cur.fetchall()}
 
-    # Load captured class dates for this session and selected academic month.
+    # Load captured class dates for this session/month
     cur.execute("""
         SELECT date
         FROM attendance_sessions
         WHERE session_id = ?
           AND month = ?
         ORDER BY date DESC
-    """, (sid, attendance_month))
+    """, (sid, month))
 
     captured_dates = cur.fetchall()
 
@@ -17769,8 +17714,8 @@ def tutor_session_attendance(sid: int):
         rows.append(f"""
         <tr>
             <td>
-                {escape(st['full_name'])}
-                <div class="mini muted">{escape(st['phone_whatsapp'] or '—')}</div>
+                {st['full_name']}
+                <div class="mini muted">{st['phone_whatsapp'] or '—'}</div>
             </td>
 
             <td style="text-align:center">
@@ -17806,12 +17751,7 @@ def tutor_session_attendance(sid: int):
         """
 
     table = (
-        f"""
-        <div class='empty'>
-            No active learners for {pretty_month_label(attendance_month)}.
-            Please switch to the academic month where learners were enrolled.
-        </div>
-        """
+        "<div class='empty'>No active learners for this subject/month.</div>"
         if not rows
         else f"""
         <div class="scroll-x">
@@ -17839,59 +17779,32 @@ def tutor_session_attendance(sid: int):
         <h1>Capture Attendance</h1>
 
         <p class="muted">
-            {grade_label(se['grade'])} — {escape(se['subject_name'])}
+            {grade_label(se['grade'])} — {se['subject_name']}
         </p>
-
-        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:12px">
-            <h3>Academic Month</h3>
-            <p class="mini muted">
-                You are capturing attendance for <strong>{pretty_month_label(attendance_month)}</strong>.
-                The actual session date may fall within this month or within the first 7 days of the next month.
-            </p>
-            <p class="mini muted">
-                Allowed date range:
-                <strong>{month_start.strftime('%d %b %Y')}</strong>
-                to
-                <strong>{grace_end.strftime('%d %b %Y')}</strong>
-            </p>
-        </div>
 
         <div class="card soft" style="border-left:5px solid #f59e0b;margin-bottom:12px">
             <h3>Important</h3>
             <p class="mini muted">
-                If this is a May session happening on 1 June, first switch your tutor dashboard month to May,
-                then select 1 June as the session date here.
+                Only capture attendance for sessions that have already happened.
+                The dashboard will calculate attendance only from captured session dates.
             </p>
         </div>
 
         {captured_html}
 
-        <form method="get"
-              action="{url_for('tutor_session_attendance', sid=sid)}"
-              class="toolbar"
-              style="margin-bottom:12px">
-            <label class="mini muted">Session Date</label>
-
-            <input type="date"
-                   name="date"
-                   value="{escape(date_str)}"
-                   min="{month_start.isoformat()}"
-                   max="{min(today_obj, grace_end).isoformat()}"
-                   onchange="this.form.submit()">
-
-            <noscript>
-                <button class="btn mini">Load Date</button>
-            </noscript>
-        </form>
-
         <form method="post">
-            <input type="hidden" name="date" value="{escape(date_str)}">
+            <div style="max-width:260px;margin-bottom:12px">
+                <label>Session Date</label>
+                <input type="date"
+                       name="date"
+                       value="{date_str}"
+                       max="{today}"
+                       required>
+            </div>
 
             {table}
 
-            <button class="btn success"
-                    style="margin-top:12px"
-                    {'disabled' if not studs else ''}>
+            <button class="btn success" style="margin-top:12px">
                 Save Attendance
             </button>
         </form>
