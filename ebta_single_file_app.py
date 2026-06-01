@@ -7796,7 +7796,7 @@ def home():
         <div class="grid two-col">
             <div>
             <label>Student Name & Surname</label>
-            <input name='full_name' required/>
+            <input name='full_name' id="full_name_input" required/>
             </div>
             <div>
             <label>Student WhatsApp Number</label>
@@ -7813,8 +7813,37 @@ def home():
             </div>
             
             <div>
+                <label>Student PIN</label>
+                <input
+                  name="pin"
+                  id="student_pin"
+                  required
+                  maxlength="5"
+                  inputmode="numeric"
+                  placeholder="Enter your 5-digit PIN"
+                  autocomplete="off"
+                />
+
+                <div class="mini muted" style="margin-top:4px;">
+                    Returning students: enter your name, WhatsApp number and PIN to load your saved details.
+                </div>
+            </div>
+            
+            <div id="returning_student_status"
+                 class="mini muted"
+                 style="
+                    grid-column:1/-1;
+                    display:none;
+                    padding:10px;
+                    border-radius:10px;
+                    background:#f8fafc;
+                    border:1px solid #e2e8f0;
+                 ">
+            </div>
+            
+            <div>
             <label>Guardian Name & Surname</label>
-            <input name="guardian_name" required />
+            <input name="guardian_name" id="guardian_name_input" required />
             </div>
             
             <div>
@@ -7833,11 +7862,11 @@ def home():
  
             <div>
             <label>Student Email (optional)</label>
-            <input name='email'/>
+            <input name='email' id="email_input"/>
             </div>
             <div>
               <label>Province</label>
-              <select name="province" required>
+              <select name="province" id="province_input" required>
                 <option value="">Select province…</option>
                 <option>Eastern Cape</option>
                 <option>Free State</option>
@@ -7853,7 +7882,7 @@ def home():
 
             <div>
               <label>School</label>
-              <input name="school" placeholder="School name" required />
+              <input name="school" id="school_input" placeholder="School name" required />
             </div>
 
         </div>
@@ -7876,21 +7905,6 @@ def home():
             <div id="subject_list" class="subject-grid">
             {subject_items}
             </div>
-        </div>
-
-        <!-- PIN + Payment + PoP -->
-        <div class="grid two-col">
-          <div>
-            <label>Create a 5-digit PIN</label>
-            <input
-              name="pin"
-              required
-              maxlength="5"
-              inputmode="numeric"
-              placeholder="e.g. 12345"
-              autocomplete="off"
-            />
-          </div>
         </div>
 
         <div class="card soft" id="payment-anchor">
@@ -8159,6 +8173,144 @@ def home():
     """
 
     extra_js = '''
+    
+<script>
+document.addEventListener("DOMContentLoaded", function(){
+
+    const fullNameInput = document.getElementById("full_name_input");
+    const phoneInput = document.getElementById("phone_input");
+    const phoneTypeInput = document.getElementById("phone_type");
+    const pinInput = document.getElementById("student_pin");
+
+    const guardianNameInput = document.getElementById("guardian_name_input");
+    const guardianInput = document.getElementById("guardian_input");
+    const guardianPhoneTypeInput = document.getElementById("guardian_phone_type");
+    const emailInput = document.getElementById("email_input");
+    const provinceInput = document.getElementById("province_input");
+    const schoolInput = document.getElementById("school_input");
+
+    const statusBox = document.getElementById("returning_student_status");
+
+    let lookupTimer = null;
+    let lastLookupKey = "";
+
+    function showReturningStatus(message, type){
+        if(!statusBox) return;
+
+        statusBox.style.display = "block";
+        statusBox.innerText = message;
+
+        if(type === "success"){
+            statusBox.style.background = "#ecfdf5";
+            statusBox.style.borderColor = "#86efac";
+            statusBox.style.color = "#166534";
+        } else if(type === "error"){
+            statusBox.style.background = "#fef2f2";
+            statusBox.style.borderColor = "#fecaca";
+            statusBox.style.color = "#991b1b";
+        } else {
+            statusBox.style.background = "#f8fafc";
+            statusBox.style.borderColor = "#e2e8f0";
+            statusBox.style.color = "#475569";
+        }
+    }
+
+    function canLookupReturningStudent(){
+        return (
+            fullNameInput &&
+            phoneInput &&
+            pinInput &&
+            fullNameInput.value.trim().length >= 3 &&
+            phoneInput.value.trim().length >= 8 &&
+            pinInput.value.trim().length === 5
+        );
+    }
+
+    async function lookupReturningStudent(){
+
+        if(!canLookupReturningStudent()){
+            return;
+        }
+
+        const lookupKey = [
+            fullNameInput.value.trim().toLowerCase(),
+            phoneInput.value.trim(),
+            phoneTypeInput ? phoneTypeInput.value : "SA",
+            pinInput.value.trim()
+        ].join("|");
+
+        if(lookupKey === lastLookupKey){
+            return;
+        }
+
+        lastLookupKey = lookupKey;
+
+        showReturningStatus("Checking returning student details...", "info");
+
+        const formData = new FormData();
+        formData.append("full_name", fullNameInput.value.trim());
+        formData.append("phone", phoneInput.value.trim());
+        formData.append("phone_type", phoneTypeInput ? phoneTypeInput.value : "SA");
+        formData.append("pin", pinInput.value.trim());
+
+        try{
+            const response = await fetch("/api/returning-student-lookup", {
+                method: "POST",
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if(!data.ok){
+                if(data.silent){
+                    if(statusBox){
+                        statusBox.style.display = "none";
+                        statusBox.innerText = "";
+                    }
+                    return;
+                }
+
+                showReturningStatus(data.message || "", "error");
+                return;
+            }
+
+            const s = data.student || {};
+
+            if(guardianNameInput) guardianNameInput.value = s.guardian_name || "";
+            if(guardianInput) guardianInput.value = s.guardian_phone || "";
+            if(guardianPhoneTypeInput) guardianPhoneTypeInput.value = s.guardian_phone_type || "SA";
+            if(emailInput) emailInput.value = s.email || "";
+            if(provinceInput) provinceInput.value = s.province || "";
+            if(schoolInput) schoolInput.value = s.school || "";
+
+            showReturningStatus(
+                data.message || "Returning student details loaded. You can still edit them before submitting.",
+                "success"
+            );
+
+        } catch(error){
+            showReturningStatus("Could not check returning student details. You can still continue manually.", "error");
+        }
+    }
+
+    function scheduleLookup(){
+        clearTimeout(lookupTimer);
+
+        lookupTimer = setTimeout(function(){
+            lookupReturningStudent();
+        }, 600);
+    }
+
+    [fullNameInput, phoneInput, phoneTypeInput, pinInput].forEach(function(el){
+        if(el){
+            el.addEventListener("input", scheduleLookup);
+            el.addEventListener("change", scheduleLookup);
+        }
+    });
+
+});
+</script>
+
     
 <script>
 
@@ -9002,6 +9154,98 @@ function showPopup(message, type='info', timeout=4000){
     return page("EBTA Enrollment", body, extra_js=extra_js)
 
 
+@app.post('/api/returning-student-lookup')
+def returning_student_lookup():
+
+    full_name = request.form.get("full_name", "").strip()
+    phone_raw = request.form.get("phone", "").strip()
+    phone_type = request.form.get("phone_type", "SA").strip()
+    pin = request.form.get("pin", "").strip()
+
+    # Silent fail: new students must not be scared by lookup messages.
+    if not full_name or not phone_raw or not pin:
+        return {
+            "ok": False,
+            "silent": True
+        }
+
+    if not is_valid_pin(pin):
+        return {
+            "ok": False,
+            "silent": True
+        }
+
+    try:
+        phone = normalize_phone(phone_raw, phone_type, strict=True)
+    except ValueError:
+        return {
+            "ok": False,
+            "silent": True
+        }
+
+    variants = phone_variants(phone)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    placeholders = ",".join("?" * len(variants))
+
+    cur.execute(f"""
+        SELECT
+            id,
+            full_name,
+            phone_whatsapp,
+            phone_type,
+            guardian_name,
+            guardian_phone,
+            guardian_phone_type,
+            email,
+            province,
+            school,
+            grade
+        FROM students
+        WHERE phone_whatsapp IN ({placeholders})
+          AND pin=?
+        LIMIT 1
+    """, variants + [pin])
+
+    student = cur.fetchone()
+    conn.close()
+
+    # Silent fail: this is likely a new student, so let them continue normally.
+    if not student:
+        return {
+            "ok": False,
+            "silent": True
+        }
+
+    # Light name check. Also silent, because new students should not be blocked by lookup.
+    typed_name = " ".join(full_name.lower().split())
+    saved_name = " ".join((student["full_name"] or "").lower().split())
+
+    if typed_name and saved_name and typed_name != saved_name:
+        return {
+            "ok": False,
+            "silent": True
+        }
+
+    return {
+        "ok": True,
+        "message": "Returning student found. Your saved details have been loaded, but you can still edit them.",
+        "student": {
+            "full_name": student["full_name"] or "",
+            "phone_whatsapp": student["phone_whatsapp"] or "",
+            "phone_type": student["phone_type"] or "SA",
+            "guardian_name": student["guardian_name"] or "",
+            "guardian_phone": student["guardian_phone"] or "",
+            "guardian_phone_type": student["guardian_phone_type"] or "SA",
+            "email": student["email"] or "",
+            "province": student["province"] or "",
+            "school": student["school"] or "",
+            "grade": student["grade"] or ""
+        }
+    }
+
 
 @app.post('/register/discount-preview')
 def register_discount_preview():
@@ -9106,36 +9350,66 @@ def register():
     """, variants)
     srow = cur.fetchone()
 
+    # Derive grade from first selected subject.
+    cur.execute("SELECT grade FROM subjects WHERE id=?", (subject_ids[0],))
+    r0 = cur.fetchone()
+
+    if not r0:
+        conn.close()
+        return page("Error", card_msg("Invalid subject selection."))
+
+    derived_grade = r0["grade"]
+
     if srow:
         if srow['pin'] != pin:
             conn.close()
             return page("Error", card_msg("Incorrect PIN for this phone number."))
+
         sid = srow['id']
-    else:
-        # Derive grade from first subject
-        cur.execute("SELECT grade FROM subjects WHERE id=?", (subject_ids[0],))
-        r0 = cur.fetchone()
-        if not r0:
-            conn.close()
-            return page("Error", card_msg("Invalid subject selection."))
 
-        derived_grade = r0['grade']
-
+        # Update editable details for returning students.
         cur.execute("""
-        INSERT INTO students (
+            UPDATE students
+            SET full_name=?,
+                guardian_phone=?,
+                guardian_name=?,
+                email=?,
+                grade=?,
+                province=?,
+                school=?,
+                phone_type=?,
+                guardian_phone_type=?
+            WHERE id=?
+        """, (
             full_name,
-            phone_whatsapp,
-            guardian_phone,
+            guardian,
             guardian_name,
             email,
-            grade,
-            pin,
+            derived_grade,
             province,
             school,
             phone_type,
             guardian_phone_type,
-            created_at
-        )VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            sid
+        ))
+
+    else:
+        cur.execute("""
+            INSERT INTO students(
+                full_name,
+                phone_whatsapp,
+                guardian_phone,
+                guardian_name,
+                email,
+                grade,
+                pin,
+                created_at,
+                province,
+                school,
+                phone_type,
+                guardian_phone_type
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             full_name,
             phone,
@@ -9144,14 +9418,16 @@ def register():
             email,
             derived_grade,
             pin,
+            now_utc_iso(),
             province,
             school,
             phone_type,
-            guardian_phone_type,
-            now_utc_iso()
+            guardian_phone_type
         ))
 
         sid = cur.lastrowid
+
+        ensure_student_referral_code(conn, sid)
 
     # Annual registration (optional)
     try:
