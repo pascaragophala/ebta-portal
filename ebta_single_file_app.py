@@ -18276,6 +18276,224 @@ def tutor_work_progress_data(tutor_id, month):
     }
 
 
+def tutor_manager_work_progress_data(manager_id, month):
+    """
+    Builds work progress data for one tutor manager based on:
+    - tutors assigned to the manager
+    - progress of those tutors
+    - tracker logs captured by the manager
+    - ratings/comments/follow-ups captured in tutor_weekly_tracker
+    """
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            tm.id,
+            tm.full_name,
+            tm.phone,
+            tm.created_at
+        FROM tutor_managers tm
+        WHERE tm.id=?
+        LIMIT 1
+    """, (manager_id,))
+
+    manager = cur.fetchone()
+
+    if not manager:
+        conn.close()
+        return None
+
+    cur.execute("""
+        SELECT
+            t.id,
+            t.full_name,
+            t.phone
+        FROM manager_tutors mt
+        JOIN tutors t ON t.id = mt.tutor_id
+        WHERE mt.manager_id=?
+        ORDER BY t.full_name
+    """, (manager_id,))
+
+    assigned_tutors = cur.fetchall()
+
+    cur.execute("""
+        SELECT
+            COUNT(*) AS tracker_logs,
+            SUM(CASE WHEN session_held=1 THEN 1 ELSE 0 END) AS sessions_held,
+            SUM(CASE WHEN session_held=0 THEN 1 ELSE 0 END) AS sessions_missed,
+            SUM(CASE WHEN recording_posted=1 THEN 1 ELSE 0 END) AS recordings_posted,
+            SUM(CASE WHEN posted_within_24h=1 THEN 1 ELSE 0 END) AS posted_within_24h,
+            SUM(CASE WHEN TRIM(IFNULL(manager_comments,'')) != '' THEN 1 ELSE 0 END) AS comments_count,
+            AVG(manager_rating) AS avg_manager_rating,
+            COUNT(DISTINCT tutor_id) AS tutors_followed_up
+        FROM tutor_weekly_tracker
+        WHERE manager_id=?
+          AND substr(IFNULL(session_date,''),1,7)=?
+    """, (manager_id, month))
+
+    tracker = cur.fetchone()
+
+    conn.close()
+
+    tutor_rows = []
+
+    total_progress = 0
+    total_uploads = 0
+    total_recordings = 0
+    total_assignments = 0
+    total_views = 0
+    total_submissions = 0
+    total_marked = 0
+    total_unmarked = 0
+    total_attendance_logs = 0
+    total_assigned_sessions = 0
+    total_tracker_completion = 0
+
+    on_track = 0
+    needs_attention = 0
+    high_risk = 0
+
+    for tutor in assigned_tutors:
+        progress = tutor_work_progress_data(tutor["id"], month)
+
+        status = progress["overall_status"]
+
+        if status == "On Track":
+            on_track += 1
+        elif status == "Needs Attention":
+            needs_attention += 1
+        elif status == "High Risk":
+            high_risk += 1
+
+        total_progress += progress["overall_rate"]
+        total_uploads += progress["total_uploads"]
+        total_recordings += progress["recordings_uploaded"]
+        total_assignments += progress["assignments_uploaded"]
+        total_views += progress["material_views"]
+        total_submissions += progress["submissions_received"]
+        total_marked += progress["marked_submissions"]
+        total_unmarked += progress["unmarked_submissions"]
+        total_attendance_logs += progress["attendance_logs"]
+        total_assigned_sessions += progress["assigned_sessions"]
+        total_tracker_completion += progress["tracker_completion_rate"]
+
+        tutor_rows.append({
+            "id": tutor["id"],
+            "full_name": tutor["full_name"],
+            "phone": tutor["phone"],
+            "overall_rate": progress["overall_rate"],
+            "overall_status": progress["overall_status"],
+            "total_uploads": progress["total_uploads"],
+            "recordings_uploaded": progress["recordings_uploaded"],
+            "assignments_uploaded": progress["assignments_uploaded"],
+            "material_views": progress["material_views"],
+            "submissions_received": progress["submissions_received"],
+            "marked_submissions": progress["marked_submissions"],
+            "unmarked_submissions": progress["unmarked_submissions"],
+            "attendance_logs": progress["attendance_logs"],
+            "assigned_sessions": progress["assigned_sessions"],
+            "tracker_logs": progress["tracker_logs"],
+            "recommendations": progress["recommendations"]
+        })
+
+    assigned_count = len(assigned_tutors)
+
+    avg_managed_progress = round(total_progress / assigned_count) if assigned_count else 0
+    avg_tracker_completion = round(total_tracker_completion / assigned_count) if assigned_count else 0
+
+    tracker_logs = int(tracker["tracker_logs"] or 0) if tracker else 0
+    tutors_followed_up = int(tracker["tutors_followed_up"] or 0) if tracker else 0
+    comments_count = int(tracker["comments_count"] or 0) if tracker else 0
+
+    followup_coverage = round((tutors_followed_up / assigned_count) * 100) if assigned_count else 0
+
+    avg_manager_rating = tracker["avg_manager_rating"] if tracker and tracker["avg_manager_rating"] is not None else None
+
+    manager_score = round(
+        (
+            (avg_managed_progress * 0.45) +
+            (followup_coverage * 0.30) +
+            (min(100, avg_tracker_completion) * 0.15) +
+            (min(100, tracker_logs * 10) * 0.10)
+        )
+    )
+
+    if manager_score >= 75 and high_risk == 0:
+        status = "On Track"
+        status_class = "active"
+    elif manager_score >= 50:
+        status = "Needs Attention"
+        status_class = "pending"
+    else:
+        status = "High Risk"
+        status_class = "danger"
+
+    recommendations = []
+
+    if assigned_count == 0:
+        recommendations.append("No tutors assigned to this manager yet.")
+
+    if followup_coverage < 70 and assigned_count > 0:
+        recommendations.append("Improve follow-up coverage with assigned tutors.")
+
+    if tracker_logs == 0 and assigned_count > 0:
+        recommendations.append("Manager must capture tutor tracker logs.")
+
+    if high_risk > 0:
+        recommendations.append("Follow up with high-risk tutors urgently.")
+
+    if total_unmarked > 0:
+        recommendations.append("Follow up on unmarked learner submissions.")
+
+    if not recommendations:
+        recommendations.append("Manager work progress is on track.")
+
+    return {
+        "manager_id": manager["id"],
+        "full_name": manager["full_name"],
+        "phone": manager["phone"],
+        "created_at": manager["created_at"],
+
+        "assigned_tutors": assigned_count,
+        "tutors_followed_up": tutors_followed_up,
+        "followup_coverage": followup_coverage,
+
+        "manager_score": manager_score,
+        "status": status,
+        "status_class": status_class,
+
+        "avg_managed_progress": avg_managed_progress,
+        "avg_tracker_completion": avg_tracker_completion,
+
+        "on_track": on_track,
+        "needs_attention": needs_attention,
+        "high_risk": high_risk,
+
+        "tracker_logs": tracker_logs,
+        "sessions_held": int(tracker["sessions_held"] or 0) if tracker else 0,
+        "sessions_missed": int(tracker["sessions_missed"] or 0) if tracker else 0,
+        "recordings_posted": int(tracker["recordings_posted"] or 0) if tracker else 0,
+        "posted_within_24h": int(tracker["posted_within_24h"] or 0) if tracker else 0,
+        "comments_count": comments_count,
+        "avg_manager_rating": round(float(avg_manager_rating), 1) if avg_manager_rating is not None else None,
+
+        "total_uploads": total_uploads,
+        "total_recordings": total_recordings,
+        "total_assignments": total_assignments,
+        "total_views": total_views,
+        "total_submissions": total_submissions,
+        "total_marked": total_marked,
+        "total_unmarked": total_unmarked,
+        "total_attendance_logs": total_attendance_logs,
+        "total_assigned_sessions": total_assigned_sessions,
+
+        "tutor_rows": tutor_rows,
+        "recommendations": recommendations
+    }
+
+
 @app.get('/tutor/progress')
 def tutor_work_progress():
 
@@ -57479,6 +57697,7 @@ def cao_nav():
                 cao_link("Academic Team", "cao_academic_team", "cao_tutors_enabled", icon="👥"),
                 cao_link("Tutors", "cao_tutors", "cao_tutors_enabled", icon="🧑‍🏫"),
                 cao_link("Tutor Managers", "cao_tutor_managers", "cao_tutor_managers_enabled", icon="📋"),
+                cao_link("Manager Work Progress", "cao_tutor_manager_performance", "cao_tutor_managers_enabled", icon="📈"),
                 cao_link("AQM Team", "cao_aqm_team", "cao_aqm_enabled", icon="✅"),
             ]
         ),
@@ -59097,6 +59316,602 @@ def cao_tutor_managers():
     """
 
     return page("CAO Tutor Managers", body)
+    
+    
+@app.get('/cao/tutor-manager-performance')
+def cao_tutor_manager_performance():
+
+    r = require_cao_permission("cao_tutor_managers_enabled", "tutor manager work progress")
+    if r:
+        return r
+
+    month = request.args.get("month", "").strip() or cao_selected_month()
+    q = request.args.get("q", "").strip()
+    status_filter = request.args.get("status", "").strip()
+    page_num = cao_page_num()
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("(tm.full_name LIKE ? OR tm.phone LIKE ?)")
+        params += [search, search]
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT
+            tm.id,
+            tm.full_name,
+            tm.phone
+        FROM tutor_managers tm
+        {where_sql}
+        ORDER BY tm.full_name
+    """, params)
+
+    manager_rows = cur.fetchall()
+    conn.close()
+
+    manager_data = []
+
+    for manager in manager_rows:
+        progress = tutor_manager_work_progress_data(manager["id"], month)
+
+        if not progress:
+            continue
+
+        if status_filter and progress["status"] != status_filter:
+            continue
+
+        manager_data.append(progress)
+
+    manager_data = sorted(
+        manager_data,
+        key=lambda x: (x["manager_score"], x["full_name"] or "")
+    )
+
+    total = len(manager_data)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    managers = manager_data[offset:offset + per_page]
+
+    on_track_count = len([x for x in manager_data if x["status"] == "On Track"])
+    attention_count = len([x for x in manager_data if x["status"] == "Needs Attention"])
+    high_risk_count = len([x for x in manager_data if x["status"] == "High Risk"])
+
+    avg_score = round(sum([x["manager_score"] for x in manager_data]) / len(manager_data)) if manager_data else 0
+    avg_followup = round(sum([x["followup_coverage"] for x in manager_data]) / len(manager_data)) if manager_data else 0
+    total_assigned_tutors = sum([x["assigned_tutors"] for x in manager_data])
+    total_tracker_logs = sum([x["tracker_logs"] for x in manager_data])
+    total_high_risk_tutors = sum([x["high_risk"] for x in manager_data])
+    total_unmarked = sum([x["total_unmarked"] for x in manager_data])
+
+    status_options = f"""
+        <option value="" {'selected' if status_filter == '' else ''}>All Statuses</option>
+        <option value="On Track" {'selected' if status_filter == 'On Track' else ''}>On Track</option>
+        <option value="Needs Attention" {'selected' if status_filter == 'Needs Attention' else ''}>Needs Attention</option>
+        <option value="High Risk" {'selected' if status_filter == 'High Risk' else ''}>High Risk</option>
+    """
+
+    rows = ""
+
+    for m in managers:
+        avg_rating = m["avg_manager_rating"] if m["avg_manager_rating"] is not None else "—"
+        recommendations = ", ".join(m["recommendations"][:3]) or "On track"
+
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(m['full_name'] or '—')}</strong>
+                <div class="mini muted">{escape(m['phone'] or '—')}</div>
+            </td>
+
+            <td>
+                <span class="chip {m['status_class']}">
+                    {escape(m['status'])}
+                </span>
+                <div class="mini muted">Score: {m['manager_score']}%</div>
+            </td>
+
+            <td>
+                {m['assigned_tutors']}
+                <div class="mini muted">
+                    {m['tutors_followed_up']} followed up · {m['followup_coverage']}% coverage
+                </div>
+            </td>
+
+            <td>
+                {m['avg_managed_progress']}%
+                <div class="mini muted">
+                    {m['on_track']} on track · {m['needs_attention']} attention · {m['high_risk']} high risk
+                </div>
+            </td>
+
+            <td>
+                {m['tracker_logs']}
+                <div class="mini muted">
+                    {m['comments_count']} comment(s) captured
+                </div>
+            </td>
+
+            <td>
+                {m['sessions_held']} held / {m['sessions_missed']} missed
+                <div class="mini muted">
+                    {m['recordings_posted']} recordings posted
+                </div>
+            </td>
+
+            <td>
+                {m['total_marked']} / {m['total_submissions']}
+                <div class="mini muted">
+                    {m['total_unmarked']} unmarked script(s)
+                </div>
+            </td>
+
+            <td>
+                {escape(str(avg_rating))}
+                <div class="mini muted">Avg manager rating</div>
+            </td>
+
+            <td>
+                <div class="mini muted">{escape(recommendations)}</div>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>Tutor Manager Work Progress</h1>
+
+        <p class="muted">
+            This section shows how tutor managers are following up with their assigned tutors,
+            capturing tracker logs, supporting tutor performance and managing academic delivery risks.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search manager name or phone">
+
+            <select name="status">
+                {status_options}
+            </select>
+
+            <button class="btn mini">Search</button>
+
+            <a class="btn mini secondary" href="{url_for('cao_tutor_manager_performance')}">
+                Clear
+            </a>
+
+            <a class="btn mini success"
+               href="/cao/tutor-manager-performance/export?month={escape(month)}&q={quote_from_bytes(q.encode())}&status={quote_from_bytes(status_filter.encode())}">
+                Export Excel
+            </a>
+        </form>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Managers Analysed", total)}
+            {stat("Average Manager Score", f"{avg_score}%")}
+            {stat("Follow-Up Coverage", f"{avg_followup}%")}
+            {stat("Assigned Tutors", total_assigned_tutors)}
+            {stat("Tracker Logs", total_tracker_logs)}
+            {stat("On Track", on_track_count)}
+            {stat("Needs Attention", attention_count)}
+            {stat("High Risk", high_risk_count)}
+            {stat("High-Risk Tutors", total_high_risk_tutors)}
+            {stat("Unmarked Scripts", total_unmarked)}
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Detailed Tutor Manager Work Progress Table</h2>
+
+            <div class="mini muted" style="margin:10px 0">
+                Showing {len(managers)} of {total} tutor manager(s).
+            </div>
+
+            {pagination_controls("/cao/tutor-manager-performance", page_num, total_pages, {
+                "month": month,
+                "q": q,
+                "status": status_filter
+            })}
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tutor Manager</th>
+                            <th>Status</th>
+                            <th>Assigned Tutors</th>
+                            <th>Managed Tutor Progress</th>
+                            <th>Tracker Logs</th>
+                            <th>Session Follow-Up</th>
+                            <th>Marking Follow-Up</th>
+                            <th>Avg Rating</th>
+                            <th>Recommendation</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='9'>No tutor manager progress records found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+
+            {pagination_controls("/cao/tutor-manager-performance", page_num, total_pages, {
+                "month": month,
+                "q": q,
+                "status": status_filter
+            })}
+        </div>
+    </section>
+    """
+
+    return page("Tutor Manager Work Progress", body)    
+    
+    
+@app.get('/cao/tutor-manager-performance/export')
+def cao_tutor_manager_performance_export():
+
+    r = require_cao_permission("cao_tutor_managers_enabled", "tutor manager work progress export")
+    if r:
+        return r
+
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except Exception:
+        return page(
+            "Export Error",
+            card_msg("openpyxl is not installed. Please add openpyxl to requirements.txt and redeploy.")
+        )
+
+    month = request.args.get("month", "").strip() or cao_selected_month()
+    q = request.args.get("q", "").strip()
+    status_filter = request.args.get("status", "").strip()
+
+    where = []
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("(tm.full_name LIKE ? OR tm.phone LIKE ?)")
+        params += [search, search]
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT
+            tm.id,
+            tm.full_name,
+            tm.phone
+        FROM tutor_managers tm
+        {where_sql}
+        ORDER BY tm.full_name
+    """, params)
+
+    managers = cur.fetchall()
+    conn.close()
+
+    export_rows = []
+
+    for manager in managers:
+        progress = tutor_manager_work_progress_data(manager["id"], month)
+
+        if not progress:
+            continue
+
+        if status_filter and progress["status"] != status_filter:
+            continue
+
+        export_rows.append({
+            "Tutor Manager": progress["full_name"],
+            "Phone": progress["phone"] or "",
+            "Month": month,
+            "Manager Score %": progress["manager_score"],
+            "Status": progress["status"],
+            "Assigned Tutors": progress["assigned_tutors"],
+            "Tutors Followed Up": progress["tutors_followed_up"],
+            "Follow-Up Coverage %": progress["followup_coverage"],
+            "Avg Managed Tutor Progress %": progress["avg_managed_progress"],
+            "Managed Tutors On Track": progress["on_track"],
+            "Managed Tutors Needs Attention": progress["needs_attention"],
+            "Managed Tutors High Risk": progress["high_risk"],
+            "Tracker Logs": progress["tracker_logs"],
+            "Manager Comments": progress["comments_count"],
+            "Sessions Held": progress["sessions_held"],
+            "Sessions Missed": progress["sessions_missed"],
+            "Recordings Posted": progress["recordings_posted"],
+            "Posted Within 24h": progress["posted_within_24h"],
+            "Total Uploads By Managed Tutors": progress["total_uploads"],
+            "Total Recordings By Managed Tutors": progress["total_recordings"],
+            "Total Assignments By Managed Tutors": progress["total_assignments"],
+            "Learner Views Under Managed Tutors": progress["total_views"],
+            "Submissions Received": progress["total_submissions"],
+            "Marked Submissions": progress["total_marked"],
+            "Unmarked Submissions": progress["total_unmarked"],
+            "Total Attendance Logs": progress["total_attendance_logs"],
+            "Total Assigned Sessions": progress["total_assigned_sessions"],
+            "Average Manager Rating": progress["avg_manager_rating"] if progress["avg_manager_rating"] is not None else "",
+            "Recommendations": ", ".join(progress["recommendations"]) if progress["recommendations"] else "On track"
+        })
+
+    export_rows = sorted(
+        export_rows,
+        key=lambda x: (x["Manager Score %"], x["Tutor Manager"] or "")
+    )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Manager Work Progress"
+
+    headers = [
+        "Tutor Manager",
+        "Phone",
+        "Month",
+        "Manager Score %",
+        "Status",
+        "Assigned Tutors",
+        "Tutors Followed Up",
+        "Follow-Up Coverage %",
+        "Avg Managed Tutor Progress %",
+        "Managed Tutors On Track",
+        "Managed Tutors Needs Attention",
+        "Managed Tutors High Risk",
+        "Tracker Logs",
+        "Manager Comments",
+        "Sessions Held",
+        "Sessions Missed",
+        "Recordings Posted",
+        "Posted Within 24h",
+        "Total Uploads By Managed Tutors",
+        "Total Recordings By Managed Tutors",
+        "Total Assignments By Managed Tutors",
+        "Learner Views Under Managed Tutors",
+        "Submissions Received",
+        "Marked Submissions",
+        "Unmarked Submissions",
+        "Total Attendance Logs",
+        "Total Assigned Sessions",
+        "Average Manager Rating",
+        "Recommendations"
+    ]
+
+    last_col = len(headers)
+
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
+    ws.cell(row=1, column=1).value = f"Tutor Manager Work Progress - {month}"
+    ws.cell(row=1, column=1).font = Font(size=14, bold=True, color="FFFFFF")
+    ws.cell(row=1, column=1).fill = PatternFill("solid", fgColor="1B5E20")
+    ws.cell(row=1, column=1).alignment = Alignment(horizontal="center")
+
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=last_col)
+    ws.cell(row=2, column=1).value = f"Filters: Search={q or 'All'} | Status={status_filter or 'All'}"
+    ws.cell(row=2, column=1).font = Font(italic=True, color="64748B")
+    ws.cell(row=2, column=1).alignment = Alignment(horizontal="center")
+
+    header_row = 4
+
+    for col, header in enumerate(headers, start=1):
+        cell = ws.cell(row=header_row, column=col)
+        cell.value = header
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="166534")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for row_index, row_data in enumerate(export_rows, start=5):
+        for col_index, header in enumerate(headers, start=1):
+            cell = ws.cell(row=row_index, column=col_index)
+            cell.value = row_data.get(header, "")
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+            if header == "Status":
+                status = str(row_data.get(header, ""))
+
+                if status == "On Track":
+                    cell.fill = PatternFill("solid", fgColor="DCFCE7")
+                elif status == "Needs Attention":
+                    cell.fill = PatternFill("solid", fgColor="FEF3C7")
+                elif status == "High Risk":
+                    cell.fill = PatternFill("solid", fgColor="FEE2E2")
+
+    thin = Side(border_style="thin", color="CBD5E1")
+
+    for row in ws.iter_rows(min_row=4, max_row=ws.max_row, min_col=1, max_col=last_col):
+        for cell in row:
+            cell.border = Border(top=thin, left=thin, right=thin, bottom=thin)
+
+    widths = {
+        1: 26,
+        2: 18,
+        3: 12,
+        4: 18,
+        5: 18,
+        6: 16,
+        7: 18,
+        8: 20,
+        9: 26,
+        10: 22,
+        11: 26,
+        12: 22,
+        13: 16,
+        14: 18,
+        15: 16,
+        16: 16,
+        17: 18,
+        18: 18,
+        19: 26,
+        20: 28,
+        21: 28,
+        22: 30,
+        23: 20,
+        24: 20,
+        25: 20,
+        26: 20,
+        27: 22,
+        28: 22,
+        29: 50
+    }
+
+    for col_index, width in widths.items():
+        ws.column_dimensions[get_column_letter(col_index)].width = width
+
+    ws.freeze_panes = "A5"
+    ws.auto_filter.ref = f"A4:{get_column_letter(last_col)}{ws.max_row}"
+
+    # ================= TOP 10 SUMMARY SHEET =================
+    top_ws = wb.create_sheet("Top 10 Summary")
+
+    top_ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+    top_ws.cell(row=1, column=1).value = f"Top 10 Tutor Manager Summary - {month}"
+    top_ws.cell(row=1, column=1).font = Font(size=14, bold=True, color="FFFFFF")
+    top_ws.cell(row=1, column=1).fill = PatternFill("solid", fgColor="1B5E20")
+    top_ws.cell(row=1, column=1).alignment = Alignment(horizontal="center")
+
+    top_performers = sorted(
+        export_rows,
+        key=lambda x: (
+            -int(x.get("Manager Score %") or 0),
+            -int(x.get("Follow-Up Coverage %") or 0),
+            -int(x.get("Avg Managed Tutor Progress %") or 0),
+            x.get("Tutor Manager") or ""
+        )
+    )[:10]
+
+    support_needed = sorted(
+        export_rows,
+        key=lambda x: (
+            int(x.get("Manager Score %") or 0),
+            int(x.get("Follow-Up Coverage %") or 0),
+            int(x.get("Avg Managed Tutor Progress %") or 0),
+            x.get("Tutor Manager") or ""
+        )
+    )[:10]
+
+    def write_manager_top_section(sheet, start_row, title, data_rows):
+        sheet.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=8)
+        sheet.cell(row=start_row, column=1).value = title
+        sheet.cell(row=start_row, column=1).font = Font(size=12, bold=True, color="FFFFFF")
+        sheet.cell(row=start_row, column=1).fill = PatternFill("solid", fgColor="166534")
+        sheet.cell(row=start_row, column=1).alignment = Alignment(horizontal="center")
+
+        top_headers = [
+            "Rank",
+            "Tutor Manager",
+            "Manager Score %",
+            "Status",
+            "Assigned Tutors",
+            "Follow-Up Coverage %",
+            "High-Risk Tutors",
+            "Recommendation"
+        ]
+
+        header_row = start_row + 1
+
+        for col, header in enumerate(top_headers, start=1):
+            cell = sheet.cell(row=header_row, column=col)
+            cell.value = header
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="1B5E20")
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        for i, row_data in enumerate(data_rows, start=1):
+            row_num = header_row + i
+
+            sheet.cell(row=row_num, column=1).value = i
+            sheet.cell(row=row_num, column=2).value = row_data.get("Tutor Manager", "")
+            sheet.cell(row=row_num, column=3).value = row_data.get("Manager Score %", "")
+            sheet.cell(row=row_num, column=4).value = row_data.get("Status", "")
+            sheet.cell(row=row_num, column=5).value = row_data.get("Assigned Tutors", "")
+            sheet.cell(row=row_num, column=6).value = row_data.get("Follow-Up Coverage %", "")
+            sheet.cell(row=row_num, column=7).value = row_data.get("Managed Tutors High Risk", "")
+            sheet.cell(row=row_num, column=8).value = row_data.get("Recommendations", "")
+
+            status_cell = sheet.cell(row=row_num, column=4)
+            status = str(row_data.get("Status", ""))
+
+            if status == "On Track":
+                status_cell.fill = PatternFill("solid", fgColor="DCFCE7")
+            elif status == "Needs Attention":
+                status_cell.fill = PatternFill("solid", fgColor="FEF3C7")
+            elif status == "High Risk":
+                status_cell.fill = PatternFill("solid", fgColor="FEE2E2")
+
+        thin = Side(border_style="thin", color="CBD5E1")
+
+        for row in sheet.iter_rows(
+            min_row=header_row,
+            max_row=header_row + len(data_rows),
+            min_col=1,
+            max_col=8
+        ):
+            for cell in row:
+                cell.border = Border(top=thin, left=thin, right=thin, bottom=thin)
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+        return header_row + len(data_rows) + 3
+
+    next_row = write_manager_top_section(
+        top_ws,
+        3,
+        "Top 10 Performing Tutor Managers",
+        top_performers
+    )
+
+    write_manager_top_section(
+        top_ws,
+        next_row,
+        "Top 10 Tutor Managers Needing Support",
+        support_needed
+    )
+
+    top_widths = {
+        1: 8,
+        2: 28,
+        3: 18,
+        4: 18,
+        5: 18,
+        6: 22,
+        7: 20,
+        8: 55
+    }
+
+    for col_index, width in top_widths.items():
+        top_ws.column_dimensions[get_column_letter(col_index)].width = width
+
+    top_ws.freeze_panes = "A5"
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    safe_month = month.replace("-", "_")
+    filename = f"CAO_Tutor_Manager_Work_Progress_{safe_month}.xlsx"
+
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )    
     
     
 @app.get('/cao/aqm')
