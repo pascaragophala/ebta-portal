@@ -7741,48 +7741,108 @@ def home():
 
     body = fr"""
     <section class='grid' style='margin-top:10px'>
-        <div class="card soft" style="margin-top:18px;">
+    <div class="card soft" style="margin-top:18px;">
 
-    <h2>Portal Help Videos</h2>
-    <div class="mini muted" style="margin-bottom:10px;">
-    Watch these videos if you need help using the EBTA Portal.
-    </div>
+        <h2 style="margin-bottom:8px;">Portal Help Videos</h2>
 
-    <div style="
-    display:grid;
-    grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
-    gap:16px;
-    ">
+        <div class="mini muted" style="margin-bottom:16px;">
+            Watch these videos if you need help using the EBTA Portal.
+        </div>
 
-    <div>
-    <div class="mini" style="font-weight:600;margin-bottom:6px;">
-    How to Enroll on EBTA Portal
-    </div>
-    <iframe
-    src="https://drive.google.com/file/d/1z3kRXeO0iTvcofjQKWH0TJx7MKs7IIdg/preview"
-    width="100%"
-    height="180"
-    allow="autoplay"
-    loading="lazy"
-    style="border-radius:10px;border:1px solid #e2e8f0;"
-    ></iframe>
-    </div>
+        <div style="
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+            gap:18px;
+            align-items:start;
+        ">
 
-    <div>
-    <div class="mini" style="font-weight:600;margin-bottom:6px;">
-    How to Log into Portal
-    </div>
-    <iframe
-    src="https://drive.google.com/file/d/18J666KbFvxMY2K9PhbgDmZQOWLH-8uz4/preview"
-    width="100%"
-    height="180"
-    allow="autoplay"
-    loading="lazy"
-    style="border-radius:10px;border:1px solid #e2e8f0;"
-    ></iframe>
-    </div>
+            <!-- VIDEO 1 -->
+            <div style="
+                border:1px solid #e2e8f0;
+                border-radius:16px;
+                padding:12px;
+                background:#ffffff;
+                box-shadow:0 4px 14px rgba(15,23,42,0.06);
+            ">
+                <div class="mini" style="
+                    font-weight:700;
+                    margin-bottom:10px;
+                    color:#0f172a;
+                ">
+                    How to Enroll on EBTA Portal
+                </div>
 
-    </div>
+                <div style="
+                    position:relative;
+                    width:100%;
+                    aspect-ratio:16/9;
+                    overflow:hidden;
+                    border-radius:14px;
+                    background:#000;
+                    border:1px solid #e2e8f0;
+                ">
+                    <iframe
+                        src="https://drive.google.com/file/d/1z3kRXeO0iTvcofjQKWH0TJx7MKs7IIdg/preview"
+                        allow="autoplay; fullscreen"
+                        allowfullscreen
+                        webkitallowfullscreen
+                        mozallowfullscreen
+                        loading="lazy"
+                        style="
+                            position:absolute;
+                            inset:0;
+                            width:100%;
+                            height:100%;
+                            border:0;
+                        ">
+                    </iframe>
+                </div>
+            </div>
+
+            <!-- VIDEO 2 -->
+            <div style="
+                border:1px solid #e2e8f0;
+                border-radius:16px;
+                padding:12px;
+                background:#ffffff;
+                box-shadow:0 4px 14px rgba(15,23,42,0.06);
+            ">
+                <div class="mini" style="
+                    font-weight:700;
+                    margin-bottom:10px;
+                    color:#0f172a;
+                ">
+                    How to Log into Portal
+                </div>
+
+                <div style="
+                    position:relative;
+                    width:100%;
+                    aspect-ratio:16/9;
+                    overflow:hidden;
+                    border-radius:14px;
+                    background:#000;
+                    border:1px solid #e2e8f0;
+                ">
+                    <iframe
+                        src="https://drive.google.com/file/d/18J666KbFvxMY2K9PhbgDmZQOWLH-8uz4/preview"
+                        allow="autoplay; fullscreen"
+                        allowfullscreen
+                        webkitallowfullscreen
+                        mozallowfullscreen
+                        loading="lazy"
+                        style="
+                            position:absolute;
+                            inset:0;
+                            width:100%;
+                            height:100%;
+                            border:0;
+                        ">
+                    </iframe>
+                </div>
+            </div>
+
+        </div>
     </div>
     
     
