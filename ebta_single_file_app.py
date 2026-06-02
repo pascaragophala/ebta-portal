@@ -23731,6 +23731,9 @@ def admin_tutors():
     cur.execute("""
         SELECT 
             ts.tutor_id,
+            ts.subject_id,
+            s.name,
+            s.grade,
             s.name || ' (' || s.grade || ')' AS label
         FROM tutor_subjects ts
         JOIN subjects s ON s.id = ts.subject_id
@@ -23738,8 +23741,14 @@ def admin_tutors():
     """)
 
     maps = {}
+
     for rmap in cur.fetchall():
-        maps.setdefault(rmap["tutor_id"], []).append(rmap["label"])
+        maps.setdefault(rmap["tutor_id"], []).append({
+            "subject_id": rmap["subject_id"],
+            "label": rmap["label"],
+            "name": rmap["name"],
+            "grade": rmap["grade"]
+        })
 
     conn.close()
 
@@ -23762,7 +23771,40 @@ def admin_tutors():
 
     for t in rows:
         pin = escape(t["pin"]) if t["pin"] else "<span class='muted'>not set</span>"
-        mapped = ", ".join(maps.get(t["id"], [])) or "<span class='muted'>No subjects</span>"
+        assigned_subjects = maps.get(t["id"], [])
+
+        if assigned_subjects:
+            mapped = "<div style='display:flex;gap:6px;flex-wrap:wrap'>"
+
+            for sub in assigned_subjects:
+                mapped += f"""
+                <div class="chip" style="
+                    display:inline-flex;
+                    align-items:center;
+                    gap:6px;
+                    padding:6px 8px;
+                    border-radius:999px;
+                    background:#ecfdf5;
+                    border:1px solid #bbf7d0;
+                    color:#14532d;
+                ">
+                    <span>{escape(sub['label'])}</span>
+
+                    <form method="post"
+                          action="{url_for('admin_tutor_remove_subject', tid=t['id'], subject_id=sub['subject_id'])}"
+                          style="display:inline"
+                          onsubmit="return confirm('Remove this subject from the tutor? This will also unlink sessions for this tutor and subject.')">
+                        <button class="btn mini danger"
+                                style="padding:3px 7px;font-size:11px">
+                            Remove
+                        </button>
+                    </form>
+                </div>
+                """
+
+            mapped += "</div>"
+        else:
+            mapped = "<span class='muted'>No subjects</span>"
 
         trs.append(f"""
         <tr>
@@ -24153,7 +24195,90 @@ def admin_tutor_add_subject(tid:int):
     finally:
         conn.close()
     return redirect(url_for('admin_tutors'))
-    
+   
+
+@app.post('/admin/tutors/<int:tid>/subjects/<int:subject_id>/remove')
+@require_high_admin
+def admin_tutor_remove_subject(tid: int, subject_id: int):
+
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Confirm tutor exists
+    cur.execute("""
+        SELECT id
+        FROM tutors
+        WHERE id=?
+        LIMIT 1
+    """, (tid,))
+
+    tutor = cur.fetchone()
+
+    if not tutor:
+        conn.close()
+        return page("Error", card_msg("Tutor not found."))
+
+    # Confirm subject exists
+    cur.execute("""
+        SELECT id
+        FROM subjects
+        WHERE id=?
+        LIMIT 1
+    """, (subject_id,))
+
+    subject = cur.fetchone()
+
+    if not subject:
+        conn.close()
+        return page("Error", card_msg("Subject not found."))
+
+    # Get all sessions linked to this tutor and subject.
+    cur.execute("""
+        SELECT id
+        FROM sessions
+        WHERE tutor_id=?
+          AND subject_id=?
+    """, (tid, subject_id))
+
+    session_ids = [row["id"] for row in cur.fetchall()]
+
+    if session_ids:
+        placeholders = ",".join("?" * len(session_ids))
+
+        # Delete attendance records linked to those sessions first.
+        cur.execute(f"""
+            DELETE FROM attendance
+            WHERE session_id IN ({placeholders})
+        """, session_ids)
+
+        # Delete attendance session summaries linked to those sessions.
+        cur.execute(f"""
+            DELETE FROM attendance_sessions
+            WHERE session_id IN ({placeholders})
+        """, session_ids)
+
+        # Delete the actual tutor sessions for that subject.
+        cur.execute(f"""
+            DELETE FROM sessions
+            WHERE id IN ({placeholders})
+        """, session_ids)
+
+    # Remove the tutor-subject assignment.
+    cur.execute("""
+        DELETE FROM tutor_subjects
+        WHERE tutor_id=?
+          AND subject_id=?
+    """, (tid, subject_id))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_tutors"))
+   
     
 @app.get('/admin/uploads-control')
 @require_high_admin
