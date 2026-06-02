@@ -36636,6 +36636,22 @@ def admin_applications():
         status_options += f"<option value='{st}' {selected}>{st}</option>"
 
     rows = ""
+    
+    return_params = {
+        "q": q,
+        "grade": grade_filter,
+        "subject": subject_filter,
+        "status": status_filter,
+        "page": page_num
+    }
+
+    return_params = {
+        k: v for k, v in return_params.items()
+        if v not in ["", None]
+    }
+
+    return_url = url_for("admin_applications") + "?" + urlencode(return_params)
+    encoded_return_url = quote_from_bytes(return_url.encode())
 
     for a in applications:
         try:
@@ -36660,7 +36676,8 @@ def admin_applications():
             <td><span class="chip">{escape(a['status'])}</span></td>
             <td>{a['created_at'][:16].replace('T',' ')}</td>
             <td style="white-space:nowrap">
-                <a class="btn mini" href="/admin/application/{a['id']}">
+                <a class="btn mini"
+                   href="/admin/application/{a['id']}?return_url={encoded_return_url}">
                     View
                 </a>
 
@@ -36669,6 +36686,11 @@ def admin_applications():
                       action="/admin/application/{a['id']}/delete"
                       onsubmit="return confirm('Delete this application?');"
                       style="display:inline">
+
+                    <input type="hidden"
+                           name="return_url"
+                           value="{escape(return_url)}">
+
                     <button class="btn mini danger">
                         Delete
                     </button>
@@ -36678,7 +36700,19 @@ def admin_applications():
         </tr>
         """
 
-    query_base = f"q={escape(q)}&grade={grade_filter}&subject={escape(subject_filter)}&status={status_filter}"
+    query_params = {
+        "q": q,
+        "grade": grade_filter,
+        "subject": subject_filter,
+        "status": status_filter
+    }
+
+    query_params = {
+        k: v for k, v in query_params.items()
+        if v not in ["", None]
+    }
+
+    query_base = urlencode(query_params)
 
     page_links = []
 
@@ -36780,6 +36814,13 @@ def admin_application_detail(app_id):
 
     r = require_admin()
     if r: return r
+    
+    return_url = request.args.get("return_url", "").strip()
+
+    if not return_url.startswith("/admin/applications"):
+        return_url = url_for("admin_applications")
+
+    encoded_return_url = quote_from_bytes(return_url.encode())
 
     conn = get_db()
     cur = conn.cursor()
@@ -36841,6 +36882,13 @@ def admin_application_detail(app_id):
     {admin_nav()}
 
     <section class="card">
+    
+        <div class="toolbar" style="margin-bottom:12px">
+            <a class="btn mini secondary" href="{escape(return_url)}">
+                Back to Applications
+            </a>
+        </div>
+        
         <h1>{escape(a['full_name'])}</h1>
         <div class="mini muted">Applied: {a['created_at'][:16].replace('T',' ')}</div>
 
@@ -36901,7 +36949,13 @@ def admin_application_detail(app_id):
         <div class="card soft" style="margin-top:12px;border-left:5px solid #f59e0b">
             <h2>Admin Review</h2>
 
-            <form method="post" action="/admin/application/{a['id']}/status" class="grid">
+            <form method="post"
+                  action="/admin/application/{a['id']}/status"
+                  class="grid">
+
+                <input type="hidden"
+                       name="return_url"
+                       value="{escape(return_url)}">
 
                 <div>
                     <label>Status</label>
@@ -36936,6 +36990,13 @@ def admin_application_update_status(app_id):
 
     status = request.form.get("status", "NEW").strip()
     admin_notes = request.form.get("admin_notes", "").strip()
+    
+    return_url = request.form.get("return_url", "").strip()
+
+    if not return_url.startswith("/admin/applications"):
+        return_url = url_for("admin_applications")
+
+    encoded_return_url = quote_from_bytes(return_url.encode())
 
     allowed_statuses = ["NEW", "SHORTLISTED", "INTERVIEWED", "ACCEPTED", "REJECTED"]
 
@@ -36956,7 +37017,10 @@ def admin_application_update_status(app_id):
     conn.commit()
     conn.close()
 
-    return redirect(url_for("admin_application_detail", app_id=app_id))
+    return redirect(
+        url_for("admin_application_detail", app_id=app_id)
+        + f"?return_url={encoded_return_url}"
+    )
     
 
 @app.get('/admin/application/<int:app_id>/download/<kind>')
@@ -37127,6 +37191,11 @@ def admin_application_delete(app_id):
 
     r = require_admin()
     if r: return r
+    
+    return_url = request.form.get("return_url", "").strip()
+
+    if not return_url.startswith("/admin/applications"):
+        return_url = url_for("admin_applications")
 
     if not is_high_admin():
         return page("Access Denied", card_msg("Only high admin can delete applications."))
@@ -37144,7 +37213,7 @@ def admin_application_delete(app_id):
 
     if not a:
         conn.close()
-        return redirect(url_for("admin_applications"))
+        return redirect(return_url)
 
     # Delete uploaded files from storage
     for file_path in [a["cv_file_path"], a["certificate_file_path"]]:
@@ -37159,7 +37228,7 @@ def admin_application_delete(app_id):
     conn.commit()
     conn.close()
 
-    return redirect(url_for("admin_applications"))
+    return redirect(return_url)
 
 
 #Admin management site
