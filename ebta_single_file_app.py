@@ -36893,7 +36893,6 @@ def admin_application_detail(app_id):
         <div class="mini muted">Applied: {a['created_at'][:16].replace('T',' ')}</div>
 
         <div class="toolbar" style="margin-top:12px">
-            <a class="btn mini secondary" href="/admin/applications">Back to Applications</a>
             {cv_btn}
             {cert_btn}
 
@@ -36902,6 +36901,11 @@ def admin_application_detail(app_id):
                   action="/admin/application/{a['id']}/delete"
                   onsubmit="return confirm('Are you sure you want to delete this entire application? This will also delete the uploaded CV/certificate files.');"
                   style="display:inline">
+
+                <input type="hidden"
+                       name="return_url"
+                       value="{escape(return_url)}">
+
                 <button class="btn mini danger">
                     Delete Application
                 </button>
@@ -51376,6 +51380,26 @@ def admission_discounts():
                 Delete locked
             </span>
             """
+            
+        mark_used_button = ""
+
+        if c["status"] == "ACTIVE" and int(c["used_count"] or 0) < int(c["max_uses"] or 1):
+            mark_used_button = f"""
+            <form method="post"
+                  action="{url_for('admission_discount_mark_used', coupon_id=c['id'])}"
+                  style="display:inline"
+                  onsubmit="return confirm('Mark this discount code as used? The student will no longer be able to use it.');">
+                <button class="btn mini success">
+                    Mark Used
+                </button>
+            </form>
+            """
+        else:
+            mark_used_button = """
+            <span class="mini muted">
+                Already used
+            </span>
+            """
 
         coupon_rows += f"""
         <tr>
@@ -51404,6 +51428,7 @@ def admission_discounts():
             <td>
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
                     {sms_button}
+                    {mark_used_button}
                     {delete_button}
                 </div>
             </td>
@@ -51894,6 +51919,55 @@ def admission_discount_sms_all():
         </section>
         """
     )
+
+
+@app.post('/admission/discounts/<int:coupon_id>/mark-used')
+def admission_discount_mark_used(coupon_id):
+
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, code, used_count, max_uses, status
+        FROM discount_coupons
+        WHERE id=?
+        LIMIT 1
+    """, (coupon_id,))
+
+    coupon = cur.fetchone()
+
+    if not coupon:
+        conn.close()
+        return page("Not Found", card_msg("Discount code not found."))
+
+    used_count = int(coupon["used_count"] or 0)
+    max_uses = int(coupon["max_uses"] or 1)
+
+    if coupon["status"] != "ACTIVE" or used_count >= max_uses:
+        conn.close()
+        return redirect(request.referrer or url_for("admission_discounts"))
+
+    # Force the code to be fully used, not just +1.
+    cur.execute("""
+        UPDATE discount_coupons
+        SET used_count=?,
+            status='USED',
+            used_at=?
+        WHERE id=?
+    """, (
+        max_uses,
+        now_utc_iso(),
+        coupon_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(request.referrer or url_for("admission_discounts"))
 
 
 @app.post('/admission/discounts/<int:coupon_id>/delete')
