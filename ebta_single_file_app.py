@@ -1868,6 +1868,14 @@ def set_setting(key, value):
     )
     conn.commit()
     conn.close()
+    
+    
+def enrollment_status_actions_locked():
+    """
+    When enabled, Normal Admin and Admission Coordinator cannot approve or lapse enrollments.
+    High Admin can still approve, lapse and set pending.
+    """
+    return get_setting("enrollment_status_actions_locked", "0") == "1"
 
 def grade_label(g): return g.replace("G","Grade ")
 
@@ -19521,6 +19529,7 @@ def admin_nav():
                     ("Duty Admins", "admin_duty_admins", "/admin/duty-admins"),
                     ("Admission Coordinators", "admin_admission_coordinators", "/admin/admission-coordinators"),
                     ("Discount Control", "admin_discounts_control", "/admin/discounts-control"),
+                    ("Enrollment Approval Control", "admin_enrollment_approval_control", "/admin/enrollment-approval-control"),
                 ],
                 False
             ),
@@ -19915,40 +19924,57 @@ def admin_enrollments():
             </div>
             """
 
-        actions = f"""
+        approval_locked = enrollment_status_actions_locked()
 
-        <form method='post'
-              action='{url_for('enrollment_action', id=r['id'], action='approve')}'
-              style='display:inline'>
-            <input type="hidden" name="page" value="{page_num}">
-            <button class='btn success mini'>Approve Only</button>
-        </form>
+        if approval_locked and not is_high_admin():
+            actions = f"""
+            <div class="mini muted" style="max-width:220px">
+                Approvals and rejections are locked by High Admin.
+            </div>
 
-        <form method='post'
-              action='{url_for('enrollment_action', id=r['id'], action='approve_sms')}'
-              style='display:inline'
-              onsubmit="return confirm('Approve this enrollment and send SMS to the learner?');">
-            <input type="hidden" name="page" value="{page_num}">
-            <button class='btn warn mini'>Approve + SMS</button>
-        </form>
+            <form method='post'
+                  action='{url_for('enrollment_action', id=r['id'], action='sms')}'
+                  style='display:inline'
+                  onsubmit="return confirm('Send approval/login SMS to this learner without changing status?');">
+                <input type="hidden" name="page" value="{page_num}">
+                <button class='btn secondary mini'>SMS Only</button>
+            </form>
+            """
+        else:
+            actions = f"""
 
-        <form method='post'
-              action='{url_for('enrollment_action', id=r['id'], action='sms')}'
-              style='display:inline'
-              onsubmit="return confirm('Send approval/login SMS to this learner without changing status?');">
-            <input type="hidden" name="page" value="{page_num}">
-            <button class='btn secondary mini'>SMS Only</button>
-        </form>
+            <form method='post'
+                  action='{url_for('enrollment_action', id=r['id'], action='approve')}'
+                  style='display:inline'>
+                <input type="hidden" name="page" value="{page_num}">
+                <button class='btn success mini'>Approve Only</button>
+            </form>
 
-        <form method='post'
-              action='{url_for('enrollment_action', id=r['id'], action='lapse')}'
-              style='display:inline'
-              onsubmit="return confirm('Mark this enrollment as lapsed?');">
-            <input type="hidden" name="page" value="{page_num}">
-            <button class='btn danger mini'>Lapse</button>
-        </form>
+            <form method='post'
+                  action='{url_for('enrollment_action', id=r['id'], action='approve_sms')}'
+                  style='display:inline'
+                  onsubmit="return confirm('Approve this enrollment and send SMS to the learner?');">
+                <input type="hidden" name="page" value="{page_num}">
+                <button class='btn warn mini'>Approve + SMS</button>
+            </form>
 
-        """
+            <form method='post'
+                  action='{url_for('enrollment_action', id=r['id'], action='sms')}'
+                  style='display:inline'
+                  onsubmit="return confirm('Send approval/login SMS to this learner without changing status?');">
+                <input type="hidden" name="page" value="{page_num}">
+                <button class='btn secondary mini'>SMS Only</button>
+            </form>
+
+            <form method='post'
+                  action='{url_for('enrollment_action', id=r['id'], action='lapse')}'
+                  style='display:inline'
+                  onsubmit="return confirm('Mark this enrollment as lapsed?');">
+                <input type="hidden" name="page" value="{page_num}">
+                <button class='btn danger mini'>Lapse</button>
+            </form>
+
+            """
         
         
         if is_high_admin():
@@ -20161,6 +20187,17 @@ def enrollment_action(id: int, action: str):
 
     if action not in allowed_actions:
         return page("Invalid Action", card_msg("Invalid enrollment action."))
+        
+    status_changing_actions = ["approve", "approve_sms", "lapse"]
+
+    if action in status_changing_actions and enrollment_status_actions_locked() and not is_high_admin():
+        return page(
+            "Approvals Locked",
+            card_msg(
+                "Enrollment approvals and rejections are currently locked by High Admin. "
+                "Only High Admin can approve or lapse enrollments at the moment."
+            )
+        )
 
     conn = get_db()
     cur = conn.cursor()
@@ -48509,6 +48546,17 @@ def admission_enrollment_action(id, action):
 
     if action not in allowed_actions:
         return page("Invalid Action", card_msg("Invalid enrollment action."))
+        
+    status_changing_actions = ["approve", "approve_sms", "lapse"]
+
+    if action in status_changing_actions and enrollment_status_actions_locked():
+        return page(
+            "Approvals Locked",
+            card_msg(
+                "Enrollment approvals and rejections are currently locked by High Admin. "
+                "Please contact High Admin if this enrollment needs to be approved or lapsed."
+            )
+        )
 
     conn = get_db()
     cur = conn.cursor()
@@ -48791,28 +48839,43 @@ def admission_enrollments():
         elif row["status"] == "LAPSED":
             status_class = "lapsed"
 
-        actions = f"""
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
+        approval_locked = enrollment_status_actions_locked()
 
-            <form method="post" action="/admission/enrollment/{row['id']}/approve" style="display:inline">
-                <button class="btn success mini">Approve Only</button>
-            </form>
+        if approval_locked:
+            actions = f"""
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <span class="mini muted">
+                    Approvals/rejections locked by High Admin
+                </span>
 
-            <form method="post" action="/admission/enrollment/{row['id']}/approve_sms" style="display:inline">
-                <button class="btn warn mini">Approve + SMS</button>
-            </form>
+                <form method="post" action="/admission/enrollment/{row['id']}/sms" style="display:inline">
+                    <button class="btn secondary mini">SMS Only</button>
+                </form>
+            </div>
+            """
+        else:
+            actions = f"""
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
 
-            <form method="post" action="/admission/enrollment/{row['id']}/sms" style="display:inline">
-                <button class="btn secondary mini">SMS Only</button>
-            </form>
+                <form method="post" action="/admission/enrollment/{row['id']}/approve" style="display:inline">
+                    <button class="btn success mini">Approve Only</button>
+                </form>
 
-            <form method="post" action="/admission/enrollment/{row['id']}/lapse" style="display:inline"
-                  onsubmit="return confirm('Lapse this enrollment?');">
-                <button class="btn danger mini">Lapse</button>
-            </form>
+                <form method="post" action="/admission/enrollment/{row['id']}/approve_sms" style="display:inline">
+                    <button class="btn warn mini">Approve + SMS</button>
+                </form>
 
-        </div>
-        """
+                <form method="post" action="/admission/enrollment/{row['id']}/sms" style="display:inline">
+                    <button class="btn secondary mini">SMS Only</button>
+                </form>
+
+                <form method="post" action="/admission/enrollment/{row['id']}/lapse" style="display:inline"
+                      onsubmit="return confirm('Lapse this enrollment?');">
+                    <button class="btn danger mini">Lapse</button>
+                </form>
+
+            </div>
+            """
 
         trs += f"""
         <tr>
@@ -69410,6 +69473,79 @@ def tutor_save_assessment_marks(attempt_id):
     conn.close()
 
     return redirect(url_for("tutor_assessment_submissions", assessment_id=assessment_id))
+
+
+
+@app.get('/admin/enrollment-approval-control')
+@require_high_admin
+def admin_enrollment_approval_control():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can control enrollment approval settings."))
+
+    locked = get_setting("enrollment_status_actions_locked", "0")
+
+    status_html = (
+        "<span class='chip lapsed'>Approvals/Rejections Locked</span>"
+        if locked == "1"
+        else "<span class='chip active'>Approvals/Rejections Unlocked</span>"
+    )
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Enrollment Approval Control</h1>
+
+        <p class="muted">
+            Control whether Normal Admins and Admission Coordinators can approve or lapse student enrollments.
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20">
+            <h2>Approval and Rejection Lock</h2>
+
+            <p>{status_html}</p>
+
+            <p class="muted">
+                When locked, Normal Admins and Admission Coordinators will not be able to approve, approve with SMS,
+                or lapse enrollments. High Admin can still perform these actions.
+            </p>
+
+            <form method="post"
+                  action="{url_for('admin_enrollment_approval_toggle')}"
+                  onsubmit="return confirm('Update enrollment approval lock setting?');">
+                <button class="btn {'success' if locked == '1' else 'danger'}">
+                    {'Unlock Approvals/Rejections' if locked == '1' else 'Lock Approvals/Rejections'}
+                </button>
+            </form>
+        </div>
+    </section>
+    """
+
+    return page("Enrollment Approval Control", body)
+
+
+@app.post('/admin/enrollment-approval-control/toggle')
+@require_high_admin
+def admin_enrollment_approval_toggle():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can update enrollment approval settings."))
+
+    current = get_setting("enrollment_status_actions_locked", "0")
+    new_value = "0" if current == "1" else "1"
+
+    set_setting("enrollment_status_actions_locked", new_value)
+
+    return redirect(url_for("admin_enrollment_approval_control"))
 
 
 # --- Export remove list ---
