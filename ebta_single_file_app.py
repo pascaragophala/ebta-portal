@@ -374,6 +374,42 @@ def init_db():
     """)
     
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS tutor_manager_ratings(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        manager_id INTEGER NOT NULL,
+        tutor_id INTEGER NOT NULL,
+        month TEXT NOT NULL,
+
+        rating INTEGER NOT NULL,
+        comment TEXT,
+
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        UNIQUE(manager_id, tutor_id, month),
+
+        FOREIGN KEY(manager_id) REFERENCES tutor_managers(id) ON DELETE CASCADE,
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tutor_manager_ratings_manager
+        ON tutor_manager_ratings(manager_id)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tutor_manager_ratings_tutor
+        ON tutor_manager_ratings(tutor_id)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tutor_manager_ratings_month
+        ON tutor_manager_ratings(month)
+    """)
+    
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS academic_quality_managers(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         full_name TEXT NOT NULL,
@@ -1876,6 +1912,64 @@ def enrollment_status_actions_locked():
     High Admin can still approve, lapse and set pending.
     """
     return get_setting("enrollment_status_actions_locked", "0") == "1"
+    
+    
+def tutor_manager_rating_summary(manager_id, month=None):
+    """
+    Returns overall tutor feedback summary for a tutor manager.
+    If month is provided, it limits the summary to that month.
+    """
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    params = [manager_id]
+    where_month = ""
+
+    if month:
+        where_month = "AND month=?"
+        params.append(month)
+
+    cur.execute(f"""
+        SELECT
+            COUNT(*) AS rating_count,
+            AVG(rating) AS avg_rating
+        FROM tutor_manager_ratings
+        WHERE manager_id=?
+        {where_month}
+    """, params)
+
+    row = cur.fetchone()
+
+    conn.close()
+
+    count = int(row["rating_count"] or 0) if row else 0
+    avg_rating = row["avg_rating"] if row and row["avg_rating"] is not None else None
+
+    return {
+        "rating_count": count,
+        "avg_rating": round(float(avg_rating), 1) if avg_rating is not None else None
+    }
+
+
+def tutor_manager_rating_chip(avg_rating):
+    """
+    Small display label for ratings.
+    """
+
+    if avg_rating is None:
+        return "<span class='chip'>Not rated yet</span>"
+
+    rating = float(avg_rating)
+
+    if rating >= 4:
+        return f"<span class='chip active'>{rating}/5 Excellent</span>"
+
+    if rating >= 3:
+        return f"<span class='chip pending'>{rating}/5 Good</span>"
+
+    return f"<span class='chip danger'>{rating}/5 Needs Attention</span>"
+
 
 def grade_label(g): return g.replace("G","Grade ")
 
@@ -14329,6 +14423,105 @@ def tutor_home():
             </button>
         </form>
         """
+        
+    # ================= TUTOR MANAGER RATING SECTION =================
+    cur.execute("""
+        SELECT
+            tm.id AS manager_id,
+            tm.full_name AS manager_name,
+            tm.phone AS manager_phone,
+            tmr.rating,
+            tmr.comment,
+            tmr.updated_at
+        FROM manager_tutors mt
+        JOIN tutor_managers tm ON tm.id = mt.manager_id
+        LEFT JOIN tutor_manager_ratings tmr
+            ON tmr.manager_id = tm.id
+           AND tmr.tutor_id = mt.tutor_id
+           AND tmr.month = ?
+        WHERE mt.tutor_id = ?
+        ORDER BY tm.full_name
+    """, (month, tid))
+
+    assigned_managers = cur.fetchall()
+
+    manager_rating_cards = ""
+
+    for manager in assigned_managers:
+
+        rating_options = """
+            <option value="">Select rating</option>
+        """
+
+        for n in range(1, 6):
+            selected = "selected" if manager["rating"] == n else ""
+            rating_options += f"""
+            <option value="{n}" {selected}>{n} / 5</option>
+            """
+
+        last_updated = ""
+
+        if manager["updated_at"]:
+            last_updated = f"""
+            <div class="mini muted" style="margin-top:6px">
+                Last updated: {escape((manager["updated_at"] or "")[:16].replace("T", " "))}
+            </div>
+            """
+
+        manager_rating_cards += f"""
+        <div class="card soft" style="border-left:5px solid #7c3aed;margin-bottom:10px">
+
+            <h3 style="margin-top:0">
+                {escape(manager["manager_name"] or "Tutor Manager")}
+            </h3>
+
+            <div class="mini muted" style="margin-bottom:10px">
+                Rate your tutor manager for {pretty_month_label(month)}.
+                Your rating helps EBTA improve academic support.
+            </div>
+
+            <form method="post" action="{url_for('tutor_manager_rating_save')}" class="grid">
+
+                <input type="hidden" name="manager_id" value="{manager["manager_id"]}">
+                <input type="hidden" name="month" value="{escape(month)}">
+
+                <div>
+                    <label>Rating</label>
+                    <select name="rating" required>
+                        {rating_options}
+                    </select>
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <label>Comment Optional</label>
+                    <textarea name="comment"
+                              placeholder="Share feedback about communication, support, follow-ups, professionalism, or availability.">{escape(manager["comment"] or "")}</textarea>
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <button class="btn success mini">
+                        Save Rating
+                    </button>
+                </div>
+
+                {last_updated}
+
+            </form>
+        </div>
+        """
+
+    tutor_manager_rating_section = f"""
+    <div class="card">
+        <h2>Rate Your Tutor Manager</h2>
+
+        <p class="muted">
+            Your feedback is submitted to EBTA. Tutor managers will only see anonymous comments and overall ratings.
+        </p>
+
+        {manager_rating_cards or "<div class='empty'>No tutor manager assigned to you yet.</div>"}
+    </div>
+    """    
+        
 
     # Assigned subjects
     cur.execute("""SELECT s.id AS subject_id, s.name AS subject_name, s.grade
@@ -15671,7 +15864,9 @@ def tutor_home():
         </div>
 
     </div>
-
+    
+    {tutor_manager_rating_section}
+    
     {tutor_referral_section}
     
     <div class='card'><h2>WhatsApp Group Links</h2>{groups_html}</div>
@@ -15701,6 +15896,81 @@ def tutor_home():
     </section>
     """
     return page("Tutor Portal", body)
+  
+  
+@app.post('/tutor/manager-rating/save')
+def tutor_manager_rating_save():
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    manager_id = request.form.get("manager_id", "").strip()
+    month = request.form.get("month", "").strip() or get_active_month("tutor")
+    rating_raw = request.form.get("rating", "").strip()
+    comment = request.form.get("comment", "").strip()
+
+    try:
+        manager_id = int(manager_id)
+        rating = int(rating_raw)
+    except Exception:
+        return page("Invalid Rating", card_msg("Please select a valid rating."))
+
+    if rating < 1 or rating > 5:
+        return page("Invalid Rating", card_msg("Rating must be between 1 and 5."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Make sure this tutor is actually assigned to this tutor manager.
+    cur.execute("""
+        SELECT 1
+        FROM manager_tutors
+        WHERE manager_id=?
+          AND tutor_id=?
+        LIMIT 1
+    """, (manager_id, tid))
+
+    assigned = cur.fetchone()
+
+    if not assigned:
+        conn.close()
+        return page("Access Denied", card_msg("You can only rate your assigned tutor manager."))
+
+    now = now_utc_iso()
+
+    cur.execute("""
+        INSERT INTO tutor_manager_ratings(
+            manager_id,
+            tutor_id,
+            month,
+            rating,
+            comment,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(manager_id, tutor_id, month)
+        DO UPDATE SET
+            rating=excluded.rating,
+            comment=excluded.comment,
+            updated_at=excluded.updated_at
+    """, (
+        manager_id,
+        tid,
+        month,
+        rating,
+        comment,
+        now,
+        now
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("tutor_home"))  
   
 
 @app.get('/tutor/profile')
@@ -28651,6 +28921,93 @@ def manager_dashboard():
 
     conn = get_db()
     cur = conn.cursor()
+    
+    manager_id = session["manager_id"]
+
+    cur.execute("""
+        SELECT
+            COUNT(*) AS rating_count,
+            AVG(rating) AS avg_rating
+        FROM tutor_manager_ratings
+        WHERE manager_id=?
+          AND month=?
+    """, (manager_id, month))
+
+    manager_rating_row = cur.fetchone()
+
+    manager_rating_count = int(manager_rating_row["rating_count"] or 0) if manager_rating_row else 0
+    manager_avg_rating = manager_rating_row["avg_rating"] if manager_rating_row and manager_rating_row["avg_rating"] is not None else None
+    manager_avg_rating_label = f"{round(float(manager_avg_rating), 1)}/5" if manager_avg_rating is not None else "Not rated yet"
+
+    cur.execute("""
+        SELECT
+            rating,
+            comment,
+            updated_at
+        FROM tutor_manager_ratings
+        WHERE manager_id=?
+          AND month=?
+          AND TRIM(IFNULL(comment, '')) != ''
+        ORDER BY updated_at DESC
+        LIMIT 20
+    """, (manager_id, month))
+
+    anonymous_comments = cur.fetchall()
+
+    anonymous_comment_rows = ""
+
+    for c in anonymous_comments:
+        anonymous_comment_rows += f"""
+        <tr>
+            <td>{c["rating"]}/5</td>
+            <td>{escape(c["comment"] or "")}</td>
+            <td>{escape((c["updated_at"] or "")[:16].replace("T", " "))}</td>
+        </tr>
+        """
+
+    manager_rating_section = f"""
+    <details class="tm-accordion" open>
+        <summary>
+            <span>Your Anonymous Tutor Feedback</span>
+        </summary>
+
+        <div class="tm-accordion-body">
+
+            <div class="tm-top-stats">
+                <div class="tm-stat">
+                    <div class="k">{manager_avg_rating_label}</div>
+                    <div class="t">Average Rating</div>
+                </div>
+
+                <div class="tm-stat">
+                    <div class="k">{manager_rating_count}</div>
+                    <div class="t">Tutor Ratings</div>
+                </div>
+            </div>
+
+            <p class="mini muted">
+                These comments are anonymous. You can see the feedback, but not which tutor submitted it.
+            </p>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Rating</th>
+                            <th>Anonymous Comment</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {anonymous_comment_rows or "<tr><td colspan='3'>No anonymous tutor comments yet.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+
+        </div>
+    </details>
+    """
 
     cur.execute("""
         SELECT t.id, t.full_name
@@ -28875,6 +29232,8 @@ def manager_dashboard():
             </div>
 
         </div>
+        
+        {manager_rating_section}
 
         <details class="tm-accordion" open>
             <summary>
@@ -58136,6 +58495,7 @@ def cao_nav():
                 cao_link("Tutors", "cao_tutors", "cao_tutors_enabled", icon="🧑‍🏫"),
                 cao_link("Tutor Managers", "cao_tutor_managers", "cao_tutor_managers_enabled", icon="📋"),
                 cao_link("Manager Work Progress", "cao_tutor_manager_performance", "cao_tutor_managers_enabled", icon="📈"),
+                cao_link("Manager Ratings", "cao_tutor_manager_ratings", "cao_tutor_managers_enabled", icon="⭐"),
                 cao_link("AQM Team", "cao_aqm_team", "cao_aqm_enabled", icon="✅"),
             ]
         ),
@@ -60000,6 +60360,215 @@ def cao_tutor_manager_performance():
     """
 
     return page("Tutor Manager Work Progress", body)    
+    
+    
+@app.get('/cao/tutor-manager-ratings')
+def cao_tutor_manager_ratings():
+
+    r = require_cao_permission("cao_tutor_managers_enabled", "tutor manager ratings")
+    if r:
+        return r
+
+    month = request.args.get("month", "").strip() or cao_selected_month()
+    q = request.args.get("q", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    params = [month]
+    where = ["tmr.month=?"]
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                tm.full_name LIKE ?
+                OR t.full_name LIKE ?
+                OR t.phone LIKE ?
+                OR tm.phone LIKE ?
+                OR tmr.comment LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search]
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT
+            tmr.id,
+            tmr.month,
+            tmr.rating,
+            tmr.comment,
+            tmr.created_at,
+            tmr.updated_at,
+
+            tm.id AS manager_id,
+            tm.full_name AS manager_name,
+            tm.phone AS manager_phone,
+
+            t.id AS tutor_id,
+            t.full_name AS tutor_name,
+            t.phone AS tutor_phone
+        FROM tutor_manager_ratings tmr
+        JOIN tutor_managers tm ON tm.id = tmr.manager_id
+        JOIN tutors t ON t.id = tmr.tutor_id
+        {where_sql}
+        ORDER BY tm.full_name, t.full_name
+    """, params)
+
+    ratings = cur.fetchall()
+
+    cur.execute("""
+        SELECT
+            tm.id AS manager_id,
+            tm.full_name AS manager_name,
+            tm.phone AS manager_phone,
+            COUNT(tmr.id) AS rating_count,
+            AVG(tmr.rating) AS avg_rating
+        FROM tutor_managers tm
+        LEFT JOIN tutor_manager_ratings tmr
+            ON tmr.manager_id = tm.id
+           AND tmr.month = ?
+        GROUP BY tm.id
+        ORDER BY tm.full_name
+    """, (month,))
+
+    manager_summaries = cur.fetchall()
+
+    conn.close()
+
+    summary_rows = ""
+
+    total_rating_sum = 0
+    total_rating_count = 0
+
+    for s in manager_summaries:
+        avg_rating = s["avg_rating"] if s["avg_rating"] is not None else None
+        rating_count = int(s["rating_count"] or 0)
+
+        if avg_rating is not None:
+            total_rating_sum += float(avg_rating) * rating_count
+            total_rating_count += rating_count
+
+        avg_html = tutor_manager_rating_chip(avg_rating)
+
+        summary_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(s["manager_name"] or "—")}</strong>
+                <div class="mini muted">{escape(s["manager_phone"] or "—")}</div>
+            </td>
+
+            <td>{avg_html}</td>
+
+            <td>{rating_count}</td>
+        </tr>
+        """
+
+    overall_avg = round(total_rating_sum / total_rating_count, 1) if total_rating_count else None
+    overall_avg_label = f"{overall_avg}/5" if overall_avg is not None else "Not rated yet"
+
+    detail_rows = ""
+
+    for r0 in ratings:
+        detail_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(r0["manager_name"] or "—")}</strong>
+                <div class="mini muted">{escape(r0["manager_phone"] or "—")}</div>
+            </td>
+
+            <td>
+                <strong>{escape(r0["tutor_name"] or "—")}</strong>
+                <div class="mini muted">{escape(r0["tutor_phone"] or "—")}</div>
+            </td>
+
+            <td>{r0["rating"]}/5</td>
+
+            <td>{escape(r0["comment"] or "—")}</td>
+
+            <td>{escape((r0["updated_at"] or r0["created_at"] or "")[:16].replace("T", " "))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+
+        <h1>Tutor Manager Ratings</h1>
+
+        <p class="muted">
+            CAO can view the full tutor manager rating records, including which tutor submitted each rating.
+            Tutor managers only see anonymous feedback.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search manager, tutor, phone or comment">
+
+            <button class="btn mini">Search</button>
+
+            <a class="btn mini secondary" href="{url_for('cao_tutor_manager_ratings')}">
+                Clear
+            </a>
+        </form>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Overall Manager Rating", overall_avg_label)}
+            {stat("Total Ratings", total_rating_count)}
+            {stat("Managers Listed", len(manager_summaries))}
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Overall Rating Per Tutor Manager</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tutor Manager</th>
+                            <th>Average Rating</th>
+                            <th>Number of Ratings</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {summary_rows or "<tr><td colspan='3'>No tutor manager rating summary found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Detailed Tutor Manager Ratings</h2>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tutor Manager</th>
+                            <th>Rated By Tutor</th>
+                            <th>Rating</th>
+                            <th>Comment</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {detail_rows or "<tr><td colspan='5'>No detailed ratings found for this month.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </section>
+    """
+
+    return page("Tutor Manager Ratings", body)    
     
     
 @app.get('/cao/tutor-manager-performance/export')
