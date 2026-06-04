@@ -454,6 +454,66 @@ def init_db():
     
     
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS aqm_workspace_records(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        aqm_id INTEGER NOT NULL,
+        student_id INTEGER,
+
+        record_month TEXT,
+        record_date TEXT,
+
+        category TEXT,
+        title TEXT,
+        status TEXT DEFAULT 'OPEN',
+        priority TEXT DEFAULT 'MEDIUM',
+
+        subject_name TEXT,
+        term TEXT,
+        mark TEXT,
+
+        issue TEXT,
+        action_taken TEXT,
+        followup_date TEXT,
+
+        notes TEXT,
+
+        custom_1 TEXT,
+        custom_2 TEXT,
+        custom_3 TEXT,
+        custom_4 TEXT,
+        custom_5 TEXT,
+
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        FOREIGN KEY(aqm_id) REFERENCES academic_quality_managers(id) ON DELETE CASCADE,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE SET NULL
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_aqm_workspace_aqm
+        ON aqm_workspace_records(aqm_id)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_aqm_workspace_student
+        ON aqm_workspace_records(student_id)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_aqm_workspace_month
+        ON aqm_workspace_records(record_month)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_aqm_workspace_status
+        ON aqm_workspace_records(status)
+    """)
+    
+    
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS tutor_applications(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
 
@@ -31331,6 +31391,7 @@ def aqm_nav():
     return """
     <div class="toolbar">
         <a class="btn mini" href="/aqm/dashboard">Dashboard</a>
+        <a class="btn mini" href="/aqm/workspace">Workspace</a>
         <a class="btn mini" href="/aqm/learners">Learner Performance</a>
         <a class="btn mini" href="/aqm/reports">Student Reports</a>
         <a class="btn mini" href="/aqm/manual-marks">Manual Marks</a>
@@ -34194,6 +34255,938 @@ def aqm_manual_marks_save_student():
     ))
     
     
+ @app.get('/aqm/workspace')
+def aqm_workspace():
+
+    r = require_aqm()
+    if r:
+        return r
+
+    aqm_id = is_academic_quality_manager()
+
+    month = request.args.get("month", "").strip() or get_setting("current_month")
+    q = request.args.get("q", "").strip()
+    status_filter = request.args.get("status", "").strip()
+    category_filter = request.args.get("category", "").strip()
+    student_id = request.args.get("student_id", "").strip()
+    edit_id = request.args.get("edit_id", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # ================= STUDENT DROPDOWN =================
+
+    cur.execute("""
+        SELECT
+            id,
+            full_name,
+            phone_whatsapp,
+            grade,
+            school
+        FROM students
+        ORDER BY full_name
+    """)
+
+    students = cur.fetchall()
+
+    student_options = """
+        <option value="">Select student optional</option>
+    """
+
+    for st in students:
+        selected = "selected" if str(st["id"]) == str(student_id) else ""
+        student_options += f"""
+        <option value="{st['id']}" {selected}>
+            {escape(st['full_name'])} | {escape(st['grade'] or '')} | {escape(st['phone_whatsapp'] or '')}
+        </option>
+        """
+
+    # ================= SELECTED STUDENT INFO =================
+
+    selected_student_card = ""
+
+    if student_id:
+        cur.execute("""
+            SELECT
+                id,
+                full_name,
+                phone_whatsapp,
+                guardian_name,
+                guardian_phone,
+                email,
+                grade,
+                province,
+                school
+            FROM students
+            WHERE id=?
+            LIMIT 1
+        """, (student_id,))
+
+        st = cur.fetchone()
+
+        if st:
+            cur.execute("""
+                SELECT
+                    sub.name AS subject_name,
+                    sub.grade,
+                    e.month,
+                    e.status
+                FROM enrollments e
+                JOIN subjects sub ON sub.id = e.subject_id
+                WHERE e.student_id=?
+                ORDER BY e.month DESC, sub.grade, sub.name
+                LIMIT 12
+            """, (student_id,))
+
+            subjects = cur.fetchall()
+
+            subjects_html = ""
+
+            for s in subjects:
+                subjects_html += f"""
+                <span class="chip">
+                    {escape(s['subject_name'])} ({escape(s['grade'])}) - {escape(s['month'])} - {escape(s['status'])}
+                </span>
+                """
+
+            selected_student_card = f"""
+            <div class="card soft" style="border-left:5px solid #2563eb;margin-bottom:14px">
+                <h2>Selected Student Information</h2>
+
+                <div class="stats">
+                    {stat("Student", escape(st["full_name"] or "—"))}
+                    {stat("Grade", escape(grade_label(st["grade"] or "")))}
+                    {stat("WhatsApp", escape(st["phone_whatsapp"] or "—"))}
+                    {stat("School", escape(st["school"] or "—"))}
+                    {stat("Province", escape(st["province"] or "—"))}
+                    {stat("Guardian", escape(st["guardian_name"] or "—"))}
+                </div>
+
+                <div style="margin-top:12px">
+                    <strong>Recent Enrollments:</strong>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+                        {subjects_html or "<span class='mini muted'>No enrollment records found.</span>"}
+                    </div>
+                </div>
+            </div>
+            """
+
+    # ================= EDIT RECORD =================
+
+    edit_record = None
+
+    if edit_id:
+        cur.execute("""
+            SELECT *
+            FROM aqm_workspace_records
+            WHERE id=?
+              AND aqm_id=?
+            LIMIT 1
+        """, (edit_id, aqm_id))
+
+        edit_record = cur.fetchone()
+
+    def field_value(name, default=""):
+        if edit_record:
+            return escape(edit_record[name] or "")
+        return escape(default)
+
+    current_student_value = ""
+    if edit_record and edit_record["student_id"]:
+        current_student_value = str(edit_record["student_id"])
+    elif student_id:
+        current_student_value = str(student_id)
+
+    # rebuild dropdown selection for edit mode
+    student_options_form = """
+        <option value="">Select student optional</option>
+    """
+
+    for st in students:
+        selected = "selected" if str(st["id"]) == current_student_value else ""
+        student_options_form += f"""
+        <option value="{st['id']}" {selected}>
+            {escape(st['full_name'])} | {escape(st['grade'] or '')} | {escape(st['phone_whatsapp'] or '')}
+        </option>
+        """
+
+    # ================= FILTER RECORDS =================
+
+    where = ["awr.aqm_id=?"]
+    params = [aqm_id]
+
+    if month:
+        where.append("IFNULL(awr.record_month,'')=?")
+        params.append(month)
+
+    if status_filter:
+        where.append("awr.status=?")
+        params.append(status_filter)
+
+    if category_filter:
+        where.append("awr.category=?")
+        params.append(category_filter)
+
+    if student_id:
+        where.append("awr.student_id=?")
+        params.append(student_id)
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                st.full_name LIKE ?
+                OR st.phone_whatsapp LIKE ?
+                OR awr.title LIKE ?
+                OR awr.category LIKE ?
+                OR awr.subject_name LIKE ?
+                OR awr.issue LIKE ?
+                OR awr.action_taken LIKE ?
+                OR awr.notes LIKE ?
+                OR awr.custom_1 LIKE ?
+                OR awr.custom_2 LIKE ?
+                OR awr.custom_3 LIKE ?
+                OR awr.custom_4 LIKE ?
+                OR awr.custom_5 LIKE ?
+            )
+        """)
+        params += [search] * 13
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT
+            awr.*,
+            st.full_name AS student_name,
+            st.phone_whatsapp,
+            st.grade,
+            st.school
+        FROM aqm_workspace_records awr
+        LEFT JOIN students st ON st.id = awr.student_id
+        {where_sql}
+        ORDER BY awr.record_date DESC, awr.id DESC
+    """, params)
+
+    records = cur.fetchall()
+
+    conn.close()
+
+    # ================= TABLE ROWS =================
+
+    rows = ""
+
+    for rec in records:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(rec["student_name"] or "General Record")}</strong>
+                <div class="mini muted">
+                    {escape(rec["grade"] or "—")} · {escape(rec["phone_whatsapp"] or "—")}
+                </div>
+            </td>
+
+            <td>{escape(rec["record_date"] or "—")}</td>
+            <td>{escape(rec["category"] or "—")}</td>
+            <td>{escape(rec["title"] or "—")}</td>
+            <td><span class="chip">{escape(rec["status"] or "OPEN")}</span></td>
+            <td>{escape(rec["priority"] or "MEDIUM")}</td>
+            <td>{escape(rec["subject_name"] or "—")}</td>
+            <td>{escape(rec["mark"] or "—")}</td>
+            <td>{escape(rec["issue"] or "—")}</td>
+            <td>{escape(rec["action_taken"] or "—")}</td>
+            <td>{escape(rec["followup_date"] or "—")}</td>
+            <td>{escape(rec["notes"] or "—")}</td>
+
+            <td>
+                <a class="btn mini secondary"
+                   href="/aqm/workspace?month={escape(month)}&student_id={rec['student_id'] or ''}&edit_id={rec['id']}">
+                    Edit
+                </a>
+
+                <form method="post"
+                      action="/aqm/workspace/{rec['id']}/delete"
+                      style="display:inline"
+                      onsubmit="return confirm('Delete this AQM workspace record?');">
+                    <button class="btn mini danger">
+                        Delete
+                    </button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    record_id_input = ""
+    form_title = "Add Workspace Record"
+
+    if edit_record:
+        record_id_input = f"""
+        <input type="hidden" name="record_id" value="{edit_record['id']}">
+        """
+        form_title = "Edit Workspace Record"
+
+    body = f"""
+    {aqm_nav()}
+
+    <section class="card">
+        <h1>AQM Workspace</h1>
+
+        <p class="muted">
+            Capture academic notes, learner risks, interventions, marks, follow-ups or any custom information.
+            This section works like a flexible spreadsheet for the Academic Quality Manager.
+        </p>
+
+        <form method="get" class="toolbar" style="margin-bottom:14px">
+            <input type="month" name="month" value="{escape(month)}">
+
+            <select name="student_id" onchange="this.form.submit()">
+                {student_options}
+            </select>
+
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search workspace records">
+
+            <select name="status">
+                <option value="">All Statuses</option>
+                <option value="OPEN" {'selected' if status_filter == 'OPEN' else ''}>OPEN</option>
+                <option value="IN_PROGRESS" {'selected' if status_filter == 'IN_PROGRESS' else ''}>IN PROGRESS</option>
+                <option value="RESOLVED" {'selected' if status_filter == 'RESOLVED' else ''}>RESOLVED</option>
+                <option value="CLOSED" {'selected' if status_filter == 'CLOSED' else ''}>CLOSED</option>
+            </select>
+
+            <select name="category">
+                <option value="">All Categories</option>
+                <option value="Academic Progress" {'selected' if category_filter == 'Academic Progress' else ''}>Academic Progress</option>
+                <option value="Attendance" {'selected' if category_filter == 'Attendance' else ''}>Attendance</option>
+                <option value="Assessment" {'selected' if category_filter == 'Assessment' else ''}>Assessment</option>
+                <option value="Report Review" {'selected' if category_filter == 'Report Review' else ''}>Report Review</option>
+                <option value="Parent Follow-Up" {'selected' if category_filter == 'Parent Follow-Up' else ''}>Parent Follow-Up</option>
+                <option value="Tutor Concern" {'selected' if category_filter == 'Tutor Concern' else ''}>Tutor Concern</option>
+                <option value="Other" {'selected' if category_filter == 'Other' else ''}>Other</option>
+            </select>
+
+            <button class="btn mini">Filter</button>
+
+            <a class="btn mini secondary" href="/aqm/workspace">
+                Clear
+            </a>
+
+            <a class="btn mini success"
+               href="/aqm/workspace/export?month={escape(month)}&student_id={escape(student_id)}&q={quote_from_bytes(q.encode())}&status={quote_from_bytes(status_filter.encode())}&category={quote_from_bytes(category_filter.encode())}">
+                Export Excel
+            </a>
+        </form>
+
+        {selected_student_card}
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>{form_title}</h2>
+
+            <form method="post" action="/aqm/workspace/save" class="grid">
+                {record_id_input}
+
+                <div>
+                    <label>Student</label>
+                    <select name="student_id">
+                        {student_options_form}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Month</label>
+                    <input type="month" name="record_month" value="{field_value('record_month', month)}">
+                </div>
+
+                <div>
+                    <label>Record Date</label>
+                    <input type="date" name="record_date" value="{field_value('record_date', datetime.date.today().isoformat())}">
+                </div>
+
+                <div>
+                    <label>Category</label>
+                    <select name="category">
+                        <option value="Academic Progress" {'selected' if field_value('category') == 'Academic Progress' else ''}>Academic Progress</option>
+                        <option value="Attendance" {'selected' if field_value('category') == 'Attendance' else ''}>Attendance</option>
+                        <option value="Assessment" {'selected' if field_value('category') == 'Assessment' else ''}>Assessment</option>
+                        <option value="Report Review" {'selected' if field_value('category') == 'Report Review' else ''}>Report Review</option>
+                        <option value="Parent Follow-Up" {'selected' if field_value('category') == 'Parent Follow-Up' else ''}>Parent Follow-Up</option>
+                        <option value="Tutor Concern" {'selected' if field_value('category') == 'Tutor Concern' else ''}>Tutor Concern</option>
+                        <option value="Other" {'selected' if field_value('category') == 'Other' else ''}>Other</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Status</label>
+                    <select name="status">
+                        <option value="OPEN" {'selected' if field_value('status', 'OPEN') == 'OPEN' else ''}>OPEN</option>
+                        <option value="IN_PROGRESS" {'selected' if field_value('status') == 'IN_PROGRESS' else ''}>IN PROGRESS</option>
+                        <option value="RESOLVED" {'selected' if field_value('status') == 'RESOLVED' else ''}>RESOLVED</option>
+                        <option value="CLOSED" {'selected' if field_value('status') == 'CLOSED' else ''}>CLOSED</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Priority</label>
+                    <select name="priority">
+                        <option value="LOW" {'selected' if field_value('priority') == 'LOW' else ''}>LOW</option>
+                        <option value="MEDIUM" {'selected' if field_value('priority', 'MEDIUM') == 'MEDIUM' else ''}>MEDIUM</option>
+                        <option value="HIGH" {'selected' if field_value('priority') == 'HIGH' else ''}>HIGH</option>
+                        <option value="CRITICAL" {'selected' if field_value('priority') == 'CRITICAL' else ''}>CRITICAL</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Title</label>
+                    <input name="title" value="{field_value('title')}" placeholder="Example: Low attendance concern">
+                </div>
+
+                <div>
+                    <label>Subject</label>
+                    <input name="subject_name" value="{field_value('subject_name')}" placeholder="Example: Mathematics">
+                </div>
+
+                <div>
+                    <label>Term</label>
+                    <input name="term" value="{field_value('term')}" placeholder="Example: Term 2">
+                </div>
+
+                <div>
+                    <label>Mark / Score</label>
+                    <input name="mark" value="{field_value('mark')}" placeholder="Example: 65%">
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <label>Issue / Observation</label>
+                    <textarea name="issue" placeholder="What did the AQM observe?">{field_value('issue')}</textarea>
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <label>Action Taken / Intervention</label>
+                    <textarea name="action_taken" placeholder="What action was taken or recommended?">{field_value('action_taken')}</textarea>
+                </div>
+
+                <div>
+                    <label>Follow-Up Date</label>
+                    <input type="date" name="followup_date" value="{field_value('followup_date')}">
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <label>Notes</label>
+                    <textarea name="notes" placeholder="Any additional notes">{field_value('notes')}</textarea>
+                </div>
+
+                <div>
+                    <label>Custom Column 1</label>
+                    <input name="custom_1" value="{field_value('custom_1')}">
+                </div>
+
+                <div>
+                    <label>Custom Column 2</label>
+                    <input name="custom_2" value="{field_value('custom_2')}">
+                </div>
+
+                <div>
+                    <label>Custom Column 3</label>
+                    <input name="custom_3" value="{field_value('custom_3')}">
+                </div>
+
+                <div>
+                    <label>Custom Column 4</label>
+                    <input name="custom_4" value="{field_value('custom_4')}">
+                </div>
+
+                <div>
+                    <label>Custom Column 5</label>
+                    <input name="custom_5" value="{field_value('custom_5')}">
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <button class="btn success">
+                        {'Update Record' if edit_record else 'Save Record'}
+                    </button>
+
+                    <a class="btn secondary" href="/aqm/workspace?month={escape(month)}">
+                        Cancel
+                    </a>
+                </div>
+            </form>
+        </div>
+
+        <div class="card soft">
+            <h2>Workspace Records</h2>
+
+            <div class="mini muted" style="margin-bottom:8px">
+                Showing {len(records)} record(s).
+            </div>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Student</th>
+                            <th>Date</th>
+                            <th>Category</th>
+                            <th>Title</th>
+                            <th>Status</th>
+                            <th>Priority</th>
+                            <th>Subject</th>
+                            <th>Mark</th>
+                            <th>Issue</th>
+                            <th>Action Taken</th>
+                            <th>Follow-Up</th>
+                            <th>Notes</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='13'>No workspace records found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("AQM Workspace", body)
+ 
+  
+@app.post('/aqm/workspace/save')
+def aqm_workspace_save():
+
+    r = require_aqm()
+    if r:
+        return r
+
+    aqm_id = is_academic_quality_manager()
+
+    record_id = request.form.get("record_id", "").strip()
+    student_id = request.form.get("student_id", "").strip() or None
+
+    record_month = request.form.get("record_month", "").strip() or get_setting("current_month")
+    record_date = request.form.get("record_date", "").strip() or datetime.date.today().isoformat()
+
+    category = request.form.get("category", "").strip()
+    title = request.form.get("title", "").strip()
+    status = request.form.get("status", "OPEN").strip()
+    priority = request.form.get("priority", "MEDIUM").strip()
+
+    subject_name = request.form.get("subject_name", "").strip()
+    term = request.form.get("term", "").strip()
+    mark = request.form.get("mark", "").strip()
+
+    issue = request.form.get("issue", "").strip()
+    action_taken = request.form.get("action_taken", "").strip()
+    followup_date = request.form.get("followup_date", "").strip()
+
+    notes = request.form.get("notes", "").strip()
+
+    custom_1 = request.form.get("custom_1", "").strip()
+    custom_2 = request.form.get("custom_2", "").strip()
+    custom_3 = request.form.get("custom_3", "").strip()
+    custom_4 = request.form.get("custom_4", "").strip()
+    custom_5 = request.form.get("custom_5", "").strip()
+
+    if not title and not issue and not notes:
+        return page(
+            "Missing Information",
+            card_msg("Please capture at least a title, issue, or notes.")
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    now = now_utc_iso()
+
+    if record_id:
+        cur.execute("""
+            UPDATE aqm_workspace_records
+            SET student_id=?,
+                record_month=?,
+                record_date=?,
+                category=?,
+                title=?,
+                status=?,
+                priority=?,
+                subject_name=?,
+                term=?,
+                mark=?,
+                issue=?,
+                action_taken=?,
+                followup_date=?,
+                notes=?,
+                custom_1=?,
+                custom_2=?,
+                custom_3=?,
+                custom_4=?,
+                custom_5=?,
+                updated_at=?
+            WHERE id=?
+              AND aqm_id=?
+        """, (
+            student_id,
+            record_month,
+            record_date,
+            category,
+            title,
+            status,
+            priority,
+            subject_name,
+            term,
+            mark,
+            issue,
+            action_taken,
+            followup_date,
+            notes,
+            custom_1,
+            custom_2,
+            custom_3,
+            custom_4,
+            custom_5,
+            now,
+            record_id,
+            aqm_id
+        ))
+
+    else:
+        cur.execute("""
+            INSERT INTO aqm_workspace_records(
+                aqm_id,
+                student_id,
+                record_month,
+                record_date,
+                category,
+                title,
+                status,
+                priority,
+                subject_name,
+                term,
+                mark,
+                issue,
+                action_taken,
+                followup_date,
+                notes,
+                custom_1,
+                custom_2,
+                custom_3,
+                custom_4,
+                custom_5,
+                created_at,
+                updated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            aqm_id,
+            student_id,
+            record_month,
+            record_date,
+            category,
+            title,
+            status,
+            priority,
+            subject_name,
+            term,
+            mark,
+            issue,
+            action_taken,
+            followup_date,
+            notes,
+            custom_1,
+            custom_2,
+            custom_3,
+            custom_4,
+            custom_5,
+            now,
+            now
+        ))
+
+    conn.commit()
+    conn.close()
+
+    redirect_url = url_for("aqm_workspace", month=record_month)
+
+    if student_id:
+        redirect_url += f"&student_id={student_id}"
+
+    return redirect(redirect_url)
+
+  
+@app.post('/aqm/workspace/<int:record_id>/delete')
+def aqm_workspace_delete(record_id):
+
+    r = require_aqm()
+    if r:
+        return r
+
+    aqm_id = is_academic_quality_manager()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        DELETE FROM aqm_workspace_records
+        WHERE id=?
+          AND aqm_id=?
+    """, (record_id, aqm_id))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(request.referrer or url_for("aqm_workspace"))  
+  
+  
+@app.get('/aqm/workspace/export')
+def aqm_workspace_export():
+
+    r = require_aqm()
+    if r:
+        return r
+
+    aqm_id = is_academic_quality_manager()
+
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except Exception:
+        return page(
+            "Export Error",
+            card_msg("openpyxl is not installed. Please add openpyxl to requirements.txt and redeploy.")
+        )
+
+    month = request.args.get("month", "").strip()
+    q = request.args.get("q", "").strip()
+    status_filter = request.args.get("status", "").strip()
+    category_filter = request.args.get("category", "").strip()
+    student_id = request.args.get("student_id", "").strip()
+
+    where = ["awr.aqm_id=?"]
+    params = [aqm_id]
+
+    if month:
+        where.append("IFNULL(awr.record_month,'')=?")
+        params.append(month)
+
+    if status_filter:
+        where.append("awr.status=?")
+        params.append(status_filter)
+
+    if category_filter:
+        where.append("awr.category=?")
+        params.append(category_filter)
+
+    if student_id:
+        where.append("awr.student_id=?")
+        params.append(student_id)
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                st.full_name LIKE ?
+                OR st.phone_whatsapp LIKE ?
+                OR awr.title LIKE ?
+                OR awr.category LIKE ?
+                OR awr.subject_name LIKE ?
+                OR awr.issue LIKE ?
+                OR awr.action_taken LIKE ?
+                OR awr.notes LIKE ?
+                OR awr.custom_1 LIKE ?
+                OR awr.custom_2 LIKE ?
+                OR awr.custom_3 LIKE ?
+                OR awr.custom_4 LIKE ?
+                OR awr.custom_5 LIKE ?
+            )
+        """)
+        params += [search] * 13
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT
+            awr.*,
+            st.full_name AS student_name,
+            st.phone_whatsapp,
+            st.guardian_name,
+            st.guardian_phone,
+            st.email,
+            st.grade,
+            st.school,
+            st.province
+        FROM aqm_workspace_records awr
+        LEFT JOIN students st ON st.id = awr.student_id
+        {where_sql}
+        ORDER BY awr.record_date DESC, awr.id DESC
+    """, params)
+
+    records = cur.fetchall()
+    conn.close()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "AQM Workspace"
+
+    headers = [
+        "Student Name",
+        "Student Phone",
+        "Guardian Name",
+        "Guardian Phone",
+        "Email",
+        "Grade",
+        "School",
+        "Province",
+        "Record Month",
+        "Record Date",
+        "Category",
+        "Title",
+        "Status",
+        "Priority",
+        "Subject",
+        "Term",
+        "Mark",
+        "Issue",
+        "Action Taken",
+        "Follow-Up Date",
+        "Notes",
+        "Custom 1",
+        "Custom 2",
+        "Custom 3",
+        "Custom 4",
+        "Custom 5",
+        "Created At",
+        "Updated At"
+    ]
+
+    last_col = len(headers)
+
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
+    ws.cell(row=1, column=1).value = "AQM Workspace Export"
+    ws.cell(row=1, column=1).font = Font(size=14, bold=True, color="FFFFFF")
+    ws.cell(row=1, column=1).fill = PatternFill("solid", fgColor="1B5E20")
+    ws.cell(row=1, column=1).alignment = Alignment(horizontal="center")
+
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=last_col)
+    ws.cell(row=2, column=1).value = f"Filters: Month={month or 'All'} | Status={status_filter or 'All'} | Category={category_filter or 'All'} | Search={q or 'All'}"
+    ws.cell(row=2, column=1).font = Font(italic=True, color="64748B")
+    ws.cell(row=2, column=1).alignment = Alignment(horizontal="center")
+
+    header_row = 4
+
+    for col, header in enumerate(headers, start=1):
+        cell = ws.cell(row=header_row, column=col)
+        cell.value = header
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="166534")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for row_index, rec in enumerate(records, start=5):
+        values = [
+            rec["student_name"] or "",
+            rec["phone_whatsapp"] or "",
+            rec["guardian_name"] or "",
+            rec["guardian_phone"] or "",
+            rec["email"] or "",
+            rec["grade"] or "",
+            rec["school"] or "",
+            rec["province"] or "",
+            rec["record_month"] or "",
+            rec["record_date"] or "",
+            rec["category"] or "",
+            rec["title"] or "",
+            rec["status"] or "",
+            rec["priority"] or "",
+            rec["subject_name"] or "",
+            rec["term"] or "",
+            rec["mark"] or "",
+            rec["issue"] or "",
+            rec["action_taken"] or "",
+            rec["followup_date"] or "",
+            rec["notes"] or "",
+            rec["custom_1"] or "",
+            rec["custom_2"] or "",
+            rec["custom_3"] or "",
+            rec["custom_4"] or "",
+            rec["custom_5"] or "",
+            rec["created_at"] or "",
+            rec["updated_at"] or ""
+        ]
+
+        for col_index, value in enumerate(values, start=1):
+            cell = ws.cell(row=row_index, column=col_index)
+            cell.value = value
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+            if headers[col_index - 1] == "Status":
+                if value == "RESOLVED":
+                    cell.fill = PatternFill("solid", fgColor="DCFCE7")
+                elif value == "IN_PROGRESS":
+                    cell.fill = PatternFill("solid", fgColor="FEF3C7")
+                elif value == "OPEN":
+                    cell.fill = PatternFill("solid", fgColor="E0F2FE")
+                elif value == "CLOSED":
+                    cell.fill = PatternFill("solid", fgColor="E5E7EB")
+
+    thin = Side(border_style="thin", color="CBD5E1")
+
+    for row in ws.iter_rows(min_row=4, max_row=ws.max_row, min_col=1, max_col=last_col):
+        for cell in row:
+            cell.border = Border(top=thin, left=thin, right=thin, bottom=thin)
+
+    widths = {
+        1: 26,
+        2: 18,
+        3: 22,
+        4: 18,
+        5: 26,
+        6: 12,
+        7: 28,
+        8: 18,
+        9: 14,
+        10: 14,
+        11: 20,
+        12: 30,
+        13: 16,
+        14: 14,
+        15: 22,
+        16: 14,
+        17: 14,
+        18: 38,
+        19: 38,
+        20: 16,
+        21: 45,
+        22: 22,
+        23: 22,
+        24: 22,
+        25: 22,
+        26: 22,
+        27: 22,
+        28: 22
+    }
+
+    for col_index, width in widths.items():
+        ws.column_dimensions[get_column_letter(col_index)].width = width
+
+    ws.freeze_panes = "A5"
+    ws.auto_filter.ref = f"A4:{get_column_letter(last_col)}{ws.max_row}"
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    safe_month = (month or "all").replace("-", "_")
+    filename = f"AQM_Workspace_{safe_month}.xlsx"
+
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )  
+  
+  
 @app.get('/aqm/learners')
 def aqm_learners():
 
