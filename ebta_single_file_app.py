@@ -34255,7 +34255,7 @@ def aqm_manual_marks_save_student():
     ))
     
     
- @app.get('/aqm/workspace')
+@app.get('/aqm/workspace')
 def aqm_workspace():
 
     r = require_aqm()
