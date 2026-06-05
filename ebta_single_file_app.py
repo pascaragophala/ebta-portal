@@ -1251,6 +1251,9 @@ def init_db():
     ensure_column(conn, "tutors", "qualification", "TEXT")
     ensure_column(conn, "tutors", "achievements", "TEXT")
     ensure_column(conn, "tutors", "about", "TEXT")
+    
+    ensure_column(conn, "tutors", "is_active", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "tutors", "deleted_at", "TEXT")
 
     ensure_column(conn, "enrollments", "coupon_code", "TEXT")
     ensure_column(conn, "enrollments", "coupon_discount_amount", "REAL NOT NULL DEFAULT 0")
@@ -14390,6 +14393,7 @@ def tutor_login_post():
         SELECT id, pin, full_name
         FROM tutors
         WHERE phone IN ({placeholders})
+          AND COALESCE(is_active, 1) = 1
         LIMIT 1
     """, variants)
 
@@ -24012,12 +24016,17 @@ def admin_tutors():
     cur = conn.cursor()
 
     # Total tutors on the portal
-    cur.execute("SELECT COUNT(*) AS c FROM tutors")
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM tutors
+        WHERE COALESCE(is_active, 1) = 1
+    """)
+
     total_tutors = cur.fetchone()["c"] or 0
 
     # Build filtered tutor query
     params = []
-    where = []
+    where = ["COALESCE(t.is_active, 1) = 1"]
 
     if q:
         where.append("(t.full_name LIKE ? OR t.phone LIKE ?)")
@@ -24224,6 +24233,15 @@ def admin_tutors():
                           style='display:inline'>
                         <button class='btn success mini'>
                             Reset PIN
+                        </button>
+                    </form>
+                    
+                    <form method='post'
+                          action='{url_for('admin_tutor_delete', tid=t['id'])}'
+                          style='display:inline'
+                          onsubmit="return confirm('Delete this tutor from the portal? Their uploaded materials will NOT be deleted. The tutor will be removed from active sessions and subject assignments.');">
+                        <button class='btn danger mini'>
+                            Delete Tutor
                         </button>
                     </form>
 
@@ -24531,21 +24549,91 @@ def admin_tutor_reset_pin(tid:int):
     conn.close()
     return page("PIN Updated", card_msg(f"Tutor PIN reset to: {new_pin}"))
 
+
 @app.post('/admin/tutors/<int:tid>/delete')
 @require_high_admin
-def admin_tutor_delete(tid:int):
+def admin_tutor_delete(tid: int):
+
     r = require_admin()
     if r:
         return r
+
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("DELETE FROM sessions WHERE tutor_id=?", (tid,))
-    cur.execute("DELETE FROM materials WHERE tutor_id=?", (tid,))
-    cur.execute("DELETE FROM tutor_subjects WHERE tutor_id=?", (tid,))
-    cur.execute("DELETE FROM tutors WHERE id=?", (tid,))
+
+    cur.execute("""
+        SELECT id, full_name, phone
+        FROM tutors
+        WHERE id=?
+        LIMIT 1
+    """, (tid,))
+
+    tutor = cur.fetchone()
+
+    if not tutor:
+        conn.close()
+        return page("Error", card_msg("Tutor not found."))
+
+    # Get sessions linked to this tutor.
+    cur.execute("""
+        SELECT id
+        FROM sessions
+        WHERE tutor_id=?
+    """, (tid,))
+
+    session_ids = [row["id"] for row in cur.fetchall()]
+
+    if session_ids:
+        placeholders = ",".join("?" * len(session_ids))
+
+        # Remove attendance linked to the tutor's sessions first.
+        cur.execute(f"""
+            DELETE FROM attendance
+            WHERE session_id IN ({placeholders})
+        """, session_ids)
+
+        cur.execute(f"""
+            DELETE FROM attendance_sessions
+            WHERE session_id IN ({placeholders})
+        """, session_ids)
+
+        # Remove the tutor's active sessions.
+        cur.execute(f"""
+            DELETE FROM sessions
+            WHERE id IN ({placeholders})
+        """, session_ids)
+
+    # Remove subject assignments.
+    cur.execute("""
+        DELETE FROM tutor_subjects
+        WHERE tutor_id=?
+    """, (tid,))
+
+    # Remove tutor-manager assignments.
+    cur.execute("""
+        DELETE FROM manager_tutors
+        WHERE tutor_id=?
+    """, (tid,))
+
+    # IMPORTANT:
+    # Do NOT delete materials.
+    # Do NOT delete submissions.
+    # Do NOT delete the tutor row.
+    # We only deactivate the tutor.
+    cur.execute("""
+        UPDATE tutors
+        SET is_active=0,
+            deleted_at=?
+        WHERE id=?
+    """, (
+        now_utc_iso(),
+        tid
+    ))
+
     conn.commit()
     conn.close()
-    return redirect(url_for('admin_tutors'))
+
+    return redirect(url_for("admin_tutors"))
 
 @app.post('/admin/tutors/<int:tid>/add-subject')
 def admin_tutor_add_subject(tid:int):
