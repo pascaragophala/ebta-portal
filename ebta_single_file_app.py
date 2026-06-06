@@ -68844,253 +68844,574 @@ def ceo_award_delete(award_id):
     return redirect(url_for("ceo_awards"))
     
     
+# --- Admin: Analytics section ---
+
+
+def admin_shift_month(month, offset):
+    """
+    Moves a YYYY-MM month forward/backward by offset.
+    Example: admin_shift_month("2026-06", -1) -> "2026-05"
+    """
+    y, m = [int(x) for x in month.split("-")]
+    total = (y * 12 + (m - 1)) + offset
+    new_y = total // 12
+    new_m = (total % 12) + 1
+    return f"{new_y:04d}-{new_m:02d}"
+
+
+def admin_analytics_data(month):
+    """
+    Shared analytics dataset used by:
+    - High Admin analytics page
+    - High Admin analytics Excel export
+    """
+
+    prev_month = admin_shift_month(month, -1)
+    month_2 = admin_shift_month(month, -2)
+    month_3 = admin_shift_month(month, -3)
+
+    trend_months = [month_3, month_2, prev_month, month]
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    def scalar(sql, params=()):
+        cur.execute(sql, params)
+        row = cur.fetchone()
+        if not row:
+            return 0
+        return list(dict(row).values())[0] or 0
+
+    def month_revenue(m):
+        cur.execute("""
+            SELECT ROUND(SUM(
+                e.amount_paid * 1.0 / NULLIF((
+                    SELECT COUNT(*)
+                    FROM enrollments e2
+                    WHERE e2.student_id = e.student_id
+                      AND e2.month = e.month
+                      AND e2.status = 'ACTIVE'
+                ), 0)
+            ), 2) AS total_revenue
+            FROM enrollments e
+            WHERE e.month=?
+              AND e.status='ACTIVE'
+        """, (m,))
+
+        row = cur.fetchone()
+        return float(row["total_revenue"] or 0) if row else 0
+
+    def month_enrollments(m):
+        return int(scalar("""
+            SELECT COUNT(*)
+            FROM enrollments
+            WHERE month=?
+        """, (m,)))
+
+    def month_active(m):
+        return int(scalar("""
+            SELECT COUNT(*)
+            FROM enrollments
+            WHERE month=?
+              AND status='ACTIVE'
+        """, (m,)))
+
+    def month_pending(m):
+        return int(scalar("""
+            SELECT COUNT(*)
+            FROM enrollments
+            WHERE month=?
+              AND status='PENDING'
+        """, (m,)))
+
+    def month_lapsed(m):
+        return int(scalar("""
+            SELECT COUNT(*)
+            FROM enrollments
+            WHERE month=?
+              AND status='LAPSED'
+        """, (m,)))
+
+    def month_unique_students(m):
+        return int(scalar("""
+            SELECT COUNT(DISTINCT student_id)
+            FROM enrollments
+            WHERE month=?
+              AND status='ACTIVE'
+        """, (m,)))
+
+    def month_new_students(m):
+        return int(scalar("""
+            SELECT COUNT(DISTINCT student_id)
+            FROM enrollments
+            WHERE month=?
+              AND status='ACTIVE'
+              AND student_id NOT IN (
+                    SELECT student_id
+                    FROM enrollments
+                    WHERE month < ?
+              )
+        """, (m, m)))
+
+    def month_returning_students(m):
+        return int(scalar("""
+            SELECT COUNT(DISTINCT student_id)
+            FROM enrollments
+            WHERE month=?
+              AND status='ACTIVE'
+              AND student_id IN (
+                    SELECT student_id
+                    FROM enrollments
+                    WHERE month < ?
+              )
+        """, (m, m)))
+
+    current_revenue = month_revenue(month)
+    previous_revenue = month_revenue(prev_month)
+
+    total_enrollments = month_enrollments(month)
+    previous_enrollments = month_enrollments(prev_month)
+
+    active = month_active(month)
+    previous_active = month_active(prev_month)
+
+    pending = month_pending(month)
+    lapsed = month_lapsed(month)
+
+    unique_students = month_unique_students(month)
+    previous_unique_students = month_unique_students(prev_month)
+
+    new_students = month_new_students(month)
+    returning_students = month_returning_students(month)
+
+    def pct_change(current, previous):
+        current = float(current or 0)
+        previous = float(previous or 0)
+
+        if previous == 0 and current > 0:
+            return 100
+
+        if previous == 0:
+            return 0
+
+        return round(((current - previous) / previous) * 100, 1)
+
+    summary = {
+        "month": month,
+        "prev_month": prev_month,
+        "month_2": month_2,
+        "month_3": month_3,
+
+        "revenue": current_revenue,
+        "previous_revenue": previous_revenue,
+        "revenue_change": current_revenue - previous_revenue,
+        "revenue_change_pct": pct_change(current_revenue, previous_revenue),
+
+        "total_enrollments": total_enrollments,
+        "previous_enrollments": previous_enrollments,
+        "enrollment_change": total_enrollments - previous_enrollments,
+        "enrollment_change_pct": pct_change(total_enrollments, previous_enrollments),
+
+        "active": active,
+        "previous_active": previous_active,
+        "active_change": active - previous_active,
+        "active_change_pct": pct_change(active, previous_active),
+
+        "pending": pending,
+        "lapsed": lapsed,
+
+        "unique_students": unique_students,
+        "previous_unique_students": previous_unique_students,
+        "unique_student_change": unique_students - previous_unique_students,
+        "unique_student_change_pct": pct_change(unique_students, previous_unique_students),
+
+        "new_students": new_students,
+        "returning_students": returning_students
+    }
+
+    monthly_trend = []
+
+    for m in trend_months:
+        monthly_trend.append({
+            "month": m,
+            "revenue": month_revenue(m),
+            "enrollments": month_enrollments(m),
+            "active": month_active(m),
+            "unique_students": month_unique_students(m),
+            "new_students": month_new_students(m),
+            "returning_students": month_returning_students(m),
+            "pending": month_pending(m),
+            "lapsed": month_lapsed(m)
+        })
+
+    # Subject comparison: selected month vs previous month
+    cur.execute("""
+        SELECT
+            s.id AS subject_id,
+            s.name || ' (' || s.grade || ')' AS subject,
+
+            SUM(CASE WHEN e.month=? AND e.status='ACTIVE' THEN 1 ELSE 0 END) AS current_active,
+            SUM(CASE WHEN e.month=? AND e.status='ACTIVE' THEN 1 ELSE 0 END) AS previous_active,
+
+            ROUND(SUM(CASE WHEN e.month=? AND e.status='ACTIVE' THEN
+                e.amount_paid * 1.0 / NULLIF((
+                    SELECT COUNT(*)
+                    FROM enrollments e2
+                    WHERE e2.student_id = e.student_id
+                      AND e2.month = e.month
+                      AND e2.status = 'ACTIVE'
+                ), 0)
+            ELSE 0 END), 2) AS current_revenue,
+
+            ROUND(SUM(CASE WHEN e.month=? AND e.status='ACTIVE' THEN
+                e.amount_paid * 1.0 / NULLIF((
+                    SELECT COUNT(*)
+                    FROM enrollments e2
+                    WHERE e2.student_id = e.student_id
+                      AND e2.month = e.month
+                      AND e2.status = 'ACTIVE'
+                ), 0)
+            ELSE 0 END), 2) AS previous_revenue
+
+        FROM subjects s
+        LEFT JOIN enrollments e ON e.subject_id = s.id
+        GROUP BY s.id
+        ORDER BY current_active DESC, subject ASC
+    """, (month, prev_month, month, prev_month))
+
+    subject_comparison = []
+
+    for row in cur.fetchall():
+        current_active = int(row["current_active"] or 0)
+        previous_active = int(row["previous_active"] or 0)
+        current_subject_revenue = float(row["current_revenue"] or 0)
+        previous_subject_revenue = float(row["previous_revenue"] or 0)
+
+        subject_comparison.append({
+            "subject": row["subject"],
+            "current_active": current_active,
+            "previous_active": previous_active,
+            "active_difference": current_active - previous_active,
+            "current_revenue": current_subject_revenue,
+            "previous_revenue": previous_subject_revenue,
+            "revenue_difference": current_subject_revenue - previous_subject_revenue
+        })
+
+    improving_subjects = [x for x in subject_comparison if x["active_difference"] > 0]
+    declining_subjects = [x for x in subject_comparison if x["active_difference"] < 0]
+    low_subjects = [x for x in subject_comparison if 0 < x["current_active"] <= 4]
+
+    improving_subjects = sorted(improving_subjects, key=lambda x: x["active_difference"], reverse=True)
+    declining_subjects = sorted(declining_subjects, key=lambda x: x["active_difference"])
+    low_subjects = sorted(low_subjects, key=lambda x: x["current_active"])
+
+    # 4-month subject trend for selected month and previous 3 months
+    cur.execute("""
+        SELECT
+            s.id AS subject_id,
+            s.name || ' (' || s.grade || ')' AS subject,
+
+            SUM(CASE WHEN e.month=? AND e.status='ACTIVE' THEN 1 ELSE 0 END) AS m3_count,
+            SUM(CASE WHEN e.month=? AND e.status='ACTIVE' THEN 1 ELSE 0 END) AS m2_count,
+            SUM(CASE WHEN e.month=? AND e.status='ACTIVE' THEN 1 ELSE 0 END) AS m1_count,
+            SUM(CASE WHEN e.month=? AND e.status='ACTIVE' THEN 1 ELSE 0 END) AS current_count
+
+        FROM subjects s
+        LEFT JOIN enrollments e ON e.subject_id = s.id
+        GROUP BY s.id
+        ORDER BY subject
+    """, (month_3, month_2, prev_month, month))
+
+    subject_trend = []
+    critical_decline = []
+
+    for row in cur.fetchall():
+        m3_count = int(row["m3_count"] or 0)
+        m2_count = int(row["m2_count"] or 0)
+        m1_count = int(row["m1_count"] or 0)
+        current_count = int(row["current_count"] or 0)
+
+        trend_item = {
+            "subject": row["subject"],
+            month_3: m3_count,
+            month_2: m2_count,
+            prev_month: m1_count,
+            month: current_count
+        }
+
+        subject_trend.append(trend_item)
+
+        if m3_count > m2_count > m1_count > current_count:
+            critical_decline.append(trend_item)
+
+    # Revenue trend per day
+    cur.execute("""
+        SELECT
+            substr(e.created_at,1,10) AS day,
+            ROUND(SUM(
+                e.amount_paid * 1.0 / NULLIF((
+                    SELECT COUNT(*)
+                    FROM enrollments e2
+                    WHERE e2.student_id = e.student_id
+                      AND e2.month = e.month
+                      AND e2.status = 'ACTIVE'
+                ), 0)
+            ), 2) AS revenue
+        FROM enrollments e
+        WHERE e.month=?
+          AND e.status='ACTIVE'
+        GROUP BY day
+        ORDER BY day
+    """, (month,))
+
+    revenue_daily = [dict(row) for row in cur.fetchall()]
+
+    # Attendance trend per day
+    cur.execute("""
+        SELECT
+            a.date AS day,
+            COUNT(*) AS attendance_count
+        FROM attendance a
+        WHERE substr(a.date,1,7)=?
+        GROUP BY a.date
+        ORDER BY a.date
+    """, (month,))
+
+    attendance_daily = [dict(row) for row in cur.fetchall()]
+
+    # Revenue per subject
+    revenue_per_subject = sorted(
+        [
+            {
+                "subject": x["subject"],
+                "revenue": x["current_revenue"]
+            }
+            for x in subject_comparison
+            if x["current_revenue"] > 0
+        ],
+        key=lambda x: x["revenue"],
+        reverse=True
+    )
+
+    # Active students per subject
+    active_per_subject = sorted(
+        [
+            {
+                "subject": x["subject"],
+                "active": x["current_active"]
+            }
+            for x in subject_comparison
+            if x["current_active"] > 0
+        ],
+        key=lambda x: x["active"],
+        reverse=True
+    )
+
+    # Top rated tutors
+    cur.execute("""
+        SELECT
+            t.full_name,
+            ROUND(AVG(l.rating), 2) AS avg_rating,
+            COUNT(l.id) AS rating_count
+        FROM lesson_ratings l
+        JOIN tutor_subjects ts ON ts.subject_id = l.subject_id
+        JOIN tutors t ON t.id = ts.tutor_id
+        WHERE l.month=?
+          AND COALESCE(t.is_active, 1) = 1
+        GROUP BY t.id
+        HAVING rating_count > 0
+        ORDER BY avg_rating DESC, rating_count DESC
+        LIMIT 20
+    """, (month,))
+
+    top_tutors = [dict(row) for row in cur.fetchall()]
+
+    # Tutor manager ratings
+    cur.execute("""
+        SELECT
+            tm.full_name,
+            ROUND(AVG(tmr.rating), 2) AS avg_rating,
+            COUNT(tmr.id) AS rating_count
+        FROM tutor_manager_ratings tmr
+        JOIN tutor_managers tm ON tm.id = tmr.manager_id
+        WHERE tmr.month=?
+        GROUP BY tm.id
+        HAVING rating_count > 0
+        ORDER BY avg_rating DESC, rating_count DESC
+        LIMIT 20
+    """, (month,))
+
+    manager_ratings = [dict(row) for row in cur.fetchall()]
+
+    conn.close()
+
+    return {
+        "summary": summary,
+        "monthly_trend": monthly_trend,
+        "subject_comparison": subject_comparison,
+        "improving_subjects": improving_subjects,
+        "declining_subjects": declining_subjects,
+        "low_subjects": low_subjects,
+        "subject_trend": subject_trend,
+        "critical_decline": critical_decline,
+        "revenue_daily": revenue_daily,
+        "attendance_daily": attendance_daily,
+        "revenue_per_subject": revenue_per_subject,
+        "active_per_subject": active_per_subject,
+        "top_tutors": top_tutors,
+        "manager_ratings": manager_ratings
+    }
+
 
 # --- Admin: Analytics dashboard ---
 
 @app.get('/admin/analytics')
 @require_high_admin
 def admin_analytics():
+
     r = require_admin()
-    if r: return r
+    if r:
+        return r
 
     import json
 
-    month = request.args.get("month") or get_admin_active_month()
-    # ===== Month Calculations =====
-    import datetime
+    month = request.args.get("month", "").strip() or get_admin_active_month()
+    data = admin_analytics_data(month)
 
-    current = datetime.datetime.strptime(month, "%Y-%m")
+    summary = data["summary"]
+    monthly_trend = data["monthly_trend"]
 
-    m1 = (current.replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")
-    m2 = (datetime.datetime.strptime(m1, "%Y-%m").replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")
-    
-    conn = get_db()
-    cur = conn.cursor()
+    def change_badge(value, suffix=""):
+        try:
+            value = float(value or 0)
+        except Exception:
+            value = 0
 
-    # ===== KPIs =====
-    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,))
-    total = cur.fetchone()['c'] or 0
+        if value > 0:
+            return f"<span class='chip active'>+{value:g}{suffix}</span>"
 
-    def count_status(s):
-        cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status=?", (month,s))
-        return cur.fetchone()['c'] or 0
+        if value < 0:
+            return f"<span class='chip danger'>{value:g}{suffix}</span>"
 
-    pending = count_status('PENDING')
-    active = count_status('ACTIVE')
-    lapsed = count_status('LAPSED')
-    
-    # ===== Month-to-Month Comparison =====
-    cur.execute("""
-    SELECT 
-        s.name || ' (' || s.grade || ')' AS subject,
+        return f"<span class='chip'>0{suffix}</span>"
 
-        SUM(CASE WHEN e.month=? THEN 1 ELSE 0 END) AS current_count,
-        SUM(CASE WHEN e.month=? THEN 1 ELSE 0 END) AS prev_count
+    def money(value):
+        try:
+            return f"R{float(value or 0):,.2f}"
+        except Exception:
+            return "R0.00"
 
-    FROM enrollments e
-    JOIN subjects s ON s.id = e.subject_id
-    WHERE e.status='ACTIVE'
-    GROUP BY s.id
-    """, (month, m1))
+    trend_labels = [pretty_month_label(x["month"]) for x in monthly_trend]
+    trend_revenue = [x["revenue"] for x in monthly_trend]
+    trend_enrollments = [x["enrollments"] for x in monthly_trend]
+    trend_active = [x["active"] for x in monthly_trend]
+    trend_unique_students = [x["unique_students"] for x in monthly_trend]
 
-    comparison = cur.fetchall()
+    rev_daily_labels = [x["day"] for x in data["revenue_daily"]]
+    rev_daily_data = [x["revenue"] for x in data["revenue_daily"]]
 
-    improving = []
-    declining = []
+    attendance_labels = [x["day"] for x in data["attendance_daily"]]
+    attendance_data = [x["attendance_count"] for x in data["attendance_daily"]]
 
-    for r in comparison:
-        diff = (r["current_count"] or 0) - (r["prev_count"] or 0)
+    subject_labels = [x["subject"] for x in data["active_per_subject"][:15]]
+    subject_active_data = [x["active"] for x in data["active_per_subject"][:15]]
 
-        if diff > 0:
-            improving.append((r["subject"], diff))
-        elif diff < 0:
-            declining.append((r["subject"], diff))
-            
-    # ===== 3-Month Decline =====
-    cur.execute("""
-    SELECT 
-        s.name || ' (' || s.grade || ')' AS subject,
+    revenue_subject_labels = [x["subject"] for x in data["revenue_per_subject"][:15]]
+    revenue_subject_data = [x["revenue"] for x in data["revenue_per_subject"][:15]]
 
-        SUM(CASE WHEN e.month=? THEN 1 ELSE 0 END) AS m2_count,
-        SUM(CASE WHEN e.month=? THEN 1 ELSE 0 END) AS m1_count,
-        SUM(CASE WHEN e.month=? THEN 1 ELSE 0 END) AS m0_count
+    tutor_labels = [x["full_name"] for x in data["top_tutors"][:10]]
+    tutor_rating_data = [x["avg_rating"] for x in data["top_tutors"][:10]]
 
-    FROM enrollments e
-    JOIN subjects s ON s.id = e.subject_id
-    WHERE e.status='ACTIVE'
-    GROUP BY s.id
-    """, (m2, m1, month))
+    manager_labels = [x["full_name"] for x in data["manager_ratings"][:10]]
+    manager_rating_data = [x["avg_rating"] for x in data["manager_ratings"][:10]]
 
-    trend_rows = cur.fetchall()
-
-    decline_3_months = []
-
-    for r in trend_rows:
-        if (r["m2_count"] or 0) > (r["m1_count"] or 0) > (r["m0_count"] or 0):
-            decline_3_months.append(r["subject"])
-            
-    # ===== Low Enrolment (<=4) =====
-    cur.execute("""
-    SELECT 
-        s.name || ' (' || s.grade || ')' AS subject,
-        COUNT(*) AS total
-    FROM enrollments e
-    JOIN subjects s ON s.id = e.subject_id
-    WHERE e.month=? AND e.status='ACTIVE'
-    GROUP BY s.id
-    HAVING total <= 4
-    """, (month,))
-
-    low_subjects = cur.fetchall()
-
-    # ===== TRUE REVENUE (distributed) =====
-    cur.execute("""
-        SELECT ROUND(SUM(
-            e.amount_paid * 1.0 / (
-                SELECT COUNT(*)
-                FROM enrollments e2
-                WHERE e2.student_id = e.student_id
-                  AND e2.month = e.month
-                  AND e2.status = 'ACTIVE'
-            )
-        ), 2) AS r
-        FROM enrollments e
-        WHERE e.month=? AND e.status='ACTIVE'
-    """, (month,))
-    revenue = cur.fetchone()['r'] or 0
-
-    # ===== New vs Returning =====
-    cur.execute("""
-        SELECT COUNT(DISTINCT student_id)
-        FROM enrollments
-        WHERE month=? AND status='ACTIVE'
-        AND student_id NOT IN (
-            SELECT student_id FROM enrollments WHERE month < ?
-        )
-    """, (month, month))
-    new_students = cur.fetchone()[0] or 0
-
-    cur.execute("""
-        SELECT COUNT(DISTINCT student_id)
-        FROM enrollments
-        WHERE month=? AND status='ACTIVE'
-        AND student_id IN (
-            SELECT student_id FROM enrollments WHERE month < ?
-        )
-    """, (month, month))
-    returning = cur.fetchone()[0] or 0
-
-    # ===== Revenue trend (per day, corrected) =====
-    cur.execute("""
-        SELECT substr(e.created_at,1,10) AS day,
-               ROUND(SUM(
-                   e.amount_paid * 1.0 / (
-                       SELECT COUNT(*)
-                       FROM enrollments e2
-                       WHERE e2.student_id = e.student_id
-                         AND e2.month = e.month
-                         AND e2.status = 'ACTIVE'
-                   )
-               ), 2) AS r
-        FROM enrollments e
-        WHERE e.month=? AND e.status='ACTIVE'
-        GROUP BY day ORDER BY day
-    """, (month,))
-    rev_rows = cur.fetchall()
-    rev_labels = [r['day'] for r in rev_rows]
-    rev_data = [r['r'] for r in rev_rows]
-
-    # ===== Attendance trend =====
-    cur.execute("""
-        SELECT a.date, COUNT(*) AS c
-        FROM attendance a
-        WHERE strftime('%Y-%m', a.date)=?
-        GROUP BY a.date ORDER BY a.date
-    """, (month,))
-    att_rows = cur.fetchall()
-    att_labels = [r['date'] for r in att_rows]
-    att_data = [r['c'] for r in att_rows]
-
-    # ===== Revenue per subject (corrected) =====
-    cur.execute("""
-        SELECT s.name || ' (' || s.grade || ')' AS label,
-               ROUND(SUM(
-                   e.amount_paid * 1.0 / (
-                       SELECT COUNT(*)
-                       FROM enrollments e2
-                       WHERE e2.student_id = e.student_id
-                         AND e2.month = e.month
-                         AND e2.status = 'ACTIVE'
-                   )
-               ), 2) AS r
-        FROM enrollments e
-        JOIN subjects s ON s.id=e.subject_id
-        WHERE e.month=? AND e.status='ACTIVE'
-        GROUP BY s.id
-        ORDER BY r DESC
-    """, (month,))
-    rev_sub_rows = cur.fetchall()
-    rev_sub_labels = [r['label'] for r in rev_sub_rows]
-    rev_sub_data = [r['r'] for r in rev_sub_rows]
-
-    # ===== Top rated tutors =====
-    cur.execute("""
-        SELECT t.full_name, ROUND(AVG(l.rating),2) AS avg_rating
-        FROM lesson_ratings l
-        JOIN tutor_subjects ts ON ts.subject_id=l.subject_id
-        JOIN tutors t ON t.id=ts.tutor_id
-        WHERE l.month=?
-        GROUP BY t.id
-        ORDER BY avg_rating DESC
-    """, (month,))
-    tutor_rows = cur.fetchall()
-    tutor_labels = [r['full_name'] for r in tutor_rows]
-    tutor_data = [r['avg_rating'] for r in tutor_rows]
-
-    # ===== Subject performance table =====
-    cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
-    subs = cur.fetchall()
-
-    rows=[]
-    for s in subs:
-        cur.execute("""
-            SELECT COUNT(*) AS c
-            FROM enrollments
-            WHERE subject_id=? AND month=? AND status='ACTIVE'
-        """, (s['id'], month))
-        active_students = cur.fetchone()['c'] or 0
-
-        cur.execute("""
-            SELECT COUNT(*) AS c
-            FROM attendance a
-            JOIN sessions se ON se.id=a.session_id
-            WHERE se.subject_id=? AND strftime('%Y-%m', a.date)=?
-        """, (s['id'], month))
-        att = cur.fetchone()['c'] or 0
-
-        rows.append(f"""
+    improving_rows = ""
+    for x in data["improving_subjects"][:10]:
+        improving_rows += f"""
         <tr>
-            <td>{grade_label(s['grade'])} — {s['name']}</td>
-            <td>{active_students}</td>
-            <td>{att}</td>
+            <td>{escape(x["subject"])}</td>
+            <td>{x["previous_active"]}</td>
+            <td>{x["current_active"]}</td>
+            <td>{change_badge(x["active_difference"])}</td>
         </tr>
-        """)
+        """
 
-    conn.close()
+    declining_rows = ""
+    for x in data["declining_subjects"][:10]:
+        declining_rows += f"""
+        <tr>
+            <td>{escape(x["subject"])}</td>
+            <td>{x["previous_active"]}</td>
+            <td>{x["current_active"]}</td>
+            <td>{change_badge(x["active_difference"])}</td>
+        </tr>
+        """
+
+    low_rows = ""
+    for x in data["low_subjects"][:15]:
+        low_rows += f"""
+        <tr>
+            <td>{escape(x["subject"])}</td>
+            <td>{x["current_active"]}</td>
+        </tr>
+        """
+
+    critical_rows = ""
+
+    for x in data["critical_decline"][:15]:
+        critical_rows += f"""
+        <tr>
+            <td>{escape(x["subject"])}</td>
+            <td>{x.get(summary["month_3"], 0)}</td>
+            <td>{x.get(summary["month_2"], 0)}</td>
+            <td>{x.get(summary["prev_month"], 0)}</td>
+            <td>{x.get(summary["month"], 0)}</td>
+        </tr>
+        """
+
+    subject_comparison_rows = ""
+
+    for x in data["subject_comparison"]:
+        subject_comparison_rows += f"""
+        <tr>
+            <td>{escape(x["subject"])}</td>
+            <td>{x["previous_active"]}</td>
+            <td>{x["current_active"]}</td>
+            <td>{change_badge(x["active_difference"])}</td>
+            <td>{money(x["previous_revenue"])}</td>
+            <td>{money(x["current_revenue"])}</td>
+            <td>{change_badge(round(x["revenue_difference"], 2))}</td>
+        </tr>
+        """
+
+    comparison_cards = f"""
+    <div class="stats" style="margin-top:12px">
+        {stat("Revenue Change", f"{money(summary['revenue_change'])}")}
+        {stat("Revenue % Change", f"{summary['revenue_change_pct']}%")}
+        {stat("Enrollment Change", summary["enrollment_change"])}
+        {stat("Active Change", summary["active_change"])}
+        {stat("Student Change", summary["unique_student_change"])}
+    </div>
+    """
 
     body = f"""
     {admin_nav()}
-    
-    <div class='card soft' style="margin-bottom:14px;border-left:5px solid #25D366">
-        <form method="get" action="/admin/analytics"
-              style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+
+    <section class="card">
+        <h1>High Admin Analytics</h1>
+
+        <p class="muted">
+            Visual overview of EBTA enrollments, revenue, attendance, subject performance and monthly trends.
+        </p>
+
+        <form method="get"
+              action="/admin/analytics"
+              class="toolbar"
+              style="margin-bottom:14px">
 
             <div>
-                <label>View analytics for month</label>
-                <input type="month"
-                       name="month"
-                       value="{month}"
-                       required>
+                <label class="mini muted">Analytics Month</label>
+                <input type="month" name="month" value="{escape(month)}" required>
             </div>
 
             <button class="btn success mini">
@@ -69098,168 +69419,619 @@ def admin_analytics():
             </button>
 
             <a class="btn secondary mini" href="/admin/analytics">
-                Reset to Admin Month
+                Reset
             </a>
 
+            <a class="btn mini"
+               href="/admin/analytics/export?month={escape(month)}">
+                Export Excel
+            </a>
         </form>
 
-        <div class="mini muted" style="margin-top:8px">
-            Currently viewing analytics for <b>{pretty_month_label(month)}</b>.
-            This does not change the main admin month.
-        </div>
-    </div>
+        <div class="card soft" style="border-left:5px solid #2563eb;margin-bottom:14px">
+            <h2>Month Comparison</h2>
+            <p class="mini muted">
+                Comparing <strong>{pretty_month_label(month)}</strong> with
+                <strong>{pretty_month_label(summary["prev_month"])}</strong>.
+            </p>
 
-    <section class='stats big'>
-        {stat('Revenue', f'R{revenue}')}
-        {stat('Enrollments', total)}
-        {stat('Active', active)}
-        {stat('New students', new_students)}
-        {stat('Returning', returning)}
-        {stat('Lapsed', lapsed)}
-        
+            {comparison_cards}
+        </div>
+
+        <div class="stats big">
+            {stat("Revenue", money(summary["revenue"]))}
+            {stat("Enrollments", summary["total_enrollments"])}
+            {stat("Active Enrollments", summary["active"])}
+            {stat("Unique Students", summary["unique_students"])}
+            {stat("New Students", summary["new_students"])}
+            {stat("Returning Students", summary["returning_students"])}
+            {stat("Pending", summary["pending"])}
+            {stat("Lapsed", summary["lapsed"])}
+        </div>
+
+        <div class="grid" style="margin-top:14px">
+            <div class="card soft">
+                <h2>Previous 3 Months Trend</h2>
+                <p class="mini muted">
+                    Shows {pretty_month_label(summary["month_3"])} to {pretty_month_label(month)}.
+                </p>
+                <canvas id="monthlyTrendChart"></canvas>
+            </div>
+
+            <div class="card soft">
+                <h2>Current vs Previous Month</h2>
+                <p class="mini muted">Revenue, enrollments, active enrollments and unique students.</p>
+                <canvas id="monthCompareChart"></canvas>
+            </div>
+        </div>
+
+        <div class="grid" style="margin-top:14px">
+            <div class="card soft">
+                <h2>Daily Revenue</h2>
+                <canvas id="dailyRevenueChart"></canvas>
+            </div>
+
+            <div class="card soft">
+                <h2>Daily Attendance</h2>
+                <canvas id="attendanceChart"></canvas>
+            </div>
+        </div>
+
+        <div class="grid" style="margin-top:14px">
+            <div class="card soft">
+                <h2>Top Subjects by Active Learners</h2>
+                <canvas id="subjectActiveChart"></canvas>
+            </div>
+
+            <div class="card soft">
+                <h2>Top Subjects by Revenue</h2>
+                <canvas id="subjectRevenueChart"></canvas>
+            </div>
+        </div>
+
+        <div class="grid" style="margin-top:14px">
+            <div class="card soft">
+                <h2>Top Rated Tutors</h2>
+                <canvas id="tutorRatingChart"></canvas>
+            </div>
+
+            <div class="card soft">
+                <h2>Top Rated Tutor Managers</h2>
+                <canvas id="managerRatingChart"></canvas>
+            </div>
+        </div>
+
+        <div class="grid" style="margin-top:14px">
+            <div class="card soft" style="border-left:5px solid #16a34a">
+                <h2>Subjects Improving</h2>
+                <div class="scroll-x">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Subject</th>
+                                <th>{pretty_month_label(summary["prev_month"])}</th>
+                                <th>{pretty_month_label(month)}</th>
+                                <th>Change</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {improving_rows or "<tr><td colspan='4'>No improving subjects found.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #dc2626">
+                <h2>Subjects Declining</h2>
+                <div class="scroll-x">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Subject</th>
+                                <th>{pretty_month_label(summary["prev_month"])}</th>
+                                <th>{pretty_month_label(month)}</th>
+                                <th>Change</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {declining_rows or "<tr><td colspan='4'>No declining subjects found.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid" style="margin-top:14px">
+            <div class="card soft" style="border-left:5px solid #f59e0b">
+                <h2>Low Enrollment Subjects</h2>
+                <p class="mini muted">Subjects with 1 to 4 active learners.</p>
+
+                <div class="scroll-x">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Subject</th>
+                                <th>Active Learners</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {low_rows or "<tr><td colspan='2'>No low enrollment subjects found.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #7f1d1d">
+                <h2>Critical 4-Month Decline</h2>
+                <p class="mini muted">Subjects declining every month for the previous 3 months plus selected month.</p>
+
+                <div class="scroll-x">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Subject</th>
+                                <th>{pretty_month_label(summary["month_3"])}</th>
+                                <th>{pretty_month_label(summary["month_2"])}</th>
+                                <th>{pretty_month_label(summary["prev_month"])}</th>
+                                <th>{pretty_month_label(month)}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {critical_rows or "<tr><td colspan='5'>No critical declining trend found.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Full Subject Performance Comparison</h2>
+            <p class="mini muted">
+                Detailed subject comparison between {pretty_month_label(summary["prev_month"])}
+                and {pretty_month_label(month)}.
+            </p>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Subject</th>
+                            <th>Previous Active</th>
+                            <th>Current Active</th>
+                            <th>Active Change</th>
+                            <th>Previous Revenue</th>
+                            <th>Current Revenue</th>
+                            <th>Revenue Change</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {subject_comparison_rows or "<tr><td colspan='7'>No subject data found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </section>
-
-    <section class='grid'>
-        <div class='card'>
-            <h2>Revenue Trend — {month}</h2>
-            <p class="mini muted">Daily revenue for the selected month</p>
-            <canvas id="revChart"></canvas>
-        </div>
-
-        <div class='card'><h2>Students Mix</h2><canvas id="studentChart"></canvas></div>
-        <div class='card'><h2>Enrollment Status</h2><canvas id="statusChart"></canvas></div>
-        <div class='card'><h2>Attendance Trend</h2><canvas id="attChart"></canvas></div>
-    </section>
-
-    <section class='grid'>
-        <div class='card'>
-            <h2>Revenue per Subject</h2>
-            <select id="revSubFilter" onchange="updateRevSubChart()">
-                <option value="3">Top 3</option>
-                <option value="10">Top 10</option>
-                <option value="all">All</option>
-            </select>
-            <canvas id="revSubChart"></canvas>
-        </div>
-
-        <div class='card'>
-            <h2>Top Rated Tutors</h2>
-            <select id="tutorFilter" onchange="updateTutorChart()">
-                <option value="3">Top 3</option>
-                <option value="10">Top 10</option>
-                <option value="all">All</option>
-            </select>
-            <canvas id="tutorChart"></canvas>
-        </div>
-    </section>
-    
-    <div class='grid'>
-
-        <div class='card'>
-            <h2>Subjects Improving</h2>
-            <ul>
-            {''.join([f"<li>{s} (+{d})</li>" for s,d in improving]) or "<li>No improvements</li>"}
-            </ul>
-        </div>
-
-        <div class='card'>
-            <h2>Subjects Declining</h2>
-            <ul>
-            {''.join([f"<li>{s} ({d})</li>" for s,d in declining]) or "<li>No decline</li>"}
-            </ul>
-        </div>
-
-        <div class='card'>
-            <h2>3-Month Decline (Critical)</h2>
-            <ul>
-            {''.join([f"<li>{s}</li>" for s in decline_3_months]) or "<li>No critical decline</li>"}
-            </ul>
-        </div>
-
-        <div class='card'>
-            <h2>Low Enrolment (≤ 4 students)</h2>
-            <ul>
-            {''.join([f"<li>{r['subject']} ({r['total']})</li>" for r in low_subjects]) or "<li>All subjects healthy</li>"}
-            </ul>
-        </div>
-
-    </div>
-
-    <div class='card'>
-        <h2>Subject Performance</h2>
-        <div class="scroll-x">
-            <table>
-                <thead>
-                    <tr><th>Subject</th><th>Active students</th><th>Attendance rows</th></tr>
-                </thead>
-                <tbody>{''.join(rows)}</tbody>
-            </table>
-        </div>
-    </div>
 
     <script>
-    const revLabels = {json.dumps(rev_labels)};
-    const revData = {json.dumps(rev_data)};
-    const attLabels = {json.dumps(att_labels)};
-    const attData = {json.dumps(att_data)};
-    const revSubLabels = {json.dumps(rev_sub_labels)};
-    const revSubData = {json.dumps(rev_sub_data)};
+    const trendLabels = {json.dumps(trend_labels)};
+    const trendRevenue = {json.dumps(trend_revenue)};
+    const trendEnrollments = {json.dumps(trend_enrollments)};
+    const trendActive = {json.dumps(trend_active)};
+    const trendUniqueStudents = {json.dumps(trend_unique_students)};
+
+    const dailyRevenueLabels = {json.dumps(rev_daily_labels)};
+    const dailyRevenueData = {json.dumps(rev_daily_data)};
+
+    const attendanceLabels = {json.dumps(attendance_labels)};
+    const attendanceData = {json.dumps(attendance_data)};
+
+    const subjectLabels = {json.dumps(subject_labels)};
+    const subjectActiveData = {json.dumps(subject_active_data)};
+
+    const revenueSubjectLabels = {json.dumps(revenue_subject_labels)};
+    const revenueSubjectData = {json.dumps(revenue_subject_data)};
+
     const tutorLabels = {json.dumps(tutor_labels)};
-    const tutorData = {json.dumps(tutor_data)};
+    const tutorRatingData = {json.dumps(tutor_rating_data)};
 
-    new Chart(document.getElementById("revChart"), {{
-        type:'line',
-        data:{{labels:revLabels,datasets:[{{label:'Revenue',data:revData}}]}}
+    const managerLabels = {json.dumps(manager_labels)};
+    const managerRatingData = {json.dumps(manager_rating_data)};
+
+    new Chart(document.getElementById("monthlyTrendChart"), {{
+        type: "line",
+        data: {{
+            labels: trendLabels,
+            datasets: [
+                {{ label: "Revenue", data: trendRevenue, tension: 0.3 }},
+                {{ label: "Enrollments", data: trendEnrollments, tension: 0.3 }},
+                {{ label: "Active", data: trendActive, tension: 0.3 }},
+                {{ label: "Unique Students", data: trendUniqueStudents, tension: 0.3 }}
+            ]
+        }},
+        options: {{
+            responsive: true,
+            plugins: {{
+                legend: {{ position: "bottom" }}
+            }}
+        }}
     }});
 
-    new Chart(document.getElementById("studentChart"), {{
-        type:'pie',
-        data:{{labels:['New','Returning'],datasets:[{{data:[{new_students},{returning}]}}]}}
+    new Chart(document.getElementById("monthCompareChart"), {{
+        type: "bar",
+        data: {{
+            labels: ["Revenue", "Enrollments", "Active", "Students"],
+            datasets: [
+                {{
+                    label: "{pretty_month_label(summary["prev_month"])}",
+                    data: [
+                        {summary["previous_revenue"]},
+                        {summary["previous_enrollments"]},
+                        {summary["previous_active"]},
+                        {summary["previous_unique_students"]}
+                    ]
+                }},
+                {{
+                    label: "{pretty_month_label(month)}",
+                    data: [
+                        {summary["revenue"]},
+                        {summary["total_enrollments"]},
+                        {summary["active"]},
+                        {summary["unique_students"]}
+                    ]
+                }}
+            ]
+        }},
+        options: {{
+            responsive: true,
+            plugins: {{
+                legend: {{ position: "bottom" }}
+            }}
+        }}
     }});
 
-    new Chart(document.getElementById("statusChart"), {{
-        type:'bar',
-        data:{{labels:['Pending','Active','Lapsed'],datasets:[{{data:[{pending},{active},{lapsed}]}}]}}
+    new Chart(document.getElementById("dailyRevenueChart"), {{
+        type: "line",
+        data: {{
+            labels: dailyRevenueLabels,
+            datasets: [
+                {{ label: "Revenue", data: dailyRevenueData, tension: 0.3 }}
+            ]
+        }},
+        options: {{
+            responsive: true,
+            plugins: {{
+                legend: {{ position: "bottom" }}
+            }}
+        }}
     }});
 
-    new Chart(document.getElementById("attChart"), {{
-        type:'line',
-        data:{{labels:attLabels,datasets:[{{label:'Attendance',data:attData}}]}}
+    new Chart(document.getElementById("attendanceChart"), {{
+        type: "line",
+        data: {{
+            labels: attendanceLabels,
+            datasets: [
+                {{ label: "Attendance Records", data: attendanceData, tension: 0.3 }}
+            ]
+        }},
+        options: {{
+            responsive: true,
+            plugins: {{
+                legend: {{ position: "bottom" }}
+            }}
+        }}
     }});
 
-    const revSubCtx = document.getElementById("revSubChart").getContext("2d");
-    let revSubChartObj = new Chart(revSubCtx, {{
-        type:'bar',
-        data:{{labels:revSubLabels,datasets:[{{label:'Revenue',data:revSubData}}]}}
+    new Chart(document.getElementById("subjectActiveChart"), {{
+        type: "bar",
+        data: {{
+            labels: subjectLabels,
+            datasets: [
+                {{ label: "Active Learners", data: subjectActiveData }}
+            ]
+        }},
+        options: {{
+            indexAxis: "y",
+            responsive: true,
+            plugins: {{
+                legend: {{ display: false }}
+            }}
+        }}
     }});
 
-    function updateRevSubChart(){{
-        const mode = document.getElementById("revSubFilter").value;
-        let l = revSubLabels, d = revSubData;
-        if(mode !== "all"){{ l=l.slice(0,mode); d=d.slice(0,mode); }}
-        revSubChartObj.data.labels = l;
-        revSubChartObj.data.datasets[0].data = d;
-        revSubChartObj.update();
-    }}
-
-    const tutorCtx = document.getElementById("tutorChart").getContext("2d");
-    let tutorChartObj = new Chart(tutorCtx, {{
-        type:'bar',
-        data:{{labels:tutorLabels,datasets:[{{label:'Avg ★',data:tutorData}}]}}
+    new Chart(document.getElementById("subjectRevenueChart"), {{
+        type: "bar",
+        data: {{
+            labels: revenueSubjectLabels,
+            datasets: [
+                {{ label: "Revenue", data: revenueSubjectData }}
+            ]
+        }},
+        options: {{
+            indexAxis: "y",
+            responsive: true,
+            plugins: {{
+                legend: {{ display: false }}
+            }}
+        }}
     }});
 
-    function updateTutorChart(){{
-        const mode = document.getElementById("tutorFilter").value;
-        let l = tutorLabels, d = tutorData;
-        if(mode !== "all"){{ l=l.slice(0,mode); d=d.slice(0,mode); }}
-        tutorChartObj.data.labels = l;
-        tutorChartObj.data.datasets[0].data = d;
-        tutorChartObj.update();
-    }}
+    new Chart(document.getElementById("tutorRatingChart"), {{
+        type: "bar",
+        data: {{
+            labels: tutorLabels,
+            datasets: [
+                {{ label: "Average Rating", data: tutorRatingData }}
+            ]
+        }},
+        options: {{
+            indexAxis: "y",
+            responsive: true,
+            scales: {{
+                x: {{ min: 0, max: 5 }}
+            }},
+            plugins: {{
+                legend: {{ display: false }}
+            }}
+        }}
+    }});
+
+    new Chart(document.getElementById("managerRatingChart"), {{
+        type: "bar",
+        data: {{
+            labels: managerLabels,
+            datasets: [
+                {{ label: "Average Rating", data: managerRatingData }}
+            ]
+        }},
+        options: {{
+            indexAxis: "y",
+            responsive: true,
+            scales: {{
+                x: {{ min: 0, max: 5 }}
+            }},
+            plugins: {{
+                legend: {{ display: false }}
+            }}
+        }}
+    }});
     </script>
     """
 
-    return page("Analytics Dashboard", body)
+    return page("High Admin Analytics", body)
+    
+    
+@app.get('/admin/analytics/export')
+@require_high_admin
+def admin_analytics_export():
+
+    r = require_admin()
+    if r:
+        return r
+
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except Exception:
+        return page(
+            "Export Error",
+            card_msg("openpyxl is not installed. Please add openpyxl to requirements.txt and redeploy.")
+        )
+
+    month = request.args.get("month", "").strip() or get_admin_active_month()
+    data = admin_analytics_data(month)
+    summary = data["summary"]
+
+    wb = Workbook()
+
+    header_fill = PatternFill("solid", fgColor="166534")
+    title_fill = PatternFill("solid", fgColor="1B5E20")
+    white_font = Font(color="FFFFFF", bold=True)
+    thin = Side(border_style="thin", color="CBD5E1")
+
+    def style_sheet(ws):
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+                cell.border = Border(top=thin, left=thin, right=thin, bottom=thin)
+
+        for col in range(1, ws.max_column + 1):
+            ws.column_dimensions[get_column_letter(col)].width = 22
+
+    def write_title(ws, title, last_col):
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
+        cell = ws.cell(row=1, column=1)
+        cell.value = title
+        cell.font = Font(size=14, bold=True, color="FFFFFF")
+        cell.fill = title_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    def write_headers(ws, headers, row_num=3):
+        for col, header in enumerate(headers, start=1):
+            cell = ws.cell(row=row_num, column=col)
+            cell.value = header
+            cell.font = white_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    # ================= SUMMARY SHEET =================
+    ws = wb.active
+    ws.title = "Summary"
+
+    summary_headers = ["Metric", pretty_month_label(summary["prev_month"]), pretty_month_label(month), "Change", "Change %"]
+    write_title(ws, f"High Admin Analytics Summary - {pretty_month_label(month)}", len(summary_headers))
+    write_headers(ws, summary_headers)
+
+    summary_rows = [
+        ["Revenue", summary["previous_revenue"], summary["revenue"], summary["revenue_change"], summary["revenue_change_pct"]],
+        ["Enrollments", summary["previous_enrollments"], summary["total_enrollments"], summary["enrollment_change"], summary["enrollment_change_pct"]],
+        ["Active Enrollments", summary["previous_active"], summary["active"], summary["active_change"], summary["active_change_pct"]],
+        ["Unique Students", summary["previous_unique_students"], summary["unique_students"], summary["unique_student_change"], summary["unique_student_change_pct"]],
+        ["Pending", "", summary["pending"], "", ""],
+        ["Lapsed", "", summary["lapsed"], "", ""],
+        ["New Students", "", summary["new_students"], "", ""],
+        ["Returning Students", "", summary["returning_students"], "", ""]
+    ]
+
+    for r_idx, row in enumerate(summary_rows, start=4):
+        for c_idx, value in enumerate(row, start=1):
+            ws.cell(row=r_idx, column=c_idx).value = value
+
+    style_sheet(ws)
+
+    # ================= MONTHLY TREND SHEET =================
+    ws = wb.create_sheet("Monthly Trend")
+    headers = ["Month", "Revenue", "Enrollments", "Active", "Unique Students", "New Students", "Returning Students", "Pending", "Lapsed"]
+    write_title(ws, "Previous 3 Months Trend", len(headers))
+    write_headers(ws, headers)
+
+    for r_idx, row in enumerate(data["monthly_trend"], start=4):
+        values = [
+            row["month"],
+            row["revenue"],
+            row["enrollments"],
+            row["active"],
+            row["unique_students"],
+            row["new_students"],
+            row["returning_students"],
+            row["pending"],
+            row["lapsed"]
+        ]
+
+        for c_idx, value in enumerate(values, start=1):
+            ws.cell(row=r_idx, column=c_idx).value = value
+
+    style_sheet(ws)
+
+    # ================= SUBJECT COMPARISON SHEET =================
+    ws = wb.create_sheet("Subject Comparison")
+    headers = [
+        "Subject",
+        "Previous Active",
+        "Current Active",
+        "Active Difference",
+        "Previous Revenue",
+        "Current Revenue",
+        "Revenue Difference"
+    ]
+
+    write_title(ws, "Subject Comparison", len(headers))
+    write_headers(ws, headers)
+
+    for r_idx, row in enumerate(data["subject_comparison"], start=4):
+        values = [
+            row["subject"],
+            row["previous_active"],
+            row["current_active"],
+            row["active_difference"],
+            row["previous_revenue"],
+            row["current_revenue"],
+            row["revenue_difference"]
+        ]
+
+        for c_idx, value in enumerate(values, start=1):
+            ws.cell(row=r_idx, column=c_idx).value = value
+
+    style_sheet(ws)
+
+    # ================= CRITICAL DECLINE SHEET =================
+    ws = wb.create_sheet("Critical Decline")
+    headers = [
+        "Subject",
+        summary["month_3"],
+        summary["month_2"],
+        summary["prev_month"],
+        summary["month"]
+    ]
+
+    write_title(ws, "Critical 4-Month Decline", len(headers))
+    write_headers(ws, headers)
+
+    for r_idx, row in enumerate(data["critical_decline"], start=4):
+        values = [
+            row["subject"],
+            row.get(summary["month_3"], 0),
+            row.get(summary["month_2"], 0),
+            row.get(summary["prev_month"], 0),
+            row.get(summary["month"], 0)
+        ]
+
+        for c_idx, value in enumerate(values, start=1):
+            ws.cell(row=r_idx, column=c_idx).value = value
+
+    style_sheet(ws)
+
+    # ================= DAILY REVENUE SHEET =================
+    ws = wb.create_sheet("Daily Revenue")
+    headers = ["Day", "Revenue"]
+    write_title(ws, "Daily Revenue", len(headers))
+    write_headers(ws, headers)
+
+    for r_idx, row in enumerate(data["revenue_daily"], start=4):
+        ws.cell(row=r_idx, column=1).value = row["day"]
+        ws.cell(row=r_idx, column=2).value = row["revenue"]
+
+    style_sheet(ws)
+
+    # ================= ATTENDANCE SHEET =================
+    ws = wb.create_sheet("Attendance")
+    headers = ["Day", "Attendance Records"]
+    write_title(ws, "Daily Attendance", len(headers))
+    write_headers(ws, headers)
+
+    for r_idx, row in enumerate(data["attendance_daily"], start=4):
+        ws.cell(row=r_idx, column=1).value = row["day"]
+        ws.cell(row=r_idx, column=2).value = row["attendance_count"]
+
+    style_sheet(ws)
+
+    # ================= TOP TUTORS SHEET =================
+    ws = wb.create_sheet("Tutor Ratings")
+    headers = ["Tutor", "Average Rating", "Number of Ratings"]
+    write_title(ws, "Top Tutor Ratings", len(headers))
+    write_headers(ws, headers)
+
+    for r_idx, row in enumerate(data["top_tutors"], start=4):
+        ws.cell(row=r_idx, column=1).value = row["full_name"]
+        ws.cell(row=r_idx, column=2).value = row["avg_rating"]
+        ws.cell(row=r_idx, column=3).value = row["rating_count"]
+
+    style_sheet(ws)
+
+    # ================= MANAGER RATINGS SHEET =================
+    ws = wb.create_sheet("Manager Ratings")
+    headers = ["Tutor Manager", "Average Rating", "Number of Ratings"]
+    write_title(ws, "Tutor Manager Ratings", len(headers))
+    write_headers(ws, headers)
+
+    for r_idx, row in enumerate(data["manager_ratings"], start=4):
+        ws.cell(row=r_idx, column=1).value = row["full_name"]
+        ws.cell(row=r_idx, column=2).value = row["avg_rating"]
+        ws.cell(row=r_idx, column=3).value = row["rating_count"]
+
+    style_sheet(ws)
+
+    # Freeze panes and filters
+    for sheet in wb.worksheets:
+        sheet.freeze_panes = "A4"
+
+        if sheet.max_row >= 3 and sheet.max_column >= 1:
+            sheet.auto_filter.ref = f"A3:{get_column_letter(sheet.max_column)}{sheet.max_row}"
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    safe_month = month.replace("-", "_")
+    filename = f"High_Admin_Analytics_{safe_month}.xlsx"
+
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     
     
 def assessment_status_chip(status):
