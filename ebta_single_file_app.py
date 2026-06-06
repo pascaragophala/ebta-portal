@@ -59,7 +59,9 @@ MATERIALS_DIR = Path(BASE_DATA_DIR) / "materials"
 SUBMISSIONS_DIR = Path(BASE_DATA_DIR) / "submissions"
 QR_DIR = Path(BASE_DATA_DIR) / "qr"
 
-for d in (UPLOADS_DIR, MATERIALS_DIR, SUBMISSIONS_DIR, QR_DIR):
+ASSESSMENT_FILES_DIR = Path(BASE_DATA_DIR) / "assessment_files"
+
+for d in (UPLOADS_DIR, MATERIALS_DIR, SUBMISSIONS_DIR, QR_DIR, ASSESSMENT_FILES_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/SqocnYt.png")
@@ -1753,6 +1755,44 @@ def init_db():
         FOREIGN KEY(attempt_id) REFERENCES assessment_attempts(id) ON DELETE CASCADE,
         FOREIGN KEY(question_id) REFERENCES assessment_questions(id) ON DELETE CASCADE
     );
+    """)
+    
+    ensure_column(conn, "assessment_questions", "question_file_path", "TEXT")
+    ensure_column(conn, "assessment_questions", "question_file_name", "TEXT")
+    ensure_column(conn, "assessment_questions", "question_file_type", "TEXT")
+    ensure_column(conn, "assessment_questions", "question_file_uploaded_at", "TEXT")
+    
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS assessment_answer_files(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        answer_id INTEGER NOT NULL,
+        attempt_id INTEGER NOT NULL,
+        question_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+
+        file_path TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        file_type TEXT,
+
+        uploaded_at TEXT NOT NULL,
+
+        FOREIGN KEY(answer_id) REFERENCES assessment_answers(id) ON DELETE CASCADE,
+        FOREIGN KEY(attempt_id) REFERENCES assessment_attempts(id) ON DELETE CASCADE,
+        FOREIGN KEY(question_id) REFERENCES assessment_questions(id) ON DELETE CASCADE,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_assessment_answer_files_answer
+        ON assessment_answer_files(answer_id)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_assessment_answer_files_attempt
+        ON assessment_answer_files(attempt_id)
     """)
 
     cur.execute("CREATE INDEX IF NOT EXISTS idx_assessments_subject ON assessments(subject_id)")
@@ -10607,6 +10647,40 @@ def student_home():
         </div>
         """
         
+    # ===== ASSESSMENTS PREVIEW (DASHBOARD SUMMARY) =====
+
+    assessments_preview = ""
+
+    if has_active_enrollment and active_sub_ids:
+
+        cur.execute(f"""
+            SELECT COUNT(*) AS total
+            FROM assessments a
+            WHERE a.is_published = 1
+              AND a.subject_id IN ({','.join('?' * len(active_sub_ids))})
+              AND a.month = ?
+        """, (*active_sub_ids, month))
+
+        row = cur.fetchone()
+        total_assessments = row["total"] if row else 0
+
+        assessments_preview = f"""
+        <div class="card soft" style="border-left:5px solid #7c3aed">
+
+            <h3 style="margin-bottom:6px">Assessments</h3>
+
+            <div class="mini muted" style="margin-bottom:10px">
+                You have <b>{total_assessments}</b> published assessment(s) for {pretty_month_label(month)}.
+            </div>
+
+            <a class="btn mini success" href="{url_for('student_assessments')}">
+                Open Assessments
+            </a>
+
+        </div>
+        """
+    
+        
     # ===== ACADEMIC PROGRESS PREVIEW =====
 
     progress_preview = ""
@@ -11635,6 +11709,7 @@ def student_home():
 
     {progress_preview}
     {assignments_preview}
+    {assessments_preview}
     
     <div class="toolbar" style="margin:16px 0;">
         <a class="btn" href="/student/materials">View Learning Materials</a>
@@ -70033,6 +70108,68 @@ def admin_analytics_export():
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     
+ASSESSMENT_ALLOWED_EXTENSIONS = {
+    "jpg", "jpeg", "png", "gif", "webp",
+    "pdf",
+    "doc", "docx",
+    "ppt", "pptx",
+    "xls", "xlsx",
+    "txt", "csv",
+    "zip"
+}
+
+def clean_upload_filename(filename):
+    filename = os.path.basename(filename or "").strip()
+    filename = filename.replace(" ", "_")
+
+    safe = ""
+
+    for ch in filename:
+        if ch.isalnum() or ch in ["_", "-", "."]:
+            safe += ch
+
+    return safe or f"file_{secrets.token_hex(6)}"
+
+
+def assessment_file_allowed(filename):
+    if not filename or "." not in filename:
+        return False
+
+    ext = filename.rsplit(".", 1)[-1].lower()
+    return ext in ASSESSMENT_ALLOWED_EXTENSIONS
+
+
+def save_assessment_upload(file_obj, folder_name):
+    """
+    Saves assessment-related uploads safely.
+    folder_name examples:
+    - tutor_questions
+    - student_answers
+    """
+
+    if not file_obj or not file_obj.filename:
+        return None
+
+    original_name = clean_upload_filename(file_obj.filename)
+
+    if not assessment_file_allowed(original_name):
+        return None
+
+    target_dir = ASSESSMENT_FILES_DIR / folder_name
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = original_name.rsplit(".", 1)[-1].lower()
+    stored_name = f"{secrets.token_hex(12)}.{ext}"
+    stored_path = target_dir / stored_name
+
+    file_obj.save(stored_path)
+
+    return {
+        "file_path": str(stored_path),
+        "file_name": original_name,
+        "file_type": ext
+    }    
+    
     
 def assessment_status_chip(status):
     status = (status or "").upper()
@@ -70665,11 +70802,28 @@ def tutor_assessment_builder(assessment_id):
         else:
             options_html = f"<span class='muted'>Long question. Tutor marks manually.</span>"
 
+        question_file_html = ""
+
+        if q["question_file_path"]:
+            question_file_html = f"""
+            <div class="mini" style="margin-top:8px">
+                Attached file:
+                <a class="links"
+                   target="_blank"
+                   href="/assessment-file/question/{q['id']}">
+                    {escape(q['question_file_name'] or 'Open file')}
+                </a>
+            </div>
+            """
+        
         question_rows += f"""
         <tr>
             <td>{q['question_order']}</td>
             <td>{escape(q['question_type'])}</td>
-            <td style="min-width:260px">{escape(q['question_text'])}</td>
+            <td style="min-width:260px">
+                {escape(q['question_text'])}
+                {question_file_html}
+            </td>
             <td>{options_html}</td>
             <td>{q['points']}</td>
         </tr>
@@ -70739,6 +70893,7 @@ def tutor_assessment_builder(assessment_id):
 
             <form method="post"
                   action="/tutor/assessments/{assessment_id}/question/add"
+                  enctype="multipart/form-data"
                   class="grid"
                   style="grid-template-columns:1fr 1fr;gap:12px">
 
@@ -70784,6 +70939,16 @@ def tutor_assessment_builder(assessment_id):
                 <div style="grid-column:1/-1">
                     <label>Memo / Marking Guide</label>
                     <textarea name="memo" rows="4"></textarea>
+                </div>
+                
+                <div style="grid-column:1/-1">
+                    <label>Optional Question File</label>
+                    <input type="file"
+                           name="question_file"
+                           accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.zip">
+                    <div class="mini muted">
+                        Optional. Use only when the question needs an attached file, screenshot, diagram or document.
+                    </div>
                 </div>
 
                 <div style="grid-column:1/-1">
@@ -70877,6 +71042,11 @@ def tutor_add_assessment_question(assessment_id):
         correct_index = None
         options_json = None
 
+    question_file_data = save_assessment_upload(
+        request.files.get("question_file"),
+        "tutor_questions"
+    )
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -70898,9 +71068,13 @@ def tutor_add_assessment_question(assessment_id):
             memo,
             points,
             question_order,
-            created_at
+            created_at,
+            question_file_path,
+            question_file_name,
+            question_file_type,
+            question_file_uploaded_at
         )
-        VALUES(?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         assessment_id,
         question_type,
@@ -70910,7 +71084,11 @@ def tutor_add_assessment_question(assessment_id):
         memo,
         points,
         question_order,
-        now_utc_iso()
+        now_utc_iso(),
+        question_file_data["file_path"] if question_file_data else None,
+        question_file_data["file_name"] if question_file_data else None,
+        question_file_data["file_type"] if question_file_data else None,
+        now_utc_iso() if question_file_data else None
     ))
 
     conn.commit()
@@ -71022,7 +71200,6 @@ def student_assessments():
         return r
 
     sid = is_student()
-    month = get_active_month("student")
 
     conn = get_db()
     cur = conn.cursor()
@@ -71033,6 +71210,10 @@ def student_assessments():
             s.name AS subject_name,
             s.grade,
             t.full_name AS tutor_name,
+
+            e.month AS enrollment_month,
+            e.status AS enrollment_status,
+
             at.status AS attempt_status,
             at.total_score,
             at.total_points,
@@ -71040,17 +71221,17 @@ def student_assessments():
         FROM assessments a
         JOIN subjects s ON s.id = a.subject_id
         JOIN tutors t ON t.id = a.tutor_id
-        JOIN enrollments e ON e.subject_id = a.subject_id
+        JOIN enrollments e 
+             ON e.subject_id = a.subject_id
+            AND e.month = a.month
+            AND e.student_id = ?
+            AND e.status = 'ACTIVE'
         LEFT JOIN assessment_attempts at 
                ON at.assessment_id = a.id
               AND at.student_id = e.student_id
-        WHERE e.student_id=?
-          AND e.status='ACTIVE'
-          AND e.month = a.month
-          AND a.month=?
-          AND a.is_published=1
-        ORDER BY a.created_at DESC
-    """, (sid, month))
+        WHERE a.is_published = 1
+        ORDER BY a.month DESC, a.created_at DESC
+    """, (sid,))
 
     rows = cur.fetchall()
     conn.close()
@@ -71072,29 +71253,37 @@ def student_assessments():
         if a["attempt_status"] in ["SUBMITTED", "MARKED"]:
             action = "<span class='mini muted'>Submitted</span>"
 
+        open_status = "Open"
+
+        if not assessment_is_open(a):
+            open_status = "Closed / Not Open"
+
         trs += f"""
         <tr>
             <td>
                 <strong>{escape(a['title'])}</strong>
                 <div class="mini muted">{escape(a['description'] or '')}</div>
+                <div class="mini muted">Assessment Month: {pretty_month_label(a['month'])}</div>
             </td>
 
             <td>{grade_label(a['grade'])} - {escape(a['subject_name'])}</td>
             <td>{escape(a['tutor_name'])}</td>
             <td>{a['duration_minutes']} min</td>
             <td>{assessment_status_chip(a['attempt_status'] or 'NOT STARTED')}</td>
+            <td>{escape(open_status)}</td>
             <td>{result_text}</td>
             <td>{action}</td>
         </tr>
         """
 
     body = f"""
+    {student_nav() if 'student_nav' in globals() else ''}
+
     <section class="card">
         <h1>Assessments</h1>
 
         <p class="muted">
-            Complete your online quizzes and assessments here. Some questions are auto-marked,
-            while long questions are marked by your tutor.
+            Complete your online quizzes and assessments here. Published assessments from your active enrolled subjects will appear below.
         </p>
 
         <div class="scroll-x">
@@ -71106,13 +71295,14 @@ def student_assessments():
                         <th>Tutor</th>
                         <th>Duration</th>
                         <th>Status</th>
+                        <th>Open Status</th>
                         <th>Result</th>
                         <th>Action</th>
                     </tr>
                 </thead>
 
                 <tbody>
-                    {trs or "<tr><td colspan='7'>No assessments available yet.</td></tr>"}
+                    {trs or "<tr><td colspan='8'>No assessments available yet.</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -71217,6 +71407,33 @@ def student_take_assessment(assessment_id):
 
     for i, q in enumerate(questions_list, start=1):
 
+        question_file_html = ""
+
+        if q["question_file_path"]:
+            question_file_html = f"""
+            <div class="card soft" style="border-left:5px solid #2563eb;margin-top:10px">
+                <strong>Question file:</strong>
+                <a class="links"
+                   target="_blank"
+                   href="/assessment-file/question/{q['id']}">
+                    {escape(q['question_file_name'] or 'Open file')}
+                </a>
+            </div>
+            """
+
+        upload_html = f"""
+        <div style="margin-top:12px">
+            <label>Upload supporting file(s) optional</label>
+            <input type="file"
+                   name="files_{q['id']}"
+                   multiple
+                   accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.zip">
+            <div class="mini muted">
+                You may upload screenshots, pictures, PDFs, Word files or other supported files for this question.
+            </div>
+        </div>
+        """
+
         if q["question_type"] == "MCQ":
             try:
                 options = json.loads(q["options_json"] or "[]")
@@ -71251,7 +71468,9 @@ def student_take_assessment(assessment_id):
 
             <p style="white-space:pre-wrap">{escape(q['question_text'])}</p>
 
+            {question_file_html}
             {answer_html}
+            {upload_html}
         </div>
         """
 
@@ -71351,7 +71570,9 @@ def student_take_assessment(assessment_id):
             </p>
         </div>
 
-        <form method="post" action="/student/assessment/{assessment_id}/submit">
+        <form method="post"
+              action="/student/assessment/{assessment_id}/submit"
+              enctype="multipart/form-data">
             <input type="hidden" name="attempt_id" value="{attempt_id}">
             <input type="hidden" name="security_events" id="security_events" value="{{}}">
 
@@ -71535,6 +71756,52 @@ def student_submit_assessment(assessment_id):
             now_utc_iso(),
             now_utc_iso()
         ))
+        
+        cur.execute("""
+            SELECT id
+            FROM assessment_answers
+            WHERE attempt_id=?
+              AND question_id=?
+            LIMIT 1
+        """, (attempt_id, q["id"]))
+
+        answer_row = cur.fetchone()
+        answer_id = answer_row["id"] if answer_row else None
+
+        if answer_id:
+            uploaded_files = request.files.getlist(f"files_{q['id']}")
+
+            for uploaded_file in uploaded_files:
+                file_data = save_assessment_upload(
+                    uploaded_file,
+                    "student_answers"
+                )
+
+                if not file_data:
+                    continue
+
+                cur.execute("""
+                    INSERT INTO assessment_answer_files(
+                        answer_id,
+                        attempt_id,
+                        question_id,
+                        student_id,
+                        file_path,
+                        file_name,
+                        file_type,
+                        uploaded_at
+                    )
+                    VALUES(?,?,?,?,?,?,?,?)
+                """, (
+                    answer_id,
+                    attempt_id,
+                    q["id"],
+                    sid,
+                    file_data["file_path"],
+                    file_data["file_name"],
+                    file_data["file_type"],
+                    now_utc_iso()
+                ))
 
     cur.execute("""
         UPDATE assessment_attempts
@@ -71710,12 +71977,16 @@ def tutor_mark_assessment_attempt(attempt_id):
             ans.auto_mark,
             ans.manual_mark,
             ans.feedback,
+
+            q.id AS question_id,
             q.question_text,
             q.question_type,
             q.options_json,
             q.correct_index,
             q.memo,
-            q.points
+            q.points,
+            q.question_file_path,
+            q.question_file_name
         FROM assessment_answers ans
         JOIN assessment_questions q ON q.id = ans.question_id
         WHERE ans.attempt_id=?
@@ -71723,11 +71994,62 @@ def tutor_mark_assessment_attempt(attempt_id):
     """, (attempt_id,))
 
     answers = cur.fetchall()
+    
+    cur.execute("""
+        SELECT *
+        FROM assessment_answer_files
+        WHERE attempt_id=?
+        ORDER BY uploaded_at ASC
+    """, (attempt_id,))
+
+    file_rows = cur.fetchall()
+
+    answer_files = {}
+
+    for f in file_rows:
+        answer_files.setdefault(f["answer_id"], []).append(f)
+        
     conn.close()
 
     answer_cards = ""
 
     for ans in answers:
+        
+        question_file_html = ""
+
+        if ans["question_file_path"]:
+            question_file_html = f"""
+            <div class="mini" style="margin-top:8px">
+                Tutor question file:
+                <a class="links"
+                   target="_blank"
+                   href="/assessment-file/question/{ans['question_id']}">
+                    {escape(ans['question_file_name'] or 'Open question file')}
+                </a>
+            </div>
+            """
+
+        learner_files_html = ""
+
+        for f in answer_files.get(ans["answer_id"], []):
+            learner_files_html += f"""
+            <a class="btn mini secondary"
+               target="_blank"
+               href="/assessment-file/answer/{f['id']}">
+                {escape(f['file_name'] or 'Open file')}
+            </a>
+            """
+
+        if learner_files_html:
+            learner_files_html = f"""
+            <div class="card soft" style="border-left:5px solid #2563eb;margin-top:10px">
+                <strong>Learner uploaded file(s):</strong>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+                    {learner_files_html}
+                </div>
+            </div>
+            """
+        
         answer_display = ""
 
         if ans["question_type"] == "MCQ":
@@ -71781,6 +72103,8 @@ def tutor_mark_assessment_attempt(attempt_id):
             <p style="white-space:pre-wrap">{escape(ans['question_text'])}</p>
 
             {answer_display}
+            {question_file_html}
+            {learner_files_html}
 
             <p class="mini muted" style="white-space:pre-wrap">
                 Memo: {escape(ans['memo'] or 'No memo added.')}
@@ -71896,6 +72220,101 @@ def tutor_save_assessment_marks(attempt_id):
 
     return redirect(url_for("tutor_assessment_submissions", assessment_id=assessment_id))
 
+
+@app.get('/assessment-file/question/<int:question_id>')
+def assessment_question_file(question_id):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            q.question_file_path,
+            q.question_file_name,
+            a.id AS assessment_id,
+            a.tutor_id
+        FROM assessment_questions q
+        JOIN assessments a ON a.id = q.assessment_id
+        WHERE q.id=?
+        LIMIT 1
+    """, (question_id,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row or not row["question_file_path"]:
+        return page("Not Found", card_msg("Question file not found."))
+
+    allowed = False
+
+    if is_tutor() and int(is_tutor()) == int(row["tutor_id"]):
+        allowed = True
+
+    if is_student() and student_can_access_assessment(is_student(), row["assessment_id"]):
+        allowed = True
+
+    if is_admin() or is_high_admin():
+        allowed = True
+
+    if not allowed:
+        return page("Access Denied", card_msg("You are not allowed to open this file."))
+
+    if not os.path.exists(row["question_file_path"]):
+        return page("Not Found", card_msg("The file is missing from storage."))
+
+    return send_file(
+        row["question_file_path"],
+        as_attachment=False,
+        download_name=row["question_file_name"] or "assessment_file"
+    )
+
+
+@app.get('/assessment-file/answer/<int:file_id>')
+def assessment_answer_file(file_id):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            af.*,
+            at.student_id,
+            a.tutor_id
+        FROM assessment_answer_files af
+        JOIN assessment_attempts at ON at.id = af.attempt_id
+        JOIN assessments a ON a.id = at.assessment_id
+        WHERE af.id=?
+        LIMIT 1
+    """, (file_id,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return page("Not Found", card_msg("Answer file not found."))
+
+    allowed = False
+
+    if is_tutor() and int(is_tutor()) == int(row["tutor_id"]):
+        allowed = True
+
+    if is_student() and int(is_student()) == int(row["student_id"]):
+        allowed = True
+
+    if is_admin() or is_high_admin():
+        allowed = True
+
+    if not allowed:
+        return page("Access Denied", card_msg("You are not allowed to open this file."))
+
+    if not os.path.exists(row["file_path"]):
+        return page("Not Found", card_msg("The file is missing from storage."))
+
+    return send_file(
+        row["file_path"],
+        as_attachment=False,
+        download_name=row["file_name"] or "answer_file"
+    )
 
 
 @app.get('/admin/enrollment-approval-control')
