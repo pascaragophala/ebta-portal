@@ -31555,6 +31555,7 @@ def aqm_nav():
     <div class="toolbar">
         <a class="btn mini" href="/aqm/dashboard">Dashboard</a>
         <a class="btn mini" href="/aqm/workspace">Workspace</a>
+        <a class="btn mini" href="/aqm/students-info">Students Info</a>
         <a class="btn mini" href="/aqm/learners">Learner Performance</a>
         <a class="btn mini" href="/aqm/reports">Student Reports</a>
         <a class="btn mini" href="/aqm/manual-marks">Manual Marks</a>
@@ -35348,6 +35349,526 @@ def aqm_workspace_export():
         download_name=filename,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )  
+  
+  
+@app.get('/aqm/students-info')
+def aqm_students_info():
+
+    r = require_aqm()
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    grade_filter = request.args.get("grade", "").strip()
+    province_filter = request.args.get("province", "").strip()
+    selected_id = request.args.get("student_id", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # ================= FILTER DROPDOWNS =================
+
+    cur.execute("""
+        SELECT DISTINCT grade
+        FROM students
+        WHERE grade IS NOT NULL
+          AND TRIM(grade) != ''
+        ORDER BY grade
+    """)
+
+    grades = [row["grade"] for row in cur.fetchall()]
+
+    grade_options = "<option value=''>All Grades</option>"
+
+    for g in grades:
+        grade_options += f"""
+        <option value="{escape(g)}" {'selected' if grade_filter == g else ''}>
+            {escape(grade_label(g))}
+        </option>
+        """
+
+    cur.execute("""
+        SELECT DISTINCT province
+        FROM students
+        WHERE province IS NOT NULL
+          AND TRIM(province) != ''
+        ORDER BY province
+    """)
+
+    provinces = [row["province"] for row in cur.fetchall()]
+
+    province_options = "<option value=''>All Provinces</option>"
+
+    for p in provinces:
+        province_options += f"""
+        <option value="{escape(p)}" {'selected' if province_filter == p else ''}>
+            {escape(p)}
+        </option>
+        """
+
+    # ================= STUDENTS LIST =================
+
+    where = ["1=1"]
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                full_name LIKE ?
+                OR phone_whatsapp LIKE ?
+                OR guardian_name LIKE ?
+                OR guardian_phone LIKE ?
+                OR email LIKE ?
+                OR school LIKE ?
+                OR province LIKE ?
+                OR referral_code LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search, search, search, search]
+
+    if grade_filter:
+        where.append("grade=?")
+        params.append(grade_filter)
+
+    if province_filter:
+        where.append("province=?")
+        params.append(province_filter)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT
+            id,
+            full_name,
+            phone_whatsapp,
+            phone_type,
+            guardian_name,
+            guardian_phone,
+            guardian_phone_type,
+            email,
+            grade,
+            province,
+            school,
+            profile_picture_path,
+            profile_picture_uploaded_at,
+            referral_code,
+            referral_points,
+            referral_total_count,
+            created_at
+        FROM students
+        {where_sql}
+        ORDER BY full_name
+        LIMIT 300
+    """, params)
+
+    students = cur.fetchall()
+
+    student_rows = ""
+
+    for st in students:
+
+        profile_html = ""
+
+        if st["profile_picture_path"]:
+            profile_html = f"""
+            <img src="/profile-picture/{st['id']}"
+                 style="
+                    width:42px;
+                    height:42px;
+                    border-radius:50%;
+                    object-fit:cover;
+                    border:2px solid #1b5e20;
+                 ">
+            """
+        else:
+            initials = "".join([
+                part[0].upper()
+                for part in (st["full_name"] or "Student").split()[:2]
+            ])
+
+            profile_html = f"""
+            <div style="
+                width:42px;
+                height:42px;
+                border-radius:50%;
+                background:#eef6ee;
+                display:flex;
+                align-items:center;
+                justify-content:center;
+                border:2px solid #1b5e20;
+                font-weight:800;
+                color:#1b5e20;
+            ">
+                {escape(initials or "S")}
+            </div>
+            """
+
+        student_rows += f"""
+        <tr>
+            <td>
+                <div style="display:flex;gap:10px;align-items:center">
+                    {profile_html}
+
+                    <div>
+                        <strong>{escape(st["full_name"] or "—")}</strong>
+                        <div class="mini muted">
+                            ID: {st["id"]}
+                        </div>
+                    </div>
+                </div>
+            </td>
+
+            <td>{escape(grade_label(st["grade"] or ""))}</td>
+            <td>{escape(st["phone_whatsapp"] or "—")}</td>
+            <td>{escape(st["guardian_name"] or "—")}</td>
+            <td>{escape(st["guardian_phone"] or "—")}</td>
+            <td>{escape(st["email"] or "—")}</td>
+            <td>{escape(st["school"] or "—")}</td>
+            <td>{escape(st["province"] or "—")}</td>
+
+            <td>
+                <a class="btn mini success"
+                   href="/aqm/students-info?student_id={st['id']}">
+                    View Full Info
+                </a>
+
+                <a class="btn mini secondary"
+                   href="/aqm/workspace?student_id={st['id']}">
+                    Add Workspace Record
+                </a>
+            </td>
+        </tr>
+        """
+
+    # ================= SELECTED STUDENT FULL DETAILS =================
+
+    selected_student_html = ""
+
+    if selected_id:
+
+        cur.execute("""
+            SELECT
+                id,
+                full_name,
+                phone_whatsapp,
+                phone_type,
+                guardian_name,
+                guardian_phone,
+                guardian_phone_type,
+                email,
+                grade,
+                province,
+                school,
+                profile_picture_path,
+                profile_picture_uploaded_at,
+                referral_code,
+                referral_points,
+                referral_total_count,
+                created_at
+            FROM students
+            WHERE id=?
+            LIMIT 1
+        """, (selected_id,))
+
+        st = cur.fetchone()
+
+        if st:
+
+            cur.execute("""
+                SELECT
+                    e.id,
+                    e.month,
+                    e.status,
+                    e.payment_method,
+                    e.payment_ref,
+                    e.amount_paid,
+                    e.coupon_code,
+                    e.coupon_discount_amount,
+                    e.created_at,
+                    s.name AS subject_name,
+                    s.grade AS subject_grade
+                FROM enrollments e
+                JOIN subjects s ON s.id = e.subject_id
+                WHERE e.student_id=?
+                ORDER BY e.month DESC, s.grade, s.name
+            """, (selected_id,))
+
+            enrollments = cur.fetchall()
+
+            enrollment_rows = ""
+
+            for e in enrollments:
+                enrollment_rows += f"""
+                <tr>
+                    <td>{escape(e["month"] or "—")}</td>
+                    <td>{escape(grade_label(e["subject_grade"] or ""))}</td>
+                    <td>{escape(e["subject_name"] or "—")}</td>
+                    <td><span class="chip">{escape(e["status"] or "—")}</span></td>
+                    <td>R{e["amount_paid"] or 0}</td>
+                    <td>{escape(e["payment_method"] or "—")}</td>
+                    <td>{escape(e["payment_ref"] or "—")}</td>
+                    <td>{escape(e["coupon_code"] or "—")}</td>
+                    <td>R{e["coupon_discount_amount"] or 0}</td>
+                </tr>
+                """
+
+            cur.execute("""
+                SELECT
+                    id,
+                    file_name,
+                    file_type,
+                    grade,
+                    term,
+                    upload_date
+                FROM student_reports
+                WHERE student_id=?
+                ORDER BY upload_date DESC
+                LIMIT 20
+            """, (selected_id,))
+
+            reports = cur.fetchall()
+
+            report_rows = ""
+
+            for rep in reports:
+                report_rows += f"""
+                <tr>
+                    <td>{escape(rep["file_name"] or "—")}</td>
+                    <td>{escape(rep["file_type"] or "—")}</td>
+                    <td>{escape(rep["grade"] or "—")}</td>
+                    <td>{escape(rep["term"] or "—")}</td>
+                    <td>{escape((rep["upload_date"] or "")[:16].replace("T", " "))}</td>
+                </tr>
+                """
+
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS total_enrollments,
+                    SUM(CASE WHEN status='ACTIVE' THEN 1 ELSE 0 END) AS active_enrollments,
+                    SUM(CASE WHEN status='PENDING' THEN 1 ELSE 0 END) AS pending_enrollments,
+                    SUM(CASE WHEN status='LAPSED' THEN 1 ELSE 0 END) AS lapsed_enrollments
+                FROM enrollments
+                WHERE student_id=?
+            """, (selected_id,))
+
+            summary = cur.fetchone()
+
+            cur.execute("""
+                SELECT COUNT(*) AS total_reports
+                FROM student_reports
+                WHERE student_id=?
+            """, (selected_id,))
+
+            total_reports = cur.fetchone()["total_reports"] or 0
+
+            selected_photo = ""
+
+            if st["profile_picture_path"]:
+                selected_photo = f"""
+                <img src="/profile-picture/{st['id']}"
+                     style="
+                        width:90px;
+                        height:90px;
+                        border-radius:50%;
+                        object-fit:cover;
+                        border:3px solid #1b5e20;
+                     ">
+                """
+            else:
+                selected_photo = """
+                <div style="
+                    width:90px;
+                    height:90px;
+                    border-radius:50%;
+                    background:#eef6ee;
+                    display:flex;
+                    align-items:center;
+                    justify-content:center;
+                    border:3px solid #1b5e20;
+                    font-weight:800;
+                    color:#1b5e20;
+                    font-size:24px;
+                ">
+                    S
+                </div>
+                """
+
+            selected_student_html = f"""
+            <div class="card soft" style="border-left:5px solid #2563eb;margin-bottom:14px">
+
+                <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+                    {selected_photo}
+
+                    <div>
+                        <h2 style="margin:0">{escape(st["full_name"] or "Student")}</h2>
+                        <div class="mini muted">
+                            {escape(grade_label(st["grade"] or ""))} · {escape(st["phone_whatsapp"] or "No phone")}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="stats">
+                    {stat("Total Enrollments", summary["total_enrollments"] or 0)}
+                    {stat("Active", summary["active_enrollments"] or 0)}
+                    {stat("Pending", summary["pending_enrollments"] or 0)}
+                    {stat("Lapsed", summary["lapsed_enrollments"] or 0)}
+                    {stat("Reports Uploaded", total_reports)}
+                </div>
+
+                <div class="grid" style="margin-top:14px">
+                    <div class="card">
+                        <h3>Student Details</h3>
+
+                        <p><strong>Full Name:</strong> {escape(st["full_name"] or "—")}</p>
+                        <p><strong>WhatsApp Number:</strong> {escape(st["phone_whatsapp"] or "—")}</p>
+                        <p><strong>Phone Type:</strong> {escape(st["phone_type"] or "SA")}</p>
+                        <p><strong>Email:</strong> {escape(st["email"] or "—")}</p>
+                        <p><strong>Grade:</strong> {escape(grade_label(st["grade"] or ""))}</p>
+                        <p><strong>School:</strong> {escape(st["school"] or "—")}</p>
+                        <p><strong>Province:</strong> {escape(st["province"] or "—")}</p>
+                        <p><strong>Created At:</strong> {escape((st["created_at"] or "")[:16].replace("T", " "))}</p>
+                    </div>
+
+                    <div class="card">
+                        <h3>Guardian & Referral Details</h3>
+
+                        <p><strong>Guardian Name:</strong> {escape(st["guardian_name"] or "—")}</p>
+                        <p><strong>Guardian Phone:</strong> {escape(st["guardian_phone"] or "—")}</p>
+                        <p><strong>Guardian Phone Type:</strong> {escape(st["guardian_phone_type"] or "SA")}</p>
+                        <p><strong>Referral Code:</strong> {escape(st["referral_code"] or "—")}</p>
+                        <p><strong>Referral Points:</strong> {st["referral_points"] or 0}</p>
+                        <p><strong>Total Referrals:</strong> {st["referral_total_count"] or 0}</p>
+
+                        <div style="margin-top:12px">
+                            <a class="btn mini success"
+                               href="/aqm/workspace?student_id={st['id']}">
+                                Add AQM Workspace Record
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-top:14px">
+                    <h3>Enrollment History</h3>
+
+                    <div class="scroll-x">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Month</th>
+                                    <th>Grade</th>
+                                    <th>Subject</th>
+                                    <th>Status</th>
+                                    <th>Amount Paid</th>
+                                    <th>Payment Method</th>
+                                    <th>Payment Ref</th>
+                                    <th>Coupon Code</th>
+                                    <th>Discount</th>
+                                </tr>
+                            </thead>
+
+                            <tbody>
+                                {enrollment_rows or "<tr><td colspan='9'>No enrollment records found.</td></tr>"}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-top:14px">
+                    <h3>Uploaded Student Reports</h3>
+
+                    <div class="scroll-x">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>File Name</th>
+                                    <th>Type</th>
+                                    <th>Grade</th>
+                                    <th>Term</th>
+                                    <th>Uploaded</th>
+                                </tr>
+                            </thead>
+
+                            <tbody>
+                                {report_rows or "<tr><td colspan='5'>No reports uploaded yet.</td></tr>"}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            """
+
+    conn.close()
+
+    body = f"""
+    {aqm_nav()}
+
+    <section class="card">
+        <h1>Student Information</h1>
+
+        <p class="muted">
+            View student information for academic quality monitoring. Student PINs are intentionally not shown here.
+        </p>
+
+        <form method="get" class="toolbar" style="margin-bottom:14px">
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search name, phone, guardian, email, school, province or referral code">
+
+            <select name="grade">
+                {grade_options}
+            </select>
+
+            <select name="province">
+                {province_options}
+            </select>
+
+            <button class="btn mini success">
+                Search
+            </button>
+
+            <a class="btn mini secondary" href="/aqm/students-info">
+                Clear
+            </a>
+        </form>
+
+        {selected_student_html}
+
+        <div class="card soft">
+            <h2>All Students</h2>
+
+            <div class="mini muted" style="margin-bottom:8px">
+                Showing {len(students)} student(s). PINs are hidden.
+            </div>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Student</th>
+                            <th>Grade</th>
+                            <th>WhatsApp</th>
+                            <th>Guardian</th>
+                            <th>Guardian Phone</th>
+                            <th>Email</th>
+                            <th>School</th>
+                            <th>Province</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {student_rows or "<tr><td colspan='9'>No students found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </section>
+    """
+
+    return page("AQM Student Information", body)  
   
   
 @app.get('/aqm/learners')
