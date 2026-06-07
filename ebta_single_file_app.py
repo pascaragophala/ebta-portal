@@ -35363,6 +35363,17 @@ def aqm_students_info():
     province_filter = request.args.get("province", "").strip()
     selected_id = request.args.get("student_id", "").strip()
 
+    try:
+        page_num = int(request.args.get("page", 1))
+    except Exception:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 15
+    offset = (page_num - 1) * per_page
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -35459,12 +35470,78 @@ def aqm_students_info():
         FROM students
         {where_sql}
         ORDER BY full_name
-        LIMIT 300
+        LIMIT ? OFFSET ?
+    """, params + [per_page, offset])
+    
+    where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM students
+        {where_sql}
     """, params)
+
+    total_records = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total_records + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+    
 
     students = cur.fetchall()
 
     student_rows = ""
+    
+    pagination_params = {
+        "q": q,
+        "grade": grade_filter,
+        "province": province_filter
+    }
+
+    pagination_params = {
+        k: v for k, v in pagination_params.items()
+        if v not in ["", None]
+    }
+
+    def aqm_students_page_url(target_page):
+        params = dict(pagination_params)
+        params["page"] = target_page
+        return url_for("aqm_students_info") + "?" + urlencode(params)
+
+    pagination_html = ""
+
+    if total_pages > 1:
+        prev_disabled = page_num <= 1
+        next_disabled = page_num >= total_pages
+
+        pagination_html = f"""
+        <div class="toolbar" style="margin:12px 0;justify-content:space-between;align-items:center">
+            <div class="mini muted">
+                Page {page_num} of {total_pages} · Showing {len(students)} of {total_records} student(s)
+            </div>
+
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+                {
+                    f'<a class="btn mini secondary" href="{aqm_students_page_url(page_num - 1)}">Previous</a>'
+                    if not prev_disabled else
+                    '<span class="btn mini secondary" style="opacity:.5;pointer-events:none">Previous</span>'
+                }
+
+                {
+                    f'<a class="btn mini success" href="{aqm_students_page_url(page_num + 1)}">Next</a>'
+                    if not next_disabled else
+                    '<span class="btn mini success" style="opacity:.5;pointer-events:none">Next</span>'
+                }
+            </div>
+        </div>
+        """
+    else:
+        pagination_html = f"""
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(students)} of {total_records} student(s)
+        </div>
+        """
 
     for st in students:
 
@@ -35812,6 +35889,7 @@ def aqm_students_info():
         </p>
 
         <form method="get" class="toolbar" style="margin-bottom:14px">
+            <input type="hidden" name="page" value="1">
             <input name="q"
                    value="{escape(q)}"
                    placeholder="Search name, phone, guardian, email, school, province or referral code">
@@ -35839,8 +35917,10 @@ def aqm_students_info():
             <h2>All Students</h2>
 
             <div class="mini muted" style="margin-bottom:8px">
-                Showing {len(students)} student(s). PINs are hidden.
+                PINs are hidden.
             </div>
+
+            {pagination_html}
 
             <div class="scroll-x">
                 <table>
@@ -35863,6 +35943,8 @@ def aqm_students_info():
                     </tbody>
                 </table>
             </div>
+            
+            {pagination_html}
         </div>
 
     </section>
