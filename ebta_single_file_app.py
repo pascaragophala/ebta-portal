@@ -35582,7 +35582,7 @@ def aqm_students_info():
 
         student_rows += f"""
         <tr>
-            <td>
+            <td style="min-width:220px">
                 <div style="display:flex;gap:10px;align-items:center">
                     {profile_html}
 
@@ -35595,24 +35595,43 @@ def aqm_students_info():
                 </div>
             </td>
 
-            <td>{escape(grade_label(st["grade"] or ""))}</td>
-            <td>{escape(st["phone_whatsapp"] or "—")}</td>
-            <td>{escape(st["guardian_name"] or "—")}</td>
-            <td>{escape(st["guardian_phone"] or "—")}</td>
-            <td>{escape(st["email"] or "—")}</td>
-            <td>{escape(st["school"] or "—")}</td>
-            <td>{escape(st["province"] or "—")}</td>
+            <td style="min-width:90px">
+                {escape(grade_label(st["grade"] or ""))}
+            </td>
 
-            <td>
-                <a class="btn mini success"
-                   href="/aqm/students-info?student_id={st['id']}">
-                    View Full Info
-                </a>
+            <td style="min-width:190px">
+                <strong>{escape(st["phone_whatsapp"] or "—")}</strong>
+                <div class="mini muted" style="word-break:break-word">
+                    {escape(st["email"] or "No email")}
+                </div>
+            </td>
 
-                <a class="btn mini secondary"
-                   href="/aqm/workspace?student_id={st['id']}">
-                    Add Workspace Record
-                </a>
+            <td style="min-width:190px">
+                <strong>{escape(st["guardian_name"] or "—")}</strong>
+                <div class="mini muted">
+                    {escape(st["guardian_phone"] or "No guardian phone")}
+                </div>
+            </td>
+
+            <td style="min-width:190px">
+                <strong>{escape(st["school"] or "—")}</strong>
+                <div class="mini muted">
+                    {escape(st["province"] or "No province")}
+                </div>
+            </td>
+
+            <td style="min-width:170px">
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    <a class="btn mini success"
+                       href="/aqm/students-info?student_id={st['id']}">
+                        View Full Info
+                    </a>
+
+                    <a class="btn mini secondary"
+                       href="/aqm/workspace?student_id={st['id']}">
+                        Add Record
+                    </a>
+                </div>
             </td>
         </tr>
         """
@@ -35921,24 +35940,21 @@ def aqm_students_info():
 
             {pagination_html}
 
-            <div class="scroll-x">
-                <table>
+            <div class="scroll-x" style="overflow-x:auto;width:100%">
+                <table style="min-width:980px">
                     <thead>
                         <tr>
                             <th>Student</th>
                             <th>Grade</th>
-                            <th>WhatsApp</th>
+                            <th>Contact</th>
                             <th>Guardian</th>
-                            <th>Guardian Phone</th>
-                            <th>Email</th>
-                            <th>School</th>
-                            <th>Province</th>
+                            <th>School / Province</th>
                             <th>Action</th>
                         </tr>
                     </thead>
 
                     <tbody>
-                        {student_rows or "<tr><td colspan='9'>No students found.</td></tr>"}
+                        {student_rows or "<tr><td colspan='6'>No students found.</td></tr>"}
                     </tbody>
                 </table>
             </div>
