@@ -35884,7 +35884,7 @@ def aqm_students_info():
         <h1>Student Information</h1>
 
         <p class="muted">
-            View student information for academic quality monitoring. Student PINs are intentionally not shown here.
+            View student information for academic quality monitoring.
         </p>
 
         <form method="get" class="toolbar" style="margin-bottom:14px">
