@@ -35448,6 +35448,21 @@ def aqm_students_info():
 
     where_sql = "WHERE " + " AND ".join(where)
 
+    # Count records first
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM students
+        {where_sql}
+    """, params)
+
+    total_records = cur.fetchone()["c"] or 0
+    total_pages = max(1, (total_records + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    # Then fetch the actual students for the selected page
     cur.execute(f"""
         SELECT
             id,
@@ -35472,22 +35487,6 @@ def aqm_students_info():
         ORDER BY full_name
         LIMIT ? OFFSET ?
     """, params + [per_page, offset])
-    
-    where_sql = "WHERE " + " AND ".join(where)
-
-    cur.execute(f"""
-        SELECT COUNT(*) AS c
-        FROM students
-        {where_sql}
-    """, params)
-
-    total_records = cur.fetchone()["c"] or 0
-    total_pages = max(1, (total_records + per_page - 1) // per_page)
-
-    if page_num > total_pages:
-        page_num = total_pages
-        offset = (page_num - 1) * per_page
-    
 
     students = cur.fetchall()
 
@@ -37366,9 +37365,13 @@ def aqm_tutors():
 @app.get('/aqm/awards')
 def aqm_awards():
     r = require_aqm()
-    if r: return r
+    if r:
+        return r
 
     month = request.args.get("month") or get_setting("current_month")
+
+    # Hide/show schools toggle
+    hide_schools = request.args.get("hide_schools", "0") == "1"
 
     try:
         page_num = int(request.args.get("page", 1))
@@ -37432,10 +37435,33 @@ def aqm_awards():
     end_index = start_index + per_page
     records = all_records[start_index:end_index]
 
+    # Keep toggle state in pagination and buttons
+    def awards_url(target_page=1, hide=None):
+        params = {
+            "month": month,
+            "page": target_page,
+            "hide_schools": "1" if (hide_schools if hide is None else hide) else "0"
+        }
+        return url_for("aqm_awards") + "?" + urlencode(params)
+
+    school_header = "" if hide_schools else "<th>School</th>"
+    table_colspan = 5 if hide_schools else 6
+
     rows = ""
 
     for x in records:
-        avg_mark = x["avg_mark"] or 0
+        raw_avg = x["avg_mark"] or 0
+
+        try:
+            avg_mark = float(raw_avg)
+        except:
+            avg_mark = 0
+
+        # Cap percentage so it never shows above 100%
+        avg_mark = min(avg_mark, 100)
+        avg_mark = max(avg_mark, 0)
+
+        avg_mark_display = f"{avg_mark:.1f}".rstrip("0").rstrip(".")
 
         if avg_mark >= 90:
             award = "Top Achiever Candidate"
@@ -37448,14 +37474,21 @@ def aqm_awards():
         else:
             award = "Monitor for Improvement"
 
+        school_cell = ""
+
+        if not hide_schools:
+            school_cell = f"""
+            <td>{escape(x['school'] or '—')}</td>
+            """
+
         rows += f"""
         <tr>
-            <td>{x['full_name']}</td>
-            <td>{grade_label(x['grade'])}</td>
-            <td>{x['school'] or '—'}</td>
-            <td>{x['subject_name']}</td>
-            <td>{avg_mark}%</td>
-            <td><span class="chip">{award}</span></td>
+            <td>{escape(x['full_name'] or '—')}</td>
+            <td>{escape(grade_label(x['grade'] or ''))}</td>
+            {school_cell}
+            <td>{escape(x['subject_name'] or '—')}</td>
+            <td>{avg_mark_display}%</td>
+            <td><span class="chip">{escape(award)}</span></td>
         </tr>
         """
 
@@ -37468,7 +37501,7 @@ def aqm_awards():
         if page_num > 1:
             prev_link = f"""
             <a class="btn mini secondary"
-               href="/aqm/awards?month={month}&page={page_num - 1}">
+               href="{awards_url(page_num - 1)}">
                 ← Previous
             </a>
             """
@@ -37476,7 +37509,7 @@ def aqm_awards():
         if page_num < total_pages:
             next_link = f"""
             <a class="btn mini secondary"
-               href="/aqm/awards?month={month}&page={page_num + 1}">
+               href="{awards_url(page_num + 1)}">
                 Next →
             </a>
             """
@@ -37489,19 +37522,34 @@ def aqm_awards():
         </div>
         """
 
+    toggle_button = f"""
+    <a class="btn mini {'success' if hide_schools else 'secondary'}"
+       href="{awards_url(1, hide=not hide_schools)}">
+        {'Show Schools' if hide_schools else 'Hide Schools'}
+    </a>
+    """
+
     body = f"""
     {aqm_nav()}
 
     <div class="card">
         <h2>Awards & Top Achievers</h2>
 
-        <form method="get" style="max-width:220px;margin-bottom:12px">
-            <label>Month</label>
-            <input type="month" name="month" value="{month}" onchange="this.form.submit()">
+        <form method="get" class="toolbar" style="margin-bottom:12px;align-items:end">
+            <div style="max-width:220px">
+                <label>Month</label>
+                <input type="month" name="month" value="{escape(month)}" onchange="this.form.submit()">
+            </div>
+
+            <input type="hidden" name="hide_schools" value="{'1' if hide_schools else '0'}">
+            <input type="hidden" name="page" value="1">
+
+            {toggle_button}
         </form>
 
         <div class="mini muted" style="margin-bottom:10px">
-            Showing {len(records)} of {total_records} award records for {month}.
+            Showing {len(records)} of {total_records} award records for {escape(month)}.
+            {'Schools are hidden.' if hide_schools else 'Schools are visible.'}
         </div>
 
         <div class="scroll-x">
@@ -37510,14 +37558,15 @@ def aqm_awards():
                     <tr>
                         <th>Learner</th>
                         <th>Grade</th>
-                        <th>School</th>
+                        {school_header}
                         <th>Subject</th>
                         <th>Average</th>
                         <th>Award Suggestion</th>
                     </tr>
                 </thead>
+
                 <tbody>
-                    {rows or '<tr><td colspan="6">No award candidates found for this month.</td></tr>'}
+                    {rows or f'<tr><td colspan="{table_colspan}">No award candidates found for this month.</td></tr>'}
                 </tbody>
             </table>
         </div>
