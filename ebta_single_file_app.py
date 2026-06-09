@@ -74170,7 +74170,8 @@ def student_review_assessment_attempt(assessment_id):
 
 def assessment_security_flags_ui(flags_json):
     """
-    Converts assessment security JSON into a readable tutor-friendly UI.
+    Converts assessment security JSON into a compact, expandable tutor-friendly UI.
+    Closed by default to keep the submissions table short.
     """
 
     try:
@@ -74249,65 +74250,87 @@ def assessment_security_flags_ui(flags_json):
         reasons_text = ", ".join(reasons) if reasons else "Minor activity recorded."
 
     return f"""
-    <div style="
-        min-width:260px;
-        max-width:360px;
+    <details style="
+        width:260px;
+        max-width:280px;
         border:1px solid #e2e8f0;
         border-left:5px solid {border};
         border-radius:14px;
-        padding:10px;
         background:#ffffff;
-        box-shadow:0 6px 16px rgba(15,23,42,.06);
+        box-shadow:0 5px 14px rgba(15,23,42,.06);
+        overflow:hidden;
     ">
-        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">
-            <span class="chip {badge_class}">
-                {level} Risk
+        <summary style="
+            list-style:none;
+            cursor:pointer;
+            padding:10px 12px;
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:8px;
+        ">
+            <div>
+                <span class="chip {badge_class}" style="font-size:11px">
+                    {level} Risk
+                </span>
+
+                <div style="font-weight:800;color:#0f172a;margin-top:5px">
+                    {message}
+                </div>
+
+                <div class="mini muted">
+                    {total_events} event(s) · Click to view
+                </div>
+            </div>
+
+            <span style="
+                font-size:18px;
+                font-weight:900;
+                color:#64748b;
+            ">
+                ▾
             </span>
-
-            <span class="mini muted">
-                {total_events} event(s)
-            </span>
-        </div>
-
-        <div style="margin-top:8px;font-weight:800;color:#0f172a">
-            {message}
-        </div>
-
-        <div class="mini muted" style="margin-top:4px">
-            {escape(reasons_text)}
-        </div>
+        </summary>
 
         <div style="
-            display:grid;
-            grid-template-columns:repeat(3, minmax(70px, 1fr));
-            gap:6px;
-            margin-top:10px;
+            border-top:1px solid #e2e8f0;
+            padding:10px 12px 12px;
         ">
-            <div class="mini" style="background:#f8fafc;border-radius:10px;padding:6px">
-                <strong>{tab_switches}</strong><br>Tabs
+            <div class="mini muted" style="margin-bottom:8px">
+                {escape(reasons_text)}
             </div>
 
-            <div class="mini" style="background:#f8fafc;border-radius:10px;padding:6px">
-                <strong>{window_blurs}</strong><br>Focus
-            </div>
+            <div style="
+                display:grid;
+                grid-template-columns:repeat(2, minmax(80px, 1fr));
+                gap:6px;
+            ">
+                <div class="mini" style="background:#f8fafc;border-radius:10px;padding:7px">
+                    <strong>{tab_switches}</strong><br>Tab switches
+                </div>
 
-            <div class="mini" style="background:#f8fafc;border-radius:10px;padding:6px">
-                <strong>{copy_events}</strong><br>Copy
-            </div>
+                <div class="mini" style="background:#f8fafc;border-radius:10px;padding:7px">
+                    <strong>{window_blurs}</strong><br>Focus loss
+                </div>
 
-            <div class="mini" style="background:#f8fafc;border-radius:10px;padding:6px">
-                <strong>{paste_events}</strong><br>Paste
-            </div>
+                <div class="mini" style="background:#f8fafc;border-radius:10px;padding:7px">
+                    <strong>{copy_events}</strong><br>Copy
+                </div>
 
-            <div class="mini" style="background:#f8fafc;border-radius:10px;padding:6px">
-                <strong>{right_clicks}</strong><br>Right Click
-            </div>
+                <div class="mini" style="background:#f8fafc;border-radius:10px;padding:7px">
+                    <strong>{paste_events}</strong><br>Paste
+                </div>
 
-            <div class="mini" style="background:#f8fafc;border-radius:10px;padding:6px">
-                <strong>{fullscreen_exits}</strong><br>Fullscreen
+                <div class="mini" style="background:#f8fafc;border-radius:10px;padding:7px">
+                    <strong>{right_clicks}</strong><br>Right click
+                </div>
+
+                <div class="mini" style="background:#f8fafc;border-radius:10px;padding:7px">
+                    <strong>{fullscreen_exits}</strong><br>Fullscreen exit
+                </div>
             </div>
         </div>
-    </div>
+    </details>
     """
 
 
@@ -74395,7 +74418,7 @@ def tutor_assessment_submissions(assessment_id):
         </p>
 
         <div class="scroll-x" style="overflow-x:auto;width:100%">
-            <table style="min-width:1250px">
+            <table style="min-width:1050px">
                 <thead>
                     <tr>
                         <th>Learner</th>
