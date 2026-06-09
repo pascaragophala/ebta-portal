@@ -31563,6 +31563,7 @@ def aqm_nav():
         <a class="btn mini" href="/aqm/attendance">Attendance Trends</a>
         <a class="btn mini" href="/aqm/assignments">Assignment Completion</a>
         <a class="btn mini" href="/aqm/tutors">Tutor Work Progress</a>
+        <a class="btn mini" href="/aqm/assessment-analysis">Assessment Analysis</a>
         <a class="btn mini" href="/aqm/ratings">Student Ratings</a>
         <a class="btn mini" href="/aqm/awards">Awards</a>
         <a class="btn mini danger" href="/aqm/logout">Logout</a>
@@ -37720,6 +37721,588 @@ def aqm_view_report(rid):
         os.path.basename(row["file_path"]),
         as_attachment=False
     )
+    
+    
+def aqm_assessment_security_level(flags_json):
+    """
+    Reads assessment flags_json and returns LOW, MEDIUM or HIGH.
+    """
+
+    try:
+        flags = json.loads(flags_json or "{}")
+    except Exception:
+        flags = {}
+
+    tab_switches = int(flags.get("tab_switches", 0) or 0)
+    window_blurs = int(flags.get("window_blurs", 0) or 0)
+    copy_events = int(flags.get("copy_events", 0) or 0)
+    paste_events = int(flags.get("paste_events", 0) or 0)
+    right_clicks = int(flags.get("right_clicks", 0) or 0)
+    fullscreen_exits = int(flags.get("fullscreen_exits", 0) or 0)
+
+    score = 0
+
+    if tab_switches >= 5:
+        score += 35
+    elif tab_switches > 0:
+        score += 15
+
+    if window_blurs >= 5:
+        score += 30
+    elif window_blurs > 0:
+        score += 10
+
+    if paste_events > 0:
+        score += 25
+
+    if copy_events > 0:
+        score += 15
+
+    if right_clicks > 0:
+        score += 10
+
+    if fullscreen_exits > 0:
+        score += 20
+
+    if score >= 60:
+        return "HIGH"
+
+    if score >= 25:
+        return "MEDIUM"
+
+    return "LOW"
+
+
+def aqm_assessment_risk_chip(level):
+    if level == "HIGH":
+        return "<span class='chip danger'>High Risk</span>"
+
+    if level == "MEDIUM":
+        return "<span class='chip pending'>Medium Risk</span>"
+
+    return "<span class='chip active'>Low Risk</span>"    
+    
+ 
+@app.get('/aqm/assessment-analysis')
+def aqm_assessment_analysis():
+
+    r = require_aqm()
+    if r:
+        return r
+
+    month = request.args.get("month", "").strip() or get_setting("current_month")
+    tutor_filter = request.args.get("tutor_id", "").strip()
+    status_filter = request.args.get("status", "").strip()
+    subject_filter = request.args.get("subject_id", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # ================= FILTER OPTIONS =================
+
+    cur.execute("""
+        SELECT id, full_name
+        FROM tutors
+        WHERE COALESCE(is_active, 1)=1
+        ORDER BY full_name
+    """)
+
+    tutors = cur.fetchall()
+
+    tutor_options = "<option value=''>All Tutors</option>"
+
+    for t in tutors:
+        tutor_options += f"""
+        <option value="{t['id']}" {'selected' if tutor_filter == str(t['id']) else ''}>
+            {escape(t['full_name'])}
+        </option>
+        """
+
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
+    """)
+
+    subjects = cur.fetchall()
+
+    subject_options = "<option value=''>All Subjects</option>"
+
+    for s in subjects:
+        label = f"{grade_label(s['grade'])} - {s['name']}"
+        subject_options += f"""
+        <option value="{s['id']}" {'selected' if subject_filter == str(s['id']) else ''}>
+            {escape(label)}
+        </option>
+        """
+
+    # ================= WHERE FILTERS =================
+
+    where = ["a.month = ?"]
+    params = [month]
+
+    if tutor_filter:
+        where.append("a.tutor_id = ?")
+        params.append(tutor_filter)
+
+    if subject_filter:
+        where.append("a.subject_id = ?")
+        params.append(subject_filter)
+
+    if status_filter == "PUBLISHED":
+        where.append("a.is_published = 1")
+
+    if status_filter == "DRAFT":
+        where.append("a.is_published = 0")
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    # ================= OVERALL SUMMARY =================
+
+    cur.execute(f"""
+        SELECT
+            COUNT(DISTINCT a.id) AS total_assessments,
+            SUM(CASE WHEN a.is_published=1 THEN 1 ELSE 0 END) AS published_assessments,
+            SUM(CASE WHEN a.is_published=0 THEN 1 ELSE 0 END) AS draft_assessments,
+            COUNT(DISTINCT a.tutor_id) AS tutors_with_assessments
+        FROM assessments a
+        {where_sql}
+    """, params)
+
+    summary = cur.fetchone()
+
+    total_assessments = int(summary["total_assessments"] or 0)
+    published_assessments = int(summary["published_assessments"] or 0)
+    draft_assessments = int(summary["draft_assessments"] or 0)
+    tutors_with_assessments = int(summary["tutors_with_assessments"] or 0)
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT t.id) AS c
+        FROM tutors t
+        JOIN tutor_subjects ts ON ts.tutor_id = t.id
+        WHERE COALESCE(t.is_active, 1)=1
+    """)
+
+    total_active_tutors = int(cur.fetchone()["c"] or 0)
+    tutors_without_assessments = max(total_active_tutors - tutors_with_assessments, 0)
+
+    cur.execute(f"""
+        SELECT
+            COUNT(DISTINCT at.id) AS total_attempts,
+            SUM(CASE WHEN at.status='SUBMITTED' THEN 1 ELSE 0 END) AS submitted_attempts,
+            SUM(CASE WHEN at.status='MARKED' THEN 1 ELSE 0 END) AS marked_attempts,
+            ROUND(AVG(
+                CASE
+                    WHEN at.total_points > 0
+                    THEN (at.total_score * 100.0 / at.total_points)
+                    ELSE NULL
+                END
+            ), 1) AS avg_percentage
+        FROM assessments a
+        LEFT JOIN assessment_attempts at ON at.assessment_id = a.id
+        {where_sql}
+    """, params)
+
+    attempt_summary = cur.fetchone()
+
+    total_attempts = int(attempt_summary["total_attempts"] or 0)
+    submitted_attempts = int(attempt_summary["submitted_attempts"] or 0)
+    marked_attempts = int(attempt_summary["marked_attempts"] or 0)
+    avg_percentage = attempt_summary["avg_percentage"]
+
+    # ================= SECURITY RISK SUMMARY =================
+
+    cur.execute(f"""
+        SELECT at.flags_json
+        FROM assessments a
+        JOIN assessment_attempts at ON at.assessment_id = a.id
+        {where_sql}
+          AND at.status IN ('SUBMITTED', 'MARKED')
+    """, params)
+
+    high_security_count = 0
+    medium_security_count = 0
+    low_security_count = 0
+
+    for row in cur.fetchall():
+        level = aqm_assessment_security_level(row["flags_json"])
+
+        if level == "HIGH":
+            high_security_count += 1
+        elif level == "MEDIUM":
+            medium_security_count += 1
+        else:
+            low_security_count += 1
+
+    # ================= TUTOR ANALYSIS =================
+
+    tutor_where_extra = ""
+    tutor_params = [month]
+
+    if tutor_filter:
+        tutor_where_extra += " AND t.id=? "
+        tutor_params.append(tutor_filter)
+
+    cur.execute(f"""
+        SELECT
+            t.id AS tutor_id,
+            t.full_name AS tutor_name,
+
+            COUNT(DISTINCT ts.subject_id) AS assigned_subjects,
+
+            COUNT(DISTINCT a.id) AS assessment_count,
+            SUM(CASE WHEN a.is_published=1 THEN 1 ELSE 0 END) AS published_count,
+            SUM(CASE WHEN a.is_published=0 THEN 1 ELSE 0 END) AS draft_count,
+
+            COUNT(DISTINCT aq.id) AS question_count,
+            COUNT(DISTINCT at.id) AS attempt_count,
+            SUM(CASE WHEN at.status='SUBMITTED' THEN 1 ELSE 0 END) AS submitted_count,
+            SUM(CASE WHEN at.status='MARKED' THEN 1 ELSE 0 END) AS marked_count,
+
+            ROUND(AVG(
+                CASE
+                    WHEN at.total_points > 0
+                    THEN (at.total_score * 100.0 / at.total_points)
+                    ELSE NULL
+                END
+            ), 1) AS avg_score_percentage
+
+        FROM tutors t
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id = t.id
+        LEFT JOIN assessments a
+               ON a.tutor_id = t.id
+              AND a.month = ?
+        LEFT JOIN assessment_questions aq ON aq.assessment_id = a.id
+        LEFT JOIN assessment_attempts at ON at.assessment_id = a.id
+
+        WHERE COALESCE(t.is_active, 1)=1
+        {tutor_where_extra}
+
+        GROUP BY t.id
+        ORDER BY assessment_count DESC, attempt_count DESC, t.full_name
+    """, tutor_params)
+
+    tutor_rows_data = cur.fetchall()
+
+    tutor_rows = ""
+
+    for t in tutor_rows_data:
+
+        assessment_count = int(t["assessment_count"] or 0)
+        assigned_subjects = int(t["assigned_subjects"] or 0)
+        published_count = int(t["published_count"] or 0)
+        draft_count = int(t["draft_count"] or 0)
+        attempt_count = int(t["attempt_count"] or 0)
+        submitted_count = int(t["submitted_count"] or 0)
+        marked_count = int(t["marked_count"] or 0)
+        unmarked_count = max(submitted_count - marked_count, 0)
+
+        avg_score = "—"
+
+        if t["avg_score_percentage"] is not None:
+            avg_score = f"{t['avg_score_percentage']}%"
+
+        if assessment_count == 0 and assigned_subjects > 0:
+            status_chip = "<span class='chip danger'>No Assessment</span>"
+            recommended_action = "Follow up with this tutor. They have assigned subjects but no assessment for this month."
+        elif draft_count > 0 and published_count == 0:
+            status_chip = "<span class='chip pending'>Draft Only</span>"
+            recommended_action = "Ask tutor to complete and publish the assessment."
+        elif unmarked_count > 0:
+            status_chip = "<span class='chip pending'>Needs Marking</span>"
+            recommended_action = "Tutor must mark submitted long-question attempts."
+        else:
+            status_chip = "<span class='chip active'>On Track</span>"
+            recommended_action = "Continue monitoring submissions and performance."
+
+        tutor_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(t['tutor_name'] or '—')}</strong>
+                <div class="mini muted">Tutor ID: {t['tutor_id']}</div>
+            </td>
+            <td>{assigned_subjects}</td>
+            <td>{assessment_count}</td>
+            <td>{published_count}</td>
+            <td>{draft_count}</td>
+            <td>{t['question_count'] or 0}</td>
+            <td>{attempt_count}</td>
+            <td>{unmarked_count}</td>
+            <td>{avg_score}</td>
+            <td>{status_chip}</td>
+            <td>{escape(recommended_action)}</td>
+        </tr>
+        """
+
+    # ================= ASSESSMENT DETAILS =================
+
+    assessment_params = list(params)
+
+    cur.execute(f"""
+        SELECT
+            a.id,
+            a.title,
+            a.description,
+            a.month,
+            a.duration_minutes,
+            a.is_published,
+            a.opens_at,
+            a.closes_at,
+            a.lockdown_required,
+            a.show_results,
+            a.created_at,
+
+            t.full_name AS tutor_name,
+            s.name AS subject_name,
+            s.grade,
+
+            COUNT(DISTINCT q.id) AS question_count,
+            COUNT(DISTINCT at.id) AS attempt_count,
+            SUM(CASE WHEN at.status='SUBMITTED' THEN 1 ELSE 0 END) AS submitted_count,
+            SUM(CASE WHEN at.status='MARKED' THEN 1 ELSE 0 END) AS marked_count,
+
+            ROUND(AVG(
+                CASE
+                    WHEN at.total_points > 0
+                    THEN (at.total_score * 100.0 / at.total_points)
+                    ELSE NULL
+                END
+            ), 1) AS avg_percentage
+
+        FROM assessments a
+        JOIN tutors t ON t.id = a.tutor_id
+        JOIN subjects s ON s.id = a.subject_id
+        LEFT JOIN assessment_questions q ON q.assessment_id = a.id
+        LEFT JOIN assessment_attempts at ON at.assessment_id = a.id
+
+        {where_sql}
+
+        GROUP BY a.id
+        ORDER BY a.created_at DESC
+    """, assessment_params)
+
+    assessment_rows_data = cur.fetchall()
+
+    assessment_rows = ""
+
+    for a in assessment_rows_data:
+
+        publish_chip = "<span class='chip active'>Published</span>" if a["is_published"] else "<span class='chip pending'>Draft</span>"
+        lockdown_chip = "<span class='chip danger'>Monitoring On</span>" if a["lockdown_required"] else "<span class='chip'>Monitoring Off</span>"
+
+        avg_score = "—"
+
+        if a["avg_percentage"] is not None:
+            avg_score = f"{a['avg_percentage']}%"
+
+        submitted_count = int(a["submitted_count"] or 0)
+        marked_count = int(a["marked_count"] or 0)
+        unmarked_count = max(submitted_count - marked_count, 0)
+
+        if a["question_count"] == 0:
+            action_note = "Assessment has no questions yet."
+            action_chip = "<span class='chip danger'>Incomplete</span>"
+        elif not a["is_published"]:
+            action_note = "Assessment is still in draft mode."
+            action_chip = "<span class='chip pending'>Needs Publishing</span>"
+        elif unmarked_count > 0:
+            action_note = "Some submitted attempts still need marking."
+            action_chip = "<span class='chip pending'>Needs Marking</span>"
+        else:
+            action_note = "Assessment looks fine."
+            action_chip = "<span class='chip active'>Good</span>"
+
+        assessment_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(a['title'] or '—')}</strong>
+                <div class="mini muted">{escape(a['description'] or '')}</div>
+                <div class="mini muted">Created: {escape((a['created_at'] or '')[:16].replace('T', ' '))}</div>
+            </td>
+            <td>{escape(a['tutor_name'] or '—')}</td>
+            <td>{escape(grade_label(a['grade'] or ''))} - {escape(a['subject_name'] or '—')}</td>
+            <td>{publish_chip}</td>
+            <td>{a['duration_minutes']} min</td>
+            <td>{a['question_count'] or 0}</td>
+            <td>{a['attempt_count'] or 0}</td>
+            <td>{unmarked_count}</td>
+            <td>{avg_score}</td>
+            <td>{lockdown_chip}</td>
+            <td>
+                {action_chip}
+                <div class="mini muted" style="margin-top:5px">{escape(action_note)}</div>
+            </td>
+        </tr>
+        """
+
+    conn.close()
+
+    avg_percentage_display = "—"
+
+    if avg_percentage is not None:
+        avg_percentage_display = f"{avg_percentage}%"
+
+    status_options = f"""
+    <option value="">All Statuses</option>
+    <option value="PUBLISHED" {'selected' if status_filter == 'PUBLISHED' else ''}>Published</option>
+    <option value="DRAFT" {'selected' if status_filter == 'DRAFT' else ''}>Draft</option>
+    """
+
+    body = f"""
+    {aqm_nav()}
+
+    <section class="card">
+        <h1>Assessment Analysis</h1>
+
+        <p class="muted">
+            Analyse tutor assessment activity, learner attempts, marking progress, security risk and academic performance.
+        </p>
+
+        <form method="get"
+              class="toolbar"
+              style="margin-bottom:14px;align-items:end">
+
+            <div>
+                <label>Month</label>
+                <input type="month" name="month" value="{escape(month)}">
+            </div>
+
+            <div>
+                <label>Tutor</label>
+                <select name="tutor_id">
+                    {tutor_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Subject</label>
+                <select name="subject_id">
+                    {subject_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Status</label>
+                <select name="status">
+                    {status_options}
+                </select>
+            </div>
+
+            <button class="btn mini success">
+                Apply Filter
+            </button>
+
+            <a class="btn mini secondary" href="/aqm/assessment-analysis">
+                Clear
+            </a>
+        </form>
+
+        <div class="stats big">
+            {stat("Assessments Created", total_assessments)}
+            {stat("Published", published_assessments)}
+            {stat("Drafts", draft_assessments)}
+            {stat("Tutors With Assessments", tutors_with_assessments)}
+            {stat("Tutors Without Assessments", tutors_without_assessments)}
+            {stat("Total Attempts", total_attempts)}
+            {stat("Marked Attempts", marked_attempts)}
+            {stat("Average Score", avg_percentage_display)}
+        </div>
+
+        <div class="grid" style="margin-top:14px">
+            <div class="card soft" style="border-left:5px solid #dc2626">
+                <h2>Security Risk Summary</h2>
+
+                <div class="stats">
+                    {stat("High Risk Attempts", high_security_count)}
+                    {stat("Medium Risk Attempts", medium_security_count)}
+                    {stat("Low Risk Attempts", low_security_count)}
+                </div>
+
+                <p class="mini muted">
+                    High risk means the learner had several tab switches, focus losses, paste events or other suspicious actions.
+                </p>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #2563eb">
+                <h2>What AQM Should Check</h2>
+
+                <ul class="muted">
+                    <li>Tutors with no assessment for the selected month.</li>
+                    <li>Draft assessments that should be published.</li>
+                    <li>Submitted attempts that are not marked yet.</li>
+                    <li>Assessments with low average performance.</li>
+                    <li>Attempts with high security risk.</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Tutor Assessment Coverage</h2>
+
+            <p class="mini muted">
+                This section shows which tutors created assessments and which tutors still need follow-up.
+            </p>
+
+            <div class="scroll-x" style="overflow-x:auto;width:100%">
+                <table style="min-width:1250px">
+                    <thead>
+                        <tr>
+                            <th>Tutor</th>
+                            <th>Assigned Subjects</th>
+                            <th>Assessments</th>
+                            <th>Published</th>
+                            <th>Drafts</th>
+                            <th>Questions</th>
+                            <th>Attempts</th>
+                            <th>Unmarked</th>
+                            <th>Average</th>
+                            <th>Status</th>
+                            <th>AQM Action</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {tutor_rows or "<tr><td colspan='11'>No tutor assessment data found.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Assessment Details</h2>
+
+            <p class="mini muted">
+                This section shows every assessment created by tutors for the selected month.
+            </p>
+
+            <div class="scroll-x" style="overflow-x:auto;width:100%">
+                <table style="min-width:1350px">
+                    <thead>
+                        <tr>
+                            <th>Assessment</th>
+                            <th>Tutor</th>
+                            <th>Subject</th>
+                            <th>Status</th>
+                            <th>Duration</th>
+                            <th>Questions</th>
+                            <th>Attempts</th>
+                            <th>Unmarked</th>
+                            <th>Average</th>
+                            <th>Monitoring</th>
+                            <th>AQM Note</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {assessment_rows or "<tr><td colspan='11'>No assessments found for this filter.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("AQM Assessment Analysis", body) 
     
     
 @app.get('/student/profile')
