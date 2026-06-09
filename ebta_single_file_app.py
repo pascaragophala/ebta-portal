@@ -71922,6 +71922,10 @@ def tutor_assessments():
                 <a class="btn mini secondary" href="/tutor/assessments/{a['id']}/builder">
                     Build
                 </a>
+                
+                <a class="btn mini success" href="/tutor/assessments/{a['id']}/edit">
+                    Edit
+                </a>
 
                 <a class="btn mini" href="/tutor/assessments/{a['id']}/submissions">
                     Submissions
@@ -72185,6 +72189,222 @@ def tutor_create_assessment():
 
     return redirect(url_for("tutor_assessment_builder", assessment_id=assessment_id))
     
+    
+@app.get('/tutor/assessments/<int:assessment_id>/edit')
+def tutor_edit_assessment(assessment_id):
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT a.*, s.name AS subject_name, s.grade
+        FROM assessments a
+        JOIN subjects s ON s.id = a.subject_id
+        WHERE a.id=?
+          AND a.tutor_id=?
+        LIMIT 1
+    """, (assessment_id, tid))
+
+    a = cur.fetchone()
+    conn.close()
+
+    if not a:
+        return page("Not Found", card_msg("Assessment not found or not owned by you."))
+
+    def dt_value(value):
+        if not value:
+            return ""
+        return str(value)[:16]
+
+    body = f"""
+    <section class="card">
+        <div class="toolbar">
+            <a class="btn mini secondary" href="/tutor/assessments">
+                ← Back to Assessments
+            </a>
+
+            <a class="btn mini" href="/tutor/assessments/{assessment_id}/builder">
+                Open Builder
+            </a>
+        </div>
+
+        <h1>Edit Assessment</h1>
+
+        <p class="muted">
+            Update the assessment details, duration and availability times.
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <strong>Subject:</strong> {escape(grade_label(a["grade"] or ""))} - {escape(a["subject_name"] or "")}
+            <br>
+            <strong>Status:</strong> {"Published" if a["is_published"] else "Draft"}
+        </div>
+
+        <form method="post"
+              action="/tutor/assessments/{assessment_id}/edit"
+              class="grid"
+              style="grid-template-columns:1fr 1fr;gap:12px">
+
+            <div style="grid-column:1/-1">
+                <label>Title</label>
+                <input name="title" value="{escape(a["title"] or "")}" required>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Description</label>
+                <textarea name="description" rows="3">{escape(a["description"] or "")}</textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Instructions</label>
+                <textarea name="instructions" rows="4">{escape(a["instructions"] or "")}</textarea>
+            </div>
+
+            <div>
+                <label>Duration in minutes</label>
+                <input type="number"
+                       name="duration_minutes"
+                       value="{a["duration_minutes"] or 30}"
+                       min="5"
+                       max="240">
+            </div>
+
+            <div>
+                <label>Opens At</label>
+                <input type="datetime-local"
+                       name="opens_at"
+                       value="{escape(dt_value(a["opens_at"]))}">
+            </div>
+
+            <div>
+                <label>Closes At</label>
+                <input type="datetime-local"
+                       name="closes_at"
+                       value="{escape(dt_value(a["closes_at"]))}">
+            </div>
+
+            <div>
+                <label>
+                    <input type="checkbox" name="shuffle_questions" {'checked' if a["shuffle_questions"] else ''}>
+                    Shuffle questions
+                </label>
+            </div>
+
+            <div>
+                <label>
+                    <input type="checkbox" name="lockdown_required" {'checked' if a["lockdown_required"] else ''}>
+                    Lockdown-style monitoring
+                </label>
+            </div>
+
+            <div>
+                <label>
+                    <input type="checkbox" name="show_results" {'checked' if a["show_results"] else ''}>
+                    Show results to learners after submission
+                </label>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <button class="btn success">
+                    Save Changes
+                </button>
+            </div>
+        </form>
+    </section>
+    """
+
+    return page("Edit Assessment", body)    
+    
+    
+@app.post('/tutor/assessments/<int:assessment_id>/edit')
+def tutor_update_assessment(assessment_id):
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    title = request.form.get("title", "").strip()
+    description = request.form.get("description", "").strip()
+    instructions = request.form.get("instructions", "").strip()
+
+    try:
+        duration_minutes = int(request.form.get("duration_minutes", 30))
+    except Exception:
+        duration_minutes = 30
+
+    if duration_minutes < 5:
+        duration_minutes = 5
+
+    if duration_minutes > 240:
+        duration_minutes = 240
+
+    opens_at = parse_datetime_local(request.form.get("opens_at"))
+    closes_at = parse_datetime_local(request.form.get("closes_at"))
+
+    shuffle_questions = 1 if request.form.get("shuffle_questions") else 0
+    lockdown_required = 1 if request.form.get("lockdown_required") else 0
+    show_results = 1 if request.form.get("show_results") else 0
+
+    if not title:
+        return page("Error", card_msg("Assessment title is required."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id
+        FROM assessments
+        WHERE id=?
+          AND tutor_id=?
+        LIMIT 1
+    """, (assessment_id, tid))
+
+    if not cur.fetchone():
+        conn.close()
+        return page("Not Found", card_msg("Assessment not found or not owned by you."))
+
+    cur.execute("""
+        UPDATE assessments
+        SET title=?,
+            description=?,
+            instructions=?,
+            duration_minutes=?,
+            opens_at=?,
+            closes_at=?,
+            shuffle_questions=?,
+            show_results=?,
+            lockdown_required=?,
+            updated_at=?
+        WHERE id=?
+          AND tutor_id=?
+    """, (
+        title,
+        description,
+        instructions,
+        duration_minutes,
+        opens_at,
+        closes_at,
+        shuffle_questions,
+        show_results,
+        lockdown_required,
+        now_utc_iso(),
+        assessment_id,
+        tid
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("tutor_assessment_builder", assessment_id=assessment_id))
+    
    
 @app.get('/tutor/assessments/<int:assessment_id>/builder')
 def tutor_assessment_builder(assessment_id):
@@ -72269,6 +72489,12 @@ def tutor_assessment_builder(assessment_id):
             </td>
             <td>{options_html}</td>
             <td>{q['points']}</td>
+            <td>
+                <a class="btn mini secondary"
+                   href="/tutor/assessments/{assessment_id}/question/{q['id']}/edit">
+                    Edit
+                </a>
+            </td>
         </tr>
         """
 
@@ -72317,6 +72543,10 @@ def tutor_assessment_builder(assessment_id):
         <div class="toolbar">
             <a class="btn mini secondary" href="/tutor/assessments">
                 ← Back
+            </a>
+            
+            <a class="btn mini success" href="/tutor/assessments/{assessment_id}/edit">
+                Edit Assessment Settings
             </a>
 
             {publish_button}
@@ -72414,11 +72644,12 @@ def tutor_assessment_builder(assessment_id):
                             <th>Question</th>
                             <th>Options / Details</th>
                             <th>Points</th>
+                            <th>Action</th>
                         </tr>
                     </thead>
 
                     <tbody>
-                        {question_rows or "<tr><td colspan='5'>No questions added yet.</td></tr>"}
+                        {question_rows or "<tr><td colspan='6'>No questions added yet.</td></tr>"}
                     </tbody>
                 </table>
             </div>
@@ -72538,6 +72769,325 @@ def tutor_add_assessment_question(assessment_id):
     conn.close()
 
     return redirect(url_for("tutor_assessment_builder", assessment_id=assessment_id))
+
+
+@app.get('/tutor/assessments/<int:assessment_id>/question/<int:question_id>/edit')
+def tutor_edit_assessment_question(assessment_id, question_id):
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    if not tutor_owns_assessment(tid, assessment_id):
+        return page("Access Denied", card_msg("You cannot edit this assessment."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    attempts = assessment_attempt_count(conn, assessment_id)
+
+    if attempts > 0:
+        conn.close()
+        return page(
+            "Question Editing Locked",
+            card_msg("This assessment already has learner attempts. To protect submitted answers, question editing is locked.")
+        )
+
+    cur.execute("""
+        SELECT *
+        FROM assessment_questions
+        WHERE id=?
+          AND assessment_id=?
+        LIMIT 1
+    """, (question_id, assessment_id))
+
+    q = cur.fetchone()
+    conn.close()
+
+    if not q:
+        return page("Not Found", card_msg("Question not found."))
+
+    options_text = ""
+
+    if q["question_type"] == "MCQ":
+        try:
+            options = json.loads(q["options_json"] or "[]")
+        except Exception:
+            options = []
+
+        options_text = "\n".join(options)
+
+    current_file_html = ""
+
+    if q["question_file_path"]:
+        current_file_html = f"""
+        <div class="card soft" style="border-left:5px solid #2563eb;margin-top:10px">
+            <strong>Current attached file:</strong>
+            <a class="links"
+               target="_blank"
+               href="/assessment-file/question/{q['id']}">
+                {escape(q['question_file_name'] or 'Open file')}
+            </a>
+
+            <div style="margin-top:8px">
+                <label>
+                    <input type="checkbox" name="remove_question_file" form="editQuestionForm">
+                    Remove current file
+                </label>
+            </div>
+        </div>
+        """
+
+    body = f"""
+    <section class="card">
+        <div class="toolbar">
+            <a class="btn mini secondary" href="/tutor/assessments/{assessment_id}/builder">
+                ← Back to Builder
+            </a>
+        </div>
+
+        <h1>Edit Question</h1>
+
+        <form id="editQuestionForm"
+              method="post"
+              enctype="multipart/form-data"
+              action="/tutor/assessments/{assessment_id}/question/{question_id}/edit"
+              class="grid"
+              style="grid-template-columns:1fr 1fr;gap:12px">
+
+            <div>
+                <label>Question Type</label>
+                <select name="question_type">
+                    <option value="MCQ" {'selected' if q["question_type"] == 'MCQ' else ''}>Multiple Choice</option>
+                    <option value="LONG" {'selected' if q["question_type"] == 'LONG' else ''}>Long Question</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Question Order</label>
+                <input type="number" name="question_order" value="{q["question_order"] or 1}" min="1">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Question Text</label>
+                <textarea name="question_text" rows="5" required>{escape(q["question_text"] or "")}</textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Options for MCQ, one option per line</label>
+                <textarea name="options_text" rows="5">{escape(options_text)}</textarea>
+                <div class="mini muted">
+                    Only used for multiple-choice questions.
+                </div>
+            </div>
+
+            <div>
+                <label>Correct Option Number</label>
+                <input type="number"
+                       name="correct_index"
+                       value="{(q["correct_index"] or 0) + 1 if q["correct_index"] is not None else 1}"
+                       min="1">
+                <div class="mini muted">
+                    Example: enter 1 for option A, 2 for option B.
+                </div>
+            </div>
+
+            <div>
+                <label>Points</label>
+                <input type="number" name="points" value="{q["points"] or 1}" min="1">
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Memo / Marking Guide</label>
+                <textarea name="memo" rows="4">{escape(q["memo"] or "")}</textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                <label>Replace / Add Question File Optional</label>
+                <input type="file"
+                       name="question_file"
+                       accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.zip">
+
+                <div class="mini muted">
+                    Optional. Upload a new file only if this question needs a replacement file.
+                </div>
+
+                {current_file_html}
+            </div>
+
+            <div style="grid-column:1/-1">
+                <button class="btn success">
+                    Save Question Changes
+                </button>
+            </div>
+        </form>
+    </section>
+    """
+
+    return page("Edit Question", body)
+    
+    
+@app.post('/tutor/assessments/<int:assessment_id>/question/<int:question_id>/edit')
+def tutor_update_assessment_question(assessment_id, question_id):
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    if not tutor_owns_assessment(tid, assessment_id):
+        return page("Access Denied", card_msg("You cannot edit this assessment."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    attempts = assessment_attempt_count(conn, assessment_id)
+
+    if attempts > 0:
+        conn.close()
+        return page(
+            "Question Editing Locked",
+            card_msg("This assessment already has learner attempts. To protect submitted answers, question editing is locked.")
+        )
+
+    cur.execute("""
+        SELECT *
+        FROM assessment_questions
+        WHERE id=?
+          AND assessment_id=?
+        LIMIT 1
+    """, (question_id, assessment_id))
+
+    q = cur.fetchone()
+
+    if not q:
+        conn.close()
+        return page("Not Found", card_msg("Question not found."))
+
+    question_type = request.form.get("question_type", "MCQ").strip().upper()
+    question_text = request.form.get("question_text", "").strip()
+    options_text = request.form.get("options_text", "").strip()
+    memo = request.form.get("memo", "").strip()
+
+    try:
+        points = int(request.form.get("points", 1))
+    except Exception:
+        points = 1
+
+    try:
+        question_order = int(request.form.get("question_order", q["question_order"] or 1))
+    except Exception:
+        question_order = q["question_order"] or 1
+
+    try:
+        correct_index = int(request.form.get("correct_index", 1)) - 1
+    except Exception:
+        correct_index = 0
+
+    if points < 1:
+        points = 1
+
+    if question_order < 1:
+        question_order = 1
+
+    if question_type not in ["MCQ", "LONG"]:
+        question_type = "MCQ"
+
+    if not question_text:
+        conn.close()
+        return page("Error", card_msg("Question text is required."))
+
+    options_json = None
+
+    if question_type == "MCQ":
+        options = [
+            x.strip()
+            for x in options_text.splitlines()
+            if x.strip()
+        ]
+
+        if len(options) < 2:
+            conn.close()
+            return page("Error", card_msg("Multiple-choice questions need at least two options."))
+
+        if correct_index < 0 or correct_index >= len(options):
+            correct_index = 0
+
+        options_json = json.dumps(options)
+
+    else:
+        correct_index = None
+        options_json = None
+
+    remove_file = request.form.get("remove_question_file") == "on"
+
+    question_file_path = q["question_file_path"]
+    question_file_name = q["question_file_name"]
+    question_file_type = q["question_file_type"]
+    question_file_uploaded_at = q["question_file_uploaded_at"]
+
+    if remove_file:
+        question_file_path = None
+        question_file_name = None
+        question_file_type = None
+        question_file_uploaded_at = None
+
+    new_file_data = save_assessment_upload(
+        request.files.get("question_file"),
+        "tutor_questions"
+    )
+
+    if new_file_data:
+        question_file_path = new_file_data["file_path"]
+        question_file_name = new_file_data["file_name"]
+        question_file_type = new_file_data["file_type"]
+        question_file_uploaded_at = now_utc_iso()
+
+    cur.execute("""
+        UPDATE assessment_questions
+        SET question_type=?,
+            question_text=?,
+            options_json=?,
+            correct_index=?,
+            memo=?,
+            points=?,
+            question_order=?,
+            question_file_path=?,
+            question_file_name=?,
+            question_file_type=?,
+            question_file_uploaded_at=?
+        WHERE id=?
+          AND assessment_id=?
+    """, (
+        question_type,
+        question_text,
+        options_json,
+        correct_index,
+        memo,
+        points,
+        question_order,
+        question_file_path,
+        question_file_name,
+        question_file_type,
+        question_file_uploaded_at,
+        question_id,
+        assessment_id
+    ))
+
+    cur.execute("""
+        UPDATE assessments
+        SET updated_at=?
+        WHERE id=?
+          AND tutor_id=?
+    """, (now_utc_iso(), assessment_id, tid))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("tutor_assessment_builder", assessment_id=assessment_id))    
 
 
 @app.post('/tutor/assessments/<int:assessment_id>/publish')
