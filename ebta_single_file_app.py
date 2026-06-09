@@ -19920,6 +19920,7 @@ def admin_nav():
                     ("Uploads Control", "admin_uploads_control", "/admin/uploads-control"),
                     ("Unlock Uploads", "admin_materials", "/admin/materials"),
                     ("Analytics", "admin_analytics", "/admin/analytics"),
+                    ("Predictive Models", "admin_predictive_models", "/admin/predictive-models"),
                     ("Assessment Delete Locks", "admin_assessment_delete_locks", "/admin/assessment-delete-locks"),
                 ],
                 False
@@ -69600,6 +69601,780 @@ def admin_shift_month(month, offset):
     new_y = total // 12
     new_m = (total % 12) + 1
     return f"{new_y:04d}-{new_m:02d}"
+
+
+def prediction_shift_month(month, offset):
+    y, m = [int(x) for x in month.split("-")]
+    total = (y * 12 + (m - 1)) + offset
+    new_y = total // 12
+    new_m = (total % 12) + 1
+    return f"{new_y:04d}-{new_m:02d}"
+
+
+def prediction_days_in_month(month):
+    y, m = [int(x) for x in month.split("-")]
+    return calendar.monthrange(y, m)[1]
+
+
+def prediction_today_day(month):
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date()
+
+    if today.strftime("%Y-%m") == month:
+        return max(1, today.day)
+
+    return prediction_days_in_month(month)
+
+
+def prediction_pct_change(current, previous):
+    current = float(current or 0)
+    previous = float(previous or 0)
+
+    if previous == 0 and current > 0:
+        return 100
+
+    if previous == 0:
+        return 0
+
+    return round(((current - previous) / previous) * 100, 1)
+
+
+def prediction_level(score):
+    score = int(score or 0)
+
+    if score >= 75:
+        return "CRITICAL"
+
+    if score >= 50:
+        return "HIGH"
+
+    if score >= 25:
+        return "MEDIUM"
+
+    return "LOW"
+
+
+def prediction_chip(level):
+    if level == "CRITICAL":
+        return "<span class='chip danger'>Critical</span>"
+
+    if level == "HIGH":
+        return "<span class='chip danger'>High</span>"
+
+    if level == "MEDIUM":
+        return "<span class='chip pending'>Medium</span>"
+
+    return "<span class='chip active'>Low</span>"
+
+
+def prediction_money(value):
+    try:
+        return f"R{float(value or 0):,.2f}"
+    except Exception:
+        return "R0.00"
+        
+        
+def admin_predictive_models_data(month):
+    """
+    Predictive dashboard for EBTA.
+    Uses live portal data and simple forecasting/risk scoring.
+    """
+
+    prev_month = prediction_shift_month(month, -1)
+    month_2 = prediction_shift_month(month, -2)
+    month_3 = prediction_shift_month(month, -3)
+
+    days_in_month = prediction_days_in_month(month)
+    day_now = prediction_today_day(month)
+    progress_ratio = max(day_now / days_in_month, 0.01)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    def scalar(sql, params=()):
+        cur.execute(sql, params)
+        row = cur.fetchone()
+        if not row:
+            return 0
+        return list(dict(row).values())[0] or 0
+
+    def month_revenue(m):
+        cur.execute("""
+            SELECT ROUND(SUM(
+                e.amount_paid * 1.0 / NULLIF((
+                    SELECT COUNT(*)
+                    FROM enrollments e2
+                    WHERE e2.student_id = e.student_id
+                      AND e2.month = e.month
+                      AND e2.status = 'ACTIVE'
+                ), 0)
+            ), 2) AS total_revenue
+            FROM enrollments e
+            WHERE e.month=?
+              AND e.status='ACTIVE'
+        """, (m,))
+
+        row = cur.fetchone()
+        return float(row["total_revenue"] or 0) if row else 0
+
+    def active_enrollments(m):
+        return int(scalar("""
+            SELECT COUNT(*)
+            FROM enrollments
+            WHERE month=?
+              AND status='ACTIVE'
+        """, (m,)))
+
+    def pending_enrollments(m):
+        return int(scalar("""
+            SELECT COUNT(*)
+            FROM enrollments
+            WHERE month=?
+              AND status='PENDING'
+        """, (m,)))
+
+    def lapsed_enrollments(m):
+        return int(scalar("""
+            SELECT COUNT(*)
+            FROM enrollments
+            WHERE month=?
+              AND status='LAPSED'
+        """, (m,)))
+
+    def unique_students(m):
+        return int(scalar("""
+            SELECT COUNT(DISTINCT student_id)
+            FROM enrollments
+            WHERE month=?
+              AND status='ACTIVE'
+        """, (m,)))
+
+    current_revenue = month_revenue(month)
+    prev_revenue = month_revenue(prev_month)
+
+    current_active = active_enrollments(month)
+    prev_active = active_enrollments(prev_month)
+
+    current_pending = pending_enrollments(month)
+    current_lapsed = lapsed_enrollments(month)
+    current_students = unique_students(month)
+    prev_students = unique_students(prev_month)
+
+    predicted_month_end_revenue = round(current_revenue / progress_ratio, 2)
+    predicted_month_end_active = int(round(current_active / progress_ratio, 0))
+    predicted_month_end_students = int(round(current_students / progress_ratio, 0))
+
+    revenue_change_pct = prediction_pct_change(current_revenue, prev_revenue)
+    active_change_pct = prediction_pct_change(current_active, prev_active)
+    student_change_pct = prediction_pct_change(current_students, prev_students)
+
+    # ================= Daily activity =================
+
+    today = datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date().isoformat()
+
+    today_enrollments = int(scalar("""
+        SELECT COUNT(*)
+        FROM enrollments
+        WHERE substr(created_at, 1, 10)=?
+    """, (today,)))
+
+    today_attendance = int(scalar("""
+        SELECT COUNT(*)
+        FROM attendance
+        WHERE date=?
+    """, (today,)))
+
+    today_submissions = int(scalar("""
+        SELECT COUNT(*)
+        FROM submissions
+        WHERE substr(submitted_at, 1, 10)=?
+    """, (today,)))
+
+    today_uploads = int(scalar("""
+        SELECT COUNT(*)
+        FROM materials
+        WHERE substr(created_at, 1, 10)=?
+    """, (today,)))
+
+    # ================= Subject risks =================
+
+    cur.execute("""
+        SELECT
+            s.id AS subject_id,
+            s.name || ' (' || s.grade || ')' AS subject,
+
+            SUM(CASE WHEN e.month=? AND e.status='ACTIVE' THEN 1 ELSE 0 END) AS m3_count,
+            SUM(CASE WHEN e.month=? AND e.status='ACTIVE' THEN 1 ELSE 0 END) AS m2_count,
+            SUM(CASE WHEN e.month=? AND e.status='ACTIVE' THEN 1 ELSE 0 END) AS prev_count,
+            SUM(CASE WHEN e.month=? AND e.status='ACTIVE' THEN 1 ELSE 0 END) AS current_count,
+
+            SUM(CASE WHEN e.month=? AND e.status='PENDING' THEN 1 ELSE 0 END) AS pending_count,
+            SUM(CASE WHEN e.month=? AND e.status='LAPSED' THEN 1 ELSE 0 END) AS lapsed_count
+
+        FROM subjects s
+        LEFT JOIN enrollments e ON e.subject_id = s.id
+        GROUP BY s.id
+        ORDER BY current_count ASC, subject ASC
+    """, (month_3, month_2, prev_month, month, month, month))
+
+    subject_risks = []
+
+    for row in cur.fetchall():
+        m3_count = int(row["m3_count"] or 0)
+        m2_count = int(row["m2_count"] or 0)
+        prev_count = int(row["prev_count"] or 0)
+        current_count = int(row["current_count"] or 0)
+        pending_count = int(row["pending_count"] or 0)
+        lapsed_count = int(row["lapsed_count"] or 0)
+
+        risk_score = 0
+        reasons = []
+
+        if current_count == 0:
+            risk_score += 35
+            reasons.append("No active learner this month")
+
+        if 0 < current_count <= 3:
+            risk_score += 25
+            reasons.append("Very low active learners")
+
+        if current_count < prev_count:
+            risk_score += 20
+            reasons.append("Lower than last month")
+
+        if m3_count > m2_count > prev_count > current_count:
+            risk_score += 30
+            reasons.append("Declining for 4 months")
+
+        if pending_count >= 3:
+            risk_score += 10
+            reasons.append("Many pending enrollments")
+
+        if lapsed_count >= 2:
+            risk_score += 10
+            reasons.append("Lapsed enrollments need follow-up")
+
+        if risk_score > 0:
+            subject_risks.append({
+                "subject": row["subject"],
+                "m3_count": m3_count,
+                "m2_count": m2_count,
+                "prev_count": prev_count,
+                "current_count": current_count,
+                "pending_count": pending_count,
+                "lapsed_count": lapsed_count,
+                "risk_score": risk_score,
+                "risk_level": prediction_level(risk_score),
+                "reason": ", ".join(reasons),
+                "action": "Push marketing, follow up pending learners, check tutor quality and contact parents."
+            })
+
+    subject_risks = sorted(subject_risks, key=lambda x: x["risk_score"], reverse=True)[:20]
+
+    # ================= Tutor risks =================
+
+    cur.execute("""
+        SELECT
+            t.id AS tutor_id,
+            t.full_name AS tutor_name,
+
+            COUNT(DISTINCT ts.subject_id) AS assigned_subjects,
+
+            COUNT(DISTINCT m.id) AS uploads_count,
+            SUM(CASE WHEN m.is_assignment=1 THEN 1 ELSE 0 END) AS assignments_count,
+
+            COUNT(DISTINCT sess_log.id) AS attendance_logs,
+
+            ROUND(AVG(lr.rating), 2) AS avg_rating,
+            COUNT(lr.id) AS rating_count
+
+        FROM tutors t
+
+        LEFT JOIN tutor_subjects ts
+            ON ts.tutor_id = t.id
+
+        LEFT JOIN materials m
+            ON m.tutor_id = t.id
+           AND m.month = ?
+
+        LEFT JOIN attendance_sessions sess_log
+            ON sess_log.tutor_id = t.id
+           AND sess_log.month = ?
+
+        LEFT JOIN lesson_ratings lr
+            ON lr.subject_id = ts.subject_id
+           AND lr.month = ?
+
+        WHERE COALESCE(t.is_active, 1)=1
+
+        GROUP BY t.id
+        ORDER BY uploads_count ASC, attendance_logs ASC
+    """, (month, month, month))
+
+    tutor_risks = []
+
+    for row in cur.fetchall():
+        uploads_count = int(row["uploads_count"] or 0)
+        assignments_count = int(row["assignments_count"] or 0)
+        attendance_logs = int(row["attendance_logs"] or 0)
+        assigned_subjects = int(row["assigned_subjects"] or 0)
+        avg_rating = row["avg_rating"]
+        rating_count = int(row["rating_count"] or 0)
+
+        risk_score = 0
+        reasons = []
+
+        if assigned_subjects > 0 and uploads_count == 0:
+            risk_score += 30
+            reasons.append("No uploads this month")
+
+        if assigned_subjects > 0 and attendance_logs == 0:
+            risk_score += 25
+            reasons.append("No attendance logs")
+
+        if assigned_subjects > 0 and assignments_count == 0:
+            risk_score += 15
+            reasons.append("No assignments uploaded")
+
+        if avg_rating is not None and float(avg_rating) < 3:
+            risk_score += 25
+            reasons.append("Low learner rating")
+
+        if rating_count == 0 and assigned_subjects > 0:
+            risk_score += 5
+            reasons.append("No rating feedback yet")
+
+        if risk_score > 0:
+            tutor_risks.append({
+                "tutor_name": row["tutor_name"],
+                "assigned_subjects": assigned_subjects,
+                "uploads_count": uploads_count,
+                "assignments_count": assignments_count,
+                "attendance_logs": attendance_logs,
+                "avg_rating": avg_rating,
+                "rating_count": rating_count,
+                "risk_score": risk_score,
+                "risk_level": prediction_level(risk_score),
+                "reason": ", ".join(reasons),
+                "action": "Tutor manager must check uploads, recordings, attendance logs and session quality today."
+            })
+
+    tutor_risks = sorted(tutor_risks, key=lambda x: x["risk_score"], reverse=True)[:20]
+
+    # ================= Assignment/submission risks =================
+
+    cur.execute("""
+        SELECT
+            s.name || ' (' || s.grade || ')' AS subject,
+            COUNT(DISTINCT m.id) AS assignment_count,
+            COUNT(DISTINCT sub.id) AS submission_count,
+            ROUND(AVG(sub.mark), 1) AS avg_mark
+        FROM subjects s
+        LEFT JOIN materials m
+            ON m.subject_id = s.id
+           AND m.month = ?
+           AND m.is_assignment = 1
+        LEFT JOIN submissions sub
+            ON sub.material_id = m.id
+        GROUP BY s.id
+        HAVING assignment_count > 0
+        ORDER BY submission_count ASC
+    """, (month,))
+
+    assignment_risks = []
+
+    for row in cur.fetchall():
+        assignment_count = int(row["assignment_count"] or 0)
+        submission_count = int(row["submission_count"] or 0)
+        avg_mark = row["avg_mark"]
+
+        risk_score = 0
+        reasons = []
+
+        if assignment_count > 0 and submission_count == 0:
+            risk_score += 35
+            reasons.append("Assignments uploaded but no submissions")
+
+        if avg_mark is not None and float(avg_mark) < 50:
+            risk_score += 25
+            reasons.append("Average mark below 50%")
+
+        if risk_score > 0:
+            assignment_risks.append({
+                "subject": row["subject"],
+                "assignment_count": assignment_count,
+                "submission_count": submission_count,
+                "avg_mark": avg_mark,
+                "risk_score": risk_score,
+                "risk_level": prediction_level(risk_score),
+                "reason": ", ".join(reasons),
+                "action": "Remind learners, ask tutor to explain again, and request tutor manager to monitor marking."
+            })
+
+    assignment_risks = sorted(assignment_risks, key=lambda x: x["risk_score"], reverse=True)[:20]
+
+    # ================= Overall risk score =================
+
+    overall_score = 0
+    overall_reasons = []
+
+    if predicted_month_end_revenue < prev_revenue:
+        overall_score += 25
+        overall_reasons.append("Projected revenue is lower than last month")
+
+    if predicted_month_end_active < prev_active:
+        overall_score += 25
+        overall_reasons.append("Projected active enrollments are lower than last month")
+
+    if current_pending >= 10:
+        overall_score += 15
+        overall_reasons.append("High pending enrollments")
+
+    if current_lapsed >= 10:
+        overall_score += 15
+        overall_reasons.append("High lapsed enrollments")
+
+    if len(subject_risks) >= 5:
+        overall_score += 15
+        overall_reasons.append("Many subject-level risks")
+
+    if len(tutor_risks) >= 5:
+        overall_score += 15
+        overall_reasons.append("Many tutor-level risks")
+
+    overall_level = prediction_level(overall_score)
+
+    daily_actions = []
+
+    if current_pending > 0:
+        daily_actions.append(f"Follow up {current_pending} pending enrollment(s) before end of day.")
+
+    if current_lapsed > 0:
+        daily_actions.append(f"Review {current_lapsed} lapsed enrollment(s) and recover possible learners.")
+
+    if subject_risks:
+        daily_actions.append(f"Prioritise {subject_risks[0]['subject']} because it has the highest subject risk.")
+
+    if tutor_risks:
+        daily_actions.append(f"Ask the tutor manager to check {tutor_risks[0]['tutor_name']} today.")
+
+    if assignment_risks:
+        daily_actions.append(f"Push assignment completion for {assignment_risks[0]['subject']}.")
+
+    if not daily_actions:
+        daily_actions.append("No urgent risk detected today. Continue monitoring attendance, uploads and enrollments.")
+
+    conn.close()
+
+    return {
+        "month": month,
+        "prev_month": prev_month,
+        "month_2": month_2,
+        "month_3": month_3,
+        "today": today,
+
+        "current_revenue": current_revenue,
+        "prev_revenue": prev_revenue,
+        "predicted_month_end_revenue": predicted_month_end_revenue,
+        "revenue_change_pct": revenue_change_pct,
+
+        "current_active": current_active,
+        "prev_active": prev_active,
+        "predicted_month_end_active": predicted_month_end_active,
+        "active_change_pct": active_change_pct,
+
+        "current_students": current_students,
+        "prev_students": prev_students,
+        "predicted_month_end_students": predicted_month_end_students,
+        "student_change_pct": student_change_pct,
+
+        "current_pending": current_pending,
+        "current_lapsed": current_lapsed,
+
+        "today_enrollments": today_enrollments,
+        "today_attendance": today_attendance,
+        "today_submissions": today_submissions,
+        "today_uploads": today_uploads,
+
+        "overall_score": overall_score,
+        "overall_level": overall_level,
+        "overall_reasons": overall_reasons,
+
+        "subject_risks": subject_risks,
+        "tutor_risks": tutor_risks,
+        "assignment_risks": assignment_risks,
+        "daily_actions": daily_actions
+    }
+
+
+@app.get('/admin/predictive-models')
+@require_high_admin
+def admin_predictive_models():
+
+    r = require_admin()
+    if r:
+        return r
+
+    month = request.args.get("month", "").strip() or get_admin_active_month()
+    data = admin_predictive_models_data(month)
+
+    def metric_card(title, value, note="", border="#1b5e20"):
+        return f"""
+        <div class="card soft" style="border-left:5px solid {border}">
+            <div class="mini muted">{escape(title)}</div>
+            <div style="font-size:24px;font-weight:900;margin:6px 0">
+                {value}
+            </div>
+            <div class="mini muted">{note}</div>
+        </div>
+        """
+
+    subject_rows = ""
+
+    for x in data["subject_risks"]:
+        subject_rows += f"""
+        <tr>
+            <td><strong>{escape(x["subject"])}</strong></td>
+            <td>{x["current_count"]}</td>
+            <td>{x["prev_count"]}</td>
+            <td>{x["pending_count"]}</td>
+            <td>{x["lapsed_count"]}</td>
+            <td>{prediction_chip(x["risk_level"])}</td>
+            <td>{escape(x["reason"])}</td>
+            <td>{escape(x["action"])}</td>
+        </tr>
+        """
+
+    tutor_rows = ""
+
+    for x in data["tutor_risks"]:
+        rating = "—" if x["avg_rating"] is None else f"{x['avg_rating']}/5"
+
+        tutor_rows += f"""
+        <tr>
+            <td><strong>{escape(x["tutor_name"] or "—")}</strong></td>
+            <td>{x["assigned_subjects"]}</td>
+            <td>{x["uploads_count"]}</td>
+            <td>{x["assignments_count"]}</td>
+            <td>{x["attendance_logs"]}</td>
+            <td>{rating}</td>
+            <td>{prediction_chip(x["risk_level"])}</td>
+            <td>{escape(x["reason"])}</td>
+            <td>{escape(x["action"])}</td>
+        </tr>
+        """
+
+    assignment_rows = ""
+
+    for x in data["assignment_risks"]:
+        avg_mark = "—" if x["avg_mark"] is None else f"{x['avg_mark']}%"
+
+        assignment_rows += f"""
+        <tr>
+            <td><strong>{escape(x["subject"])}</strong></td>
+            <td>{x["assignment_count"]}</td>
+            <td>{x["submission_count"]}</td>
+            <td>{avg_mark}</td>
+            <td>{prediction_chip(x["risk_level"])}</td>
+            <td>{escape(x["reason"])}</td>
+            <td>{escape(x["action"])}</td>
+        </tr>
+        """
+
+    action_cards = ""
+
+    for index, action in enumerate(data["daily_actions"], start=1):
+        action_cards += f"""
+        <div class="card soft" style="border-left:5px solid #f59e0b">
+            <strong>Action {index}</strong>
+            <p class="mini muted" style="margin-bottom:0">{escape(action)}</p>
+        </div>
+        """
+
+    reasons_html = ""
+
+    for reason in data["overall_reasons"]:
+        reasons_html += f"<li>{escape(reason)}</li>"
+
+    if not reasons_html:
+        reasons_html = "<li>No major risk reason detected.</li>"
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Predictive Models & Early Mitigation</h1>
+
+        <p class="muted">
+            This page uses EBTA portal data to predict risks early and recommend what the team should do today.
+            It is based on enrollments, revenue, attendance, uploads, submissions, ratings and monthly trends.
+        </p>
+
+        <form method="get" class="toolbar" style="margin-bottom:14px">
+            <div>
+                <label class="mini muted">Prediction Month</label>
+                <input type="month" name="month" value="{escape(month)}">
+            </div>
+
+            <button class="btn mini success">
+                Run Prediction
+            </button>
+
+            <a class="btn mini secondary" href="/admin/predictive-models">
+                Reset
+            </a>
+
+            <a class="btn mini" href="/admin/analytics?month={escape(month)}">
+                Open Analytics
+            </a>
+        </form>
+
+        <div class="card soft" style="border-left:6px solid {'#dc2626' if data['overall_level'] in ['HIGH','CRITICAL'] else '#1b5e20'}">
+            <h2>EBTA Risk Forecast</h2>
+
+            <div style="font-size:32px;font-weight:900;margin:8px 0">
+                {prediction_chip(data["overall_level"])} Risk Score: {data["overall_score"]}
+            </div>
+
+            <p class="mini muted">
+                Prediction generated for {pretty_month_label(month)} using data up to {escape(data["today"])}.
+            </p>
+
+            <ul>
+                {reasons_html}
+            </ul>
+        </div>
+
+        <div class="stats big" style="margin-top:14px">
+            {stat("Current Revenue", prediction_money(data["current_revenue"]))}
+            {stat("Projected Month-End Revenue", prediction_money(data["predicted_month_end_revenue"]))}
+            {stat("Active Enrollments", data["current_active"])}
+            {stat("Projected Month-End Active", data["predicted_month_end_active"])}
+            {stat("Unique Students", data["current_students"])}
+            {stat("Projected Month-End Students", data["predicted_month_end_students"])}
+            {stat("Pending Enrollments", data["current_pending"])}
+            {stat("Lapsed Enrollments", data["current_lapsed"])}
+        </div>
+
+        <div class="grid" style="margin-top:14px">
+            {metric_card("Today’s Enrollments", data["today_enrollments"], "New enrollment records created today.", "#2563eb")}
+            {metric_card("Today’s Attendance Records", data["today_attendance"], "Attendance captured today.", "#16a34a")}
+            {metric_card("Today’s Submissions", data["today_submissions"], "Assignments submitted today.", "#7c3aed")}
+            {metric_card("Today’s Tutor Uploads", data["today_uploads"], "Materials uploaded today.", "#f59e0b")}
+        </div>
+
+        <div class="card soft" style="margin-top:14px;border-left:5px solid #f59e0b">
+            <h2>What EBTA Should Do Now</h2>
+
+            <div class="grid">
+                {action_cards}
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Subject Risk Predictions</h2>
+
+            <p class="mini muted">
+                These subjects may need marketing, parent follow-up, tutor support or recovery action.
+            </p>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Subject</th>
+                            <th>Current Active</th>
+                            <th>Last Month</th>
+                            <th>Pending</th>
+                            <th>Lapsed</th>
+                            <th>Risk</th>
+                            <th>Reason</th>
+                            <th>Recommended Action</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {subject_rows or "<tr><td colspan='8'>No subject risk detected.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Tutor Risk Predictions</h2>
+
+            <p class="mini muted">
+                This helps the CAO and tutor managers identify where tutor support or monitoring may be needed.
+            </p>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tutor</th>
+                            <th>Subjects</th>
+                            <th>Uploads</th>
+                            <th>Assignments</th>
+                            <th>Attendance Logs</th>
+                            <th>Rating</th>
+                            <th>Risk</th>
+                            <th>Reason</th>
+                            <th>Recommended Action</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {tutor_rows or "<tr><td colspan='9'>No tutor risk detected.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Assignment & Academic Risk Predictions</h2>
+
+            <p class="mini muted">
+                This checks where learners may be falling behind in submissions or marks.
+            </p>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Subject</th>
+                            <th>Assignments</th>
+                            <th>Submissions</th>
+                            <th>Average Mark</th>
+                            <th>Risk</th>
+                            <th>Reason</th>
+                            <th>Recommended Action</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {assignment_rows or "<tr><td colspan='7'>No assignment risk detected.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px;border-left:5px solid #2563eb">
+            <h2>How to Use This Page</h2>
+
+            <p class="muted">
+                Use this page every morning before operations start. If the risk is High or Critical,
+                the High Admin, COO and CAO should act on the recommended actions the same day.
+            </p>
+
+            <div class="grid">
+                {metric_card("Daily Use", "Morning", "Check pending, lapsed, attendance and tutor upload risks.", "#2563eb")}
+                {metric_card("Weekly Use", "Sunday/Monday", "Compare subjects and tutors before new session schedules start.", "#16a34a")}
+                {metric_card("Monthly Use", "Before 24th", "Use predictions to prepare retention, marketing and awards planning.", "#7c3aed")}
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("Predictive Models", body)
 
 
 def admin_analytics_data(month):
