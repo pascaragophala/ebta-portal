@@ -74168,6 +74168,149 @@ def student_review_assessment_attempt(assessment_id):
     return page("Assessment Review", body)
 
 
+def assessment_security_flags_ui(flags_json):
+    """
+    Converts assessment security JSON into a readable tutor-friendly UI.
+    """
+
+    try:
+        flags = json.loads(flags_json or "{}")
+    except Exception:
+        flags = {}
+
+    tab_switches = int(flags.get("tab_switches", 0) or 0)
+    window_blurs = int(flags.get("window_blurs", 0) or 0)
+    copy_events = int(flags.get("copy_events", 0) or 0)
+    paste_events = int(flags.get("paste_events", 0) or 0)
+    right_clicks = int(flags.get("right_clicks", 0) or 0)
+    fullscreen_exits = int(flags.get("fullscreen_exits", 0) or 0)
+
+    total_events = (
+        tab_switches +
+        window_blurs +
+        copy_events +
+        paste_events +
+        right_clicks +
+        fullscreen_exits
+    )
+
+    risk_score = 0
+    reasons = []
+
+    if tab_switches >= 5:
+        risk_score += 35
+        reasons.append("Many tab switches")
+    elif tab_switches > 0:
+        risk_score += 15
+        reasons.append("Some tab switches")
+
+    if window_blurs >= 5:
+        risk_score += 30
+        reasons.append("Frequent window focus loss")
+    elif window_blurs > 0:
+        risk_score += 10
+        reasons.append("Window focus changed")
+
+    if paste_events > 0:
+        risk_score += 25
+        reasons.append("Paste detected")
+
+    if copy_events > 0:
+        risk_score += 15
+        reasons.append("Copy detected")
+
+    if right_clicks > 0:
+        risk_score += 10
+        reasons.append("Right click detected")
+
+    if fullscreen_exits > 0:
+        risk_score += 20
+        reasons.append("Fullscreen exited")
+
+    if risk_score >= 60:
+        level = "High"
+        badge_class = "danger"
+        border = "#dc2626"
+        message = "Needs review"
+    elif risk_score >= 25:
+        level = "Medium"
+        badge_class = "pending"
+        border = "#f59e0b"
+        message = "Monitor attempt"
+    else:
+        level = "Low"
+        badge_class = "active"
+        border = "#16a34a"
+        message = "Looks normal"
+
+    if total_events == 0:
+        reasons_text = "No suspicious activity recorded."
+    else:
+        reasons_text = ", ".join(reasons) if reasons else "Minor activity recorded."
+
+    return f"""
+    <div style="
+        min-width:260px;
+        max-width:360px;
+        border:1px solid #e2e8f0;
+        border-left:5px solid {border};
+        border-radius:14px;
+        padding:10px;
+        background:#ffffff;
+        box-shadow:0 6px 16px rgba(15,23,42,.06);
+    ">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">
+            <span class="chip {badge_class}">
+                {level} Risk
+            </span>
+
+            <span class="mini muted">
+                {total_events} event(s)
+            </span>
+        </div>
+
+        <div style="margin-top:8px;font-weight:800;color:#0f172a">
+            {message}
+        </div>
+
+        <div class="mini muted" style="margin-top:4px">
+            {escape(reasons_text)}
+        </div>
+
+        <div style="
+            display:grid;
+            grid-template-columns:repeat(3, minmax(70px, 1fr));
+            gap:6px;
+            margin-top:10px;
+        ">
+            <div class="mini" style="background:#f8fafc;border-radius:10px;padding:6px">
+                <strong>{tab_switches}</strong><br>Tabs
+            </div>
+
+            <div class="mini" style="background:#f8fafc;border-radius:10px;padding:6px">
+                <strong>{window_blurs}</strong><br>Focus
+            </div>
+
+            <div class="mini" style="background:#f8fafc;border-radius:10px;padding:6px">
+                <strong>{copy_events}</strong><br>Copy
+            </div>
+
+            <div class="mini" style="background:#f8fafc;border-radius:10px;padding:6px">
+                <strong>{paste_events}</strong><br>Paste
+            </div>
+
+            <div class="mini" style="background:#f8fafc;border-radius:10px;padding:6px">
+                <strong>{right_clicks}</strong><br>Right Click
+            </div>
+
+            <div class="mini" style="background:#f8fafc;border-radius:10px;padding:6px">
+                <strong>{fullscreen_exits}</strong><br>Fullscreen
+            </div>
+        </div>
+    </div>
+    """
+
+
 @app.get('/tutor/assessments/<int:assessment_id>/submissions')
 def tutor_assessment_submissions(assessment_id):
 
@@ -74209,7 +74352,7 @@ def tutor_assessment_submissions(assessment_id):
     rows = ""
 
     for at in attempts:
-        flag_text = at["flags_json"] or "{}"
+        security_flags_html = assessment_security_flags_ui(at["flags_json"])
 
         rows += f"""
         <tr>
@@ -74224,9 +74367,8 @@ def tutor_assessment_submissions(assessment_id):
 
             <td>{escape((at['submitted_at'] or '')[:16].replace('T',' '))}</td>
 
-            <td style="max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
-                title="{escape(flag_text)}">
-                {escape(flag_text)}
+            <td>
+                {security_flags_html}
             </td>
 
             <td>
@@ -74252,8 +74394,8 @@ def tutor_assessment_submissions(assessment_id):
             {grade_label(assessment['grade'])} - {escape(assessment['subject_name'])}
         </p>
 
-        <div class="scroll-x">
-            <table>
+        <div class="scroll-x" style="overflow-x:auto;width:100%">
+            <table style="min-width:1250px">
                 <thead>
                     <tr>
                         <th>Learner</th>
