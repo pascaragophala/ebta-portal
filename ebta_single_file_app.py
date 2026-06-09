@@ -73244,7 +73244,11 @@ def student_assessments():
         """
 
         if a["attempt_status"] in ["SUBMITTED", "MARKED"]:
-            action = "<span class='mini muted'>Submitted</span>"
+            action = f"""
+            <a class="btn mini secondary" href="/student/assessment/{a['id']}/review">
+                View Attempt
+            </a>
+            """
 
         open_status = "Open"
 
@@ -73817,7 +73821,351 @@ def student_submit_assessment(assessment_id):
     conn.commit()
     conn.close()
 
-    return page("Submitted", card_msg("Assessment submitted successfully."))
+    return page(
+        "Submitted",
+        f"""
+        <section class="card">
+            <h1>Assessment Submitted</h1>
+
+            <p class="muted">
+                Your assessment was submitted successfully.
+            </p>
+
+            <div class="toolbar">
+                <a class="btn success" href="/student/assessment/{assessment_id}/review">
+                    View My Attempt
+                </a>
+
+                <a class="btn secondary" href="/student/assessments">
+                    Back to Assessments
+                </a>
+            </div>
+        </section>
+        """
+    )
+
+
+@app.get('/student/assessment/<int:assessment_id>/review')
+def student_review_assessment_attempt(assessment_id):
+
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            a.*,
+            s.name AS subject_name,
+            s.grade,
+            t.full_name AS tutor_name,
+            at.id AS attempt_id,
+            at.status AS attempt_status,
+            at.auto_score,
+            at.manual_score,
+            at.total_score,
+            at.total_points,
+            at.submitted_at
+        FROM assessments a
+        JOIN subjects s ON s.id = a.subject_id
+        JOIN tutors t ON t.id = a.tutor_id
+        JOIN assessment_attempts at ON at.assessment_id = a.id
+        WHERE a.id=?
+          AND at.student_id=?
+          AND at.status IN ('SUBMITTED', 'MARKED')
+        LIMIT 1
+    """, (assessment_id, sid))
+
+    assessment = cur.fetchone()
+
+    if not assessment:
+        conn.close()
+        return page(
+            "Attempt Not Found",
+            card_msg("No submitted attempt was found for this assessment.")
+        )
+
+    attempt_id = assessment["attempt_id"]
+
+    cur.execute("""
+        SELECT
+            q.id AS question_id,
+            q.question_type,
+            q.question_text,
+            q.options_json,
+            q.correct_index,
+            q.memo,
+            q.points,
+            q.question_order,
+            q.question_file_path,
+            q.question_file_name,
+
+            ans.id AS answer_id,
+            ans.selected_index,
+            ans.answer_text,
+            ans.auto_mark,
+            ans.manual_mark,
+            ans.feedback
+        FROM assessment_questions q
+        LEFT JOIN assessment_answers ans
+               ON ans.question_id = q.id
+              AND ans.attempt_id = ?
+        WHERE q.assessment_id=?
+        ORDER BY q.question_order ASC, q.id ASC
+    """, (attempt_id, assessment_id))
+
+    answers = cur.fetchall()
+
+    cur.execute("""
+        SELECT *
+        FROM assessment_answer_files
+        WHERE attempt_id=?
+          AND student_id=?
+        ORDER BY uploaded_at ASC
+    """, (attempt_id, sid))
+
+    file_rows = cur.fetchall()
+
+    answer_files = {}
+
+    for f in file_rows:
+        answer_files.setdefault(f["answer_id"], []).append(f)
+
+    conn.close()
+
+    answer_cards = ""
+
+    total_correct = 0
+    total_wrong = 0
+    total_pending = 0
+
+    for index, q in enumerate(answers, start=1):
+
+        question_type = q["question_type"] or "MCQ"
+        points = float(q["points"] or 0)
+
+        status_label = ""
+        selected_answer_html = ""
+        correct_answer_html = ""
+        mark_html = ""
+        memo_html = ""
+        feedback_html = ""
+        question_file_html = ""
+        learner_files_html = ""
+
+        if q["question_file_path"]:
+            question_file_html = f"""
+            <div class="card soft" style="border-left:5px solid #2563eb;margin-top:10px">
+                <strong>Question file:</strong>
+                <a class="links"
+                   target="_blank"
+                   href="/assessment-file/question/{q['question_id']}">
+                    {escape(q['question_file_name'] or 'Open file')}
+                </a>
+            </div>
+            """
+
+        for f in answer_files.get(q["answer_id"], []):
+            learner_files_html += f"""
+            <a class="btn mini secondary"
+               target="_blank"
+               href="/assessment-file/answer/{f['id']}">
+                {escape(f['file_name'] or 'Open file')}
+            </a>
+            """
+
+        if learner_files_html:
+            learner_files_html = f"""
+            <div class="card soft" style="border-left:5px solid #7c3aed;margin-top:10px">
+                <strong>Your uploaded file(s):</strong>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+                    {learner_files_html}
+                </div>
+            </div>
+            """
+
+        if question_type == "MCQ":
+
+            try:
+                options = json.loads(q["options_json"] or "[]")
+            except Exception:
+                options = []
+
+            selected_index = q["selected_index"]
+            correct_index = q["correct_index"]
+
+            selected_text = "No answer selected"
+            correct_text = "No correct answer set"
+
+            if selected_index is not None and 0 <= int(selected_index) < len(options):
+                selected_text = options[int(selected_index)]
+
+            if correct_index is not None and 0 <= int(correct_index) < len(options):
+                correct_text = options[int(correct_index)]
+
+            is_correct = (
+                selected_index is not None
+                and correct_index is not None
+                and int(selected_index) == int(correct_index)
+            )
+
+            if is_correct:
+                status_label = "<span class='chip active'>Correct</span>"
+                total_correct += 1
+            else:
+                status_label = "<span class='chip danger'>Wrong</span>"
+                total_wrong += 1
+
+            selected_answer_html = f"""
+            <p>
+                <strong>Your answer:</strong>
+                {escape(selected_text)}
+            </p>
+            """
+
+            correct_answer_html = f"""
+            <p>
+                <strong>Correct answer:</strong>
+                {escape(correct_text)}
+            </p>
+            """
+
+            earned = float(q["auto_mark"] or 0)
+
+            mark_html = f"""
+            <p>
+                <strong>Marks:</strong>
+                {earned:g} / {points:g}
+            </p>
+            """
+
+        else:
+            status_label = "<span class='chip pending'>Tutor Marked</span>"
+
+            selected_answer_html = f"""
+            <p>
+                <strong>Your answer:</strong>
+            </p>
+
+            <div class="card soft" style="white-space:pre-wrap">
+                {escape(q["answer_text"] or "No typed answer submitted.")}
+            </div>
+            """
+
+            if q["manual_mark"] is None:
+                total_pending += 1
+                mark_html = f"""
+                <p>
+                    <strong>Marks:</strong>
+                    Pending tutor marking / {points:g}
+                </p>
+                """
+            else:
+                earned = float(q["manual_mark"] or 0)
+                mark_html = f"""
+                <p>
+                    <strong>Marks:</strong>
+                    {earned:g} / {points:g}
+                </p>
+                """
+
+            if q["feedback"]:
+                feedback_html = f"""
+                <div class="card soft" style="border-left:5px solid #16a34a;margin-top:10px">
+                    <strong>Tutor feedback:</strong>
+                    <p style="white-space:pre-wrap;margin-bottom:0">
+                        {escape(q["feedback"])}
+                    </p>
+                </div>
+                """
+
+        if q["memo"]:
+            memo_html = f"""
+            <details style="margin-top:10px">
+                <summary class="btn mini secondary" style="display:inline-block;cursor:pointer">
+                    View Memo / Explanation
+                </summary>
+
+                <div class="card soft" style="margin-top:8px;white-space:pre-wrap">
+                    {escape(q["memo"])}
+                </div>
+            </details>
+            """
+
+        answer_cards += f"""
+        <div class="card soft" style="margin-bottom:14px;border-left:5px solid #1b5e20">
+            <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                <h3 style="margin-top:0">Question {index}</h3>
+                <div>{status_label}</div>
+            </div>
+
+            <div class="mini muted" style="margin-bottom:8px">
+                {escape(question_type)} · {points:g} mark(s)
+            </div>
+
+            <p style="white-space:pre-wrap">
+                {escape(q["question_text"] or "")}
+            </p>
+
+            {question_file_html}
+
+            {selected_answer_html}
+
+            {correct_answer_html}
+
+            {mark_html}
+
+            {feedback_html}
+
+            {learner_files_html}
+
+            {memo_html}
+        </div>
+        """
+
+    body = f"""
+    {student_nav() if 'student_nav' in globals() else ''}
+
+    <section class="card">
+        <div class="toolbar">
+            <a class="btn mini secondary" href="/student/assessments">
+                ← Back to Assessments
+            </a>
+        </div>
+
+        <h1>Assessment Attempt Review</h1>
+
+        <div class="card soft" style="border-left:5px solid #2563eb;margin-bottom:14px">
+            <h2 style="margin-top:0">{escape(assessment["title"] or "Assessment")}</h2>
+
+            <p class="mini muted">
+                {escape(grade_label(assessment["grade"] or ""))} - {escape(assessment["subject_name"] or "")}
+                · Tutor: {escape(assessment["tutor_name"] or "—")}
+                · Submitted: {escape((assessment["submitted_at"] or "")[:16].replace("T", " "))}
+            </p>
+
+            <div class="stats">
+                {stat("Total Score", f"{assessment['total_score'] or 0} / {assessment['total_points'] or 0}")}
+                {stat("Correct MCQs", total_correct)}
+                {stat("Wrong MCQs", total_wrong)}
+                {stat("Pending Long Questions", total_pending)}
+            </div>
+        </div>
+
+        <p class="muted">
+            Review your submitted answers below. Multiple-choice questions show correct and wrong answers automatically.
+            Long questions will show tutor marks and feedback once marked.
+        </p>
+
+        {answer_cards or "<div class='card soft'>No answers found for this attempt.</div>"}
+    </section>
+    """
+
+    return page("Assessment Review", body)
 
 
 @app.get('/tutor/assessments/<int:assessment_id>/submissions')
