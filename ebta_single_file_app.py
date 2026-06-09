@@ -37795,6 +37795,24 @@ def aqm_assessment_analysis():
     status_filter = request.args.get("status", "").strip()
     subject_filter = request.args.get("subject_id", "").strip()
 
+    try:
+        tutor_page = int(request.args.get("tutor_page", 1))
+    except Exception:
+        tutor_page = 1
+
+    try:
+        assessment_page = int(request.args.get("assessment_page", 1))
+    except Exception:
+        assessment_page = 1
+
+    if tutor_page < 1:
+        tutor_page = 1
+
+    if assessment_page < 1:
+        assessment_page = 1
+
+    per_page = 10
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -37856,6 +37874,64 @@ def aqm_assessment_analysis():
         where.append("a.is_published = 0")
 
     where_sql = "WHERE " + " AND ".join(where)
+    
+    def aqm_assessment_analysis_url(tutor_page_value=None, assessment_page_value=None):
+        query_params = {
+            "month": month,
+            "tutor_id": tutor_filter,
+            "subject_id": subject_filter,
+            "status": status_filter,
+            "tutor_page": tutor_page if tutor_page_value is None else tutor_page_value,
+            "assessment_page": assessment_page if assessment_page_value is None else assessment_page_value
+        }
+
+        query_params = {
+            k: v for k, v in query_params.items()
+            if v not in ["", None]
+        }
+
+        return url_for("aqm_assessment_analysis") + "?" + urlencode(query_params)
+
+
+    def simple_pagination_html(current_page, total_pages, total_records, page_type):
+        if total_pages <= 1:
+            return f"""
+            <div class="mini muted" style="margin:10px 0">
+                Showing {total_records} record(s).
+            </div>
+            """
+
+        if page_type == "tutor":
+            prev_url = aqm_assessment_analysis_url(tutor_page_value=current_page - 1)
+            next_url = aqm_assessment_analysis_url(tutor_page_value=current_page + 1)
+        else:
+            prev_url = aqm_assessment_analysis_url(assessment_page_value=current_page - 1)
+            next_url = aqm_assessment_analysis_url(assessment_page_value=current_page + 1)
+
+        prev_btn = (
+            f'<a class="btn mini secondary" href="{prev_url}">Previous</a>'
+            if current_page > 1
+            else '<span class="btn mini secondary" style="opacity:.45;pointer-events:none">Previous</span>'
+        )
+
+        next_btn = (
+            f'<a class="btn mini success" href="{next_url}">Next</a>'
+            if current_page < total_pages
+            else '<span class="btn mini success" style="opacity:.45;pointer-events:none">Next</span>'
+        )
+
+        return f"""
+        <div class="toolbar" style="margin:12px 0;justify-content:space-between;align-items:center">
+            <div class="mini muted">
+                Page {current_page} of {total_pages} · {total_records} record(s)
+            </div>
+
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+                {prev_btn}
+                {next_btn}
+            </div>
+        </div>
+        """
 
     # ================= OVERALL SUMMARY =================
 
@@ -37982,7 +38058,24 @@ def aqm_assessment_analysis():
         ORDER BY assessment_count DESC, attempt_count DESC, t.full_name
     """, tutor_params)
 
-    tutor_rows_data = cur.fetchall()
+    all_tutor_rows_data = cur.fetchall()
+
+    total_tutor_records = len(all_tutor_rows_data)
+    total_tutor_pages = max(1, (total_tutor_records + per_page - 1) // per_page)
+
+    if tutor_page > total_tutor_pages:
+        tutor_page = total_tutor_pages
+
+    tutor_start = (tutor_page - 1) * per_page
+    tutor_end = tutor_start + per_page
+    tutor_rows_data = all_tutor_rows_data[tutor_start:tutor_end]
+
+    tutor_pagination_html = simple_pagination_html(
+        tutor_page,
+        total_tutor_pages,
+        total_tutor_records,
+        "tutor"
+    )
 
     tutor_rows = ""
 
@@ -38081,7 +38174,24 @@ def aqm_assessment_analysis():
         ORDER BY a.created_at DESC
     """, assessment_params)
 
-    assessment_rows_data = cur.fetchall()
+    all_assessment_rows_data = cur.fetchall()
+
+    total_assessment_records = len(all_assessment_rows_data)
+    total_assessment_pages = max(1, (total_assessment_records + per_page - 1) // per_page)
+
+    if assessment_page > total_assessment_pages:
+        assessment_page = total_assessment_pages
+
+    assessment_start = (assessment_page - 1) * per_page
+    assessment_end = assessment_start + per_page
+    assessment_rows_data = all_assessment_rows_data[assessment_start:assessment_end]
+
+    assessment_pagination_html = simple_pagination_html(
+        assessment_page,
+        total_assessment_pages,
+        total_assessment_records,
+        "assessment"
+    )
 
     assessment_rows = ""
 
@@ -38161,6 +38271,9 @@ def aqm_assessment_analysis():
         <form method="get"
               class="toolbar"
               style="margin-bottom:14px;align-items:end">
+              
+            <input type="hidden" name="tutor_page" value="1">
+            <input type="hidden" name="assessment_page" value="1">  
 
             <div>
                 <label>Month</label>
@@ -38236,69 +38349,109 @@ def aqm_assessment_analysis():
             </div>
         </div>
 
-        <div class="card soft" style="margin-top:14px">
-            <h2>Tutor Assessment Coverage</h2>
+        <details class="card soft" style="margin-top:14px" open>
+            <summary style="
+                cursor:pointer;
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                gap:10px;
+                list-style:none;
+            ">
+                <div>
+                    <h2 style="margin:0">Tutor Assessment Coverage</h2>
+                    <p class="mini muted" style="margin:6px 0 0">
+                        Shows which tutors created assessments and which tutors still need follow-up.
+                    </p>
+                </div>
 
-            <p class="mini muted">
-                This section shows which tutors created assessments and which tutors still need follow-up.
-            </p>
+                <span class="chip">
+                    Open / Close
+                </span>
+            </summary>
 
-            <div class="scroll-x" style="overflow-x:auto;width:100%">
-                <table style="min-width:1250px">
-                    <thead>
-                        <tr>
-                            <th>Tutor</th>
-                            <th>Assigned Subjects</th>
-                            <th>Assessments</th>
-                            <th>Published</th>
-                            <th>Drafts</th>
-                            <th>Questions</th>
-                            <th>Attempts</th>
-                            <th>Unmarked</th>
-                            <th>Average</th>
-                            <th>Status</th>
-                            <th>AQM Action</th>
-                        </tr>
-                    </thead>
+            <div style="margin-top:14px">
+                {tutor_pagination_html}
 
-                    <tbody>
-                        {tutor_rows or "<tr><td colspan='11'>No tutor assessment data found.</td></tr>"}
-                    </tbody>
-                </table>
+                <div class="scroll-x" style="overflow-x:auto;width:100%">
+                    <table style="min-width:1250px">
+                        <thead>
+                            <tr>
+                                <th>Tutor</th>
+                                <th>Assigned Subjects</th>
+                                <th>Assessments</th>
+                                <th>Published</th>
+                                <th>Drafts</th>
+                                <th>Questions</th>
+                                <th>Attempts</th>
+                                <th>Unmarked</th>
+                                <th>Average</th>
+                                <th>Status</th>
+                                <th>AQM Action</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            {tutor_rows or "<tr><td colspan='11'>No tutor assessment data found.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+
+                {tutor_pagination_html}
             </div>
-        </div>
+        </details>
 
-        <div class="card soft" style="margin-top:14px">
-            <h2>Assessment Details</h2>
+        <details class="card soft" style="margin-top:14px">
+            <summary style="
+                cursor:pointer;
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                gap:10px;
+                list-style:none;
+            ">
+                <div>
+                    <h2 style="margin:0">Assessment Details</h2>
+                    <p class="mini muted" style="margin:6px 0 0">
+                        Shows each assessment created by tutors for the selected month.
+                    </p>
+                </div>
 
-            <p class="mini muted">
-                This section shows every assessment created by tutors for the selected month.
-            </p>
+                <span class="chip">
+                    Open / Close
+                </span>
+            </summary>
 
-            <div class="scroll-x" style="overflow-x:auto;width:100%">
-                <table style="min-width:1350px">
-                    <thead>
-                        <tr>
-                            <th>Assessment</th>
-                            <th>Tutor</th>
-                            <th>Subject</th>
-                            <th>Status</th>
-                            <th>Duration</th>
-                            <th>Questions</th>
-                            <th>Attempts</th>
-                            <th>Unmarked</th>
-                            <th>Average</th>
-                            <th>Monitoring</th>
-                            <th>AQM Note</th>
-                        </tr>
-                    </thead>
+            <div style="margin-top:14px">
+                {assessment_pagination_html}
 
-                    <tbody>
-                        {assessment_rows or "<tr><td colspan='11'>No assessments found for this filter.</td></tr>"}
-                    </tbody>
-                </table>
+                <div class="scroll-x" style="overflow-x:auto;width:100%">
+                    <table style="min-width:1350px">
+                        <thead>
+                            <tr>
+                                <th>Assessment</th>
+                                <th>Tutor</th>
+                                <th>Subject</th>
+                                <th>Status</th>
+                                <th>Duration</th>
+                                <th>Questions</th>
+                                <th>Attempts</th>
+                                <th>Unmarked</th>
+                                <th>Average</th>
+                                <th>Monitoring</th>
+                                <th>AQM Note</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            {assessment_rows or "<tr><td colspan='11'>No assessments found for this filter.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+
+                {assessment_pagination_html}
             </div>
-        </div>
+        </details>
     </section>
     """
 
