@@ -71627,333 +71627,6 @@ def assessment_status_chip(status):
         return "<span class='chip'>In Progress</span>"
 
     return f"<span class='chip'>{escape(status or 'Unknown')}</span>"
-    
-    
-def assessment_ui_css():
-    return """
-    <style>
-        .assessment-ui {
-            background: linear-gradient(180deg, #f8fff9 0%, #ffffff 55%);
-        }
-
-        .assessment-hero {
-            display:flex;
-            justify-content:space-between;
-            align-items:flex-start;
-            gap:18px;
-            flex-wrap:wrap;
-            padding:22px;
-            border-radius:22px;
-            background:
-                radial-gradient(circle at top right, rgba(22,163,74,.16), transparent 35%),
-                linear-gradient(135deg, #0f3d1d, #1b5e20);
-            color:white;
-            box-shadow:0 16px 36px rgba(15,61,29,.22);
-            margin-bottom:18px;
-        }
-
-        .assessment-hero h1,
-        .assessment-hero h2 {
-            margin:0 0 8px 0;
-            color:white;
-        }
-
-        .assessment-hero p {
-            color:rgba(255,255,255,.84);
-            margin:0;
-        }
-
-        .assessment-meta-grid {
-            display:grid;
-            grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));
-            gap:10px;
-            margin:16px 0;
-        }
-
-        .assessment-meta {
-            border:1px solid #dbeafe;
-            background:#ffffff;
-            border-radius:18px;
-            padding:14px;
-            box-shadow:0 8px 22px rgba(15,23,42,.06);
-        }
-
-        .assessment-meta .label {
-            font-size:12px;
-            color:#64748b;
-            font-weight:700;
-            text-transform:uppercase;
-            letter-spacing:.04em;
-        }
-
-        .assessment-meta .value {
-            margin-top:4px;
-            font-size:18px;
-            font-weight:900;
-            color:#0f172a;
-        }
-
-        .assessment-card-list {
-            display:grid;
-            gap:14px;
-        }
-
-        .assessment-card {
-            border:1px solid #e2e8f0;
-            border-radius:20px;
-            padding:18px;
-            background:#ffffff;
-            box-shadow:0 10px 28px rgba(15,23,42,.07);
-            transition:.18s ease;
-        }
-
-        .assessment-card:hover {
-            transform:translateY(-2px);
-            box-shadow:0 16px 34px rgba(15,23,42,.10);
-        }
-
-        .assessment-card-top {
-            display:flex;
-            justify-content:space-between;
-            gap:14px;
-            align-items:flex-start;
-            flex-wrap:wrap;
-        }
-
-        .assessment-title {
-            font-size:20px;
-            font-weight:900;
-            color:#0f172a;
-            margin:0 0 4px 0;
-        }
-
-        .assessment-subtitle {
-            color:#64748b;
-            font-size:13px;
-            margin-top:4px;
-        }
-
-        .assessment-pill-row {
-            display:flex;
-            gap:8px;
-            flex-wrap:wrap;
-            margin-top:12px;
-        }
-
-        .assessment-pill {
-            display:inline-flex;
-            align-items:center;
-            gap:6px;
-            border:1px solid #dcfce7;
-            background:#f0fdf4;
-            color:#166534;
-            padding:7px 10px;
-            border-radius:999px;
-            font-size:12px;
-            font-weight:800;
-        }
-
-        .assessment-pill.blue {
-            border-color:#dbeafe;
-            background:#eff6ff;
-            color:#1d4ed8;
-        }
-
-        .assessment-pill.orange {
-            border-color:#fed7aa;
-            background:#fff7ed;
-            color:#c2410c;
-        }
-
-        .assessment-question {
-            border:1px solid #e2e8f0;
-            border-radius:22px;
-            background:#ffffff;
-            box-shadow:0 10px 28px rgba(15,23,42,.07);
-            padding:20px;
-            margin-bottom:16px;
-        }
-
-        .assessment-question-head {
-            display:flex;
-            justify-content:space-between;
-            gap:12px;
-            flex-wrap:wrap;
-            align-items:center;
-            border-bottom:1px solid #e2e8f0;
-            padding-bottom:12px;
-            margin-bottom:14px;
-        }
-
-        .question-number {
-            display:inline-flex;
-            align-items:center;
-            justify-content:center;
-            width:38px;
-            height:38px;
-            border-radius:14px;
-            background:#1b5e20;
-            color:white;
-            font-weight:900;
-        }
-
-        .question-title-wrap {
-            display:flex;
-            align-items:center;
-            gap:10px;
-        }
-
-        .question-text-box {
-            background:#f8fafc;
-            border:1px solid #e2e8f0;
-            border-radius:16px;
-            padding:14px;
-            white-space:pre-wrap;
-            line-height:1.65;
-            color:#0f172a;
-        }
-
-        .assessment-option {
-            display:flex;
-            align-items:flex-start;
-            gap:10px;
-            padding:13px 14px;
-            border:1px solid #dbeafe;
-            border-radius:16px;
-            background:#ffffff;
-            margin:8px 0;
-            cursor:pointer;
-            transition:.15s ease;
-        }
-
-        .assessment-option:hover {
-            border-color:#1b5e20;
-            background:#f0fdf4;
-        }
-
-        .assessment-option input {
-            margin-top:4px;
-            transform:scale(1.15);
-        }
-
-        .assessment-upload-box {
-            border:1px dashed #94a3b8;
-            background:#f8fafc;
-            border-radius:16px;
-            padding:14px;
-            margin-top:14px;
-        }
-
-        .assessment-upload-box input[type="file"] {
-            width:100%;
-            background:white;
-            border:1px solid #e2e8f0;
-            border-radius:12px;
-            padding:10px;
-        }
-
-        .assessment-textarea {
-            width:100%;
-            min-height:150px;
-            border:1px solid #cbd5e1;
-            border-radius:16px;
-            padding:14px;
-            font-size:15px;
-            line-height:1.6;
-            resize:vertical;
-            background:#ffffff;
-        }
-
-        .assessment-submit-bar {
-            position:sticky;
-            bottom:10px;
-            z-index:20;
-            margin-top:18px;
-            padding:14px;
-            border:1px solid #bbf7d0;
-            border-radius:18px;
-            background:rgba(240,253,244,.96);
-            backdrop-filter:blur(10px);
-            display:flex;
-            justify-content:space-between;
-            gap:10px;
-            flex-wrap:wrap;
-            align-items:center;
-            box-shadow:0 14px 34px rgba(15,23,42,.12);
-        }
-
-        .attempt-card {
-            border:1px solid #e2e8f0;
-            border-radius:20px;
-            background:#fff;
-            padding:16px;
-            box-shadow:0 8px 24px rgba(15,23,42,.07);
-            margin-bottom:12px;
-        }
-
-        .attempt-score {
-            font-size:22px;
-            font-weight:900;
-            color:#1b5e20;
-        }
-
-        .review-correct {
-            border-left:6px solid #16a34a;
-        }
-
-        .review-wrong {
-            border-left:6px solid #dc2626;
-        }
-
-        .review-pending {
-            border-left:6px solid #f59e0b;
-        }
-
-        .assessment-table table {
-            border-collapse:separate;
-            border-spacing:0 10px;
-        }
-
-        .assessment-table tbody tr {
-            background:white;
-            box-shadow:0 8px 20px rgba(15,23,42,.06);
-        }
-
-        .assessment-table tbody td {
-            border-top:1px solid #e2e8f0;
-            border-bottom:1px solid #e2e8f0;
-            padding:14px;
-        }
-
-        .assessment-table tbody td:first-child {
-            border-left:1px solid #e2e8f0;
-            border-radius:16px 0 0 16px;
-        }
-
-        .assessment-table tbody td:last-child {
-            border-right:1px solid #e2e8f0;
-            border-radius:0 16px 16px 0;
-        }
-
-        @media(max-width: 760px) {
-            .assessment-hero {
-                padding:18px;
-            }
-
-            .assessment-title {
-                font-size:18px;
-            }
-
-            .assessment-submit-bar {
-                position:static;
-            }
-
-            .assessment-question {
-                padding:15px;
-            }
-        }
-    </style>
-    """
 
 
 def assessment_is_open(assessment):
@@ -72866,8 +72539,7 @@ def tutor_assessment_builder(assessment_id):
     
 
     body = f"""
-    {assessment_ui_css()}
-    <section class="card assessment-ui">
+    <section class="card">
         <div class="toolbar">
             <a class="btn mini secondary" href="/tutor/assessments">
                 ← Back
@@ -72963,7 +72635,7 @@ def tutor_assessment_builder(assessment_id):
         <div class="card soft" style="margin-top:14px">
             <h2>Questions</h2>
 
-            <div class="assessment-table scroll-x">
+            <div class="scroll-x">
                 <table>
                     <thead>
                         <tr>
@@ -73557,7 +73229,7 @@ def student_assessments():
     rows = cur.fetchall()
     conn.close()
 
-    cards = ""
+    trs = ""
 
     for a in rows:
         result_text = "—"
@@ -73583,60 +73255,53 @@ def student_assessments():
         if not assessment_is_open(a):
             open_status = "Closed / Not Open"
 
-        status_text = a["attempt_status"] or "NOT STARTED"
-        score_html = "Not submitted yet"
+        trs += f"""
+        <tr>
+            <td>
+                <strong>{escape(a['title'])}</strong>
+                <div class="mini muted">{escape(a['description'] or '')}</div>
+                <div class="mini muted">Assessment Month: {pretty_month_label(a['month'])}</div>
+            </td>
 
-        if a["attempt_status"] in ["SUBMITTED", "MARKED"] and a["total_points"]:
-            score_html = f"{a['total_score']} / {a['total_points']}"
-
-        open_status = "Open"
-
-        if not assessment_is_open(a):
-            open_status = "Closed / Not Open"
-
-        cards += f"""
-        <div class="assessment-card">
-            <div class="assessment-card-top">
-                <div>
-                    <h2 class="assessment-title">{escape(a['title'])}</h2>
-                    <div class="assessment-subtitle">
-                        {escape(a['description'] or 'No description provided.')}
-                    </div>
-
-                    <div class="assessment-pill-row">
-                        <span class="assessment-pill">{escape(grade_label(a['grade']))} - {escape(a['subject_name'])}</span>
-                        <span class="assessment-pill blue">Tutor: {escape(a['tutor_name'])}</span>
-                        <span class="assessment-pill orange">{a['duration_minutes']} min</span>
-                        <span class="assessment-pill">{escape(open_status)}</span>
-                    </div>
-                </div>
-
-                <div style="text-align:right">
-                    {assessment_status_chip(status_text)}
-                    <div class="attempt-score" style="margin-top:8px">{escape(score_html)}</div>
-                    <div class="mini muted">Result</div>
-                </div>
-            </div>
-
-            <div style="margin-top:14px">
-                {action}
-            </div>
-        </div>
+            <td>{grade_label(a['grade'])} - {escape(a['subject_name'])}</td>
+            <td>{escape(a['tutor_name'])}</td>
+            <td>{a['duration_minutes']} min</td>
+            <td>{assessment_status_chip(a['attempt_status'] or 'NOT STARTED')}</td>
+            <td>{escape(open_status)}</td>
+            <td>{result_text}</td>
+            <td>{action}</td>
+        </tr>
         """
 
     body = f"""
-    {assessment_ui_css()}
+    {student_nav() if 'student_nav' in globals() else ''}
 
-    <section class="card assessment-ui">
-        <div class="assessment-hero">
-            <div>
-                <h1>Assessments</h1>
-                <p>Complete your online quizzes and assessments from your active enrolled subjects.</p>
-            </div>
-        </div>
+    <section class="card">
+        <h1>Assessments</h1>
 
-        <div class="assessment-card-list">
-            {cards or "<div class='card soft'>No assessments available yet.</div>"}
+        <p class="muted">
+            Complete your online quizzes and assessments here. Published assessments from your active enrolled subjects will appear below.
+        </p>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Assessment</th>
+                        <th>Subject</th>
+                        <th>Tutor</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                        <th>Open Status</th>
+                        <th>Result</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {trs or "<tr><td colspan='8'>No assessments available yet.</td></tr>"}
+                </tbody>
+            </table>
         </div>
     </section>
     """
@@ -73754,15 +73419,14 @@ def student_take_assessment(assessment_id):
             """
 
         upload_html = f"""
-        <div class="assessment-upload-box">
+        <div style="margin-top:12px">
             <label>Upload supporting file(s) optional</label>
             <input type="file"
                    name="files_{q['id']}"
                    multiple
                    accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.zip">
-
-            <div class="mini muted" style="margin-top:8px">
-                Optional. Upload screenshots, pictures, PDFs, Word files or other supported files for this question.
+            <div class="mini muted">
+                You may upload screenshots, pictures, PDFs, Word files or other supported files for this question.
             </div>
         </div>
         """
@@ -73776,18 +73440,12 @@ def student_take_assessment(assessment_id):
             options_html = ""
 
             for index, opt in enumerate(options):
-                option_letter = chr(65 + index)
-
                 options_html += f"""
-                <label class="assessment-option">
+                <label style="display:block;margin:6px 0;padding:8px;border:1px solid #e5e7eb;border-radius:10px">
                     <input type="radio"
                            name="q_{q['id']}"
                            value="{index}">
-
-                    <div>
-                        <strong>{option_letter}.</strong>
-                        {escape(opt)}
-                    </div>
+                    {escape(opt)}
                 </label>
                 """
 
@@ -73796,34 +73454,19 @@ def student_take_assessment(assessment_id):
         else:
             answer_html = f"""
             <textarea name="q_{q['id']}"
-                      class="assessment-textarea"
-                      placeholder="Type your answer here..."></textarea>
+                      rows="6"
+                      placeholder="Type your answer here..."
+                      style="width:100%"></textarea>
             """
 
         q_html += f"""
-        <div class="assessment-question">
-            <div class="assessment-question-head">
-                <div class="question-title-wrap">
-                    <span class="question-number">{i}</span>
-                    <div>
-                        <h3 style="margin:0">Question {i}</h3>
-                        <div class="mini muted">
-                            {escape(q['question_type'])} · {q['points']} mark(s)
-                        </div>
-                    </div>
-                </div>
-            </div>
+        <div class="card soft assessment-question">
+            <h3>Question {i} <span class="mini muted">({q['points']} mark(s))</span></h3>
 
-            <div class="question-text-box">
-                {escape(q['question_text'])}
-            </div>
+            <p style="white-space:pre-wrap">{escape(q['question_text'])}</p>
 
             {question_file_html}
-
-            <div style="margin-top:14px">
-                {answer_html}
-            </div>
-
+            {answer_html}
             {upload_html}
         </div>
         """
@@ -73903,71 +73546,37 @@ def student_take_assessment(assessment_id):
         """
 
     body = f"""
-    {assessment_ui_css()}
+    <section class="card">
+        <h1>{escape(a['title'])}</h1>
 
-    <section class="card assessment-ui">
-        <div class="assessment-hero">
-            <div>
-                <h1>{escape(a['title'])}</h1>
-                <p>
-                    {escape(grade_label(a['grade']))} - {escape(a['subject_name'])}
-                    · Tutor: {escape(a['tutor_name'])}
-                </p>
-            </div>
+        <p class="muted">
+            {grade_label(a['grade'])} - {escape(a['subject_name'])} |
+            Tutor: {escape(a['tutor_name'])} |
+            Duration: {a['duration_minutes']} minutes
+        </p>
 
-            <div style="text-align:right">
-                <div style="font-size:28px;font-weight:900">{a['duration_minutes']} min</div>
-                <div class="mini" style="color:rgba(255,255,255,.78)">Assessment Duration</div>
-            </div>
-        </div>
+        <div class="card soft" style="border-left:5px solid #dc2626">
+            <h2>Assessment Rules</h2>
 
-        <div class="assessment-meta-grid">
-            <div class="assessment-meta">
-                <div class="label">Subject</div>
-                <div class="value">{escape(a['subject_name'])}</div>
-            </div>
+            <p style="white-space:pre-wrap">
+                {escape(a['instructions'] or 'Answer all questions. Do not leave the assessment tab while writing.')}
+            </p>
 
-            <div class="assessment-meta">
-                <div class="label">Grade</div>
-                <div class="value">{escape(grade_label(a['grade']))}</div>
-            </div>
-
-            <div class="assessment-meta">
-                <div class="label">Questions</div>
-                <div class="value">{len(questions_list)}</div>
-            </div>
-
-            <div class="assessment-meta">
-                <div class="label">Monitoring</div>
-                <div class="value">{"On" if a["lockdown_required"] else "Off"}</div>
-            </div>
-        </div>
-
-        <div class="card soft" style="border-left:5px solid #2563eb;margin-bottom:16px">
-            <h3 style="margin-top:0">Instructions</h3>
-            <p style="white-space:pre-wrap;margin-bottom:0">
-                {escape(a['instructions'] or 'Read each question carefully and submit once you are done.')}
+            <p class="mini muted">
+                Security monitoring may record tab switching, window switching, copy/paste, right-clicks and fullscreen exits.
             </p>
         </div>
 
         <form method="post"
               action="/student/assessment/{assessment_id}/submit"
               enctype="multipart/form-data">
-
-            <input type="hidden" id="security_events" name="security_events" value="{{}}">
+            <input type="hidden" name="attempt_id" value="{attempt_id}">
+            <input type="hidden" name="security_events" id="security_events" value="{{}}">
 
             {q_html}
 
-            <div class="assessment-submit-bar">
-                <div>
-                    <strong>Ready to submit?</strong>
-                    <div class="mini muted">
-                        Please check your answers before submitting. You may not be able to edit after submission.
-                    </div>
-                </div>
-
-                <button class="btn success"
-                        onclick="return confirm('Submit this assessment now?');">
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <button class="btn success" onclick="return confirm('Are you sure you want to submit this assessment?')">
                     Submit Assessment
                 </button>
             </div>
@@ -74602,63 +74211,64 @@ def tutor_assessment_submissions(assessment_id):
     for at in attempts:
         flag_text = at["flags_json"] or "{}"
 
-        score_text = f"{at['total_score']} / {at['total_points']}"
-        submitted_text = escape((at['submitted_at'] or '')[:16].replace('T',' '))
-
         rows += f"""
-        <div class="attempt-card">
-            <div class="assessment-card-top">
-                <div>
-                    <h3 style="margin:0">{escape(at['student_name'])}</h3>
-                    <div class="mini muted">{escape(at['phone_whatsapp'] or '—')}</div>
+        <tr>
+            <td>
+                <strong>{escape(at['student_name'])}</strong>
+                <div class="mini muted">{escape(at['phone_whatsapp'] or '—')}</div>
+            </td>
 
-                    <div class="assessment-pill-row">
-                        <span class="assessment-pill">{assessment_status_chip(at['status'])}</span>
-                        <span class="assessment-pill blue">Submitted: {submitted_text or 'Not submitted yet'}</span>
-                    </div>
-                </div>
+            <td>{assessment_status_chip(at['status'])}</td>
 
-                <div style="text-align:right">
-                    <div class="attempt-score">{score_text}</div>
-                    <div class="mini muted">Score</div>
-                </div>
-            </div>
+            <td>{at['total_score']} / {at['total_points']}</td>
 
-            <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+            <td>{escape((at['submitted_at'] or '')[:16].replace('T',' '))}</td>
+
+            <td style="max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+                title="{escape(flag_text)}">
+                {escape(flag_text)}
+            </td>
+
+            <td>
                 <a class="btn mini secondary" href="/tutor/assessment-attempt/{at['id']}/mark">
-                    Mark / View Attempt
+                    Mark / View
                 </a>
-            </div>
-        </div>
+            </td>
+        </tr>
         """
 
     body = f"""
-    {assessment_ui_css()}
-
-    <section class="card assessment-ui">
-        <div class="toolbar" style="margin-bottom:12px">
+    <section class="card">
+        <div class="toolbar">
             <a class="btn mini secondary" href="/tutor/assessments/{assessment_id}/builder">
                 ← Back
             </a>
         </div>
 
-        <div class="assessment-hero">
-            <div>
-                <h1>Assessment Submissions</h1>
-                <p>
-                    {escape(assessment['title'])} ·
-                    {grade_label(assessment['grade'])} - {escape(assessment['subject_name'])}
-                </p>
-            </div>
+        <h1>Assessment Submissions</h1>
 
-            <div style="text-align:right">
-                <div style="font-size:28px;font-weight:900">{len(attempts)}</div>
-                <div class="mini" style="color:rgba(255,255,255,.78)">Attempt(s)</div>
-            </div>
-        </div>
+        <p class="muted">
+            {escape(assessment['title'])} |
+            {grade_label(assessment['grade'])} - {escape(assessment['subject_name'])}
+        </p>
 
-        <div class="assessment-card-list">
-            {rows or "<div class='card soft'>No submissions yet.</div>"}
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Status</th>
+                        <th>Score</th>
+                        <th>Submitted</th>
+                        <th>Security Flags</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {rows or "<tr><td colspan='6'>No submissions yet.</td></tr>"}
+                </tbody>
+            </table>
         </div>
     </section>
     """
@@ -74744,9 +74354,7 @@ def tutor_mark_assessment_attempt(attempt_id):
 
     answer_cards = ""
 
-    for question_number, ans in enumerate(answers, start=1):
-
-        marking_html = ""
+    for ans in answers:
         
         question_file_html = ""
 
@@ -74813,68 +74421,40 @@ def tutor_mark_assessment_attempt(attempt_id):
             manual_value = "" if ans["manual_mark"] is None else ans["manual_mark"]
 
             answer_display = f"""
-            <div style="white-space:pre-wrap">
+            <p style="white-space:pre-wrap;border:1px solid #e5e7eb;padding:10px;border-radius:10px">
                 {escape(ans['answer_text'] or 'No answer')}
-            </div>
-            """
+            </p>
 
-            marking_html = f"""
-            <div class="card soft" style="margin-top:12px;border-left:5px solid #f59e0b">
-                <strong>Manual Marking</strong>
+            <label>Manual Mark out of {ans['points']}</label>
+            <input type="number"
+                   name="mark_{ans['answer_id']}"
+                   value="{manual_value}"
+                   min="0"
+                   max="{ans['points']}"
+                   step="0.5">
 
-                <div style="margin-top:10px">
-                    <label>Manual Mark out of {ans['points']}</label>
-                    <input type="number"
-                           name="mark_{ans['answer_id']}"
-                           value="{manual_value}"
-                           min="0"
-                           max="{ans['points']}"
-                           step="0.5">
-                </div>
-
-                <div style="margin-top:10px">
-                    <label>Feedback</label>
-                    <textarea name="feedback_{ans['answer_id']}" rows="3">{escape(ans['feedback'] or '')}</textarea>
-                </div>
-            </div>
+            <label>Feedback</label>
+            <textarea name="feedback_{ans['answer_id']}" rows="3">{escape(ans['feedback'] or '')}</textarea>
             """
 
         answer_cards += f"""
-        <div class="assessment-question">
-            <div class="assessment-question-head">
-                <div class="question-title-wrap">
-                    <span class="question-number">{question_number}</span>
-                    <div>
-                        <h3 style="margin:0">Question {question_number}</h3>
-                        <div class="mini muted">
-                            {escape(ans['question_type'])} · {ans['points']} mark(s)
-                        </div>
-                    </div>
-                </div>
-            </div>
+        <div class="card soft">
+            <h3>{escape(ans['question_type'])} Question ({ans['points']} mark(s))</h3>
 
-            <div class="question-text-box">
-                {escape(ans['question_text'] or '')}
-            </div>
+            <p style="white-space:pre-wrap">{escape(ans['question_text'])}</p>
 
+            {answer_display}
             {question_file_html}
-
-            <div class="card soft" style="margin-top:12px">
-                <strong>Learner Answer</strong>
-                <div style="margin-top:8px;white-space:pre-wrap">
-                    {answer_display}
-                </div>
-            </div>
-
             {learner_files_html}
 
-            {marking_html}
+            <p class="mini muted" style="white-space:pre-wrap">
+                Memo: {escape(ans['memo'] or 'No memo added.')}
+            </p>
         </div>
         """
 
     body = f"""
-    {assessment_ui_css()}
-    <section class="card assessment-ui">
+    <section class="card">
         <h1>Mark Assessment</h1>
 
         <p class="muted">
