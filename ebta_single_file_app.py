@@ -70937,6 +70937,34 @@ def admin_predictive_models():
     body = f"""
     {admin_nav()}
 
+    <style>
+        .predictive-section summary {{
+            cursor:pointer;
+            list-style:none;
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:12px;
+            flex-wrap:wrap;
+        }}
+
+        .predictive-section summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .predictive-section-title {{
+            margin:0;
+        }}
+
+        .predictive-section-note {{
+            margin:5px 0 0;
+        }}
+
+        .predictive-section-content {{
+            margin-top:14px;
+        }}
+    </style>
+
     <section class="card">
         <h1>Predictive Models & Early Mitigation</h1>
 
@@ -70964,149 +70992,235 @@ def admin_predictive_models():
             </a>
         </form>
 
-        <div class="card soft" style="border-left:6px solid {'#dc2626' if data['overall_level'] in ['HIGH','CRITICAL'] else '#1b5e20'}">
-            <h2>EBTA Risk Forecast</h2>
+        <details class="card soft predictive-section"
+                 style="border-left:6px solid {'#dc2626' if data['overall_level'] in ['HIGH','CRITICAL'] else '#1b5e20'};margin-bottom:14px"
+                 open>
+            <summary>
+                <div>
+                    <h2 class="predictive-section-title">EBTA Risk Forecast</h2>
+                    <p class="mini muted predictive-section-note">
+                        Overall risk score and reasons for {pretty_month_label(month)}.
+                    </p>
+                </div>
 
-            <div style="font-size:32px;font-weight:900;margin:8px 0">
-                {prediction_chip(data["overall_level"])} Risk Score: {data["overall_score"]}
+                <span class="chip">Open / Close</span>
+            </summary>
+
+            <div class="predictive-section-content">
+                <div style="font-size:32px;font-weight:900;margin:8px 0">
+                    {prediction_chip(data["overall_level"])} Risk Score: {data["overall_score"]}
+                </div>
+
+                <p class="mini muted">
+                    Prediction generated for {pretty_month_label(month)} using data up to {escape(data["today"])}.
+                </p>
+
+                <ul>
+                    {reasons_html}
+                </ul>
             </div>
+        </details>
 
-            <p class="mini muted">
-                Prediction generated for {pretty_month_label(month)} using data up to {escape(data["today"])}.
-            </p>
+        <details class="card soft predictive-section" style="margin-bottom:14px" open>
+            <summary>
+                <div>
+                    <h2 class="predictive-section-title">Forecast Summary</h2>
+                    <p class="mini muted predictive-section-note">
+                        Current numbers and projected month-end performance.
+                    </p>
+                </div>
 
-            <ul>
-                {reasons_html}
-            </ul>
-        </div>
+                <span class="chip">Open / Close</span>
+            </summary>
 
-        <div class="stats big" style="margin-top:14px">
-            {stat("Current Revenue", prediction_money(data["current_revenue"]))}
-            {stat("Projected Month-End Revenue", prediction_money(data["predicted_month_end_revenue"]))}
-            {stat("Active Enrollments", data["current_active"])}
-            {stat("Projected Month-End Active", data["predicted_month_end_active"])}
-            {stat("Unique Students", data["current_students"])}
-            {stat("Projected Month-End Students", data["predicted_month_end_students"])}
-            {stat("Pending Enrollments", data["current_pending"])}
-            {stat("Lapsed Enrollments", data["current_lapsed"])}
-        </div>
-
-        <div class="grid" style="margin-top:14px">
-            {metric_card("Today’s Enrollments", data["today_enrollments"], "New enrollment records created today.", "#2563eb")}
-            {metric_card("Today’s Attendance Records", data["today_attendance"], "Attendance captured today.", "#16a34a")}
-            {metric_card("Today’s Submissions", data["today_submissions"], "Assignments submitted today.", "#7c3aed")}
-            {metric_card("Today’s Tutor Uploads", data["today_uploads"], "Materials uploaded today.", "#f59e0b")}
-        </div>
-
-        <div class="card soft" style="margin-top:14px;border-left:5px solid #f59e0b">
-            <h2>What EBTA Should Do Now</h2>
-
-            <div class="grid">
-                {action_cards}
+            <div class="predictive-section-content">
+                <div class="stats big">
+                    {stat("Current Revenue", prediction_money(data["current_revenue"]))}
+                    {stat("Projected Month-End Revenue", prediction_money(data["predicted_month_end_revenue"]))}
+                    {stat("Active Enrollments", data["current_active"])}
+                    {stat("Projected Month-End Active", data["predicted_month_end_active"])}
+                    {stat("Unique Students", data["current_students"])}
+                    {stat("Projected Month-End Students", data["predicted_month_end_students"])}
+                    {stat("Pending Enrollments", data["current_pending"])}
+                    {stat("Lapsed Enrollments", data["current_lapsed"])}
+                </div>
             </div>
-        </div>
+        </details>
 
-        <div class="card soft" style="margin-top:14px">
-            <h2>Subject Risk Predictions</h2>
+        <details class="card soft predictive-section" style="margin-bottom:14px">
+            <summary>
+                <div>
+                    <h2 class="predictive-section-title">Today’s Activity</h2>
+                    <p class="mini muted predictive-section-note">
+                        Daily operational activity from the portal.
+                    </p>
+                </div>
 
-            <p class="mini muted">
-                These subjects may need marketing, parent follow-up, tutor support or recovery action.
-            </p>
+                <span class="chip">Open / Close</span>
+            </summary>
 
-            <div class="scroll-x">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Subject</th>
-                            <th>Current Active</th>
-                            <th>Last Month</th>
-                            <th>Pending</th>
-                            <th>Lapsed</th>
-                            <th>Risk</th>
-                            <th>Reason</th>
-                            <th>Recommended Action</th>
-                        </tr>
-                    </thead>
-
-                    <tbody>
-                        {subject_rows or "<tr><td colspan='8'>No subject risk detected.</td></tr>"}
-                    </tbody>
-                </table>
+            <div class="predictive-section-content">
+                <div class="grid">
+                    {metric_card("Today’s Enrollments", data["today_enrollments"], "New enrollment records created today.", "#2563eb")}
+                    {metric_card("Today’s Attendance Records", data["today_attendance"], "Attendance captured today.", "#16a34a")}
+                    {metric_card("Today’s Submissions", data["today_submissions"], "Assignments submitted today.", "#7c3aed")}
+                    {metric_card("Today’s Tutor Uploads", data["today_uploads"], "Materials uploaded today.", "#f59e0b")}
+                </div>
             </div>
-        </div>
+        </details>
 
-        <div class="card soft" style="margin-top:14px">
-            <h2>Tutor Risk Predictions</h2>
+        <details class="card soft predictive-section" style="margin-bottom:14px;border-left:5px solid #f59e0b" open>
+            <summary>
+                <div>
+                    <h2 class="predictive-section-title">What EBTA Should Do Now</h2>
+                    <p class="mini muted predictive-section-note">
+                        Priority actions recommended for today.
+                    </p>
+                </div>
 
-            <p class="mini muted">
-                This helps the CAO and tutor managers identify where tutor support or monitoring may be needed.
-            </p>
+                <span class="chip">Open / Close</span>
+            </summary>
 
-            <div class="scroll-x">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Tutor</th>
-                            <th>Subjects</th>
-                            <th>Uploads</th>
-                            <th>Assignments</th>
-                            <th>Attendance Logs</th>
-                            <th>Rating</th>
-                            <th>Risk</th>
-                            <th>Reason</th>
-                            <th>Recommended Action</th>
-                        </tr>
-                    </thead>
-
-                    <tbody>
-                        {tutor_rows or "<tr><td colspan='9'>No tutor risk detected.</td></tr>"}
-                    </tbody>
-                </table>
+            <div class="predictive-section-content">
+                <div class="grid">
+                    {action_cards}
+                </div>
             </div>
-        </div>
+        </details>
 
-        <div class="card soft" style="margin-top:14px">
-            <h2>Assignment & Academic Risk Predictions</h2>
+        <details class="card soft predictive-section" style="margin-bottom:14px">
+            <summary>
+                <div>
+                    <h2 class="predictive-section-title">Subject Risk Predictions</h2>
+                    <p class="mini muted predictive-section-note">
+                        Subjects that may need marketing, parent follow-up, tutor support or recovery action.
+                    </p>
+                </div>
 
-            <p class="mini muted">
-                This checks where learners may be falling behind in submissions or marks.
-            </p>
+                <span class="chip">Open / Close</span>
+            </summary>
 
-            <div class="scroll-x">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Subject</th>
-                            <th>Assignments</th>
-                            <th>Submissions</th>
-                            <th>Average Mark</th>
-                            <th>Risk</th>
-                            <th>Reason</th>
-                            <th>Recommended Action</th>
-                        </tr>
-                    </thead>
+            <div class="predictive-section-content">
+                <div class="scroll-x">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Subject</th>
+                                <th>Current Active</th>
+                                <th>Last Month</th>
+                                <th>Pending</th>
+                                <th>Lapsed</th>
+                                <th>Risk</th>
+                                <th>Reason</th>
+                                <th>Recommended Action</th>
+                            </tr>
+                        </thead>
 
-                    <tbody>
-                        {assignment_rows or "<tr><td colspan='7'>No assignment risk detected.</td></tr>"}
-                    </tbody>
-                </table>
+                        <tbody>
+                            {subject_rows or "<tr><td colspan='8'>No subject risk detected.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
             </div>
-        </div>
+        </details>
 
-        <div class="card soft" style="margin-top:14px;border-left:5px solid #2563eb">
-            <h2>How to Use This Page</h2>
+        <details class="card soft predictive-section" style="margin-bottom:14px">
+            <summary>
+                <div>
+                    <h2 class="predictive-section-title">Tutor Risk Predictions</h2>
+                    <p class="mini muted predictive-section-note">
+                        Tutors who may need support, monitoring or follow-up from tutor managers.
+                    </p>
+                </div>
 
-            <p class="muted">
-                Use this page every morning before operations start. If the risk is High or Critical,
-                the High Admin, COO and CAO should act on the recommended actions the same day.
-            </p>
+                <span class="chip">Open / Close</span>
+            </summary>
 
-            <div class="grid">
-                {metric_card("Daily Use", "Morning", "Check pending, lapsed, attendance and tutor upload risks.", "#2563eb")}
-                {metric_card("Weekly Use", "Sunday/Monday", "Compare subjects and tutors before new session schedules start.", "#16a34a")}
-                {metric_card("Monthly Use", "Before 24th", "Use predictions to prepare retention, marketing and awards planning.", "#7c3aed")}
+            <div class="predictive-section-content">
+                <div class="scroll-x">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Tutor</th>
+                                <th>Subjects</th>
+                                <th>Uploads</th>
+                                <th>Assignments</th>
+                                <th>Attendance Logs</th>
+                                <th>Rating</th>
+                                <th>Risk</th>
+                                <th>Reason</th>
+                                <th>Recommended Action</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            {tutor_rows or "<tr><td colspan='9'>No tutor risk detected.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
             </div>
-        </div>
+        </details>
+
+        <details class="card soft predictive-section" style="margin-bottom:14px">
+            <summary>
+                <div>
+                    <h2 class="predictive-section-title">Assignment & Academic Risk Predictions</h2>
+                    <p class="mini muted predictive-section-note">
+                        Learner submission and academic performance risks.
+                    </p>
+                </div>
+
+                <span class="chip">Open / Close</span>
+            </summary>
+
+            <div class="predictive-section-content">
+                <div class="scroll-x">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Subject</th>
+                                <th>Assignments</th>
+                                <th>Submissions</th>
+                                <th>Average Mark</th>
+                                <th>Risk</th>
+                                <th>Reason</th>
+                                <th>Recommended Action</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            {assignment_rows or "<tr><td colspan='7'>No assignment risk detected.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </details>
+
+        <details class="card soft predictive-section" style="margin-top:14px;border-left:5px solid #2563eb">
+            <summary>
+                <div>
+                    <h2 class="predictive-section-title">How to Use This Page</h2>
+                    <p class="mini muted predictive-section-note">
+                        Guidance for daily, weekly and monthly use.
+                    </p>
+                </div>
+
+                <span class="chip">Open / Close</span>
+            </summary>
+
+            <div class="predictive-section-content">
+                <p class="muted">
+                    Use this page every morning before operations start. If the risk is High or Critical,
+                    the High Admin, COO and CAO should act on the recommended actions the same day.
+                </p>
+
+                <div class="grid">
+                    {metric_card("Daily Use", "Morning", "Check pending, lapsed, attendance and tutor upload risks.", "#2563eb")}
+                    {metric_card("Weekly Use", "Sunday/Monday", "Compare subjects and tutors before new session schedules start.", "#16a34a")}
+                    {metric_card("Monthly Use", "Before 24th", "Use predictions to prepare retention, marketing and awards planning.", "#7c3aed")}
+                </div>
+            </div>
+        </details>
     </section>
     """
 
@@ -72466,6 +72580,7 @@ def admin_analytics_export():
         download_name=filename,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
     
 ASSESSMENT_ALLOWED_EXTENSIONS = {
     "jpg", "jpeg", "png", "gif", "webp",
