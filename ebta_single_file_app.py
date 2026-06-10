@@ -72213,21 +72213,21 @@ def admin_analytics():
         }}
     }});
     
-    document.addEventListener("DOMContentLoaded", function () {
-        document.querySelectorAll("details.analytics-section").forEach(function(section) {
-            section.addEventListener("toggle", function() {
-                if (section.open && window.Chart && Chart.instances) {
-                    setTimeout(function() {
-                        Object.values(Chart.instances).forEach(function(chart) {
-                            if (chart && typeof chart.resize === "function") {
+    document.addEventListener("DOMContentLoaded", function () {{
+        document.querySelectorAll("details.analytics-section").forEach(function(section) {{
+            section.addEventListener("toggle", function() {{
+                if (section.open && window.Chart && Chart.instances) {{
+                    setTimeout(function() {{
+                        Object.values(Chart.instances).forEach(function(chart) {{
+                            if (chart && typeof chart.resize === "function") {{
                                 chart.resize();
-                            }
-                        });
-                    }, 120);
-                }
-            });
-        });
-    });
+                            }}
+                        }});
+                    }}, 120);
+                }}
+            }});
+        }});
+    }});
     
     </script>
     """
