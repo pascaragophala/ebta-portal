@@ -71651,6 +71651,48 @@ def admin_analytics():
     body = f"""
     {admin_nav()}
 
+    <style>
+        .analytics-section summary {{
+            cursor:pointer;
+            list-style:none;
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:12px;
+            flex-wrap:wrap;
+        }}
+
+        .analytics-section summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .analytics-section-title {{
+            margin:0;
+        }}
+
+        .analytics-section-note {{
+            margin:5px 0 0;
+        }}
+
+        .analytics-section-content {{
+            margin-top:14px;
+        }}
+
+        .analytics-chart-box {{
+            min-height:320px;
+        }}
+
+        .analytics-chart-box canvas {{
+            max-height:360px;
+        }}
+
+        @media(max-width: 760px) {{
+            .analytics-chart-box {{
+                min-height:260px;
+            }}
+        }}
+    </style>
+
     <section class="card">
         <h1>High Admin Analytics</h1>
 
@@ -71682,189 +71724,310 @@ def admin_analytics():
             </a>
         </form>
 
-        <div class="card soft" style="border-left:5px solid #2563eb;margin-bottom:14px">
-            <h2>Month Comparison</h2>
-            <p class="mini muted">
-                Comparing <strong>{pretty_month_label(month)}</strong> with
-                <strong>{pretty_month_label(summary["prev_month"])}</strong>.
-            </p>
+        <details class="card soft analytics-section" style="border-left:5px solid #2563eb;margin-bottom:14px" open>
+            <summary>
+                <div>
+                    <h2 class="analytics-section-title">Month Comparison</h2>
+                    <p class="mini muted analytics-section-note">
+                        Comparing <strong>{pretty_month_label(month)}</strong> with
+                        <strong>{pretty_month_label(summary["prev_month"])}</strong>.
+                    </p>
+                </div>
 
-            {comparison_cards}
-        </div>
+                <span class="chip">Open / Close</span>
+            </summary>
 
-        <div class="stats big">
-            {stat("Revenue", money(summary["revenue"]))}
-            {stat("Enrollments", summary["total_enrollments"])}
-            {stat("Active Enrollments", summary["active"])}
-            {stat("Unique Students", summary["unique_students"])}
-            {stat("New Students", summary["new_students"])}
-            {stat("Returning Students", summary["returning_students"])}
-            {stat("Pending", summary["pending"])}
-            {stat("Lapsed", summary["lapsed"])}
-        </div>
-
-        <div class="grid" style="margin-top:14px">
-            <div class="card soft">
-                <h2>Previous 3 Months Trend</h2>
-                <p class="mini muted">
-                    Shows {pretty_month_label(summary["month_3"])} to {pretty_month_label(month)}.
-                </p>
-                <canvas id="monthlyTrendChart"></canvas>
+            <div class="analytics-section-content">
+                {comparison_cards}
             </div>
+        </details>
 
-            <div class="card soft">
-                <h2>Current vs Previous Month</h2>
-                <p class="mini muted">Revenue, enrollments, active enrollments and unique students.</p>
-                <canvas id="monthCompareChart"></canvas>
+        <details class="card soft analytics-section" style="margin-bottom:14px" open>
+            <summary>
+                <div>
+                    <h2 class="analytics-section-title">Main Summary</h2>
+                    <p class="mini muted analytics-section-note">
+                        Key numbers for {pretty_month_label(month)}.
+                    </p>
+                </div>
+
+                <span class="chip">Open / Close</span>
+            </summary>
+
+            <div class="analytics-section-content">
+                <div class="stats big">
+                    {stat("Revenue", money(summary["revenue"]))}
+                    {stat("Enrollments", summary["total_enrollments"])}
+                    {stat("Active Enrollments", summary["active"])}
+                    {stat("Unique Students", summary["unique_students"])}
+                    {stat("New Students", summary["new_students"])}
+                    {stat("Returning Students", summary["returning_students"])}
+                    {stat("Pending", summary["pending"])}
+                    {stat("Lapsed", summary["lapsed"])}
+                </div>
             </div>
-        </div>
+        </details>
 
-        <div class="grid" style="margin-top:14px">
-            <div class="card soft">
-                <h2>Daily Revenue</h2>
-                <canvas id="dailyRevenueChart"></canvas>
+        <details class="card soft analytics-section" style="margin-bottom:14px">
+            <summary>
+                <div>
+                    <h2 class="analytics-section-title">Monthly Trends</h2>
+                    <p class="mini muted analytics-section-note">
+                        Previous 3 months and current month comparison.
+                    </p>
+                </div>
+
+                <span class="chip">Open / Close</span>
+            </summary>
+
+            <div class="analytics-section-content">
+                <div class="grid">
+                    <div class="card soft analytics-chart-box">
+                        <h2>Previous 3 Months Trend</h2>
+                        <p class="mini muted">
+                            Shows {pretty_month_label(summary["month_3"])} to {pretty_month_label(month)}.
+                        </p>
+                        <canvas id="monthlyTrendChart"></canvas>
+                    </div>
+
+                    <div class="card soft analytics-chart-box">
+                        <h2>Current vs Previous Month</h2>
+                        <p class="mini muted">Revenue, enrollments, active enrollments and unique students.</p>
+                        <canvas id="monthCompareChart"></canvas>
+                    </div>
+                </div>
             </div>
+        </details>
 
-            <div class="card soft">
-                <h2>Daily Attendance</h2>
-                <canvas id="attendanceChart"></canvas>
+        <details class="card soft analytics-section" style="margin-bottom:14px">
+            <summary>
+                <div>
+                    <h2 class="analytics-section-title">Daily Activity</h2>
+                    <p class="mini muted analytics-section-note">
+                        Daily revenue and attendance activity.
+                    </p>
+                </div>
+
+                <span class="chip">Open / Close</span>
+            </summary>
+
+            <div class="analytics-section-content">
+                <div class="grid">
+                    <div class="card soft analytics-chart-box">
+                        <h2>Daily Revenue</h2>
+                        <canvas id="dailyRevenueChart"></canvas>
+                    </div>
+
+                    <div class="card soft analytics-chart-box">
+                        <h2>Daily Attendance</h2>
+                        <canvas id="attendanceChart"></canvas>
+                    </div>
+                </div>
             </div>
-        </div>
+        </details>
 
-        <div class="grid" style="margin-top:14px">
-            <div class="card soft">
-                <h2>Top Subjects by Active Learners</h2>
-                <canvas id="subjectActiveChart"></canvas>
+        <details class="card soft analytics-section" style="margin-bottom:14px">
+            <summary>
+                <div>
+                    <h2 class="analytics-section-title">Subject Performance Charts</h2>
+                    <p class="mini muted analytics-section-note">
+                        Active learners and revenue by subject.
+                    </p>
+                </div>
+
+                <span class="chip">Open / Close</span>
+            </summary>
+
+            <div class="analytics-section-content">
+                <div class="grid">
+                    <div class="card soft analytics-chart-box">
+                        <h2>Top Subjects by Active Learners</h2>
+                        <canvas id="subjectActiveChart"></canvas>
+                    </div>
+
+                    <div class="card soft analytics-chart-box">
+                        <h2>Top Subjects by Revenue</h2>
+                        <canvas id="subjectRevenueChart"></canvas>
+                    </div>
+                </div>
             </div>
+        </details>
 
-            <div class="card soft">
-                <h2>Top Subjects by Revenue</h2>
-                <canvas id="subjectRevenueChart"></canvas>
+        <details class="card soft analytics-section" style="margin-bottom:14px">
+            <summary>
+                <div>
+                    <h2 class="analytics-section-title">Tutor Ratings</h2>
+                    <p class="mini muted analytics-section-note">
+                        Tutor and tutor manager rating charts.
+                    </p>
+                </div>
+
+                <span class="chip">Open / Close</span>
+            </summary>
+
+            <div class="analytics-section-content">
+                <div class="grid">
+                    <div class="card soft analytics-chart-box">
+                        <h2>Top Rated Tutors</h2>
+                        <canvas id="tutorRatingChart"></canvas>
+                    </div>
+
+                    <div class="card soft analytics-chart-box">
+                        <h2>Top Rated Tutor Managers</h2>
+                        <canvas id="managerRatingChart"></canvas>
+                    </div>
+                </div>
             </div>
-        </div>
+        </details>
 
-        <div class="grid" style="margin-top:14px">
-            <div class="card soft">
-                <h2>Top Rated Tutors</h2>
-                <canvas id="tutorRatingChart"></canvas>
+        <details class="card soft analytics-section" style="margin-bottom:14px">
+            <summary>
+                <div>
+                    <h2 class="analytics-section-title">Improving & Declining Subjects</h2>
+                    <p class="mini muted analytics-section-note">
+                        Quick subject movement compared to the previous month.
+                    </p>
+                </div>
+
+                <span class="chip">Open / Close</span>
+            </summary>
+
+            <div class="analytics-section-content">
+                <div class="grid">
+                    <div class="card soft" style="border-left:5px solid #16a34a">
+                        <h2>Subjects Improving</h2>
+                        <div class="scroll-x">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Subject</th>
+                                        <th>{pretty_month_label(summary["prev_month"])}</th>
+                                        <th>{pretty_month_label(month)}</th>
+                                        <th>Change</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {improving_rows or "<tr><td colspan='4'>No improving subjects found.</td></tr>"}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="card soft" style="border-left:5px solid #dc2626">
+                        <h2>Subjects Declining</h2>
+                        <div class="scroll-x">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Subject</th>
+                                        <th>{pretty_month_label(summary["prev_month"])}</th>
+                                        <th>{pretty_month_label(month)}</th>
+                                        <th>Change</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {declining_rows or "<tr><td colspan='4'>No declining subjects found.</td></tr>"}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             </div>
+        </details>
 
-            <div class="card soft">
-                <h2>Top Rated Tutor Managers</h2>
-                <canvas id="managerRatingChart"></canvas>
+        <details class="card soft analytics-section" style="margin-bottom:14px">
+            <summary>
+                <div>
+                    <h2 class="analytics-section-title">Risk Subjects</h2>
+                    <p class="mini muted analytics-section-note">
+                        Low enrollment subjects and subjects with a critical 4-month decline.
+                    </p>
+                </div>
+
+                <span class="chip">Open / Close</span>
+            </summary>
+
+            <div class="analytics-section-content">
+                <div class="grid">
+                    <div class="card soft" style="border-left:5px solid #f59e0b">
+                        <h2>Low Enrollment Subjects</h2>
+                        <p class="mini muted">Subjects with 1 to 4 active learners.</p>
+
+                        <div class="scroll-x">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Subject</th>
+                                        <th>Active Learners</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {low_rows or "<tr><td colspan='2'>No low enrollment subjects found.</td></tr>"}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="card soft" style="border-left:5px solid #7f1d1d">
+                        <h2>Critical 4-Month Decline</h2>
+                        <p class="mini muted">Subjects declining every month for the previous 3 months plus selected month.</p>
+
+                        <div class="scroll-x">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Subject</th>
+                                        <th>{pretty_month_label(summary["month_3"])}</th>
+                                        <th>{pretty_month_label(summary["month_2"])}</th>
+                                        <th>{pretty_month_label(summary["prev_month"])}</th>
+                                        <th>{pretty_month_label(month)}</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {critical_rows or "<tr><td colspan='5'>No critical declining trend found.</td></tr>"}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             </div>
-        </div>
+        </details>
 
-        <div class="grid" style="margin-top:14px">
-            <div class="card soft" style="border-left:5px solid #16a34a">
-                <h2>Subjects Improving</h2>
+        <details class="card soft analytics-section" style="margin-top:14px">
+            <summary>
+                <div>
+                    <h2 class="analytics-section-title">Full Subject Performance Comparison</h2>
+                    <p class="mini muted analytics-section-note">
+                        Detailed subject comparison between {pretty_month_label(summary["prev_month"])}
+                        and {pretty_month_label(month)}.
+                    </p>
+                </div>
+
+                <span class="chip">Open / Close</span>
+            </summary>
+
+            <div class="analytics-section-content">
                 <div class="scroll-x">
                     <table>
                         <thead>
                             <tr>
                                 <th>Subject</th>
-                                <th>{pretty_month_label(summary["prev_month"])}</th>
-                                <th>{pretty_month_label(month)}</th>
-                                <th>Change</th>
+                                <th>Previous Active</th>
+                                <th>Current Active</th>
+                                <th>Active Change</th>
+                                <th>Previous Revenue</th>
+                                <th>Current Revenue</th>
+                                <th>Revenue Change</th>
                             </tr>
                         </thead>
+
                         <tbody>
-                            {improving_rows or "<tr><td colspan='4'>No improving subjects found.</td></tr>"}
+                            {subject_comparison_rows or "<tr><td colspan='7'>No subject data found.</td></tr>"}
                         </tbody>
                     </table>
                 </div>
             </div>
-
-            <div class="card soft" style="border-left:5px solid #dc2626">
-                <h2>Subjects Declining</h2>
-                <div class="scroll-x">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Subject</th>
-                                <th>{pretty_month_label(summary["prev_month"])}</th>
-                                <th>{pretty_month_label(month)}</th>
-                                <th>Change</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {declining_rows or "<tr><td colspan='4'>No declining subjects found.</td></tr>"}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <div class="grid" style="margin-top:14px">
-            <div class="card soft" style="border-left:5px solid #f59e0b">
-                <h2>Low Enrollment Subjects</h2>
-                <p class="mini muted">Subjects with 1 to 4 active learners.</p>
-
-                <div class="scroll-x">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Subject</th>
-                                <th>Active Learners</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {low_rows or "<tr><td colspan='2'>No low enrollment subjects found.</td></tr>"}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div class="card soft" style="border-left:5px solid #7f1d1d">
-                <h2>Critical 4-Month Decline</h2>
-                <p class="mini muted">Subjects declining every month for the previous 3 months plus selected month.</p>
-
-                <div class="scroll-x">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Subject</th>
-                                <th>{pretty_month_label(summary["month_3"])}</th>
-                                <th>{pretty_month_label(summary["month_2"])}</th>
-                                <th>{pretty_month_label(summary["prev_month"])}</th>
-                                <th>{pretty_month_label(month)}</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {critical_rows or "<tr><td colspan='5'>No critical declining trend found.</td></tr>"}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <div class="card soft" style="margin-top:14px">
-            <h2>Full Subject Performance Comparison</h2>
-            <p class="mini muted">
-                Detailed subject comparison between {pretty_month_label(summary["prev_month"])}
-                and {pretty_month_label(month)}.
-            </p>
-
-            <div class="scroll-x">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Subject</th>
-                            <th>Previous Active</th>
-                            <th>Current Active</th>
-                            <th>Active Change</th>
-                            <th>Previous Revenue</th>
-                            <th>Current Revenue</th>
-                            <th>Revenue Change</th>
-                        </tr>
-                    </thead>
-
-                    <tbody>
-                        {subject_comparison_rows or "<tr><td colspan='7'>No subject data found.</td></tr>"}
-                    </tbody>
-                </table>
-            </div>
-        </div>
+        </details>
     </section>
 
     <script>
@@ -72049,6 +72212,23 @@ def admin_analytics():
             }}
         }}
     }});
+    
+    document.addEventListener("DOMContentLoaded", function () {
+        document.querySelectorAll("details.analytics-section").forEach(function(section) {
+            section.addEventListener("toggle", function() {
+                if (section.open && window.Chart && Chart.instances) {
+                    setTimeout(function() {
+                        Object.values(Chart.instances).forEach(function(chart) {
+                            if (chart && typeof chart.resize === "function") {
+                                chart.resize();
+                            }
+                        });
+                    }, 120);
+                }
+            });
+        });
+    });
+    
     </script>
     """
 
