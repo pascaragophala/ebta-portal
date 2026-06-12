@@ -8479,6 +8479,34 @@ document.addEventListener("DOMContentLoaded", function(){
             statusBox.style.color = "#475569";
         }
     }
+    
+    function formatReturningSANumberForForm(value){
+        let number = (value || "").toString().trim();
+
+        if(!number){
+            return "";
+        }
+
+        // Remove spaces, dashes and brackets
+        number = number.replace(/\s+/g, "");
+        number = number.replace(/-/g, "");
+        number = number.replace(/\(/g, "");
+        number = number.replace(/\)/g, "");
+
+        // Convert +27 format to normal SA 10 digit format
+        // Example: +27821234567 becomes 0821234567
+        if(number.startsWith("+27") && number.length >= 12){
+            return "0" + number.substring(3);
+        }
+
+        // Convert 27 format to normal SA 10 digit format
+        // Example: 27821234567 becomes 0821234567
+        if(number.startsWith("27") && number.length >= 11){
+            return "0" + number.substring(2);
+        }
+
+        return number;
+    }
 
     function canLookupReturningStudent(){
         return (
@@ -8542,7 +8570,15 @@ document.addEventListener("DOMContentLoaded", function(){
             const s = data.student || {};
 
             if(guardianNameInput) guardianNameInput.value = s.guardian_name || "";
-            if(guardianInput) guardianInput.value = s.guardian_phone || "";
+            
+            if(guardianInput){
+                if((s.guardian_phone_type || "SA") === "SA"){
+                    guardianInput.value = formatReturningSANumberForForm(s.guardian_phone || "");
+                } else {
+                    guardianInput.value = s.guardian_phone || "";
+                }
+            }
+            
             if(guardianPhoneTypeInput) guardianPhoneTypeInput.value = s.guardian_phone_type || "SA";
             if(emailInput) emailInput.value = s.email || "";
             if(provinceInput) provinceInput.value = s.province || "";
