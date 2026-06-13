@@ -14622,6 +14622,9 @@ def tutor_home():
 
     manager_rating_cards = ""
 
+    manager_rating_window_is_open = rating_window_open(month)
+    manager_rating_window_text = rating_window_label(month)
+
     for manager in assigned_managers:
 
         rating_options = """
@@ -14643,18 +14646,8 @@ def tutor_home():
             </div>
             """
 
-        manager_rating_cards += f"""
-        <div class="card soft" style="border-left:5px solid #7c3aed;margin-bottom:10px">
-
-            <h3 style="margin-top:0">
-                {escape(manager["manager_name"] or "Tutor Manager")}
-            </h3>
-
-            <div class="mini muted" style="margin-bottom:10px">
-                Rate your tutor manager for {pretty_month_label(month)}.
-                Your rating helps EBTA improve academic support.
-            </div>
-
+        if manager_rating_window_is_open:
+            manager_form_html = f"""
             <form method="post" action="{url_for('tutor_manager_rating_save')}" class="grid">
 
                 <input type="hidden" name="manager_id" value="{manager["manager_id"]}">
@@ -14682,7 +14675,55 @@ def tutor_home():
                 {last_updated}
 
             </form>
+            """
+        else:
+            existing_rating_html = ""
+
+            if manager["rating"]:
+                existing_rating_html = f"""
+                <div class="mini muted" style="margin-top:8px">
+                    Your saved rating for this month: <strong>{manager["rating"]}/5</strong>
+                </div>
+                """
+
+            manager_form_html = f"""
+            <div class="empty" style="text-align:left">
+                Tutor manager ratings for {pretty_month_label(month)} are currently closed.
+                The rating period is open from {manager_rating_window_text}.
+                {existing_rating_html}
+                {last_updated}
+            </div>
+            """
+
+        manager_rating_cards += f"""
+        <div class="card soft" style="border-left:5px solid #7c3aed;margin-bottom:10px">
+
+            <h3 style="margin-top:0">
+                {escape(manager["manager_name"] or "Tutor Manager")}
+            </h3>
+
+            <div class="mini muted" style="margin-bottom:10px">
+                Rate your tutor manager for {pretty_month_label(month)}.
+                This rating period is open from {manager_rating_window_text}.
+            </div>
+
+            {manager_form_html}
         </div>
+        """
+
+    rating_status_note = ""
+
+    if manager_rating_window_is_open:
+        rating_status_note = f"""
+        <span class="chip active">
+            Rating period is open
+        </span>
+        """
+    else:
+        rating_status_note = f"""
+        <span class="chip pending">
+            Rating period is closed
+        </span>
         """
 
     tutor_manager_rating_section = f"""
@@ -14693,9 +14734,16 @@ def tutor_home():
             Your feedback is submitted to EBTA. Tutor managers will only see anonymous comments and overall ratings.
         </p>
 
+        <div style="margin-bottom:12px">
+            {rating_status_note}
+            <div class="mini muted" style="margin-top:6px">
+                Rating window: {manager_rating_window_text}
+            </div>
+        </div>
+
         {manager_rating_cards or "<div class='empty'>No tutor manager assigned to you yet.</div>"}
     </div>
-    """    
+    """  
         
 
     # Assigned subjects
@@ -16086,6 +16134,15 @@ def tutor_manager_rating_save():
     month = request.form.get("month", "").strip() or get_active_month("tutor")
     rating_raw = request.form.get("rating", "").strip()
     comment = request.form.get("comment", "").strip()
+    
+    if not rating_window_open(month):
+        return page(
+            "Rating Period Closed",
+            card_msg(
+                f"The tutor manager rating window for {pretty_month_label(month)} is not open. "
+                f"It is open from {rating_window_label(month)}."
+            )
+        )
 
     try:
         manager_id = int(manager_id)
