@@ -7942,9 +7942,116 @@ def home():
         """
         return page("EBTA Enrollment", body)
 
+    celebration_banner_enabled = get_setting('celebration_banner_enabled', '0') == '1'
+    celebration_banner_text = get_setting(
+        'celebration_banner_text',
+        '🎉 Enrollments open on the 20th of June! Get ready to secure your space with EBTA.'
+    )
+    celebration_banner_position = get_setting('celebration_banner_position', 'bottom')
+    celebration_banner_speed = get_setting('celebration_banner_speed', '10')
 
+    try:
+        celebration_banner_speed_int = int(celebration_banner_speed)
+    except Exception:
+        celebration_banner_speed_int = 10
+
+    if celebration_banner_speed_int < 5:
+        celebration_banner_speed_int = 5
+
+    if celebration_banner_speed_int > 60:
+        celebration_banner_speed_int = 60
+
+    if celebration_banner_position not in ["top", "bottom"]:
+        celebration_banner_position = "bottom"
+
+    celebration_banner_edge_css = "top:12px;" if celebration_banner_position == "top" else "bottom:12px;"
+
+    celebration_banner_html = ""
+
+    if celebration_banner_enabled:
+        celebration_banner_html = f"""
+        <style>
+            .ebta-celebration-banner {{
+                position:fixed;
+                left:0;
+                right:0;
+                {celebration_banner_edge_css}
+                z-index:9999;
+                pointer-events:none;
+                overflow:hidden;
+                padding:0 10px;
+            }}
+
+            .ebta-celebration-track {{
+                display:inline-flex;
+                align-items:center;
+                gap:10px;
+                white-space:nowrap;
+                padding:10px 18px;
+                border-radius:999px;
+                background:linear-gradient(135deg, #1b5e20, #2e7d32);
+                color:#ffffff;
+                font-weight:800;
+                box-shadow:0 8px 24px rgba(15,23,42,0.22);
+                border:1px solid rgba(255,255,255,0.25);
+                animation: ebtaCelebrationMove {celebration_banner_speed_int}s linear infinite;
+            }}
+
+            .ebta-celebration-spark {{
+                display:inline-flex;
+                align-items:center;
+                justify-content:center;
+                width:28px;
+                height:28px;
+                border-radius:999px;
+                background:rgba(255,255,255,0.18);
+                animation: ebtaCelebrationPulse 1.3s ease-in-out infinite;
+            }}
+
+            @keyframes ebtaCelebrationMove {{
+                0% {{
+                    transform:translateX(110vw);
+                }}
+
+                100% {{
+                    transform:translateX(-110%);
+                }}
+            }}
+
+            @keyframes ebtaCelebrationPulse {{
+                0%, 100% {{
+                    transform:scale(1);
+                }}
+
+                50% {{
+                    transform:scale(1.15);
+                }}
+            }}
+
+            @media(max-width:760px) {{
+                .ebta-celebration-track {{
+                    font-size:13px;
+                    padding:9px 14px;
+                }}
+
+                .ebta-celebration-spark {{
+                    width:24px;
+                    height:24px;
+                }}
+            }}
+        </style>
+
+        <div class="ebta-celebration-banner">
+            <div class="ebta-celebration-track">
+                <span class="ebta-celebration-spark">🎉</span>
+                <span>{escape(celebration_banner_text)}</span>
+                <span class="ebta-celebration-spark">✨</span>
+            </div>
+        </div>
+        """
 
     body = fr"""
+    {celebration_banner_html}
     <section class='grid' style='margin-top:10px'>
     <div class="card soft" style="margin-top:18px;">
 
@@ -26067,6 +26174,14 @@ def admin_settings():
     
     enrollment_open = '1' if get_setting('enrollment_open', '1') == '1' else '0'
     enrollment_message = get_setting('enrollment_message', '')
+    
+    celebration_banner_enabled = '1' if get_setting('celebration_banner_enabled', '0') == '1' else '0'
+    celebration_banner_text = get_setting(
+        'celebration_banner_text',
+        '🎉 Enrollments open on the 20th of June! Get ready to secure your space with EBTA.'
+    )
+    celebration_banner_position = get_setting('celebration_banner_position', 'bottom')
+    celebration_banner_speed = get_setting('celebration_banner_speed', '10')
 
 
     body = f"""
@@ -26125,6 +26240,54 @@ def admin_settings():
             <button class='btn warn'>Save enrollment settings</button>
         </form>
     </section>
+    
+    <section class='card soft'>
+        <h2>Homepage Celebration Animation</h2>
+
+        <p class='muted mini'>
+            Control the small moving announcement shown on the homepage.
+            You can use this for enrollment announcements, awards, reminders or special events.
+        </p>
+
+        <form class='grid' method='post' action='{url_for('admin_set_celebration_banner')}'>
+            <div>
+                <label>Animation status</label>
+                <select name='enabled'>
+                    <option value='1' {"selected" if celebration_banner_enabled == '1' else ""}>Active</option>
+                    <option value='0' {"selected" if celebration_banner_enabled == '0' else ""}>Inactive</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Position</label>
+                <select name='position'>
+                    <option value='bottom' {"selected" if celebration_banner_position == 'bottom' else ""}>Bottom</option>
+                    <option value='top' {"selected" if celebration_banner_position == 'top' else ""}>Top</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Speed in seconds</label>
+                <input
+                    type='number'
+                    name='speed'
+                    min='5'
+                    max='60'
+                    value='{escape(celebration_banner_speed)}'
+                />
+                <div class='mini muted'>
+                    Example: 10 means the message moves across the screen every 10 seconds.
+                </div>
+            </div>
+
+            <div style='grid-column:1/-1'>
+                <label>Animation message</label>
+                <textarea name='text' rows='3'>{escape(celebration_banner_text)}</textarea>
+            </div>
+
+            <button class='btn success'>Save animation settings</button>
+        </form>
+    </section>
 
     
     """
@@ -26147,6 +26310,43 @@ def admin_set_enrollment():
         'enrollment_message',
         message or 'Enrollments are currently closed.'
     )
+
+    return redirect(url_for('admin_settings'))
+    
+    
+@app.post('/admin/set-celebration-banner')
+@require_high_admin
+def admin_set_celebration_banner():
+    r = require_admin()
+    if r:
+        return r
+
+    enabled = request.form.get('enabled', '0')
+    text = request.form.get('text', '').strip()
+    position = request.form.get('position', 'bottom').strip()
+    speed = request.form.get('speed', '10').strip()
+
+    if position not in ['top', 'bottom']:
+        position = 'bottom'
+
+    try:
+        speed_int = int(speed)
+    except Exception:
+        speed_int = 10
+
+    if speed_int < 5:
+        speed_int = 5
+
+    if speed_int > 60:
+        speed_int = 60
+
+    set_setting('celebration_banner_enabled', '1' if enabled == '1' else '0')
+    set_setting(
+        'celebration_banner_text',
+        text or '🎉 Enrollments open on the 20th of June! Get ready to secure your space with EBTA.'
+    )
+    set_setting('celebration_banner_position', position)
+    set_setting('celebration_banner_speed', str(speed_int))
 
     return redirect(url_for('admin_settings'))
 
