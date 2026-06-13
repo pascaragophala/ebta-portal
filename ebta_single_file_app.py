@@ -7961,7 +7961,7 @@ def home():
             align-items:start;
         ">
 
-            <!-- VIDEO 1 -->
+            <!-- VIDEO 1: NEW STUDENTS -->
             <div style="
                 border:1px solid #e2e8f0;
                 border-radius:16px;
@@ -7974,7 +7974,7 @@ def home():
                     margin-bottom:10px;
                     color:#0f172a;
                 ">
-                    How to Enroll on EBTA Portal
+                    New Student Portal Enrolment Guide
                 </div>
 
                 <div style="
@@ -7987,7 +7987,7 @@ def home():
                     border:1px solid #e2e8f0;
                 ">
                     <iframe
-                        src="https://drive.google.com/file/d/1z3kRXeO0iTvcofjQKWH0TJx7MKs7IIdg/preview"
+                        src="https://drive.google.com/file/d/1UjT_-PqCdE9eCqbv30ywBxllVrBUJCh9/preview"
                         allow="autoplay; fullscreen"
                         allowfullscreen
                         webkitallowfullscreen
@@ -8004,7 +8004,50 @@ def home():
                 </div>
             </div>
 
-            <!-- VIDEO 2 -->
+            <!-- VIDEO 2: RETURNING STUDENTS -->
+            <div style="
+                border:1px solid #e2e8f0;
+                border-radius:16px;
+                padding:12px;
+                background:#ffffff;
+                box-shadow:0 4px 14px rgba(15,23,42,0.06);
+            ">
+                <div class="mini" style="
+                    font-weight:700;
+                    margin-bottom:10px;
+                    color:#0f172a;
+                ">
+                    Returning Student Portal Enrolment Guide
+                </div>
+
+                <div style="
+                    position:relative;
+                    width:100%;
+                    aspect-ratio:16/9;
+                    overflow:hidden;
+                    border-radius:14px;
+                    background:#000;
+                    border:1px solid #e2e8f0;
+                ">
+                    <iframe
+                        src="https://drive.google.com/file/d/15RWp9wTETlay1-vE9hGmziSMb9NY306w/preview"
+                        allow="autoplay; fullscreen"
+                        allowfullscreen
+                        webkitallowfullscreen
+                        mozallowfullscreen
+                        loading="lazy"
+                        style="
+                            position:absolute;
+                            inset:0;
+                            width:100%;
+                            height:100%;
+                            border:0;
+                        ">
+                    </iframe>
+                </div>
+            </div>
+
+            <!-- VIDEO 3: LOGIN GUIDE -->
             <div style="
                 border:1px solid #e2e8f0;
                 border-radius:16px;
