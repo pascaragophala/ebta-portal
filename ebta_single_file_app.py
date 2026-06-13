@@ -9563,16 +9563,6 @@ def returning_student_lookup():
             "silent": True
         }
 
-    # Light name check. Also silent, because new students should not be blocked by lookup.
-    typed_name = " ".join(full_name.lower().split())
-    saved_name = " ".join((student["full_name"] or "").lower().split())
-
-    if typed_name and saved_name and typed_name != saved_name:
-        return {
-            "ok": False,
-            "silent": True
-        }
-
     return {
         "ok": True,
         "message": "Returning student found. Your saved details have been loaded, but you can still edit them.",
