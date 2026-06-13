@@ -2009,6 +2009,118 @@ def set_setting(key, value):
     conn.close()
     
     
+def get_celebration_banner_html():
+    celebration_banner_enabled = get_setting('celebration_banner_enabled', '0') == '1'
+
+    if not celebration_banner_enabled:
+        return ""
+
+    celebration_banner_text = get_setting(
+        'celebration_banner_text',
+        '🎉 Enrollments open on the 20th of June! Get ready to secure your space with EBTA.'
+    )
+
+    celebration_banner_position = get_setting('celebration_banner_position', 'bottom')
+    celebration_banner_speed = get_setting('celebration_banner_speed', '10')
+
+    try:
+        celebration_banner_speed_int = int(celebration_banner_speed)
+    except Exception:
+        celebration_banner_speed_int = 10
+
+    if celebration_banner_speed_int < 5:
+        celebration_banner_speed_int = 5
+
+    if celebration_banner_speed_int > 60:
+        celebration_banner_speed_int = 60
+
+    if celebration_banner_position not in ["top", "bottom"]:
+        celebration_banner_position = "bottom"
+
+    celebration_banner_edge_css = "top:12px;" if celebration_banner_position == "top" else "bottom:12px;"
+
+    return f"""
+    <style>
+        .ebta-celebration-banner {{
+            position:fixed;
+            left:0;
+            right:0;
+            {celebration_banner_edge_css}
+            z-index:9999;
+            pointer-events:none;
+            overflow:hidden;
+            padding:0 10px;
+        }}
+
+        .ebta-celebration-track {{
+            display:inline-flex;
+            align-items:center;
+            gap:10px;
+            white-space:nowrap;
+            padding:10px 18px;
+            border-radius:999px;
+            background:linear-gradient(135deg, #1b5e20, #2e7d32);
+            color:#ffffff;
+            font-weight:800;
+            box-shadow:0 8px 24px rgba(15,23,42,0.22);
+            border:1px solid rgba(255,255,255,0.25);
+            animation: ebtaCelebrationMove {celebration_banner_speed_int}s linear infinite;
+        }}
+
+        .ebta-celebration-spark {{
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            width:28px;
+            height:28px;
+            border-radius:999px;
+            background:rgba(255,255,255,0.18);
+            animation: ebtaCelebrationPulse 1.3s ease-in-out infinite;
+        }}
+
+        @keyframes ebtaCelebrationMove {{
+            0% {{
+                transform:translateX(110vw);
+            }}
+
+            100% {{
+                transform:translateX(-110%);
+            }}
+        }}
+
+        @keyframes ebtaCelebrationPulse {{
+            0%, 100% {{
+                transform:scale(1);
+            }}
+
+            50% {{
+                transform:scale(1.15);
+            }}
+        }}
+
+        @media(max-width:760px) {{
+            .ebta-celebration-track {{
+                font-size:13px;
+                padding:9px 14px;
+            }}
+
+            .ebta-celebration-spark {{
+                width:24px;
+                height:24px;
+            }}
+        }}
+    </style>
+
+    <div class="ebta-celebration-banner">
+        <div class="ebta-celebration-track">
+            <span class="ebta-celebration-spark">🎉</span>
+            <span>{escape(celebration_banner_text)}</span>
+            <span class="ebta-celebration-spark">✨</span>
+        </div>
+    </div>
+    """
+    
+    
 def enrollment_status_actions_locked():
     """
     When enabled, Normal Admin and Admission Coordinator cannot approve or lapse enrollments.
@@ -7246,6 +7358,11 @@ def page(title, body_html, extra_head="", extra_js=""):
             
     right = " ".join(auth)
     
+    portal_celebration_banner_html = ""
+
+    if is_student() and request.endpoint != "home":
+        portal_celebration_banner_html = get_celebration_banner_html()
+    
     body_class = ""
 
     if is_student():
@@ -7700,7 +7817,7 @@ def page(title, body_html, extra_head="", extra_js=""):
     except Exception:
         status_banner = ""
 
-    content_wrapped = f"<div class='layout'>{sidebar_html}<section class='dashboard-main'>{ann_html}{status_banner}{body_html}</section></div>" if sidebar_html else body_html
+    content_wrapped = f"<div class='layout'>{sidebar_html}<section class='dashboard-main'>{ann_html}{status_banner}{portal_celebration_banner_html}{body_html}</section></div>" if sidebar_html else body_html
 
     return f"""
     <html><head>
