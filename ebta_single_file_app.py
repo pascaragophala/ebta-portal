@@ -8085,7 +8085,7 @@ def home():
                   required
                   maxlength="5"
                   inputmode="numeric"
-                  placeholder="Enter your 5-digit PIN"
+                  placeholder="Enter/Create your 5-digit PIN"
                   autocomplete="off"
                 />
 
