@@ -74296,7 +74296,7 @@ def student_assessments():
     rows = cur.fetchall()
     conn.close()
 
-    trs = ""
+    assessment_cards = ""
 
     for a in rows:
         result_text = "—"
@@ -74322,26 +74322,186 @@ def student_assessments():
         if not assessment_is_open(a):
             open_status = "Closed / Not Open"
 
-        trs += f"""
-        <tr>
-            <td>
-                <strong>{escape(a['title'])}</strong>
-                <div class="mini muted">{escape(a['description'] or '')}</div>
-                <div class="mini muted">Assessment Month: {pretty_month_label(a['month'])}</div>
-            </td>
+        description = escape(a["description"] or "No description added for this assessment.")
 
-            <td>{grade_label(a['grade'])} - {escape(a['subject_name'])}</td>
-            <td>{escape(a['tutor_name'])}</td>
-            <td>{a['duration_minutes']} min</td>
-            <td>{assessment_status_chip(a['attempt_status'] or 'NOT STARTED')}</td>
-            <td>{escape(open_status)}</td>
-            <td>{result_text}</td>
-            <td>{action}</td>
-        </tr>
+        assessment_cards += f"""
+        <details class="student-assessment-card">
+            <summary>
+                <div class="assessment-summary-left">
+                    <h3>{escape(a['title'])}</h3>
+
+                    <div class="mini muted">
+                        {grade_label(a['grade'])} - {escape(a['subject_name'])}
+                    </div>
+
+                    <div class="assessment-mobile-chips">
+                        {assessment_status_chip(a['attempt_status'] or 'NOT STARTED')}
+                        <span class="chip">{escape(open_status)}</span>
+                    </div>
+                </div>
+
+                <div class="assessment-summary-right">
+                    <span class="mini muted">Open / Close</span>
+                </div>
+            </summary>
+
+            <div class="assessment-details">
+                <div class="assessment-description-box">
+                    <strong>Assessment Details</strong>
+                    <p>{description}</p>
+                </div>
+
+                <div class="assessment-info-grid">
+                    <div>
+                        <span class="mini muted">Assessment Month</span>
+                        <strong>{pretty_month_label(a['month'])}</strong>
+                    </div>
+
+                    <div>
+                        <span class="mini muted">Tutor</span>
+                        <strong>{escape(a['tutor_name'])}</strong>
+                    </div>
+
+                    <div>
+                        <span class="mini muted">Duration</span>
+                        <strong>{a['duration_minutes']} min</strong>
+                    </div>
+
+                    <div>
+                        <span class="mini muted">Status</span>
+                        <strong>{assessment_status_chip(a['attempt_status'] or 'NOT STARTED')}</strong>
+                    </div>
+
+                    <div>
+                        <span class="mini muted">Open Status</span>
+                        <strong>{escape(open_status)}</strong>
+                    </div>
+
+                    <div>
+                        <span class="mini muted">Result</span>
+                        <strong>{result_text}</strong>
+                    </div>
+                </div>
+
+                <div style="margin-top:14px">
+                    {action}
+                </div>
+            </div>
+        </details>
         """
 
     body = f"""
     {student_nav() if 'student_nav' in globals() else ''}
+
+    <style>
+        .student-assessments-list {{
+            display:grid;
+            gap:14px;
+            margin-top:16px;
+        }}
+
+        .student-assessment-card {{
+            border:1px solid #e2e8f0;
+            border-radius:16px;
+            background:#ffffff;
+            box-shadow:0 2px 8px rgba(15,23,42,0.05);
+            overflow:hidden;
+        }}
+
+        .student-assessment-card summary {{
+            cursor:pointer;
+            list-style:none;
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:12px;
+            padding:16px;
+            background:#f8fafc;
+        }}
+
+        .student-assessment-card summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .student-assessment-card h3 {{
+            margin:0 0 6px;
+            font-size:17px;
+            color:#0f172a;
+        }}
+
+        .assessment-summary-left {{
+            min-width:0;
+            flex:1;
+        }}
+
+        .assessment-summary-right {{
+            white-space:nowrap;
+        }}
+
+        .assessment-mobile-chips {{
+            display:flex;
+            flex-wrap:wrap;
+            gap:6px;
+            margin-top:8px;
+        }}
+
+        .assessment-details {{
+            padding:16px;
+        }}
+
+        .assessment-description-box {{
+            border:1px solid #e2e8f0;
+            background:#ffffff;
+            border-radius:14px;
+            padding:12px;
+            margin-bottom:14px;
+        }}
+
+        .assessment-description-box p {{
+            margin:8px 0 0;
+            color:#475569;
+            line-height:1.6;
+            white-space:normal;
+            word-break:break-word;
+            overflow-wrap:anywhere;
+        }}
+
+        .assessment-info-grid {{
+            display:grid;
+            grid-template-columns:repeat(3,minmax(0,1fr));
+            gap:10px;
+        }}
+
+        .assessment-info-grid > div {{
+            border:1px solid #e2e8f0;
+            border-radius:12px;
+            padding:10px;
+            background:#f8fafc;
+        }}
+
+        .assessment-info-grid span {{
+            display:block;
+            margin-bottom:4px;
+        }}
+
+        @media(max-width:760px) {{
+            .student-assessment-card summary {{
+                flex-direction:column;
+            }}
+
+            .assessment-summary-right {{
+                white-space:normal;
+            }}
+
+            .assessment-info-grid {{
+                grid-template-columns:1fr;
+            }}
+
+            .assessment-description-box p {{
+                font-size:14px;
+            }}
+        }}
+    </style>
 
     <section class="card">
         <h1>Assessments</h1>
@@ -74350,25 +74510,8 @@ def student_assessments():
             Complete your online quizzes and assessments here. Published assessments from your active enrolled subjects will appear below.
         </p>
 
-        <div class="scroll-x">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Assessment</th>
-                        <th>Subject</th>
-                        <th>Tutor</th>
-                        <th>Duration</th>
-                        <th>Status</th>
-                        <th>Open Status</th>
-                        <th>Result</th>
-                        <th>Action</th>
-                    </tr>
-                </thead>
-
-                <tbody>
-                    {trs or "<tr><td colspan='8'>No assessments available yet.</td></tr>"}
-                </tbody>
-            </table>
+        <div class="student-assessments-list">
+            {assessment_cards or "<div class='empty'>No assessments available yet.</div>"}
         </div>
     </section>
     """
