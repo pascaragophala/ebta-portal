@@ -2028,67 +2028,49 @@ def certificate_safe_filename(name):
     return name[:80]
 
 
-def extract_certificate_name_from_ocr_text(text):
+def detect_certificate_name_from_image_bytes(image_bytes):
     """
-    Tries to find the learner/parent name from OCR text.
-    This is not stored anywhere; it is only used to rename the downloaded files.
+    Reads text from a certificate image and detects the person name.
+    This improves OCR by resizing and converting the image before reading it.
     """
 
-    lines = []
+    try:
+        from PIL import Image, ImageOps, ImageEnhance
+        import pytesseract
 
-    for line in str(text or "").splitlines():
-        line = line.strip()
+        img = Image.open(io.BytesIO(image_bytes))
 
-        if not line:
-            continue
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
 
-        # Remove very noisy lines
-        lowered = line.lower()
+        # Increase image size to help OCR read certificate names better
+        width, height = img.size
 
-        skip_words = [
-            "certificate",
-            "achievement",
-            "awarded",
-            "presented",
-            "early bird",
-            "testimony",
-            "academy",
-            "subject",
-            "top",
-            "student",
-            "parent",
-            "active",
-            "overall",
-            "signature",
-            "date",
-            "2025",
-            "2026"
-        ]
+        if width < 2000:
+            scale = 2000 / max(width, 1)
+            new_size = (int(width * scale), int(height * scale))
+            img = img.resize(new_size)
 
-        if any(word in lowered for word in skip_words):
-            continue
+        # Convert to grayscale and improve contrast
+        img = ImageOps.grayscale(img)
+        img = ImageEnhance.Contrast(img).enhance(2.0)
+        img = ImageEnhance.Sharpness(img).enhance(1.5)
 
-        # Names are usually alphabetic and not too long
-        cleaned = re.sub(r"[^A-Za-z\s\-']", "", line).strip()
-        cleaned = re.sub(r"\s+", " ", cleaned)
+        # OCR config: assume certificate text layout, not a tiny receipt
+        ocr_text = pytesseract.image_to_string(
+            img,
+            config="--psm 6"
+        )
 
-        if len(cleaned) < 5:
-            continue
+        detected_name = extract_certificate_name_from_ocr_text(ocr_text)
 
-        if len(cleaned.split()) < 2:
-            continue
+        if detected_name:
+            return detected_name, ocr_text, "OCR_OK"
 
-        if len(cleaned) > 60:
-            continue
+        return "", ocr_text, "OCR_OK_BUT_NAME_NOT_FOUND"
 
-        lines.append(cleaned)
-
-    if lines:
-        # Usually the actual name is one of the clearest medium-length lines
-        lines = sorted(lines, key=lambda x: (abs(len(x) - 22), len(x)))
-        return lines[0]
-
-    return ""
+    except Exception as e:
+        return "", "", f"OCR_FAILED: {str(e)[:120]}"
 
 
 def detect_certificate_name_from_image_bytes(image_bytes):
@@ -2127,7 +2109,7 @@ def process_certificate_uploads_to_zip(uploaded_files):
     allowed_image_exts = [".png", ".jpg", ".jpeg", ".webp"]
     output_memory = io.BytesIO()
     manifest_rows = [
-        "original_file,new_file,detected_name,status"
+        "original_file,new_file,detected_name,status,ocr_preview"
     ]
 
     used_names = {}
@@ -2149,7 +2131,11 @@ def process_certificate_uploads_to_zip(uploaded_files):
         safe_name = certificate_safe_filename(detected_name)
 
         if not safe_name:
-            safe_name = f"certificate_{image_counter:03d}"
+            original_base = os.path.splitext(original_name)[0]
+            safe_name = certificate_safe_filename(original_base)
+
+        if not safe_name:
+            safe_name = f"unread_certificate_{image_counter:03d}"
 
         # Avoid duplicate file names
         base_name = safe_name
@@ -2162,8 +2148,10 @@ def process_certificate_uploads_to_zip(uploaded_files):
 
         output_zip.writestr(new_file_name, image_bytes)
 
+        ocr_preview = str(ocr_text or "").replace("\n", " ").replace('"', "'")[:250]
+
         manifest_rows.append(
-            f'"{original_name}","{new_file_name}","{detected_name}","{status}"'
+            f'"{original_name}","{new_file_name}","{detected_name}","{status}","{ocr_preview}"'
         )
 
     with zipfile.ZipFile(output_memory, "w", zipfile.ZIP_DEFLATED) as output_zip:
