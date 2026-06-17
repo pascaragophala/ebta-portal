@@ -1758,6 +1758,8 @@ def init_db():
     """)
     
     ensure_column(conn, "assessment_questions", "question_file_path", "TEXT")
+    ensure_column(conn, "assessments", "max_attempts", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "assessment_attempts", "used_attempts", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "assessment_questions", "question_file_name", "TEXT")
     ensure_column(conn, "assessment_questions", "question_file_type", "TEXT")
     ensure_column(conn, "assessment_questions", "question_file_uploaded_at", "TEXT")
@@ -73527,8 +73529,15 @@ def tutor_new_assessment():
             </div>
 
             <div>
-                <label>Duration in minutes</label>
-                <input type="number" name="duration_minutes" value="30" min="5" max="240">
+                <label>Attempts Allowed</label>
+                <input type="number"
+                       name="max_attempts"
+                       value="1"
+                       min="1"
+                       max="10">
+                <div class="mini muted">
+                    Example: 1 means learners can submit once. Increase this if you want to allow re-attempts.
+                </div>
             </div>
 
             <div>
@@ -73596,6 +73605,17 @@ def tutor_create_assessment():
 
     if duration_minutes < 5:
         duration_minutes = 5
+        
+    try:
+        max_attempts = int(request.form.get("max_attempts", 1))
+    except Exception:
+        max_attempts = 1
+
+    if max_attempts < 1:
+        max_attempts = 1
+
+    if max_attempts > 10:
+        max_attempts = 10
 
     opens_at = parse_datetime_local(request.form.get("opens_at"))
     closes_at = parse_datetime_local(request.form.get("closes_at"))
@@ -73630,6 +73650,7 @@ def tutor_create_assessment():
             description,
             instructions,
             duration_minutes,
+            max_attempts,
             opens_at,
             closes_at,
             shuffle_questions,
@@ -73638,7 +73659,7 @@ def tutor_create_assessment():
             created_at,
             updated_at
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         subject_id,
         tid,
@@ -73647,6 +73668,7 @@ def tutor_create_assessment():
         description,
         instructions,
         duration_minutes,
+        max_attempts,
         opens_at,
         closes_at,
         shuffle_questions,
@@ -73748,6 +73770,18 @@ def tutor_edit_assessment(assessment_id):
                        min="5"
                        max="240">
             </div>
+            
+            <div>
+                <label>Attempts Allowed</label>
+                <input type="number"
+                       name="max_attempts"
+                       value="{a["max_attempts"] or 1}"
+                       min="1"
+                       max="10">
+                <div class="mini muted">
+                    Increase this if learners must be allowed to re-attempt after using their previous attempt.
+                </div>
+            </div>
 
             <div>
                 <label>Opens At</label>
@@ -73819,6 +73853,17 @@ def tutor_update_assessment(assessment_id):
 
     if duration_minutes > 240:
         duration_minutes = 240
+        
+    try:
+        max_attempts = int(request.form.get("max_attempts", 1))
+    except Exception:
+        max_attempts = 1
+
+    if max_attempts < 1:
+        max_attempts = 1
+
+    if max_attempts > 10:
+        max_attempts = 10
 
     opens_at = parse_datetime_local(request.form.get("opens_at"))
     closes_at = parse_datetime_local(request.form.get("closes_at"))
@@ -73851,6 +73896,7 @@ def tutor_update_assessment(assessment_id):
             description=?,
             instructions=?,
             duration_minutes=?,
+            max_attempts=?,
             opens_at=?,
             closes_at=?,
             shuffle_questions=?,
@@ -73864,6 +73910,7 @@ def tutor_update_assessment(assessment_id):
         description,
         instructions,
         duration_minutes,
+        max_attempts,
         opens_at,
         closes_at,
         shuffle_questions,
@@ -74682,6 +74729,7 @@ def student_assessments():
             e.status AS enrollment_status,
 
             at.status AS attempt_status,
+            at.used_attempts,
             at.total_score,
             at.total_points,
             at.submitted_at
@@ -74706,28 +74754,55 @@ def student_assessments():
     assessment_cards = ""
 
     for a in rows:
+        
+        try:
+            max_attempts = int(a["max_attempts"] or 1)
+        except Exception:
+            max_attempts = 1
+
+        try:
+            used_attempts = int(a["used_attempts"] or 0)
+        except Exception:
+            used_attempts = 0
+            
+        is_currently_open = assessment_is_open(a)
+        open_status = "Open" if is_currently_open else "Closed / Not Open"
+        
         result_text = "—"
 
         if a["attempt_status"] in ["SUBMITTED", "MARKED"] and a["total_points"]:
             result_text = f"{a['total_score']} / {a['total_points']}"
 
-        action = f"""
-        <a class="btn mini success" href="/student/assessment/{a['id']}/take">
-            Start / Continue
-        </a>
-        """
-
-        if a["attempt_status"] in ["SUBMITTED", "MARKED"]:
+        if not is_currently_open:
+            action = """
+            <button class="btn mini secondary" disabled>
+                Assessment Closed
+            </button>
+            """
+        else:
             action = f"""
-            <a class="btn mini secondary" href="/student/assessment/{a['id']}/review">
-                View Attempt
+            <a class="btn mini success" href="/student/assessment/{a['id']}/take">
+                Start / Continue
             </a>
             """
 
-        open_status = "Open"
+            if a["attempt_status"] in ["SUBMITTED", "MARKED"]:
+                if used_attempts < max_attempts:
+                    action = f"""
+                    <a class="btn mini success" href="/student/assessment/{a['id']}/take">
+                        Re-attempt
+                    </a>
+                    <a class="btn mini secondary" href="/student/assessment/{a['id']}/review">
+                        View Previous Attempt
+                    </a>
+                    """
+                else:
+                    action = f"""
+                    <a class="btn mini secondary" href="/student/assessment/{a['id']}/review">
+                        View Attempt
+                    </a>
+                    """
 
-        if not assessment_is_open(a):
-            open_status = "Closed / Not Open"
 
         description = escape(a["description"] or "No description added for this assessment.")
 
@@ -74739,6 +74814,10 @@ def student_assessments():
 
                     <div class="mini muted">
                         {grade_label(a['grade'])} - {escape(a['subject_name'])}
+                    </div>
+                    
+                    <div class="mini muted">
+                        Attempts used: {used_attempts} / {max_attempts}
                     </div>
 
                     <div class="assessment-mobile-chips">
@@ -74782,6 +74861,11 @@ def student_assessments():
                     <div>
                         <span class="mini muted">Open Status</span>
                         <strong>{escape(open_status)}</strong>
+                    </div>
+                    
+                    <div>
+                        <span class="mini muted">Attempts</span>
+                        <strong>{used_attempts} / {max_attempts}</strong>
                     </div>
 
                     <div>
@@ -74968,11 +75052,65 @@ def student_take_assessment(assessment_id):
 
     attempt = cur.fetchone()
 
-    if attempt and attempt["status"] in ["SUBMITTED", "MARKED"]:
-        conn.close()
-        return page("Already Submitted", card_msg("You have already submitted this assessment."))
+    try:
+        max_attempts = int(a["max_attempts"] or 1)
+    except Exception:
+        max_attempts = 1
 
-    if not attempt:
+    if attempt:
+        try:
+            used_attempts = int(attempt["used_attempts"] or 0)
+        except Exception:
+            used_attempts = 0
+    else:
+        used_attempts = 0
+
+    if attempt and attempt["status"] in ["SUBMITTED", "MARKED"]:
+
+        if used_attempts >= max_attempts:
+            conn.close()
+            return page(
+                "Already Submitted",
+                card_msg(
+                    f"You have already used all your allowed attempts for this assessment. "
+                    f"Attempts used: {used_attempts}/{max_attempts}."
+                )
+            )
+
+        total_points = assessment_total_points(conn, assessment_id)
+
+        # Clear previous answers so learner starts a fresh re-attempt.
+        cur.execute("""
+            DELETE FROM assessment_answer_files
+            WHERE attempt_id=?
+        """, (attempt["id"],))
+
+        cur.execute("""
+            DELETE FROM assessment_answers
+            WHERE attempt_id=?
+        """, (attempt["id"],))
+
+        cur.execute("""
+            UPDATE assessment_attempts
+            SET started_at=?,
+                submitted_at=NULL,
+                status='IN_PROGRESS',
+                auto_score=0,
+                manual_score=0,
+                total_score=0,
+                total_points=?,
+                flags_json='{}',
+                detail_json='{}'
+            WHERE id=?
+        """, (
+            now_utc_iso(),
+            total_points,
+            attempt["id"]
+        ))
+
+        attempt_id = attempt["id"]
+
+    elif not attempt:
         total_points = assessment_total_points(conn, assessment_id)
 
         cur.execute("""
@@ -74997,7 +75135,9 @@ def student_take_assessment(assessment_id):
         ))
 
         attempt_id = cur.lastrowid
-    else:
+        
+        
+    elif attempt["status"] == "IN_PROGRESS":
         attempt_id = attempt["id"]
 
     cur.execute("""
@@ -75265,7 +75405,8 @@ def student_submit_assessment(assessment_id):
                 UPDATE assessment_attempts
                 SET submitted_at=?,
                     status='SUBMITTED',
-                    flags_json=?
+                    flags_json=?,
+                    used_attempts=COALESCE(used_attempts, 0) + 1
                 WHERE id=?
             """, (
                 now_utc_iso(),
@@ -75424,7 +75565,8 @@ def student_submit_assessment(assessment_id):
             auto_score=?,
             total_score=?,
             total_points=?,
-            flags_json=?
+            flags_json=?,
+            used_attempts=COALESCE(used_attempts, 0) + 1
         WHERE id=?
     """, (
         now_utc_iso(),
