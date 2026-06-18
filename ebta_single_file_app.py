@@ -1760,6 +1760,14 @@ def init_db():
     ensure_column(conn, "assessment_questions", "question_file_path", "TEXT")
     ensure_column(conn, "assessments", "max_attempts", "INTEGER NOT NULL DEFAULT 1")
     ensure_column(conn, "assessment_attempts", "used_attempts", "INTEGER NOT NULL DEFAULT 0")
+    
+    cur.execute("""
+        UPDATE assessment_attempts
+        SET used_attempts = 1
+        WHERE status IN ('SUBMITTED', 'MARKED')
+          AND COALESCE(used_attempts, 0) = 0
+    """)
+    
     ensure_column(conn, "assessment_questions", "question_file_name", "TEXT")
     ensure_column(conn, "assessment_questions", "question_file_type", "TEXT")
     ensure_column(conn, "assessment_questions", "question_file_uploaded_at", "TEXT")
@@ -73527,6 +73535,15 @@ def tutor_new_assessment():
                 <textarea name="instructions" rows="4"
                           placeholder="Explain rules, allowed resources and submission expectations."></textarea>
             </div>
+            
+            <div>
+                <label>Duration in minutes</label>
+                <input type="number"
+                       name="duration_minutes"
+                       value="30"
+                       min="5"
+                       max="240">
+            </div>
 
             <div>
                 <label>Attempts Allowed</label>
@@ -75062,6 +75079,19 @@ def student_take_assessment(assessment_id):
             used_attempts = int(attempt["used_attempts"] or 0)
         except Exception:
             used_attempts = 0
+
+        # Legacy safety:
+        # Old submitted/marked attempts may have used_attempts = 0.
+        # Treat them as 1 used attempt.
+        if attempt["status"] in ["SUBMITTED", "MARKED"] and used_attempts < 1:
+            used_attempts = 1
+
+            cur.execute("""
+                UPDATE assessment_attempts
+                SET used_attempts = 1
+                WHERE id=?
+                  AND COALESCE(used_attempts, 0) = 0
+            """, (attempt["id"],))
     else:
         used_attempts = 0
 
