@@ -7706,7 +7706,7 @@ def page(title, body_html, extra_head="", extra_js=""):
 
     if role_title:
         links_html = "".join([
-            f"<a href='{href}'>{label}</a>"
+            f"<a class='portal-menu-link' href='{href}' onclick='closeStudentMenu()'>{label}</a>"
             for (label, href) in links
         ])
 
@@ -7799,8 +7799,37 @@ def page(title, body_html, extra_head="", extra_js=""):
 
         role_photo_html = ""
 
+        student_menu_button = ""
+
+        if role_title == "Student":
+            student_menu_button = """
+            <button type="button"
+                    class="student-menu-open-btn"
+                    onclick="openStudentMenu()">
+                ☰ Menu
+            </button>
+
+            <div class="student-menu-backdrop"
+                 onclick="closeStudentMenu()">
+            </div>
+            """
+
+        student_menu_close = ""
+
+        if role_title == "Student":
+            student_menu_close = """
+            <button type="button"
+                    class="student-menu-close-btn"
+                    onclick="closeStudentMenu()">
+                ✕ Close Menu
+            </button>
+            """
+
         sidebar_html = f"""
-        <aside class='sidebar'>
+        {student_menu_button}
+
+        <aside class='sidebar student-portal-sidebar' id='studentPortalSidebar'>
+            {student_menu_close}
             {role_photo_html}
             {profile_sidebar_html}
 
@@ -7826,8 +7855,155 @@ def page(title, body_html, extra_head="", extra_js=""):
             status_banner = f"<div id='status-banner' class='card'><h2>Status</h2><div>{status_text}{status_extra}</div></div>"
     except Exception:
         status_banner = ""
+        
+    student_menu_css = """
+    <style>
+        .student-menu-open-btn,
+        .student-menu-close-btn,
+        .student-menu-backdrop {
+            display:none;
+        }
 
-    content_wrapped = f"<div class='layout'>{sidebar_html}<section class='dashboard-main'>{ann_html}{status_banner}{portal_celebration_banner_html}{body_html}</section></div>" if sidebar_html else body_html
+        .portal-menu-link {
+            text-decoration:none;
+        }
+
+        @media(max-width:860px) {
+            body.role-student .layout {
+                display:block;
+            }
+
+            body.role-student .student-menu-open-btn {
+                display:inline-flex;
+                align-items:center;
+                justify-content:center;
+                gap:8px;
+                position:sticky;
+                top:8px;
+                z-index:9000;
+                margin:0 0 12px 0;
+                padding:10px 16px;
+                border:none;
+                border-radius:999px;
+                background:#1b5e20;
+                color:#ffffff;
+                font-weight:800;
+                box-shadow:0 8px 18px rgba(15,23,42,0.18);
+                cursor:pointer;
+            }
+
+            body.role-student .student-menu-backdrop {
+                position:fixed;
+                inset:0;
+                background:rgba(15,23,42,0.45);
+                z-index:9998;
+            }
+
+            body.role-student.student-menu-open .student-menu-backdrop {
+                display:block;
+            }
+
+            body.role-student .student-portal-sidebar {
+                position:fixed;
+                top:0;
+                left:-95%;
+                width:min(340px, 88vw);
+                height:100vh;
+                z-index:9999;
+                overflow-y:auto;
+                background:#f8fafc;
+                border-right:1px solid #dbe4ef;
+                border-radius:0 22px 22px 0;
+                padding:14px;
+                transition:left 0.25s ease;
+                box-shadow:12px 0 35px rgba(15,23,42,0.25);
+            }
+
+            body.role-student.student-menu-open .student-portal-sidebar {
+                left:0;
+            }
+
+            body.role-student .student-menu-close-btn {
+                display:flex;
+                width:100%;
+                align-items:center;
+                justify-content:center;
+                padding:10px 12px;
+                margin-bottom:12px;
+                border:none;
+                border-radius:12px;
+                background:#fee2e2;
+                color:#991b1b;
+                font-weight:800;
+                cursor:pointer;
+            }
+
+            body.role-student .side-links {
+                display:flex;
+                flex-direction:column;
+                gap:8px;
+                overflow:visible;
+            }
+
+            body.role-student .side-links a {
+                display:flex;
+                align-items:center;
+                gap:8px;
+                width:100%;
+                padding:12px 14px;
+                border-radius:14px;
+                background:#ffffff;
+                color:#0f172a;
+                font-weight:700;
+                border:1px solid #e2e8f0;
+                box-shadow:0 2px 8px rgba(15,23,42,0.04);
+                white-space:normal;
+            }
+
+            body.role-student .side-links a:hover {
+                background:#e8f5e9;
+                color:#1b5e20;
+                border-color:#1b5e20;
+            }
+
+            body.role-student .dashboard-main {
+                width:100%;
+            }
+        }
+    </style>
+    """
+    
+    student_menu_js = """
+    <script>
+        function openStudentMenu() {
+            document.body.classList.add("student-menu-open");
+        }
+
+        function closeStudentMenu() {
+            document.body.classList.remove("student-menu-open");
+        }
+
+        document.addEventListener("keydown", function(event) {
+            if (event.key === "Escape") {
+                closeStudentMenu();
+            }
+        });
+    </script>
+    """
+
+    content_wrapped = f"""
+    {student_menu_css}
+    {student_menu_js}
+    <div class='layout'>
+        {sidebar_html}
+        <section class='dashboard-main'>
+            {ann_html}
+            {status_banner}
+            {portal_celebration_banner_html}
+            {body_html}
+        </section>
+    </div>
+    """ if sidebar_html else body_html
 
     return f"""
     <html><head>
