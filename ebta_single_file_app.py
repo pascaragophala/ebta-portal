@@ -7706,7 +7706,7 @@ def page(title, body_html, extra_head="", extra_js=""):
 
     if role_title:
         links_html = "".join([
-            f"<a class='portal-menu-link' href='{href}' onclick='closeStudentMenu()'>{label}</a>"
+            f"<a class='portal-menu-link' href='{href}' onclick='closePortalMenu()'>{label}</a>"
             for (label, href) in links
         ])
 
@@ -7799,37 +7799,37 @@ def page(title, body_html, extra_head="", extra_js=""):
 
         role_photo_html = ""
 
-        student_menu_button = ""
+        portal_menu_button = ""
 
-        if role_title == "Student":
-            student_menu_button = """
+        if role_title in ["Student", "Tutor"]:
+            portal_menu_button = f"""
             <button type="button"
-                    class="student-menu-open-btn"
-                    onclick="openStudentMenu()">
-                ☰ Menu
+                    class="portal-menu-open-btn"
+                    onclick="openPortalMenu()">
+                ☰ {role_title} Menu
             </button>
 
-            <div class="student-menu-backdrop"
-                 onclick="closeStudentMenu()">
+            <div class="portal-menu-backdrop"
+                 onclick="closePortalMenu()">
             </div>
             """
 
-        student_menu_close = ""
+        portal_menu_close = ""
 
-        if role_title == "Student":
-            student_menu_close = """
+        if role_title in ["Student", "Tutor"]:
+            portal_menu_close = f"""
             <button type="button"
-                    class="student-menu-close-btn"
-                    onclick="closeStudentMenu()">
-                ✕ Close Menu
+                    class="portal-menu-close-btn"
+                    onclick="closePortalMenu()">
+                ✕ Close {role_title} Menu
             </button>
             """
 
         sidebar_html = f"""
-        {student_menu_button}
+        {portal_menu_button}
 
-        <aside class='sidebar student-portal-sidebar' id='studentPortalSidebar'>
-            {student_menu_close}
+        <aside class='sidebar portal-sidebar' id='portalSidebar'>
+            {portal_menu_close}
             {role_photo_html}
             {profile_sidebar_html}
 
@@ -7856,11 +7856,11 @@ def page(title, body_html, extra_head="", extra_js=""):
     except Exception:
         status_banner = ""
         
-    student_menu_css = """
+    portal_menu_css = """
     <style>
-        .student-menu-open-btn,
-        .student-menu-close-btn,
-        .student-menu-backdrop {
+        .portal-menu-open-btn,
+        .portal-menu-close-btn,
+        .portal-menu-backdrop {
             display:none;
         }
 
@@ -7869,11 +7869,16 @@ def page(title, body_html, extra_head="", extra_js=""):
         }
 
         @media(max-width:860px) {
-            body.role-student .layout {
+            body.role-student .layout,
+            body.role-tutor .layout {
                 display:block;
+                width:100%;
+                max-width:100%;
+                overflow-x:hidden;
             }
 
-            body.role-student .student-menu-open-btn {
+            body.role-student .portal-menu-open-btn,
+            body.role-tutor .portal-menu-open-btn {
                 display:inline-flex;
                 align-items:center;
                 justify-content:center;
@@ -7892,18 +7897,21 @@ def page(title, body_html, extra_head="", extra_js=""):
                 cursor:pointer;
             }
 
-            body.role-student .student-menu-backdrop {
+            body.role-student .portal-menu-backdrop,
+            body.role-tutor .portal-menu-backdrop {
                 position:fixed;
                 inset:0;
                 background:rgba(15,23,42,0.45);
                 z-index:9998;
             }
 
-            body.role-student.student-menu-open .student-menu-backdrop {
+            body.role-student.portal-menu-open .portal-menu-backdrop,
+            body.role-tutor.portal-menu-open .portal-menu-backdrop {
                 display:block;
             }
 
-            body.role-student .student-portal-sidebar {
+            body.role-student .portal-sidebar,
+            body.role-tutor .portal-sidebar {
                 position:fixed;
                 top:0;
                 left:-95%;
@@ -7919,11 +7927,13 @@ def page(title, body_html, extra_head="", extra_js=""):
                 box-shadow:12px 0 35px rgba(15,23,42,0.25);
             }
 
-            body.role-student.student-menu-open .student-portal-sidebar {
+            body.role-student.portal-menu-open .portal-sidebar,
+            body.role-tutor.portal-menu-open .portal-sidebar {
                 left:0;
             }
 
-            body.role-student .student-menu-close-btn {
+            body.role-student .portal-menu-close-btn,
+            body.role-tutor .portal-menu-close-btn {
                 display:flex;
                 width:100%;
                 align-items:center;
@@ -7938,14 +7948,16 @@ def page(title, body_html, extra_head="", extra_js=""):
                 cursor:pointer;
             }
 
-            body.role-student .side-links {
+            body.role-student .side-links,
+            body.role-tutor .side-links {
                 display:flex;
                 flex-direction:column;
                 gap:8px;
                 overflow:visible;
             }
 
-            body.role-student .side-links a {
+            body.role-student .side-links a,
+            body.role-tutor .side-links a {
                 display:flex;
                 align-items:center;
                 gap:8px;
@@ -7960,40 +7972,145 @@ def page(title, body_html, extra_head="", extra_js=""):
                 white-space:normal;
             }
 
-            body.role-student .side-links a:hover {
+            body.role-student .side-links a:hover,
+            body.role-tutor .side-links a:hover {
                 background:#e8f5e9;
                 color:#1b5e20;
                 border-color:#1b5e20;
             }
 
-            body.role-student .dashboard-main {
+            body.role-student .dashboard-main,
+            body.role-tutor .dashboard-main {
                 width:100%;
+                max-width:100%;
+                overflow-x:hidden;
+            }
+
+            body.role-student .wrap,
+            body.role-tutor .wrap {
+                width:100%;
+                max-width:100%;
+                overflow-x:hidden;
+                padding-left:10px;
+                padding-right:10px;
+            }
+
+            body.role-student .card,
+            body.role-tutor .card {
+                max-width:100%;
+                overflow-x:hidden;
+                box-sizing:border-box;
+            }
+
+            body.role-student input,
+            body.role-student select,
+            body.role-student textarea,
+            body.role-tutor input,
+            body.role-tutor select,
+            body.role-tutor textarea {
+                max-width:100%;
+                width:100%;
+                box-sizing:border-box;
+            }
+
+            body.role-student .btn,
+            body.role-tutor .btn {
+                max-width:100%;
+                white-space:normal;
+            }
+
+            body.role-student .scroll-x,
+            body.role-tutor .scroll-x {
+                overflow-x:auto;
+                -webkit-overflow-scrolling:touch;
+                max-width:100%;
+            }
+
+            body.role-student table,
+            body.role-tutor table {
+                min-width:620px;
+            }
+
+            body.role-tutor form.grid,
+            body.role-student form.grid,
+            body.role-tutor .grid,
+            body.role-student .grid {
+                grid-template-columns:1fr !important;
+            }
+
+            body.role-tutor [style*="grid-template-columns"],
+            body.role-student [style*="grid-template-columns"] {
+                grid-template-columns:1fr !important;
+            }
+
+            body.role-tutor [style*="grid-column:1/-1"],
+            body.role-student [style*="grid-column:1/-1"] {
+                grid-column:1/-1 !important;
+            }
+
+            body.role-tutor .header .nav,
+            body.role-student .header .nav {
+                flex-wrap:wrap;
+                gap:10px;
+            }
+
+            body.role-tutor .header .links,
+            body.role-student .header .links {
+                display:flex;
+                flex-wrap:wrap;
+                gap:8px;
+            }
+        }
+
+        @media(max-width:600px) {
+            body.role-student .header,
+            body.role-tutor .header {
+                position:relative;
+            }
+
+            body.role-student .header .brand,
+            body.role-tutor .header .brand {
+                width:100%;
+            }
+
+            body.role-student .header .links,
+            body.role-tutor .header .links {
+                width:100%;
+                justify-content:flex-start;
+            }
+
+            body.role-student .header .links a,
+            body.role-student .header .links button,
+            body.role-tutor .header .links a,
+            body.role-tutor .header .links button {
+                font-size:12px;
+                padding:8px 10px;
             }
         }
     </style>
     """
     
-    student_menu_js = """
+    portal_menu_js = """
     <script>
-        function openStudentMenu() {
-            document.body.classList.add("student-menu-open");
+        function openPortalMenu() {
+            document.body.classList.add("portal-menu-open");
         }
 
-        function closeStudentMenu() {
-            document.body.classList.remove("student-menu-open");
+        function closePortalMenu() {
+            document.body.classList.remove("portal-menu-open");
         }
 
         document.addEventListener("keydown", function(event) {
             if (event.key === "Escape") {
-                closeStudentMenu();
+                closePortalMenu();
             }
         });
     </script>
     """
 
     content_wrapped = f"""
-    {student_menu_css}
-    {student_menu_js}
+    {portal_menu_css}
+    {portal_menu_js}
     <div class='layout'>
         {sidebar_html}
         <section class='dashboard-main'>
