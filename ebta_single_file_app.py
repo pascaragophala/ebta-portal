@@ -12284,40 +12284,121 @@ def student_materials():
 
             for subject, items in grouped.items():
                 blocks.append(f"""
-                <div class='card' style="border-left:6px solid #1b5e20">
+                <details class='material-subject-section'>
 
-                    <div style="
-                        display:flex;
-                        justify-content:space-between;
-                        align-items:center;
-                        margin-bottom:10px;
-                        flex-wrap:wrap;
-                        gap:6px;
-                    ">
+                    <summary>
+                        <div class="material-subject-left">
+                            <h3>
+                                🎓 {subject}
+                            </h3>
 
-                        <h3 style="margin:0;font-size:16px">
-                            🎓 {subject}
-                        </h3>
+                            <div class="mini muted">
+                                Tap to view learning materials for this subject.
+                            </div>
+                        </div>
 
-                        <span class="chip">
-                            {len(items)} resources
-                        </span>
+                        <div class="material-subject-right">
+                            <span class="chip">
+                                {len(items)} resources
+                            </span>
 
+                            <span class="material-toggle-text">
+                                View more
+                            </span>
+                        </div>
+                    </summary>
+
+                    <div class='material-subject-content'>
+                        <div class='grid' style="gap:10px">
+                            {''.join(items)}
+                        </div>
                     </div>
 
-                    <div class='grid' style="gap:10px">
-                        {''.join(items)}
-                    </div>
-
-                </div>
+                </details>
                 """)
-
             materials_html = "".join(blocks)
 
     conn.close()
 
     body = f"""
     {month_selector}
+
+    <style>
+        .material-subject-section {{
+            border:1px solid #e2e8f0;
+            border-left:6px solid #1b5e20;
+            border-radius:16px;
+            background:#ffffff;
+            box-shadow:0 2px 8px rgba(15,23,42,0.05);
+            margin-bottom:14px;
+            overflow:hidden;
+        }}
+
+        .material-subject-section summary {{
+            cursor:pointer;
+            list-style:none;
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:12px;
+            padding:16px;
+            background:#f8fafc;
+        }}
+
+        .material-subject-section summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .material-subject-left h3 {{
+            margin:0;
+            font-size:16px;
+            color:#0f172a;
+        }}
+
+        .material-subject-right {{
+            display:flex;
+            align-items:center;
+            gap:8px;
+            flex-wrap:wrap;
+            justify-content:flex-end;
+        }}
+
+        .material-toggle-text {{
+            font-size:12px;
+            font-weight:700;
+            color:#1b5e20;
+            background:#e8f5e9;
+            padding:5px 9px;
+            border-radius:999px;
+        }}
+
+        .material-subject-section[open] .material-toggle-text {{
+            color:#92400e;
+            background:#fef3c7;
+        }}
+
+        .material-subject-section[open] .material-toggle-text::before {{
+            content:"Showing ";
+        }}
+
+        .material-subject-content {{
+            padding:14px;
+            border-top:1px solid #e2e8f0;
+            background:#ffffff;
+        }}
+
+        @media(max-width:760px) {{
+            .material-subject-section summary {{
+                align-items:flex-start;
+                flex-direction:column;
+            }}
+
+            .material-subject-right {{
+                justify-content:flex-start;
+            }}
+        }}
+    </style>
+
     <div class='card' style="border-left:6px solid #25D366">
 
         <a class='btn mini secondary' href='/student'>← Back</a>
