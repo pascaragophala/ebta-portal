@@ -71,7 +71,9 @@ LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/SqocnYt.png")
 # AUTO LOGOUT AFTER INACTIVITY
 # =============================================================
 
-INACTIVITY_TIMEOUT_SECONDS = 30 * 60  # 30 minutes
+INACTIVITY_WARNING_SECONDS = 1 * 60
+INACTIVITY_GRACE_SECONDS = 1 * 60
+INACTIVITY_TIMEOUT_SECONDS = INACTIVITY_WARNING_SECONDS + INACTIVITY_GRACE_SECONDS
 
 
 def get_logged_in_portal_role():
@@ -207,13 +209,29 @@ def auto_logout_after_inactivity():
         login_path = login_path_for_role(role)
 
         session.clear()
-        session["timeout_message"] = "You were logged out because there was no activity for more than 30 minutes."
+        session["timeout_message"] = "You were logged out because there was no response after the inactivity warning."
 
         return redirect(login_path)
 
     session["last_activity_ts"] = now
 
     return None
+    
+
+@app.post("/session/keep-alive")
+def session_keep_alive():
+    """
+    Keeps the current logged-in session alive when the user confirms they are still there.
+    """
+
+    role = get_logged_in_portal_role()
+
+    if not role:
+        return {"ok": False, "message": "No active session"}, 401
+
+    session["last_activity_ts"] = time.time()
+
+    return {"ok": True}
 
 # =============================================================
 
@@ -7551,19 +7569,199 @@ def page(title, body_html, extra_head="", extra_js=""):
         timeout_logout_path = logout_path_for_role(timeout_role)
 
         auto_logout_js = f"""
+        <style>
+            .inactivity-warning-backdrop {{
+                position:fixed;
+                inset:0;
+                z-index:99999;
+                background:rgba(15,23,42,0.55);
+                display:none;
+                align-items:center;
+                justify-content:center;
+                padding:18px;
+            }}
+
+            .inactivity-warning-backdrop.show {{
+                display:flex;
+            }}
+
+            .inactivity-warning-box {{
+                width:min(420px, 94vw);
+                background:#ffffff;
+                border-radius:20px;
+                padding:22px;
+                box-shadow:0 24px 70px rgba(15,23,42,0.35);
+                border:1px solid #dbe4ef;
+                text-align:center;
+            }}
+
+            .inactivity-warning-box h2 {{
+                margin:0 0 10px;
+                color:#111827;
+                font-size:22px;
+            }}
+
+            .inactivity-warning-box p {{
+                margin:0 0 16px;
+                color:#475569;
+                line-height:1.5;
+            }}
+
+            .inactivity-countdown {{
+                display:inline-flex;
+                align-items:center;
+                justify-content:center;
+                margin:8px 0 18px;
+                padding:8px 14px;
+                border-radius:999px;
+                background:#fff7ed;
+                color:#9a3412;
+                font-weight:800;
+                border:1px solid #fed7aa;
+            }}
+
+            .inactivity-actions {{
+                display:flex;
+                gap:10px;
+                justify-content:center;
+                flex-wrap:wrap;
+            }}
+
+            .inactivity-actions button,
+            .inactivity-actions a {{
+                border:none;
+                border-radius:999px;
+                padding:10px 16px;
+                font-weight:800;
+                cursor:pointer;
+                text-decoration:none;
+            }}
+
+            .inactivity-stay-btn {{
+                background:#1b5e20;
+                color:#ffffff;
+            }}
+
+            .inactivity-logout-btn {{
+                background:#fee2e2;
+                color:#991b1b;
+            }}
+        </style>
+
+        <div class="inactivity-warning-backdrop" id="inactivityWarningBackdrop">
+            <div class="inactivity-warning-box">
+                <h2>Are you still there?</h2>
+
+                <p>
+                    For security, your EBTA Portal session will close soon because there has been no activity.
+                </p>
+
+                <div class="inactivity-countdown">
+                    Logging out in <span id="inactivityCountdown">60</span>s
+                </div>
+
+                <div class="inactivity-actions">
+                    <button type="button"
+                            class="inactivity-stay-btn"
+                            onclick="confirmStillHere()">
+                        Yes, I’m still here
+                    </button>
+
+                    <a class="inactivity-logout-btn" href="{timeout_logout_path}">
+                        Logout now
+                    </a>
+                </div>
+            </div>
+        </div>
+
         <script>
             (function() {{
-                const TIMEOUT_MS = 30 * 60 * 1000;
+                const WARNING_MS = 1 * 60 * 1000;
+                const GRACE_SECONDS = 60;
                 const LOGOUT_URL = "{timeout_logout_path}";
-                let logoutTimer = null;
 
-                function resetLogoutTimer() {{
-                    clearTimeout(logoutTimer);
+                let warningTimer = null;
+                let logoutTimer = null;
+                let countdownTimer = null;
+                let warningOpen = false;
+                let remainingSeconds = GRACE_SECONDS;
+
+                const backdrop = document.getElementById("inactivityWarningBackdrop");
+                const countdown = document.getElementById("inactivityCountdown");
+
+                function showWarning() {{
+                    warningOpen = true;
+                    remainingSeconds = GRACE_SECONDS;
+
+                    if (countdown) {{
+                        countdown.textContent = remainingSeconds;
+                    }}
+
+                    if (backdrop) {{
+                        backdrop.classList.add("show");
+                    }}
+
+                    countdownTimer = setInterval(function() {{
+                        remainingSeconds -= 1;
+
+                        if (countdown) {{
+                            countdown.textContent = remainingSeconds;
+                        }}
+
+                        if (remainingSeconds <= 0) {{
+                            clearInterval(countdownTimer);
+                        }}
+                    }}, 1000);
 
                     logoutTimer = setTimeout(function() {{
                         window.location.href = LOGOUT_URL;
-                    }}, TIMEOUT_MS);
+                    }}, GRACE_SECONDS * 1000);
                 }}
+
+                function hideWarning() {{
+                    warningOpen = false;
+
+                    if (backdrop) {{
+                        backdrop.classList.remove("show");
+                    }}
+
+                    clearTimeout(logoutTimer);
+                    clearInterval(countdownTimer);
+                }}
+
+                function resetWarningTimer() {{
+                    if (warningOpen) {{
+                        return;
+                    }}
+
+                    clearTimeout(warningTimer);
+
+                    warningTimer = setTimeout(function() {{
+                        showWarning();
+                    }}, WARNING_MS);
+                }}
+
+                window.confirmStillHere = function() {{
+                    fetch("/session/keep-alive", {{
+                        method:"POST",
+                        headers: {{
+                            "Content-Type": "application/json"
+                        }},
+                        body: JSON.stringify({{ keep_alive: true }})
+                    }})
+                    .then(function(response) {{
+                        if (!response.ok) {{
+                            window.location.href = LOGOUT_URL;
+                            return;
+                        }}
+
+                        hideWarning();
+                        resetWarningTimer();
+                    }})
+                    .catch(function() {{
+                        window.location.href = LOGOUT_URL;
+                    }});
+                }};
 
                 [
                     "click",
@@ -7573,10 +7771,14 @@ def page(title, body_html, extra_head="", extra_js=""):
                     "touchstart",
                     "touchmove"
                 ].forEach(function(eventName) {{
-                    document.addEventListener(eventName, resetLogoutTimer, {{ passive: true }});
+                    document.addEventListener(eventName, function() {{
+                        if (!warningOpen) {{
+                            resetWarningTimer();
+                        }}
+                    }}, {{ passive: true }});
                 }});
 
-                resetLogoutTimer();
+                resetWarningTimer();
             }})();
         </script>
         """
