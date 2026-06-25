@@ -71,7 +71,7 @@ LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/SqocnYt.png")
 # AUTO LOGOUT AFTER INACTIVITY
 # =============================================================
 
-INACTIVITY_TIMEOUT_SECONDS = 1 * 60  # 30 minutes
+INACTIVITY_TIMEOUT_SECONDS = 30 * 60  # 30 minutes
 
 
 def get_logged_in_portal_role():
@@ -7553,7 +7553,7 @@ def page(title, body_html, extra_head="", extra_js=""):
         auto_logout_js = f"""
         <script>
             (function() {{
-                const TIMEOUT_MS = 1 * 60 * 1000;
+                const TIMEOUT_MS = 30 * 60 * 1000;
                 const LOGOUT_URL = "{timeout_logout_path}";
                 let logoutTimer = null;
 
