@@ -71,8 +71,8 @@ LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/SqocnYt.png")
 # AUTO LOGOUT AFTER INACTIVITY
 # =============================================================
 
-INACTIVITY_WARNING_SECONDS = 1 * 60
-INACTIVITY_GRACE_SECONDS = 1 * 60
+INACTIVITY_WARNING_SECONDS = 30 * 60  # show warning after 30 minutes
+INACTIVITY_GRACE_SECONDS = 1 * 60     # give user 1 minute to respond
 INACTIVITY_TIMEOUT_SECONDS = INACTIVITY_WARNING_SECONDS + INACTIVITY_GRACE_SECONDS
 
 
@@ -7676,7 +7676,7 @@ def page(title, body_html, extra_head="", extra_js=""):
 
         <script>
             (function() {{
-                const WARNING_MS = 1 * 60 * 1000;
+                const WARNING_MS = 30 * 60 * 1000;
                 const GRACE_SECONDS = 60;
                 const LOGOUT_URL = "{timeout_logout_path}";
 
