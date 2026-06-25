@@ -65,6 +65,156 @@ for d in (UPLOADS_DIR, MATERIALS_DIR, SUBMISSIONS_DIR, QR_DIR, ASSESSMENT_FILES_
     d.mkdir(parents=True, exist_ok=True)
 
 LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/SqocnYt.png")
+
+
+# =============================================================
+# AUTO LOGOUT AFTER INACTIVITY
+# =============================================================
+
+INACTIVITY_TIMEOUT_SECONDS = 1 * 60  # 30 minutes
+
+
+def get_logged_in_portal_role():
+    """
+    Detects which portal role is currently logged in.
+    This is used for inactivity timeout and auto logout.
+    """
+
+    if session.get("student_id"):
+        return "student"
+
+    if session.get("tutor_id"):
+        return "tutor"
+
+    if session.get("admin"):
+        return "admin"
+
+    if session.get("manager_id"):
+        return "manager"
+
+    if session.get("aqm_id"):
+        return "aqm"
+
+    if session.get("treasurer_id"):
+        return "treasurer"
+
+    if session.get("secretary_id"):
+        return "secretary"
+
+    if session.get("social_media_manager_id"):
+        return "social_media"
+
+    if session.get("duty_admin_id"):
+        return "duty_admin"
+
+    if session.get("admission_coordinator_id"):
+        return "admission"
+
+    if session.get("coo_id"):
+        return "coo"
+
+    if session.get("cao_id"):
+        return "cao"
+
+    if session.get("ceo_id"):
+        return "ceo"
+
+    return None
+
+
+def logout_path_for_role(role):
+    """
+    Sends each role to the correct logout route.
+    """
+
+    logout_paths = {
+        "student": "/student/logout",
+        "tutor": "/tutor/logout",
+        "admin": "/admin/logout",
+        "manager": "/manager/logout",
+        "aqm": "/aqm/logout",
+        "treasurer": "/treasurer/logout",
+        "secretary": "/secretary/logout",
+        "social_media": "/social-media/logout",
+        "duty_admin": "/duty-admin/logout",
+        "admission": "/admission/logout",
+        "coo": "/coo/logout",
+        "cao": "/cao/logout",
+        "ceo": "/ceo/logout",
+    }
+
+    return logout_paths.get(role, "/")
+
+
+def login_path_for_role(role):
+    """
+    Sends each role back to the correct login page after timeout.
+    """
+
+    login_paths = {
+        "student": "/student/login",
+        "tutor": "/tutor/login",
+        "admin": "/admin/login",
+        "manager": "/manager/login",
+        "aqm": "/aqm/login",
+        "treasurer": "/treasurer/login",
+        "secretary": "/secretary/login",
+        "social_media": "/social-media/login",
+        "duty_admin": "/duty-admin/login",
+        "admission": "/admission/login",
+        "coo": "/coo/login",
+        "cao": "/cao/login",
+        "ceo": "/ceo/login",
+    }
+
+    return login_paths.get(role, "/")
+
+
+@app.before_request
+def auto_logout_after_inactivity():
+    """
+    Logs out users after 30 minutes of no portal activity.
+    This protects student, tutor, admin and management portals.
+    """
+
+    # Do not track static files and images as user activity.
+    ignored_prefixes = (
+        "/static/",
+        "/profile-picture/",
+        "/tutor-profile-picture/",
+        "/uploads/",
+    )
+
+    if request.path.startswith(ignored_prefixes):
+        return None
+
+    role = get_logged_in_portal_role()
+
+    # No one is logged in.
+    if not role:
+        return None
+
+    now = time.time()
+
+    try:
+        last_activity = float(session.get("last_activity_ts", now))
+    except Exception:
+        last_activity = now
+
+    inactive_for = now - last_activity
+
+    if inactive_for > INACTIVITY_TIMEOUT_SECONDS:
+        login_path = login_path_for_role(role)
+
+        session.clear()
+        session["timeout_message"] = "You were logged out because there was no activity for more than 30 minutes."
+
+        return redirect(login_path)
+
+    session["last_activity_ts"] = now
+
+    return None
+
 # =============================================================
 
 
@@ -7392,6 +7542,44 @@ def page(title, body_html, extra_head="", extra_js=""):
 
     elif is_ceo():
         body_class = "role-ceo"
+        
+    auto_logout_js = ""
+
+    timeout_role = get_logged_in_portal_role()
+
+    if timeout_role:
+        timeout_logout_path = logout_path_for_role(timeout_role)
+
+        auto_logout_js = f"""
+        <script>
+            (function() {{
+                const TIMEOUT_MS = 1 * 60 * 1000;
+                const LOGOUT_URL = "{timeout_logout_path}";
+                let logoutTimer = null;
+
+                function resetLogoutTimer() {{
+                    clearTimeout(logoutTimer);
+
+                    logoutTimer = setTimeout(function() {{
+                        window.location.href = LOGOUT_URL;
+                    }}, TIMEOUT_MS);
+                }}
+
+                [
+                    "click",
+                    "mousemove",
+                    "keydown",
+                    "scroll",
+                    "touchstart",
+                    "touchmove"
+                ].forEach(function(eventName) {{
+                    document.addEventListener(eventName, resetLogoutTimer, {{ passive: true }});
+                }});
+
+                resetLogoutTimer();
+            }})();
+        </script>
+        """
 
     # Build role-aware sidebar with compact stats
     sidebar_html = ""
@@ -8180,7 +8368,7 @@ def page(title, body_html, extra_head="", extra_js=""):
             © <span id="year"></span> Early Bird Testimony Academy · All rights reserved.
         </div>
         <div style="opacity:0.95;">⚡ Powered by <a href="https://pascalmindtech.co.za/" target="_blank" style="color:#000;text-decoration:underline;font-weight:600;">PascalMindTech</a></div>
-    </footer>{extra_js}
+    </footer>{extra_js}{auto_logout_js}
     </body></html>
     """
 
