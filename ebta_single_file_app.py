@@ -8233,8 +8233,18 @@ def page(title, body_html, extra_head="", extra_js=""):
 
     # Build optional student status banner
     status_banner = ""
+
     try:
-        if role_title == 'Student':
+        hide_status_banner_endpoints = [
+            "student_assessments",
+            "student_take_assessment",
+            "student_submit_assessment",
+            "student_review_assessment",
+            "student_materials",
+            "student_assignments",
+        ]
+
+        if role_title == 'Student' and request.endpoint not in hide_status_banner_endpoints:
             # active_subjects and month already computed above
             if active_subjects and int(active_subjects) > 0:
                 status_text = f"Enrolled for {month} (subjects: {active_subjects})"
@@ -8242,7 +8252,13 @@ def page(title, body_html, extra_head="", extra_js=""):
             else:
                 status_text = f"Not enrolled for {month}"
                 status_extra = f" <a class='links' href='/'>(Enroll now)</a>"
-            status_banner = f"<div id='status-banner' class='card'><h2>Status</h2><div>{status_text}{status_extra}</div></div>"
+
+            status_banner = f"""
+            <div id='status-banner' class='card'>
+                <h2>Status</h2>
+                <div>{status_text}{status_extra}</div>
+            </div>
+            """
     except Exception:
         status_banner = ""
         
@@ -76191,7 +76207,77 @@ def student_take_assessment(assessment_id):
         """
 
     body = f"""
-    <section class="card">
+    <style>
+        body.role-student .assessment-writing-page {{
+            max-width:100%;
+            overflow-x:hidden;
+        }}
+
+        body.role-student .assessment-writing-page .assessment-header {{
+            border-left:6px solid #1b5e20;
+            margin-bottom:14px;
+        }}
+
+        body.role-student .assessment-writing-page .assessment-rules-box {{
+            border-left:5px solid #dc2626;
+            margin-bottom:14px;
+        }}
+
+        body.role-student .assessment-question {{
+            overflow-x:hidden;
+            word-break:break-word;
+            overflow-wrap:anywhere;
+        }}
+
+        body.role-student .assessment-question p {{
+            line-height:1.6;
+            white-space:pre-wrap;
+            word-break:break-word;
+            overflow-wrap:anywhere;
+        }}
+
+        body.role-student .assessment-question label {{
+            display:flex !important;
+            align-items:flex-start;
+            gap:10px;
+            width:100%;
+            box-sizing:border-box;
+            white-space:normal;
+            word-break:break-word;
+            overflow-wrap:anywhere;
+        }}
+
+        body.role-student .assessment-question input[type="radio"] {{
+            width:auto;
+            margin-top:3px;
+            flex-shrink:0;
+        }}
+
+        body.role-student .assessment-question textarea {{
+            width:100%;
+            max-width:100%;
+            box-sizing:border-box;
+        }}
+
+        body.role-student .assessment-question input[type="file"] {{
+            width:100%;
+            max-width:100%;
+            box-sizing:border-box;
+        }}
+
+        @media(max-width:760px) {{
+            body.role-student .assessment-writing-page h1 {{
+                font-size:22px;
+                line-height:1.25;
+            }}
+
+            body.role-student .assessment-writing-page .card {{
+                padding:14px;
+            }}
+        }}
+    </style>
+
+    <section class="card assessment-writing-page assessment-header">
         <h1>{escape(a['title'])}</h1>
 
         <p class="muted">
@@ -76200,7 +76286,7 @@ def student_take_assessment(assessment_id):
             Duration: {a['duration_minutes']} minutes
         </p>
 
-        <div class="card soft" style="border-left:5px solid #dc2626">
+        <div class="card soft assessment-rules-box">
             <h2>Assessment Rules</h2>
 
             <p style="white-space:pre-wrap">
@@ -76229,6 +76315,19 @@ def student_take_assessment(assessment_id):
     </section>
 
     {lockdown_script}
+
+    <script>
+        window.addEventListener("load", function() {{
+            const assessmentPage = document.querySelector(".assessment-writing-page");
+
+            if (assessmentPage) {{
+                assessmentPage.scrollIntoView({{
+                    behavior: "smooth",
+                    block: "start"
+                }});
+            }}
+        }});
+    </script>
     """
 
     return page("Take Assessment", body)
