@@ -8718,7 +8718,7 @@ def home():
     HELP_WHATSAPP_NUMBER = "27648650013"  # Replace with EBTA helper WhatsApp number
 
     help_message = quote_from_bytes(
-        "Good day EBTA, I need help with the enrollment page.".encode("utf-8")
+        "Good day EBTA, I need help with the enrollment ON THE EBTA PORTAL.".encode("utf-8")
     )
 
     enrollment_whatsapp_helper = f"""
