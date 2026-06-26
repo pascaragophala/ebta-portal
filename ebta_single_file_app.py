@@ -8583,14 +8583,14 @@ def page(title, body_html, extra_head="", extra_js=""):
     <main class='wrap'>{content_wrapped}</main>
     <footer class='footer'>
         <style>
-            .ebta-footer-clean {
+            .ebta-footer-clean {{
                 max-width:1100px;
                 margin:0 auto;
                 padding:20px 18px;
                 color:#64748b;
-            }
+            }}
 
-            .ebta-footer-top {
+            .ebta-footer-top {{
                 display:flex;
                 justify-content:space-between;
                 align-items:center;
@@ -8598,54 +8598,54 @@ def page(title, body_html, extra_head="", extra_js=""):
                 flex-wrap:wrap;
                 border-bottom:1px solid rgba(148,163,184,0.25);
                 padding-bottom:10px;
-            }
+            }}
 
-            .ebta-footer-copy {
+            .ebta-footer-copy {{
                 font-size:14px;
                 color:#64748b;
-            }
+            }}
 
-            .ebta-footer-policy {
+            .ebta-footer-policy {{
                 color:#1b5e20;
                 text-decoration:none;
                 font-size:14px;
                 font-weight:800;
-            }
+            }}
 
-            .ebta-footer-policy:hover {
+            .ebta-footer-policy:hover {{
                 text-decoration:underline;
-            }
+            }}
 
-            .ebta-footer-powered {
+            .ebta-footer-powered {{
                 margin-top:10px;
                 text-align:center;
                 font-size:13px;
                 color:#64748b;
-            }
+            }}
 
-            .ebta-footer-powered a {
+            .ebta-footer-powered a {{
                 color:#1b5e20;
                 font-weight:800;
                 text-decoration:none;
-            }
+            }}
 
-            .ebta-footer-powered a:hover {
+            .ebta-footer-powered a:hover {{
                 text-decoration:underline;
-            }
+            }}
 
-            @media(max-width:640px) {
-                .ebta-footer-top {
+            @media(max-width:640px) {{
+                .ebta-footer-top {{
                     flex-direction:column;
                     justify-content:center;
                     text-align:center;
                     gap:8px;
-                }
+                }}
 
                 .ebta-footer-copy,
-                .ebta-footer-policy {
+                .ebta-footer-policy {{
                     font-size:13px;
-                }
-            }
+                }}
+            }}
         </style>
 
         <div class="ebta-footer-clean">
