@@ -8715,9 +8715,102 @@ def home():
     month_raw = get_setting('current_month')
     month_label = pretty_month_label(month_raw)
     
+    HELP_WHATSAPP_NUMBER = "27648650013"  # Replace with EBTA helper WhatsApp number
+
+    help_message = quote_from_bytes(
+        "Good day EBTA, I need help with the enrollment page.".encode("utf-8")
+    )
+
+    enrollment_whatsapp_helper = f"""
+    <style>
+        .enrollment-whatsapp-help {{
+            position:fixed;
+            right:18px;
+            bottom:18px;
+            z-index:9998;
+            display:flex;
+            align-items:center;
+            gap:10px;
+            padding:12px 16px;
+            border-radius:999px;
+            background:#25D366;
+            color:#ffffff;
+            font-weight:800;
+            text-decoration:none;
+            box-shadow:0 12px 28px rgba(15,23,42,0.28);
+            border:2px solid rgba(255,255,255,0.85);
+            animation: ebtaWhatsappPulse 1.5s ease-in-out infinite;
+        }}
+
+        .enrollment-whatsapp-help span {{
+            display:flex;
+            flex-direction:column;
+            line-height:1.15;
+        }}
+
+        .enrollment-whatsapp-help small {{
+            font-size:11px;
+            opacity:0.95;
+            font-weight:700;
+        }}
+
+        .enrollment-whatsapp-icon {{
+            width:34px;
+            height:34px;
+            border-radius:50%;
+            background:#ffffff;
+            color:#25D366;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            font-size:20px;
+            flex-shrink:0;
+        }}
+
+        @keyframes ebtaWhatsappPulse {{
+            0%, 100% {{
+                transform:scale(1);
+                box-shadow:0 12px 28px rgba(15,23,42,0.28);
+            }}
+
+            50% {{
+                transform:scale(1.04);
+                box-shadow:0 16px 38px rgba(37,211,102,0.45);
+            }}
+        }}
+
+        @media(max-width:640px) {{
+            .enrollment-whatsapp-help {{
+                right:12px;
+                bottom:12px;
+                padding:10px 12px;
+                font-size:13px;
+            }}
+
+            .enrollment-whatsapp-icon {{
+                width:30px;
+                height:30px;
+                font-size:18px;
+            }}
+        }}
+    </style>
+
+    <a class="enrollment-whatsapp-help"
+       href="https://wa.me/{HELP_WHATSAPP_NUMBER}?text={help_message}"
+       target="_blank"
+       rel="noopener">
+        <div class="enrollment-whatsapp-icon">☎</div>
+        <span>
+            Need help?
+            <small>WhatsApp us</small>
+        </span>
+    </a>
+    """
+    
     if not enrollment_open:
         conn.close()
         body = f"""
+        {enrollment_whatsapp_helper}
         <section style="
             min-height:70vh;
             display:flex;
@@ -8862,6 +8955,7 @@ def home():
 
     body = fr"""
     {celebration_banner_html}
+    {enrollment_whatsapp_helper}
     <section class='grid' style='margin-top:10px'>
     <div class="card soft" style="margin-top:18px;">
 
