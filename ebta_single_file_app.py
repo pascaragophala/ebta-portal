@@ -8582,31 +8582,89 @@ def page(title, body_html, extra_head="", extra_js=""):
 
     <main class='wrap'>{content_wrapped}</main>
     <footer class='footer'>
-        <div class="copyright">
-            © <span id="year"></span> Early Bird Testimony Academy · All rights reserved.
-        </div>
+        <style>
+            .ebta-footer-clean {
+                max-width:1100px;
+                margin:0 auto;
+                padding:20px 18px;
+                color:#64748b;
+            }
 
-        <div style="display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:6px;">
-            <a href="/privacy-policy"
-               style="color:#000;text-decoration:underline;font-weight:600;">
-                Privacy Policy
-            </a>
+            .ebta-footer-top {
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                gap:16px;
+                flex-wrap:wrap;
+                border-bottom:1px solid rgba(148,163,184,0.25);
+                padding-bottom:10px;
+            }
 
-            <span style="opacity:0.55;">|</span>
+            .ebta-footer-copy {
+                font-size:14px;
+                color:#64748b;
+            }
 
-            <a href="/"
-               style="color:#000;text-decoration:underline;font-weight:600;">
-                Enrollment
-            </a>
-        </div>
+            .ebta-footer-policy {
+                color:#1b5e20;
+                text-decoration:none;
+                font-size:14px;
+                font-weight:800;
+            }
 
-        <div style="opacity:0.95;margin-top:6px;">
-            ⚡ Powered by
-            <a href="https://pascalmindtech.co.za/"
-               target="_blank"
-               style="color:#000;text-decoration:underline;font-weight:600;">
-                PascalMindTech
-            </a>
+            .ebta-footer-policy:hover {
+                text-decoration:underline;
+            }
+
+            .ebta-footer-powered {
+                margin-top:10px;
+                text-align:center;
+                font-size:13px;
+                color:#64748b;
+            }
+
+            .ebta-footer-powered a {
+                color:#1b5e20;
+                font-weight:800;
+                text-decoration:none;
+            }
+
+            .ebta-footer-powered a:hover {
+                text-decoration:underline;
+            }
+
+            @media(max-width:640px) {
+                .ebta-footer-top {
+                    flex-direction:column;
+                    justify-content:center;
+                    text-align:center;
+                    gap:8px;
+                }
+
+                .ebta-footer-copy,
+                .ebta-footer-policy {
+                    font-size:13px;
+                }
+            }
+        </style>
+
+        <div class="ebta-footer-clean">
+            <div class="ebta-footer-top">
+                <div class="ebta-footer-copy">
+                    © <span id="year"></span> Early Bird Testimony Academy. All rights reserved.
+                </div>
+
+                <a class="ebta-footer-policy" href="/privacy-policy">
+                    Privacy Policy
+                </a>
+            </div>
+
+            <div class="ebta-footer-powered">
+                Powered by
+                <a href="https://pascalmindtech.co.za/" target="_blank" rel="noopener">
+                    PascalMindTech
+                </a>
+            </div>
         </div>
     </footer>{extra_js}{auto_logout_js}
     </body></html>
