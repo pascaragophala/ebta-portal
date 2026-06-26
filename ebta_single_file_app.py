@@ -8585,13 +8585,185 @@ def page(title, body_html, extra_head="", extra_js=""):
         <div class="copyright">
             © <span id="year"></span> Early Bird Testimony Academy · All rights reserved.
         </div>
-        <div style="opacity:0.95;">⚡ Powered by <a href="https://pascalmindtech.co.za/" target="_blank" style="color:#000;text-decoration:underline;font-weight:600;">PascalMindTech</a></div>
+
+        <div style="display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:6px;">
+            <a href="/privacy-policy"
+               style="color:#000;text-decoration:underline;font-weight:600;">
+                Privacy Policy
+            </a>
+
+            <span style="opacity:0.55;">|</span>
+
+            <a href="/"
+               style="color:#000;text-decoration:underline;font-weight:600;">
+                Enrollment
+            </a>
+        </div>
+
+        <div style="opacity:0.95;margin-top:6px;">
+            ⚡ Powered by
+            <a href="https://pascalmindtech.co.za/"
+               target="_blank"
+               style="color:#000;text-decoration:underline;font-weight:600;">
+                PascalMindTech
+            </a>
+        </div>
     </footer>{extra_js}{auto_logout_js}
     </body></html>
     """
 
 
 # ===================== File routes ==============
+@app.get('/privacy-policy')
+def privacy_policy():
+    body = """
+    <section class="card" style="max-width:980px;margin:auto;border-left:6px solid #1b5e20;">
+        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;">
+            <div>
+                <h1 style="margin-bottom:6px;">Privacy Policy</h1>
+                <p class="mini muted" style="margin:0;">
+                    Early Bird Testimony Academy (EBTA)
+                </p>
+            </div>
+
+            <a class="btn mini secondary" href="/">
+                ← Back to Enrollment
+            </a>
+        </div>
+
+        <div class="card soft" style="margin-top:18px;border-left:5px solid #25D366;">
+            <p>
+                Early Bird Testimony Academy (“EBTA”, “we”, “us” or “our”) respects your privacy
+                and is committed to protecting the personal information of learners, parents,
+                guardians, tutors, staff members and visitors who use the EBTA Portal.
+            </p>
+
+            <p class="mini muted">
+                Last updated: June 2026
+            </p>
+        </div>
+
+        <div class="grid" style="gap:14px;margin-top:16px;">
+
+            <div class="card soft">
+                <h2>1. Information we collect</h2>
+                <p>
+                    We may collect personal information such as full name, WhatsApp number,
+                    guardian contact details, email address, grade, school, province, selected
+                    subjects, proof of payment, academic reports, uploaded files, attendance,
+                    assessment submissions, marks, messages and portal activity records.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>2. Why we collect this information</h2>
+                <p>
+                    We use personal information to process enrollments, manage student accounts,
+                    allocate learners to subjects and WhatsApp groups, provide tutoring services,
+                    track attendance, manage assessments and assignments, communicate important
+                    updates, verify payments, provide academic support and improve EBTA services.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>3. How we use WhatsApp and communication channels</h2>
+                <p>
+                    EBTA may use WhatsApp, phone calls, SMS, email or portal messages to send
+                    learning updates, class links, reminders, payment follow-ups, academic notices
+                    and support messages related to EBTA services.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>4. Sharing of information</h2>
+                <p>
+                    We do not sell personal information. Information may be shared only with
+                    authorised EBTA team members such as tutors, tutor managers, administrators,
+                    academic quality managers and management where it is necessary for academic,
+                    operational, payment or support purposes.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>5. Proof of payment and uploaded files</h2>
+                <p>
+                    Proof of payment files, student reports and other uploaded documents are used
+                    only for EBTA-related administration, verification and academic-support purposes.
+                    Users must ensure that uploaded documents are accurate and relevant.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>6. Data security</h2>
+                <p>
+                    EBTA takes reasonable steps to protect personal information against loss,
+                    unauthorised access, misuse, disclosure or alteration. Access to portal data is
+                    limited to authorised users according to their roles.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>7. Data retention</h2>
+                <p>
+                    We keep personal information only for as long as reasonably necessary for
+                    enrollment, academic, operational, legal, finance, reporting and record-keeping
+                    purposes.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>8. Your rights</h2>
+                <p>
+                    You may request access to your personal information, ask for incorrect
+                    information to be corrected, or request that EBTA updates or removes information
+                    where legally and practically possible.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>9. Children and learner information</h2>
+                <p>
+                    EBTA provides tutoring services to learners. Where learner information is
+                    provided by a parent or guardian, the parent or guardian confirms that the
+                    information is correct and that EBTA may use it for tutoring, academic support,
+                    enrollment and communication purposes.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>10. Third-party services</h2>
+                <p>
+                    EBTA may use third-party services such as WhatsApp, Google Drive, payment
+                    platforms, hosting providers or communication tools. These services may process
+                    limited information necessary for EBTA to provide its services.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>11. Contact us</h2>
+                <p>
+                    For privacy-related questions, corrections or requests, please contact EBTA
+                    through the official EBTA communication channels provided on the portal or
+                    enrollment page.
+                </p>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #f59e0b;">
+                <h2>12. Updates to this policy</h2>
+                <p>
+                    EBTA may update this Privacy Policy when necessary. The latest version will be
+                    made available on this page.
+                </p>
+            </div>
+
+        </div>
+    </section>
+    """
+
+    return page("Privacy Policy", body)
+    
+    
+    
 @app.route('/uploads/<path:filename>')
 def uploads(filename): return send_from_directory(UPLOAD_DIR, filename)
 
@@ -10497,7 +10669,11 @@ function showPopup(message, type='info', timeout=4000){
             Important information will be shared via WhatsApp or the EBTA Portal.</p>
 
             <p><strong>7. Privacy</strong><br>
-            Your personal information is stored securely and used only for academic purposes.</p>
+            Your personal information is stored securely and used only for enrollment, academic support,
+            payment verification, communication and EBTA operational purposes.
+            You can read the full policy here:
+            <a href="/privacy-policy" target="_blank">Privacy Policy</a>.
+            </p>
 
             <p><strong>8. Agreement</strong><br>
             By proceeding, you confirm that you understand and accept these Terms & Conditions.</p>
