@@ -1931,6 +1931,16 @@ def init_db():
     
     cur.execute("""
         UPDATE assessment_attempts
+        SET total_points = (
+            SELECT COALESCE(SUM(q.points), 0)
+            FROM assessment_questions q
+            WHERE q.assessment_id = assessment_attempts.assessment_id
+        )
+        WHERE COALESCE(total_points, 0) = 0
+    """)
+    
+    cur.execute("""
+        UPDATE assessment_attempts
         SET used_attempts = 1
         WHERE status IN ('SUBMITTED', 'MARKED')
           AND COALESCE(used_attempts, 0) = 0
@@ -74406,6 +74416,45 @@ def assessment_total_points(conn, assessment_id):
     """, (assessment_id,))
 
     return float(cur.fetchone()["total"] or 0)
+    
+    
+def recalculate_assessment_attempt_totals(conn, attempt_id):
+    """
+    Recalculates the correct total marks for an assessment attempt
+    based on the points set by the tutor on each question.
+    """
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT assessment_id
+        FROM assessment_attempts
+        WHERE id=?
+        LIMIT 1
+    """, (attempt_id,))
+
+    attempt = cur.fetchone()
+
+    if not attempt:
+        return 0
+
+    assessment_id = attempt["assessment_id"]
+
+    cur.execute("""
+        SELECT COALESCE(SUM(points), 0) AS total_points
+        FROM assessment_questions
+        WHERE assessment_id=?
+    """, (assessment_id,))
+
+    total_points = float(cur.fetchone()["total_points"] or 0)
+
+    cur.execute("""
+        UPDATE assessment_attempts
+        SET total_points=?
+        WHERE id=?
+    """, (total_points, attempt_id))
+
+    return total_points
 
 
 def parse_datetime_local(value):
@@ -76622,15 +76671,22 @@ def student_submit_assessment(assessment_id):
         deadline = started_at + datetime.timedelta(minutes=duration_minutes)
 
         if now_local > deadline:
+            
+            correct_total_points = assessment_total_points(conn, assessment_id)
+
             cur.execute("""
                 UPDATE assessment_attempts
                 SET submitted_at=?,
                     status='SUBMITTED',
+                    auto_score=0,
+                    total_score=0,
+                    total_points=?,
                     flags_json=?,
                     used_attempts=COALESCE(used_attempts, 0) + 1
                 WHERE id=?
             """, (
                 now_utc_iso(),
+                correct_total_points,
                 security_events,
                 attempt_id
             ))
@@ -77689,15 +77745,35 @@ def tutor_save_assessment_marks(attempt_id):
             WHERE id=?
         """, (mark, feedback, now_utc_iso(), ans["id"]))
 
-    total_score = float(attempt["auto_score"] or 0) + manual_score
+    # Recalculate MCQ auto score from saved answers
+    cur.execute("""
+        SELECT COALESCE(SUM(auto_mark), 0) AS auto_score
+        FROM assessment_answers
+        WHERE attempt_id=?
+    """, (attempt_id,))
+
+    auto_score = float(cur.fetchone()["auto_score"] or 0)
+
+    # Recalculate the correct total marks from tutor question points
+    correct_total_points = recalculate_assessment_attempt_totals(conn, attempt_id)
+
+    total_score = auto_score + manual_score
 
     cur.execute("""
         UPDATE assessment_attempts
-        SET manual_score=?,
+        SET auto_score=?,
+            manual_score=?,
             total_score=?,
+            total_points=?,
             status='MARKED'
         WHERE id=?
-    """, (manual_score, total_score, attempt_id))
+    """, (
+        auto_score,
+        manual_score,
+        total_score,
+        correct_total_points,
+        attempt_id
+    ))
 
     assessment_id = attempt["assessment_id"]
 
