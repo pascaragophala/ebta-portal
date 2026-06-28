@@ -68200,17 +68200,68 @@ def admin_ceos():
 
     for c in rows:
         status = "<span class='chip active'>Active</span>" if c["is_active"] == 1 else "<span class='chip lapsed'>Inactive</span>"
+        form_id = f"ceo_edit_{c['id']}"
 
         ceo_rows += f"""
         <tr>
             <td>
-                <strong>{escape(c['full_name'])}</strong>
-                <div class="mini muted">{escape(c['email'] or '—')}</div>
+                <input
+                    form="{form_id}"
+                    name="full_name"
+                    value="{escape(c['full_name'] or '')}"
+                    required
+                    style="width:100%;min-width:170px;"
+                >
+
+                <div style="margin-top:6px;">
+                    <input
+                        form="{form_id}"
+                        name="email"
+                        value="{escape(c['email'] or '')}"
+                        placeholder="Email"
+                        style="width:100%;min-width:170px;"
+                    >
+                </div>
             </td>
-            <td>{escape(c['phone'])}</td>
-            <td><span class="chip">{escape(c['pin'] or '—')}</span></td>
-            <td>{status}</td>
+
             <td>
+                <input
+                    form="{form_id}"
+                    name="phone"
+                    value="{escape(c['phone'] or '')}"
+                    required
+                    style="width:150px;"
+                >
+            </td>
+
+            <td>
+                <input
+                    form="{form_id}"
+                    name="pin"
+                    value="{escape(c['pin'] or '')}"
+                    required
+                    style="width:100px;"
+                >
+            </td>
+
+            <td>{status}</td>
+
+            <td style="white-space:nowrap;">
+                <form
+                    id="{form_id}"
+                    method="post"
+                    action="{url_for('admin_ceo_edit', ceo_id=c['id'])}"
+                    style="display:inline"
+                ></form>
+
+                <button
+                    form="{form_id}"
+                    class="btn mini success"
+                    onclick="return confirm('Save changes for this CEO account?')"
+                >
+                    Save
+                </button>
+
                 <form method="post" action="{url_for('admin_ceo_toggle', ceo_id=c['id'])}" style="display:inline">
                     <button class="btn mini secondary">
                         {'Deactivate' if c['is_active'] == 1 else 'Activate'}
@@ -68264,11 +68315,11 @@ def admin_ceos():
                     <table>
                         <thead>
                             <tr>
-                                <th>CEO</th>
+                                <th>CEO Details</th>
                                 <th>Phone</th>
                                 <th>PIN</th>
                                 <th>Status</th>
-                                <th>Action</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
 
@@ -68332,6 +68383,56 @@ def admin_ceo_add():
     conn.close()
 
     return redirect(url_for("admin_ceos"))
+    
+    
+@app.post('/admin/ceo/<int:ceo_id>/edit')
+def admin_ceo_edit(ceo_id):
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can edit CEO accounts."))
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    email = request.form.get("email", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    if not full_name or not phone or not pin:
+        return page("Missing Information", card_msg("Full name, phone and PIN are required."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            UPDATE ceos
+            SET full_name=?,
+                phone=?,
+                email=?,
+                pin=?,
+                updated_at=?
+            WHERE id=?
+        """, (
+            full_name,
+            phone,
+            email,
+            pin,
+            now_utc_iso(),
+            ceo_id
+        ))
+
+        conn.commit()
+
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Duplicate Phone", card_msg("Another CEO account already uses this phone number."))
+
+    conn.close()
+
+    return redirect(url_for("admin_ceos"))    
 
 
 @app.post('/admin/ceo/<int:ceo_id>/toggle')
