@@ -684,6 +684,37 @@ def init_db():
     
     
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS aqm_parent_report_logs(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        student_id INTEGER NOT NULL,
+        month TEXT NOT NULL,
+
+        sent_to TEXT,
+        sent_by_aqm_id INTEGER,
+        sent_at TEXT NOT NULL,
+
+        message_body TEXT,
+
+        UNIQUE(student_id, month),
+
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+        FOREIGN KEY(sent_by_aqm_id) REFERENCES academic_quality_managers(id) ON DELETE SET NULL
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_aqm_parent_report_logs_student
+        ON aqm_parent_report_logs(student_id)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_aqm_parent_report_logs_month
+        ON aqm_parent_report_logs(month)
+    """)
+    
+    
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS tutor_applications(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
 
@@ -33137,6 +33168,7 @@ def aqm_nav():
         <a class="btn mini" href="/aqm/assessment-analysis">Assessment Analysis</a>
         <a class="btn mini" href="/aqm/ratings">Student Ratings</a>
         <a class="btn mini" href="/aqm/awards">Awards</a>
+        <a class="btn mini" href="/aqm/parent-reports">Parent Reports</a>
         <a class="btn mini danger" href="/aqm/logout">Logout</a>
     </div>
     """
@@ -37541,6 +37573,63 @@ def aqm_students_info():
     return page("AQM Student Information", body)  
   
   
+def clean_phone_for_whatsapp(phone):
+    """
+    Converts SA phone numbers into WhatsApp-friendly format.
+    Example:
+    0831234567 -> 27831234567
+    +27831234567 -> 27831234567
+    """
+    phone = str(phone or "").strip()
+    phone = phone.replace(" ", "").replace("-", "").replace("+", "")
+
+    if phone.startswith("0") and len(phone) == 10:
+        phone = "27" + phone[1:]
+
+    return phone
+
+
+def build_aqm_parent_report_message(student_name, grade, month, subjects_text,
+                                    progress_status, overall_progress,
+                                    material_rate, assignment_rate,
+                                    attendance_rate,
+                                    avg_manual_mark, avg_assignment_mark,
+                                    overdue_assignments, portal_minutes,
+                                    risk_notes):
+    """
+    Creates a clean WhatsApp report for a parent/guardian.
+    """
+
+    return f"""Good day Parent/Guardian,
+
+Please find below the EBTA academic progress report for {student_name} for {month}.
+
+Learner: {student_name}
+Grade: {grade}
+Subjects: {subjects_text}
+
+Academic Progress Summary:
+Overall Progress: {overall_progress}%
+Progress Status: {progress_status}
+Material Engagement: {material_rate}%
+Assignment Completion: {assignment_rate}%
+Attendance: {attendance_rate}%
+AQM/Manual Mark Average: {avg_manual_mark}%
+Assignment Mark Average: {avg_assignment_mark}%
+Portal Activity: {portal_minutes} minutes
+Overdue Work: {overdue_assignments}
+
+Academic Notes:
+{risk_notes}
+
+Recommendation:
+We encourage the learner to continue attending sessions, viewing uploaded resources, completing tasks on time, and using the EBTA Portal consistently.
+
+Kind regards,
+Early Bird Testimony Academy
+Academic Quality Team"""
+  
+  
 @app.get('/aqm/learners')
 def aqm_learners():
 
@@ -38421,6 +38510,709 @@ def aqm_learners():
 
     return page("AQM Learner Progress Analysis", body)
 
+
+@app.get('/aqm/parent-reports')
+def aqm_parent_reports():
+
+    r = require_aqm()
+    if r:
+        return r
+
+    month = request.args.get("month") or get_setting("current_month")
+    q = request.args.get("q", "").strip()
+    grade_filter = request.args.get("grade", "").strip()
+    progress_filter = request.args.get("progress", "all").strip().lower()
+
+    try:
+        page_num = int(request.args.get("page", "1"))
+    except Exception:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    try:
+        per_page = int(request.args.get("per_page", "10"))
+    except Exception:
+        per_page = 10
+
+    if per_page not in [10, 15, 25, 50]:
+        per_page = 10
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    where = ["e.month=?", "e.status='ACTIVE'"]
+    params = [month]
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                st.full_name LIKE ?
+                OR st.phone_whatsapp LIKE ?
+                OR st.guardian_phone LIKE ?
+                OR st.school LIKE ?
+                OR sub.name LIKE ?
+            )
+        """)
+        params += [search, search, search, search, search]
+
+    if grade_filter:
+        where.append("st.grade=?")
+        params.append(grade_filter)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT DISTINCT
+            st.id,
+            st.full_name,
+            st.phone_whatsapp,
+            st.guardian_phone,
+            st.guardian_name,
+            st.grade,
+            st.school
+        FROM students st
+        JOIN enrollments e ON e.student_id=st.id
+        JOIN subjects sub ON sub.id=e.subject_id
+        {where_sql}
+        ORDER BY st.full_name
+    """, params)
+
+    learners = cur.fetchall()
+
+    records = []
+    counts = {
+        "all": 0,
+        "high_risk": 0,
+        "average": 0,
+        "top": 0,
+        "sent": 0,
+        "not_sent": 0
+    }
+
+    for learner in learners:
+
+        student_id = learner["id"]
+
+        cur.execute("""
+            SELECT DISTINCT
+                sub.id AS subject_id,
+                sub.name AS subject_name,
+                sub.grade
+            FROM enrollments e
+            JOIN subjects sub ON sub.id=e.subject_id
+            WHERE e.student_id=?
+              AND e.month=?
+              AND e.status='ACTIVE'
+            ORDER BY sub.grade, sub.name
+        """, (student_id, month))
+
+        subject_rows = cur.fetchall()
+        subject_ids = [str(x["subject_id"]) for x in subject_rows]
+        subjects_text = ", ".join([f"{grade_label(x['grade'])} {x['subject_name']}" for x in subject_rows]) or "No active subjects"
+
+        total_materials = 0
+        viewed_materials = 0
+        total_assignments = 0
+        submitted_assignments = 0
+        expected_sessions = 0
+        attended_sessions = 0
+        overdue_assignments = 0
+
+        if subject_ids:
+            qmarks = ",".join("?" * len(subject_ids))
+
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT id) AS c
+                FROM materials
+                WHERE subject_id IN ({qmarks})
+                  AND month LIKE ?
+            """, subject_ids + [month + "%"])
+            total_materials = cur.fetchone()["c"] or 0
+
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT mv.material_id) AS c
+                FROM material_views mv
+                JOIN materials m ON m.id=mv.material_id
+                WHERE mv.student_id=?
+                  AND m.subject_id IN ({qmarks})
+                  AND m.month LIKE ?
+            """, [student_id] + subject_ids + [month + "%"])
+            viewed_materials = cur.fetchone()["c"] or 0
+
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT id) AS c
+                FROM materials
+                WHERE subject_id IN ({qmarks})
+                  AND month LIKE ?
+                  AND (is_assignment=1 OR kind='assignment')
+            """, subject_ids + [month + "%"])
+            total_assignments = cur.fetchone()["c"] or 0
+
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT sub.id) AS c
+                FROM submissions sub
+                JOIN materials m ON m.id=sub.material_id
+                WHERE sub.student_id=?
+                  AND m.subject_id IN ({qmarks})
+                  AND m.month LIKE ?
+                  AND (m.is_assignment=1 OR m.kind='assignment')
+            """, [student_id] + subject_ids + [month + "%"])
+            submitted_assignments = cur.fetchone()["c"] or 0
+
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT ats.id) AS c
+                FROM attendance_sessions ats
+                WHERE ats.subject_id IN ({qmarks})
+                  AND ats.month=?
+            """, subject_ids + [month])
+            expected_sessions = cur.fetchone()["c"] or 0
+
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT ats.id) AS c
+                FROM attendance_sessions ats
+                JOIN attendance a
+                    ON a.session_id=ats.session_id
+                   AND a.date=ats.date
+                   AND a.student_id=?
+                WHERE ats.subject_id IN ({qmarks})
+                  AND ats.month=?
+            """, [student_id] + subject_ids + [month])
+            attended_sessions = cur.fetchone()["c"] or 0
+
+            today = datetime.date.today().isoformat()
+
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT m.id) AS c
+                FROM materials m
+                LEFT JOIN submissions sub
+                    ON sub.material_id=m.id
+                   AND sub.student_id=?
+                WHERE m.subject_id IN ({qmarks})
+                  AND m.month LIKE ?
+                  AND (m.is_assignment=1 OR m.kind='assignment')
+                  AND m.due_date IS NOT NULL
+                  AND TRIM(m.due_date) != ''
+                  AND m.due_date < ?
+                  AND sub.id IS NULL
+            """, [student_id] + subject_ids + [month + "%", today])
+            overdue_assignments = cur.fetchone()["c"] or 0
+
+        material_rate = round((viewed_materials / total_materials) * 100) if total_materials else 100
+        assignment_rate = round((submitted_assignments / total_assignments) * 100) if total_assignments else 100
+        attendance_rate = round((attended_sessions / expected_sessions) * 100) if expected_sessions else 100
+
+        cur.execute("""
+            SELECT ROUND(AVG(mark), 1) AS avg_mark
+            FROM aqm_student_marks
+            WHERE student_id=?
+              AND month=?
+        """, (student_id, month))
+        avg_manual_mark = cur.fetchone()["avg_mark"] or 0
+
+        cur.execute("""
+            SELECT ROUND(AVG(sub.mark), 1) AS avg_mark
+            FROM submissions sub
+            JOIN materials m ON m.id=sub.material_id
+            WHERE sub.student_id=?
+              AND m.month LIKE ?
+              AND (m.is_assignment=1 OR m.kind='assignment')
+              AND sub.mark IS NOT NULL
+        """, (student_id, month + "%"))
+        avg_assignment_mark = cur.fetchone()["avg_mark"] or 0
+
+        cur.execute("""
+            SELECT COALESCE(SUM(total_seconds),0) AS seconds
+            FROM student_portal_activity
+            WHERE student_id=?
+              AND month=?
+        """, (student_id, month))
+        portal_minutes = round((cur.fetchone()["seconds"] or 0) / 60)
+
+        progress_parts = [material_rate, assignment_rate, attendance_rate]
+        overall_progress = round(sum(progress_parts) / len(progress_parts)) if progress_parts else 0
+
+        improvement_notes = []
+
+        if material_rate < 50:
+            improvement_notes.append("Material engagement needs improvement.")
+
+        if assignment_rate < 60:
+            improvement_notes.append("Assignment completion needs attention.")
+
+        if attendance_rate < 60:
+            improvement_notes.append("Attendance needs improvement.")
+
+        if overdue_assignments > 0:
+            improvement_notes.append(f"There are {overdue_assignments} overdue task(s).")
+
+        if avg_manual_mark and avg_manual_mark < 50:
+            improvement_notes.append("Academic marks are below the desired level.")
+
+        if not improvement_notes:
+            improvement_notes.append("The learner is currently on track. Continued consistency is encouraged.")
+
+        if overall_progress >= 75 and overdue_assignments == 0:
+            progress_status = "TOP ACHIEVER"
+            status_class = "active"
+            category = "top"
+        elif overall_progress >= 50:
+            progress_status = "AVERAGE"
+            status_class = "pending"
+            category = "average"
+        else:
+            progress_status = "AT RISK"
+            status_class = "lapsed"
+            category = "high_risk"
+
+        risk_notes = "\n".join([f"- {note}" for note in improvement_notes])
+
+        parent_phone = learner["guardian_phone"] or learner["phone_whatsapp"]
+        whatsapp_phone = clean_phone_for_whatsapp(parent_phone)
+
+        report_message = build_aqm_parent_report_message(
+            student_name=learner["full_name"] or "Learner",
+            grade=grade_label(learner["grade"] or ""),
+            month=month,
+            subjects_text=subjects_text,
+            progress_status=progress_status,
+            overall_progress=overall_progress,
+            material_rate=material_rate,
+            assignment_rate=assignment_rate,
+            attendance_rate=attendance_rate,
+            avg_manual_mark=avg_manual_mark,
+            avg_assignment_mark=avg_assignment_mark,
+            overdue_assignments=overdue_assignments,
+            portal_minutes=portal_minutes,
+            risk_notes=risk_notes
+        )
+
+        encoded_message = quote_from_bytes(report_message.encode("utf-8"))
+        whatsapp_url = f"https://wa.me/{whatsapp_phone}?text={encoded_message}"
+
+        cur.execute("""
+            SELECT sent_at
+            FROM aqm_parent_report_logs
+            WHERE student_id=?
+              AND month=?
+            LIMIT 1
+        """, (student_id, month))
+
+        sent_log = cur.fetchone()
+        was_sent = sent_log is not None
+
+        counts["all"] += 1
+        counts[category] += 1
+        if was_sent:
+            counts["sent"] += 1
+        else:
+            counts["not_sent"] += 1
+
+        records.append({
+            "learner": learner,
+            "student_id": student_id,
+            "subjects_text": subjects_text,
+            "progress_status": progress_status,
+            "status_class": status_class,
+            "category": category,
+            "overall_progress": overall_progress,
+            "material_rate": material_rate,
+            "assignment_rate": assignment_rate,
+            "attendance_rate": attendance_rate,
+            "avg_manual_mark": avg_manual_mark,
+            "avg_assignment_mark": avg_assignment_mark,
+            "overdue_assignments": overdue_assignments,
+            "portal_minutes": portal_minutes,
+            "improvement_notes": improvement_notes,
+            "parent_phone": parent_phone,
+            "whatsapp_url": whatsapp_url,
+            "report_message": report_message,
+            "was_sent": was_sent,
+            "sent_at": sent_log["sent_at"] if sent_log else ""
+        })
+
+    if progress_filter == "high_risk":
+        records = [x for x in records if x["category"] == "high_risk"]
+    elif progress_filter == "average":
+        records = [x for x in records if x["category"] == "average"]
+    elif progress_filter == "top":
+        records = [x for x in records if x["category"] == "top"]
+    elif progress_filter == "sent":
+        records = [x for x in records if x["was_sent"]]
+    elif progress_filter == "not_sent":
+        records = [x for x in records if not x["was_sent"]]
+    else:
+        progress_filter = "all"
+
+    total_records = len(records)
+    total_pages = max(1, (total_records + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+
+    start_index = (page_num - 1) * per_page
+    end_index = start_index + per_page
+    page_records = records[start_index:end_index]
+
+    rows = ""
+
+    for record in page_records:
+        learner = record["learner"]
+        student_id = record["student_id"]
+        row_class = "aqm-report-sent-row" if record["was_sent"] else ""
+
+        sent_label = ""
+        if record["was_sent"]:
+            sent_label = f"<div class='mini sent-label'>Sent: {escape(str(record['sent_at'])[:16].replace('T', ' '))}</div>"
+
+        rows += f"""
+        <tr id="report-row-{student_id}" class="{row_class}">
+            <td>
+                <strong>{escape(learner['full_name'] or '—')}</strong>
+                <div class="mini muted">Learner: {escape(learner['phone_whatsapp'] or '—')}</div>
+                <div class="mini muted">Guardian: {escape(record['parent_phone'] or '—')}</div>
+                {sent_label}
+            </td>
+
+            <td>{grade_label(learner['grade'])}</td>
+
+            <td>
+                <span class="chip {record['status_class']}">{escape(record['progress_status'])}</span>
+                <div class="mini muted">Overall: {record['overall_progress']}%</div>
+            </td>
+
+            <td>
+                <div class="mini">Materials: {record['material_rate']}%</div>
+                <div class="mini">Assignments: {record['assignment_rate']}%</div>
+                <div class="mini">Attendance: {record['attendance_rate']}%</div>
+            </td>
+
+            <td>
+                <div class="mini">AQM: {record['avg_manual_mark'] or 0}%</div>
+                <div class="mini muted">Assignments: {record['avg_assignment_mark'] or 0}%</div>
+            </td>
+
+            <td>
+                <div class="mini">{escape(', '.join(record['improvement_notes'][:2]))}</div>
+            </td>
+
+            <td>
+                <button
+                    class="btn mini success"
+                    type="button"
+                    onclick="sendAqmParentReport({student_id}, '{record['whatsapp_url']}')"
+                >
+                    Send Report
+                </button>
+
+                <button
+                    class="btn mini secondary"
+                    type="button"
+                    onclick="previewAqmReport(`{escape(record['report_message'])}`)"
+                >
+                    Preview
+                </button>
+            </td>
+        </tr>
+        """
+
+    grade_options = '<option value="">All Grades</option>'
+
+    for g in ["G8", "G9", "G10", "G11", "G12", "G13"]:
+        selected = "selected" if grade_filter == g else ""
+        grade_options += f"<option value='{g}' {selected}>{grade_label(g)}</option>"
+
+    progress_options = {
+        "all": f"Everyone ({counts['all']})",
+        "high_risk": f"At Risk ({counts['high_risk']})",
+        "average": f"Average ({counts['average']})",
+        "top": f"Top Achievers ({counts['top']})",
+        "sent": f"Reports Sent ({counts['sent']})",
+        "not_sent": f"Reports Not Sent ({counts['not_sent']})"
+    }
+
+    progress_options_html = ""
+    for value, label in progress_options.items():
+        selected = "selected" if progress_filter == value else ""
+        progress_options_html += f"<option value='{value}' {selected}>{escape(label)}</option>"
+
+    per_page_options_html = ""
+    for value in [10, 15, 25, 50]:
+        selected = "selected" if per_page == value else ""
+        per_page_options_html += f"<option value='{value}' {selected}>{value} rows</option>"
+
+    def parent_reports_url(page_value):
+        query = {
+            "month": month,
+            "q": q,
+            "grade": grade_filter,
+            "progress": progress_filter,
+            "per_page": per_page,
+            "page": page_value
+        }
+        query = {k: v for k, v in query.items() if str(v) != ""}
+        return url_for("aqm_parent_reports") + "?" + urlencode(query)
+
+    prev_link = ""
+    next_link = ""
+
+    if page_num > 1:
+        prev_link = f"""
+        <a class="btn mini secondary" href="{parent_reports_url(page_num - 1)}">
+            Previous
+        </a>
+        """
+
+    if page_num < total_pages:
+        next_link = f"""
+        <a class="btn mini secondary" href="{parent_reports_url(page_num + 1)}">
+            Next
+        </a>
+        """
+
+    pagination_html = f"""
+    <div class="toolbar" style="margin-top:12px;align-items:center;justify-content:space-between;gap:10px;">
+        <div class="toolbar" style="gap:8px;">
+            {prev_link}
+            <span class="chip">Page {page_num} of {total_pages}</span>
+            {next_link}
+        </div>
+
+        <div class="mini muted">
+            Showing {len(page_records)} of {total_records} filtered learners.
+        </div>
+    </div>
+    """
+
+    conn.close()
+
+    body = f"""
+    {aqm_nav()}
+
+    <style>
+        .aqm-report-sent-row {{
+            background:#ecfdf3 !important;
+            border-left:6px solid #16a34a;
+        }}
+
+        .aqm-report-sent-row td {{
+            background:#ecfdf3 !important;
+        }}
+
+        .sent-label {{
+            color:#166534;
+            font-weight:800;
+            margin-top:4px;
+        }}
+
+        .report-preview-box {{
+            white-space:pre-wrap;
+            background:#f8fafc;
+            border:1px solid #e5e7eb;
+            border-radius:14px;
+            padding:14px;
+            margin-top:12px;
+            display:none;
+            max-height:360px;
+            overflow:auto;
+        }}
+
+        .aqm-report-filter-cards {{
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+            gap:10px;
+            margin:14px 0;
+        }}
+
+        .aqm-report-filter-card {{
+            background:#ffffff;
+            border:1px solid #e5e7eb;
+            border-radius:14px;
+            padding:12px;
+            box-shadow:0 2px 8px rgba(15,23,42,0.05);
+        }}
+
+        .aqm-report-filter-card strong {{
+            display:block;
+            font-size:20px;
+            color:#1b5e20;
+        }}
+
+        .aqm-report-filter-card span {{
+            color:#64748b;
+            font-size:12px;
+            font-weight:700;
+        }}
+    </style>
+
+    <section class="card">
+        <h1>AQM Parent Reports</h1>
+
+        <p class="muted">
+            This section allows AQM to filter learners by academic category, preview parent reports,
+            and send drafted academic progress reports through WhatsApp.
+        </p>
+
+        <div class="aqm-report-filter-cards">
+            <div class="aqm-report-filter-card"><strong>{counts['all']}</strong><span>Everyone</span></div>
+            <div class="aqm-report-filter-card"><strong>{counts['high_risk']}</strong><span>At Risk</span></div>
+            <div class="aqm-report-filter-card"><strong>{counts['average']}</strong><span>Average</span></div>
+            <div class="aqm-report-filter-card"><strong>{counts['top']}</strong><span>Top Achievers</span></div>
+            <div class="aqm-report-filter-card"><strong>{counts['sent']}</strong><span>Reports Sent</span></div>
+        </div>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search learner, guardian phone, school or subject">
+
+            <select name="grade">
+                {grade_options}
+            </select>
+
+            <select name="progress">
+                {progress_options_html}
+            </select>
+
+            <select name="per_page">
+                {per_page_options_html}
+            </select>
+
+            <input type="hidden" name="page" value="1">
+
+            <button class="btn mini success">Apply Filters</button>
+            <a class="btn mini secondary" href="{url_for('aqm_parent_reports')}">Clear</a>
+        </form>
+
+        <div id="reportPreview" class="report-preview-box"></div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Send Parent / Guardian Reports</h2>
+
+            <div class="mini muted" style="margin-bottom:10px">
+                Showing page {page_num} of {total_pages}. Displaying {len(page_records)} record(s) from {total_records} filtered learner(s).
+            </div>
+
+            <div class="scroll-x">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Learner</th>
+                            <th>Grade</th>
+                            <th>Status</th>
+                            <th>Engagement</th>
+                            <th>Marks</th>
+                            <th>Academic Notes</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {rows or "<tr><td colspan='7'>No learners found for the selected filters.</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+
+            {pagination_html}
+        </div>
+    </section>
+
+    <script>
+        function sendAqmParentReport(studentId, whatsappUrl) {{
+            fetch("/aqm/parent-report/" + studentId + "/mark-sent?month={escape(month)}", {{
+                method: "POST"
+            }})
+            .then(function(response) {{
+                if (!response.ok) {{
+                    throw new Error("Could not mark report as sent.");
+                }}
+
+                const row = document.getElementById("report-row-" + studentId);
+
+                if (row) {{
+                    row.classList.add("aqm-report-sent-row");
+                }}
+
+                window.open(whatsappUrl, "_blank");
+            }})
+            .catch(function(error) {{
+                alert("Could not mark report as sent. Please try again.");
+            }});
+        }}
+
+        function previewAqmReport(message) {{
+            const box = document.getElementById("reportPreview");
+            box.style.display = "block";
+            box.textContent = message;
+            box.scrollIntoView({{ behavior: "smooth", block: "center" }});
+        }}
+    </script>
+    """
+
+    return page("AQM Parent Reports", body)
+    
+@app.post('/aqm/parent-report/<int:student_id>/mark-sent')
+def aqm_parent_report_mark_sent(student_id):
+
+    r = require_aqm()
+    if r:
+        return {"ok": False, "message": "Not authorised"}, 401
+
+    month = request.args.get("month") or get_setting("current_month")
+    aqm_id = session.get("aqm_id")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT guardian_phone, phone_whatsapp
+        FROM students
+        WHERE id=?
+        LIMIT 1
+    """, (student_id,))
+
+    student = cur.fetchone()
+
+    if not student:
+        conn.close()
+        return {"ok": False, "message": "Student not found"}, 404
+
+    sent_to = student["guardian_phone"] or student["phone_whatsapp"]
+
+    cur.execute("""
+        INSERT INTO aqm_parent_report_logs(
+            student_id,
+            month,
+            sent_to,
+            sent_by_aqm_id,
+            sent_at,
+            message_body
+        )
+        VALUES(?,?,?,?,?,?)
+        ON CONFLICT(student_id, month)
+        DO UPDATE SET
+            sent_to=excluded.sent_to,
+            sent_by_aqm_id=excluded.sent_by_aqm_id,
+            sent_at=excluded.sent_at,
+            message_body=excluded.message_body
+    """, (
+        student_id,
+        month,
+        sent_to,
+        aqm_id,
+        now_utc_iso(),
+        "Academic progress report sent via WhatsApp."
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return {"ok": True}    
+    
 
 @app.get('/aqm/assignments')
 def aqm_assignments():
