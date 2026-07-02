@@ -2048,6 +2048,74 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_assessment_delete_locks_tutor ON assessment_delete_locks(tutor_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_assessment_delete_locks_active ON assessment_delete_locks(is_active)")
 
+    # ================= LEARNING GAMES / STUDY ARCADE =================
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS learning_game_questions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        subject_id INTEGER NOT NULL,
+        grade TEXT NOT NULL,
+
+        topic TEXT NOT NULL,
+        game_type TEXT NOT NULL,
+        difficulty TEXT NOT NULL DEFAULT 'Easy',
+
+        question_text TEXT NOT NULL,
+        options_json TEXT NOT NULL,
+        correct_index INTEGER NOT NULL,
+        explanation TEXT,
+
+        points INTEGER NOT NULL DEFAULT 1,
+
+        created_by_tutor_id INTEGER,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+        FOREIGN KEY(created_by_tutor_id) REFERENCES tutors(id) ON DELETE SET NULL
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS learning_game_results(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        student_id INTEGER NOT NULL,
+        subject_id INTEGER NOT NULL,
+        grade TEXT NOT NULL,
+
+        game_type TEXT NOT NULL,
+        difficulty TEXT NOT NULL,
+
+        score INTEGER NOT NULL DEFAULT 0,
+        total_questions INTEGER NOT NULL DEFAULT 0,
+        percentage REAL NOT NULL DEFAULT 0,
+
+        badge TEXT,
+        time_taken_seconds INTEGER NOT NULL DEFAULT 0,
+
+        topic_summary_json TEXT,
+        answer_details_json TEXT,
+
+        played_at TEXT NOT NULL,
+
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_learning_game_questions_subject ON learning_game_questions(subject_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_learning_game_questions_grade ON learning_game_questions(grade)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_learning_game_questions_game_type ON learning_game_questions(game_type)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_learning_game_questions_tutor ON learning_game_questions(created_by_tutor_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_learning_game_questions_status ON learning_game_questions(status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_learning_game_results_student ON learning_game_results(student_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_learning_game_results_subject ON learning_game_results(subject_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_learning_game_results_grade ON learning_game_results(grade)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_learning_game_results_played ON learning_game_results(played_at)")
+
     # Enrollment control defaults
     cur.execute("SELECT value FROM settings WHERE key='enrollment_open'")
     if not cur.fetchone():
@@ -2404,6 +2472,104 @@ def tutor_manager_rating_chip(avg_rating):
 
     return f"<span class='chip danger'>{rating}/5 Needs Attention</span>"
 
+
+
+# ================= LEARNING GAMES HELPERS =================
+GAME_TYPES = [
+    "Speed Quiz",
+    "Match the Concept",
+    "Boss Battle",
+    "Career Quest"
+]
+
+GAME_DIFFICULTIES = [
+    "Easy",
+    "Medium",
+    "Hard"
+]
+
+
+def learning_game_badge(percentage, game_type="Speed Quiz"):
+    """
+    Gives learners a fun badge after playing a game.
+    """
+    try:
+        percentage = float(percentage or 0)
+    except Exception:
+        percentage = 0
+
+    if percentage >= 95:
+        return "EBTA Legend"
+    if percentage >= 85:
+        return "Top Achiever"
+    if percentage >= 75:
+        return "Brain Champion"
+    if percentage >= 65:
+        return "Rising Star"
+    if percentage >= 50:
+        return "Keep Going"
+    return "Revision Warrior"
+
+
+def learning_game_status_chip(percentage):
+    try:
+        percentage = float(percentage or 0)
+    except Exception:
+        percentage = 0
+
+    if percentage >= 75:
+        return "<span class='chip active'>Strong</span>"
+    if percentage >= 50:
+        return "<span class='chip pending'>Average</span>"
+    return "<span class='chip lapsed'>Needs Support</span>"
+
+
+def learning_game_badge_emoji(badge):
+    badge = str(badge or "").lower()
+    if "legend" in badge:
+        return "🏆"
+    if "achiever" in badge:
+        return "🥇"
+    if "champion" in badge:
+        return "🧠"
+    if "rising" in badge:
+        return "⭐"
+    if "keep" in badge:
+        return "💪"
+    return "📚"
+
+
+def get_student_active_subjects(conn, student_id):
+    """
+    Returns active subjects for a learner based on the learner's selected month.
+    """
+    month = get_active_month('student') if session.get('student_id') else get_setting("current_month")
+
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT
+            s.id,
+            s.name,
+            s.grade
+        FROM enrollments e
+        JOIN subjects s ON s.id=e.subject_id
+        WHERE e.student_id=?
+          AND e.month=?
+          AND e.status='ACTIVE'
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.name
+    """, (student_id, month))
+
+    return cur.fetchall()
+
+
+def seconds_to_game_time(seconds):
+    try:
+        seconds = int(seconds or 0)
+    except Exception:
+        seconds = 0
+    minutes = seconds // 60
+    seconds = seconds % 60
+    return f"{minutes}m {seconds}s"
 
 def grade_label(g): return g.replace("G","Grade ")
 
@@ -7911,6 +8077,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("✅ Status", "#status"),
                 ("📝 Assignments", url_for('student_assignments')),
                 ("🧪 Assessments", url_for('student_assessments')),
+                ("🎮 Learning Games", url_for('student_learning_games')),
                 ("📚 Learning Materials", url_for('student_materials')),
                 ("💬 Messages", "#messages"),
                 ("📤 Upload Report", url_for('student_upload_report')),
@@ -8002,6 +8169,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("📚 My Library", url_for('tutor_uploads_library')),
                 ("📝 Assignments", url_for('tutor_home') + "#assignments"),
                 ("🧪 Assessments", url_for('tutor_assessments')),
+                ("🎮 Game Questions", url_for('tutor_learning_game_questions')),
                 ("💬 Messages", url_for('tutor_home') + "#messages"),
                 ("👥 Students", url_for('tutor_home') + "#students"),
                 ("🚪 Logout", url_for('tutor_logout'))
@@ -33166,6 +33334,7 @@ def aqm_nav():
         <a class="btn mini" href="/aqm/assignments">Assignment Completion</a>
         <a class="btn mini" href="/aqm/tutors">Tutor Work Progress</a>
         <a class="btn mini" href="/aqm/assessment-analysis">Assessment Analysis</a>
+        <a class="btn mini" href="/aqm/learning-games-analytics">Game Analytics</a>
         <a class="btn mini" href="/aqm/ratings">Student Ratings</a>
         <a class="btn mini" href="/aqm/awards">Awards</a>
         <a class="btn mini" href="/aqm/parent-reports">Parent Reports</a>
@@ -63430,6 +63599,7 @@ def cao_nav():
                 cao_link("Classes & Sessions", "cao_sessions", "cao_attendance_enabled", icon="📅"),
                 cao_link("Materials", "cao_materials", "cao_materials_enabled", icon="📚"),
                 cao_link("Assignments", "cao_assignments", "cao_assignments_enabled", icon="📝"),
+                cao_link("Game Analytics", "cao_learning_games_analytics", "cao_performance_enabled", icon="🎮"),
             ]
         ),
         (
@@ -78889,6 +79059,1260 @@ def export_remove_list():
     resp.headers['Content-Type'] = 'text/csv; charset=utf-8'
     resp.headers['Content-Disposition'] = 'attachment; filename=remove-list.csv'
     return resp
+
+
+
+# ===================== EBTA LEARNING GAMES / STUDY ARCADE =====================
+@app.get('/student/learning-games')
+def student_learning_games():
+
+    r = require_student()
+    if r:
+        return r
+
+    student_id = is_student()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    active_subjects = get_student_active_subjects(conn, student_id)
+
+    subject_options = ""
+
+    for srow in active_subjects:
+        label = f"{grade_label(srow['grade'])} {srow['name']}"
+        subject_options += f"<option value='{srow['id']}'>{escape(label)}</option>"
+
+    cur.execute("""
+        SELECT
+            lgr.*,
+            sub.name AS subject_name
+        FROM learning_game_results lgr
+        JOIN subjects sub ON sub.id=lgr.subject_id
+        WHERE lgr.student_id=?
+        ORDER BY lgr.played_at DESC
+        LIMIT 8
+    """, (student_id,))
+
+    recent_results = cur.fetchall()
+
+    cur.execute("""
+        SELECT
+            COUNT(*) AS games_played,
+            ROUND(AVG(percentage),1) AS avg_percentage,
+            MAX(percentage) AS best_percentage
+        FROM learning_game_results
+        WHERE student_id=?
+    """, (student_id,))
+
+    my_summary = cur.fetchone()
+    conn.close()
+
+    recent_html = ""
+
+    for rrow in recent_results:
+        badge = rrow['badge'] or learning_game_badge(rrow['percentage'], rrow['game_type'])
+        recent_html += f"""
+        <tr>
+            <td>{escape(rrow['subject_name'])}</td>
+            <td>{escape(rrow['game_type'])}</td>
+            <td>{rrow['score']} / {rrow['total_questions']}</td>
+            <td>{round(float(rrow['percentage'] or 0), 1)}%</td>
+            <td>{learning_game_badge_emoji(badge)} {escape(badge)}</td>
+        </tr>
+        """
+
+    game_type_options = "".join([f"<option>{escape(x)}</option>" for x in GAME_TYPES])
+    difficulty_options = "".join([f"<option>{escape(x)}</option>" for x in GAME_DIFFICULTIES])
+
+    games_played = my_summary['games_played'] or 0
+    avg_percentage = my_summary['avg_percentage'] or 0
+    best_percentage = round(float(my_summary['best_percentage'] or 0), 1)
+
+    body = f"""
+    <style>
+        .game-arcade-hero {{
+            background:
+                radial-gradient(circle at top right, rgba(255,255,255,.28), transparent 34%),
+                linear-gradient(135deg,#064e3b,#16a34a,#f59e0b);
+            color:#fff;
+            border-radius:26px;
+            padding:24px;
+            margin-bottom:16px;
+            box-shadow:0 16px 36px rgba(15,23,42,.18);
+            overflow:hidden;
+            position:relative;
+        }}
+        .game-arcade-hero:after {{
+            content:"🎮";
+            position:absolute;
+            right:22px;
+            bottom:8px;
+            font-size:74px;
+            opacity:.18;
+        }}
+        .game-mode-card {{
+            border-radius:18px;
+            border:1px solid #e5e7eb;
+            background:#fff;
+            padding:16px;
+            box-shadow:0 8px 22px rgba(15,23,42,.07);
+        }}
+        .game-mode-card .game-icon {{
+            font-size:30px;
+        }}
+        .game-stat-grid {{
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+            gap:10px;
+            margin-top:14px;
+        }}
+        .game-stat {{
+            background:rgba(255,255,255,.16);
+            border:1px solid rgba(255,255,255,.26);
+            border-radius:16px;
+            padding:12px;
+        }}
+        .game-stat strong {{font-size:24px;display:block}}
+    </style>
+
+    <section class="card">
+        <div class="game-arcade-hero">
+            <h1 style="margin-bottom:4px">EBTA Study Arcade</h1>
+            <p style="max-width:760px;margin:0">
+                Play quick CAPS-aligned games, earn badges, revise smarter and climb the leaderboard.
+            </p>
+            <div class="game-stat-grid">
+                <div class="game-stat"><strong>{games_played}</strong><span>Games played</span></div>
+                <div class="game-stat"><strong>{avg_percentage}%</strong><span>Average score</span></div>
+                <div class="game-stat"><strong>{best_percentage}%</strong><span>Best score</span></div>
+            </div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px">
+
+            <div class="card soft">
+                <h2>Start a Challenge</h2>
+                <p class="mini muted">Choose a subject, game mode and difficulty.</p>
+
+                <form method="get" action="{url_for('student_learning_game_play')}">
+                    <label>Subject</label>
+                    <select name="subject_id" required>
+                        {subject_options or "<option value=''>No active subjects found</option>"}
+                    </select>
+
+                    <label>Game Type</label>
+                    <select name="game_type" required>
+                        {game_type_options}
+                    </select>
+
+                    <label>Difficulty</label>
+                    <select name="difficulty" required>
+                        {difficulty_options}
+                    </select>
+
+                    <button class="btn success" style="margin-top:12px">
+                        Start Game
+                    </button>
+                </form>
+            </div>
+
+            <div class="card soft">
+                <h2>Game Modes</h2>
+                <div class="grid" style="grid-template-columns:1fr;gap:10px">
+                    <div class="game-mode-card"><div class="game-icon">⚡</div><strong>Speed Quiz</strong><div class="mini muted">Answer quickly before time runs out.</div></div>
+                    <div class="game-mode-card"><div class="game-icon">🧩</div><strong>Match the Concept</strong><div class="mini muted">Match definitions, terms and key CAPS concepts.</div></div>
+                    <div class="game-mode-card"><div class="game-icon">👾</div><strong>Boss Battle</strong><div class="mini muted">Finish normal questions then defeat harder revision questions.</div></div>
+                    <div class="game-mode-card"><div class="game-icon">🚀</div><strong>Career Quest</strong><div class="mini muted">Connect subjects with future career pathways.</div></div>
+                </div>
+            </div>
+
+            <div class="card soft" style="grid-column:1/-1">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+                    <h2 style="margin:0">Your Recent Games</h2>
+                    <a class="btn mini secondary" href="{url_for('student_learning_game_leaderboard')}">View Leaderboard</a>
+                </div>
+
+                <div class="scroll-x" style="margin-top:12px">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Subject</th>
+                                <th>Game</th>
+                                <th>Score</th>
+                                <th>%</th>
+                                <th>Badge</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {recent_html or "<tr><td colspan='5'>No games played yet.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("Learning Games", body)
+
+
+@app.get('/student/learning-games/play')
+def student_learning_game_play():
+
+    r = require_student()
+    if r:
+        return r
+
+    student_id = is_student()
+
+    subject_id = request.args.get("subject_id", "").strip()
+    game_type = request.args.get("game_type", "Speed Quiz").strip()
+    difficulty = request.args.get("difficulty", "Easy").strip()
+
+    if game_type not in GAME_TYPES:
+        game_type = "Speed Quiz"
+
+    if difficulty not in GAME_DIFFICULTIES:
+        difficulty = "Easy"
+
+    if not subject_id or not subject_id.isdigit():
+        return page("Missing Subject", card_msg("Please choose a subject first."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    active_month = get_active_month('student')
+
+    cur.execute("""
+        SELECT s.*
+        FROM subjects s
+        JOIN enrollments e ON e.subject_id=s.id
+        WHERE s.id=?
+          AND e.student_id=?
+          AND e.month=?
+          AND e.status='ACTIVE'
+        LIMIT 1
+    """, (subject_id, student_id, active_month))
+
+    subject = cur.fetchone()
+
+    if not subject:
+        conn.close()
+        return page("Access Denied", card_msg("You can only play games for your active subjects."))
+
+    question_limit = 12 if game_type == "Boss Battle" else 10
+    if difficulty == "Easy":
+        time_limit = 180
+    elif difficulty == "Medium":
+        time_limit = 150
+    else:
+        time_limit = 120
+
+    cur.execute("""
+        SELECT *
+        FROM learning_game_questions
+        WHERE subject_id=?
+          AND grade=?
+          AND game_type=?
+          AND difficulty=?
+          AND status='ACTIVE'
+        ORDER BY RANDOM()
+        LIMIT ?
+    """, (
+        subject_id,
+        subject["grade"],
+        game_type,
+        difficulty,
+        question_limit
+    ))
+
+    questions = cur.fetchall()
+    conn.close()
+
+    if not questions:
+        return page(
+            "No Questions Yet",
+            card_msg("There are no game questions for this subject, game type and difficulty yet. Please try another option or ask the tutor to add questions.")
+        )
+
+    question_html = ""
+
+    for index, qrow in enumerate(questions, start=1):
+        try:
+            options = json.loads(qrow["options_json"] or "[]")
+        except Exception:
+            options = []
+
+        option_html = ""
+
+        for opt_index, opt in enumerate(options):
+            option_html += f"""
+            <label class="game-option">
+                <input type="radio" name="q_{qrow['id']}" value="{opt_index}">
+                <span>{escape(opt)}</span>
+            </label>
+            """
+
+        boss_badge = ""
+        if game_type == "Boss Battle" and index == len(questions):
+            boss_badge = "<span class='chip warn'>Boss Question</span>"
+
+        question_html += f"""
+        <div class="game-question-card">
+            <div class="mini muted">Question {index} · {escape(qrow['topic'])} {boss_badge}</div>
+            <h3>{escape(qrow['question_text'])}</h3>
+            {option_html}
+        </div>
+        """
+
+    question_ids = ",".join([str(qrow["id"]) for qrow in questions])
+
+    body = f"""
+    <style>
+        .game-hero {{
+            background:linear-gradient(135deg,#064e3b,#16a34a,#f59e0b);
+            color:white;
+            border-radius:24px;
+            padding:20px;
+            margin-bottom:16px;
+            box-shadow:0 14px 32px rgba(20,83,45,.22);
+            position:sticky;
+            top:10px;
+            z-index:5;
+        }}
+        .game-timer {{
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            background:rgba(255,255,255,.18);
+            padding:8px 12px;
+            border-radius:999px;
+            font-weight:800;
+        }}
+        .game-question-card {{
+            background:#ffffff;
+            border:1px solid #e5e7eb;
+            border-radius:18px;
+            padding:16px;
+            margin-bottom:14px;
+            box-shadow:0 8px 22px rgba(15,23,42,.06);
+        }}
+        .game-option {{
+            display:flex;
+            gap:10px;
+            align-items:center;
+            padding:10px 12px;
+            border:1px solid #e5e7eb;
+            border-radius:12px;
+            margin:8px 0;
+            cursor:pointer;
+            background:#f8fafc;
+            transition:.18s ease;
+        }}
+        .game-option:hover {{
+            border-color:#22c55e;
+            background:#ecfdf3;
+            transform:translateY(-1px);
+        }}
+    </style>
+
+    <section class="card">
+        <div class="game-hero">
+            <h1>{escape(game_type)}</h1>
+            <p>{grade_label(subject['grade'])} {escape(subject['name'])} · {escape(difficulty)}</p>
+            <div class="game-timer">
+                Time left: <span id="gameTimer">{time_limit}</span>s
+            </div>
+        </div>
+
+        <form method="post" action="{url_for('student_learning_game_submit')}" id="gameForm">
+            <input type="hidden" name="subject_id" value="{escape(str(subject_id))}">
+            <input type="hidden" name="game_type" value="{escape(game_type)}">
+            <input type="hidden" name="difficulty" value="{escape(difficulty)}">
+            <input type="hidden" name="question_ids" value="{escape(question_ids)}">
+            <input type="hidden" name="time_taken_seconds" id="timeTaken" value="0">
+
+            {question_html}
+
+            <button class="btn success">
+                Submit Game
+            </button>
+        </form>
+    </section>
+
+    <script>
+        let totalSeconds = {time_limit};
+        let secondsLeft = totalSeconds;
+        const timerBox = document.getElementById("gameTimer");
+        const timeTaken = document.getElementById("timeTaken");
+        const gameForm = document.getElementById("gameForm");
+
+        const timer = setInterval(function() {{
+            secondsLeft -= 1;
+            timerBox.textContent = secondsLeft;
+            timeTaken.value = totalSeconds - secondsLeft;
+
+            if (secondsLeft <= 0) {{
+                clearInterval(timer);
+                gameForm.submit();
+            }}
+        }}, 1000);
+    </script>
+    """
+
+    return page("Play Learning Game", body)
+
+
+@app.post('/student/learning-games/submit')
+def student_learning_game_submit():
+
+    r = require_student()
+    if r:
+        return r
+
+    student_id = is_student()
+
+    subject_id = request.form.get("subject_id", "").strip()
+    game_type = request.form.get("game_type", "Speed Quiz").strip()
+    difficulty = request.form.get("difficulty", "Easy").strip()
+    question_ids_raw = request.form.get("question_ids", "").strip()
+    time_taken_seconds = request.form.get("time_taken_seconds", "0").strip()
+
+    try:
+        time_taken_seconds = int(time_taken_seconds)
+    except Exception:
+        time_taken_seconds = 0
+
+    question_ids = []
+
+    for x in question_ids_raw.split(","):
+        x = x.strip()
+        if x.isdigit():
+            question_ids.append(int(x))
+
+    if not question_ids:
+        return page("No Questions", card_msg("No questions were submitted."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    active_month = get_active_month('student')
+
+    cur.execute("""
+        SELECT s.grade
+        FROM subjects s
+        JOIN enrollments e ON e.subject_id=s.id
+        WHERE s.id=?
+          AND e.student_id=?
+          AND e.month=?
+          AND e.status='ACTIVE'
+        LIMIT 1
+    """, (subject_id, student_id, active_month))
+
+    subject = cur.fetchone()
+
+    if not subject:
+        conn.close()
+        return page("Access Denied", card_msg("You can only submit games for your active subjects."))
+
+    qmarks = ",".join("?" * len(question_ids))
+
+    cur.execute(f"""
+        SELECT *
+        FROM learning_game_questions
+        WHERE id IN ({qmarks})
+          AND subject_id=?
+          AND status='ACTIVE'
+    """, question_ids + [subject_id])
+
+    questions = cur.fetchall()
+
+    score = 0
+    total_questions = len(questions)
+    answer_details = []
+    topic_summary = {}
+
+    for qrow in questions:
+        selected_raw = request.form.get(f"q_{qrow['id']}", "")
+
+        try:
+            selected_index = int(selected_raw)
+        except Exception:
+            selected_index = -1
+
+        correct_index = int(qrow["correct_index"])
+        is_correct = selected_index == correct_index
+
+        if is_correct:
+            score += int(qrow["points"] or 1)
+
+        topic = qrow["topic"] or "General"
+
+        if topic not in topic_summary:
+            topic_summary[topic] = {"correct": 0, "total": 0}
+
+        topic_summary[topic]["total"] += 1
+
+        if is_correct:
+            topic_summary[topic]["correct"] += 1
+
+        answer_details.append({
+            "question_id": qrow["id"],
+            "topic": topic,
+            "selected_index": selected_index,
+            "correct_index": correct_index,
+            "is_correct": is_correct
+        })
+
+    percentage = round((score / total_questions) * 100, 1) if total_questions else 0
+    badge = learning_game_badge(percentage, game_type)
+
+    cur.execute("""
+        INSERT INTO learning_game_results(
+            student_id,
+            subject_id,
+            grade,
+            game_type,
+            difficulty,
+            score,
+            total_questions,
+            percentage,
+            badge,
+            time_taken_seconds,
+            topic_summary_json,
+            answer_details_json,
+            played_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        student_id,
+        subject_id,
+        subject["grade"],
+        game_type,
+        difficulty,
+        score,
+        total_questions,
+        percentage,
+        badge,
+        time_taken_seconds,
+        json.dumps(topic_summary),
+        json.dumps(answer_details),
+        now_utc_iso()
+    ))
+
+    result_id = cur.lastrowid
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("student_learning_game_result", result_id=result_id))
+
+
+@app.get('/student/learning-games/result/<int:result_id>')
+def student_learning_game_result(result_id):
+
+    r = require_student()
+    if r:
+        return r
+
+    student_id = is_student()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            lgr.*,
+            sub.name AS subject_name
+        FROM learning_game_results lgr
+        JOIN subjects sub ON sub.id=lgr.subject_id
+        WHERE lgr.id=?
+          AND lgr.student_id=?
+        LIMIT 1
+    """, (result_id, student_id))
+
+    result = cur.fetchone()
+    conn.close()
+
+    if not result:
+        return page("Result Not Found", card_msg("This game result could not be found."))
+
+    badge = result["badge"] or "Revision Warrior"
+    percentage = round(float(result["percentage"] or 0), 1)
+    emoji = learning_game_badge_emoji(badge)
+
+    body = f"""
+    <section class="card">
+        <div style="text-align:center;padding:28px;background:linear-gradient(135deg,#f8fafc,#ecfdf3);border-radius:24px">
+            <div style="font-size:68px">{emoji}</div>
+            <h1>{escape(badge)}</h1>
+
+            <p class="muted">
+                {grade_label(result['grade'])} {escape(result['subject_name'])} · {escape(result['game_type'])} · {escape(result['difficulty'])}
+            </p>
+
+            <h2>{result['score']} / {result['total_questions']}</h2>
+            <h1>{percentage}%</h1>
+
+            {learning_game_status_chip(percentage)}
+
+            <p class="mini muted" style="margin-top:10px">
+                Time taken: {seconds_to_game_time(result['time_taken_seconds'])}
+            </p>
+
+            <div style="margin-top:18px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+                <a class="btn success" href="{url_for('student_learning_games')}">
+                    Play Another Game
+                </a>
+
+                <a class="btn secondary" href="{url_for('student_learning_game_leaderboard')}">
+                    View Leaderboard
+                </a>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("Game Result", body)
+
+
+@app.get('/student/learning-games/leaderboard')
+def student_learning_game_leaderboard():
+
+    r = require_student()
+    if r:
+        return r
+
+    month = request.args.get("month") or datetime.date.today().strftime("%Y-%m")
+    subject_id = request.args.get("subject_id", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    where = ["substr(lgr.played_at,1,7)=?"]
+    params = [month]
+
+    if subject_id:
+        where.append("lgr.subject_id=?")
+        params.append(subject_id)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT
+            st.full_name,
+            sub.name AS subject_name,
+            lgr.grade,
+            MAX(lgr.percentage) AS best_percentage,
+            COUNT(lgr.id) AS games_played,
+            AVG(lgr.percentage) AS avg_percentage
+        FROM learning_game_results lgr
+        JOIN students st ON st.id=lgr.student_id
+        JOIN subjects sub ON sub.id=lgr.subject_id
+        {where_sql}
+        GROUP BY st.id, sub.id
+        ORDER BY best_percentage DESC, games_played DESC
+        LIMIT 25
+    """, params)
+
+    leaders = cur.fetchall()
+
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
+    """)
+
+    subjects = cur.fetchall()
+    conn.close()
+
+    subject_options = '<option value="">All Subjects</option>'
+
+    for srow in subjects:
+        selected = "selected" if subject_id == str(srow["id"]) else ""
+        subject_options += f"<option value='{srow['id']}' {selected}>{grade_label(srow['grade'])} {escape(srow['name'])}</option>"
+
+    rows = ""
+
+    for index, item in enumerate(leaders, start=1):
+        medal = "🥇" if index == 1 else "🥈" if index == 2 else "🥉" if index == 3 else index
+
+        rows += f"""
+        <tr>
+            <td>{medal}</td>
+            <td>{escape(item['full_name'])}</td>
+            <td>{grade_label(item['grade'])} {escape(item['subject_name'])}</td>
+            <td>{round(float(item['best_percentage'] or 0), 1)}%</td>
+            <td>{item['games_played']}</td>
+            <td>{round(float(item['avg_percentage'] or 0), 1)}%</td>
+        </tr>
+        """
+
+    body = f"""
+    <section class="card">
+        <h1>EBTA Games Leaderboard</h1>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+
+            <select name="subject_id">
+                {subject_options}
+            </select>
+
+            <button class="btn mini success">Filter</button>
+            <a class="btn mini secondary" href="{url_for('student_learning_game_leaderboard')}">Clear</a>
+        </form>
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Learner</th>
+                        <th>Subject</th>
+                        <th>Best Score</th>
+                        <th>Games Played</th>
+                        <th>Average</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {rows or "<tr><td colspan='6'>No leaderboard records yet.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Games Leaderboard", body)
+
+
+@app.get('/tutor/learning-game-questions')
+def tutor_learning_game_questions():
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tutor_id = is_tutor()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT s.id, s.name, s.grade
+        FROM tutor_subjects ts
+        JOIN subjects s ON s.id=ts.subject_id
+        WHERE ts.tutor_id=?
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.name
+    """, (tutor_id,))
+
+    subjects = cur.fetchall()
+
+    cur.execute("""
+        SELECT
+            lgq.*,
+            s.name AS subject_name
+        FROM learning_game_questions lgq
+        JOIN subjects s ON s.id=lgq.subject_id
+        WHERE lgq.created_by_tutor_id=?
+        ORDER BY lgq.created_at DESC
+        LIMIT 80
+    """, (tutor_id,))
+
+    questions = cur.fetchall()
+    conn.close()
+
+    subject_options = ""
+
+    for srow in subjects:
+        subject_options += f"<option value='{srow['id']}'>{grade_label(srow['grade'])} {escape(srow['name'])}</option>"
+
+    game_type_options = "".join([f"<option>{escape(x)}</option>" for x in GAME_TYPES])
+    difficulty_options = "".join([f"<option>{escape(x)}</option>" for x in GAME_DIFFICULTIES])
+
+    rows = ""
+
+    for qrow in questions:
+        toggle_label = "Deactivate" if qrow['status'] == "ACTIVE" else "Activate"
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape((qrow['question_text'] or '')[:90])}</strong>
+                <div class="mini muted">{escape(qrow['explanation'] or '')[:90]}</div>
+            </td>
+            <td>{grade_label(qrow['grade'])} {escape(qrow['subject_name'])}</td>
+            <td>{escape(qrow['topic'])}</td>
+            <td>{escape(qrow['game_type'])}</td>
+            <td>{escape(qrow['difficulty'])}</td>
+            <td><span class="chip {'active' if qrow['status']=='ACTIVE' else 'lapsed'}">{escape(qrow['status'])}</span></td>
+            <td>
+                <form method="post" action="{url_for('tutor_learning_game_question_toggle', question_id=qrow['id'])}" style="display:inline">
+                    <button class="btn mini secondary">{toggle_label}</button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    <section class="card">
+        <h1>Learning Game Questions</h1>
+        <p class="muted">Add CAPS-aligned questions that learners can play in the EBTA Study Arcade.</p>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px">
+
+            <div class="card soft">
+                <h2>Add CAPS Question</h2>
+
+                <form method="post" action="{url_for('tutor_learning_game_question_add')}">
+                    <label>Subject</label>
+                    <select name="subject_id" required>
+                        {subject_options or "<option value=''>No assigned subjects found</option>"}
+                    </select>
+
+                    <label>CAPS Topic</label>
+                    <input name="topic" placeholder="Example: Algebra, Newton's Laws, Photosynthesis" required>
+
+                    <label>Game Type</label>
+                    <select name="game_type" required>
+                        {game_type_options}
+                    </select>
+
+                    <label>Difficulty</label>
+                    <select name="difficulty" required>
+                        {difficulty_options}
+                    </select>
+
+                    <label>Question</label>
+                    <textarea name="question_text" required></textarea>
+
+                    <label>Option A</label>
+                    <input name="option_a" required>
+
+                    <label>Option B</label>
+                    <input name="option_b" required>
+
+                    <label>Option C</label>
+                    <input name="option_c" required>
+
+                    <label>Option D</label>
+                    <input name="option_d" required>
+
+                    <label>Correct Answer</label>
+                    <select name="correct_index" required>
+                        <option value="0">A</option>
+                        <option value="1">B</option>
+                        <option value="2">C</option>
+                        <option value="3">D</option>
+                    </select>
+
+                    <label>Explanation</label>
+                    <textarea name="explanation" placeholder="Explain why the answer is correct"></textarea>
+
+                    <button class="btn success" style="margin-top:12px">
+                        Add Question
+                    </button>
+                </form>
+            </div>
+
+            <div class="card soft">
+                <h2>My Game Questions</h2>
+
+                <div class="scroll-x">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Question</th>
+                                <th>Subject</th>
+                                <th>Topic</th>
+                                <th>Game</th>
+                                <th>Difficulty</th>
+                                <th>Status</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows or "<tr><td colspan='7'>No questions added yet.</td></tr>"}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </section>
+    """
+
+    return page("Game Questions", body)
+
+
+@app.post('/tutor/learning-game-questions/add')
+def tutor_learning_game_question_add():
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tutor_id = is_tutor()
+
+    subject_id = request.form.get("subject_id", "").strip()
+    topic = request.form.get("topic", "").strip()
+    game_type = request.form.get("game_type", "").strip()
+    difficulty = request.form.get("difficulty", "").strip()
+    question_text = request.form.get("question_text", "").strip()
+    explanation = request.form.get("explanation", "").strip()
+
+    options = [
+        request.form.get("option_a", "").strip(),
+        request.form.get("option_b", "").strip(),
+        request.form.get("option_c", "").strip(),
+        request.form.get("option_d", "").strip()
+    ]
+
+    try:
+        correct_index = int(request.form.get("correct_index", "0"))
+    except Exception:
+        correct_index = 0
+
+    if game_type not in GAME_TYPES:
+        game_type = "Speed Quiz"
+
+    if difficulty not in GAME_DIFFICULTIES:
+        difficulty = "Easy"
+
+    if not subject_id or not topic or not question_text or any(not x for x in options):
+        return page("Missing Information", card_msg("Please complete all required fields."))
+
+    if correct_index < 0 or correct_index > 3:
+        return page("Invalid Answer", card_msg("Please select a valid correct answer."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT s.grade
+        FROM tutor_subjects ts
+        JOIN subjects s ON s.id=ts.subject_id
+        WHERE ts.tutor_id=?
+          AND ts.subject_id=?
+        LIMIT 1
+    """, (tutor_id, subject_id))
+
+    allowed = cur.fetchone()
+
+    if not allowed:
+        conn.close()
+        return page("Access Denied", card_msg("You can only add questions for your assigned subjects."))
+
+    cur.execute("""
+        INSERT INTO learning_game_questions(
+            subject_id,
+            grade,
+            topic,
+            game_type,
+            difficulty,
+            question_text,
+            options_json,
+            correct_index,
+            explanation,
+            points,
+            created_by_tutor_id,
+            status,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        subject_id,
+        allowed["grade"],
+        topic,
+        game_type,
+        difficulty,
+        question_text,
+        json.dumps(options),
+        correct_index,
+        explanation,
+        1,
+        tutor_id,
+        "ACTIVE",
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("tutor_learning_game_questions"))
+
+
+@app.post('/tutor/learning-game-questions/<int:question_id>/toggle')
+def tutor_learning_game_question_toggle(question_id):
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tutor_id = is_tutor()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT status
+        FROM learning_game_questions
+        WHERE id=?
+          AND created_by_tutor_id=?
+        LIMIT 1
+    """, (question_id, tutor_id))
+
+    question = cur.fetchone()
+
+    if not question:
+        conn.close()
+        return page("Not Found", card_msg("This question could not be found."))
+
+    new_status = "INACTIVE" if question["status"] == "ACTIVE" else "ACTIVE"
+
+    cur.execute("""
+        UPDATE learning_game_questions
+        SET status=?, updated_at=?
+        WHERE id=?
+          AND created_by_tutor_id=?
+    """, (new_status, now_utc_iso(), question_id, tutor_id))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("tutor_learning_game_questions"))
+
+
+def learning_games_analytics_body(role_label):
+    month = request.args.get("month") or datetime.date.today().strftime("%Y-%m")
+    grade = request.args.get("grade", "").strip()
+    subject_id = request.args.get("subject_id", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    where = ["substr(lgr.played_at,1,7)=?"]
+    params = [month]
+
+    if grade:
+        where.append("lgr.grade=?")
+        params.append(grade)
+
+    if subject_id:
+        where.append("lgr.subject_id=?")
+        params.append(subject_id)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT
+            COUNT(*) AS games_played,
+            COUNT(DISTINCT student_id) AS active_learners,
+            ROUND(AVG(percentage),1) AS avg_percentage,
+            MAX(percentage) AS best_percentage
+        FROM learning_game_results lgr
+        {where_sql}
+    """, params)
+
+    summary = cur.fetchone()
+
+    cur.execute(f"""
+        SELECT
+            sub.name AS subject_name,
+            lgr.grade,
+            COUNT(*) AS games_played,
+            ROUND(AVG(lgr.percentage),1) AS avg_percentage
+        FROM learning_game_results lgr
+        JOIN subjects sub ON sub.id=lgr.subject_id
+        {where_sql}
+        GROUP BY sub.id, lgr.grade
+        ORDER BY games_played DESC
+    """, params)
+
+    subject_rows = cur.fetchall()
+
+    cur.execute(f"""
+        SELECT
+            st.full_name,
+            COUNT(*) AS games_played,
+            ROUND(AVG(lgr.percentage),1) AS avg_percentage,
+            MAX(lgr.percentage) AS best_percentage
+        FROM learning_game_results lgr
+        JOIN students st ON st.id=lgr.student_id
+        {where_sql}
+        GROUP BY st.id
+        ORDER BY games_played DESC, avg_percentage DESC
+        LIMIT 20
+    """, params)
+
+    learner_rows = cur.fetchall()
+
+    cur.execute(f"""
+        SELECT
+            topic.key AS topic_name,
+            COUNT(*) AS result_count
+        FROM learning_game_results lgr,
+             json_each(lgr.topic_summary_json) AS topic
+        {where_sql}
+        GROUP BY topic.key
+        ORDER BY result_count DESC
+        LIMIT 20
+    """, params)
+
+    topic_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
+    """)
+
+    subjects = cur.fetchall()
+    conn.close()
+
+    subject_html = ""
+
+    for row in subject_rows:
+        subject_html += f"""
+        <tr>
+            <td>{grade_label(row['grade'])} {escape(row['subject_name'])}</td>
+            <td>{row['games_played']}</td>
+            <td>{row['avg_percentage'] or 0}%</td>
+        </tr>
+        """
+
+    learner_html = ""
+
+    for row in learner_rows:
+        learner_html += f"""
+        <tr>
+            <td>{escape(row['full_name'])}</td>
+            <td>{row['games_played']}</td>
+            <td>{row['avg_percentage'] or 0}%</td>
+            <td>{round(float(row['best_percentage'] or 0),1)}%</td>
+        </tr>
+        """
+
+    topic_html = ""
+
+    for row in topic_rows:
+        topic_html += f"""
+        <tr>
+            <td>{escape(row['topic_name'])}</td>
+            <td>{row['result_count']}</td>
+        </tr>
+        """
+
+    grade_options = '<option value="">All Grades</option>'
+
+    for grow in ["G8", "G9", "G10", "G11", "G12", "G13"]:
+        selected = "selected" if grade == grow else ""
+        grade_options += f"<option value='{grow}' {selected}>{grade_label(grow)}</option>"
+
+    subject_options = '<option value="">All Subjects</option>'
+
+    for srow in subjects:
+        selected = "selected" if subject_id == str(srow["id"]) else ""
+        subject_options += f"<option value='{srow['id']}' {selected}>{grade_label(srow['grade'])} {escape(srow['name'])}</option>"
+
+    body = f"""
+    <section class="card">
+        <h1>{escape(role_label)} Learning Games Analytics</h1>
+        <p class="muted">Track learner engagement, leaderboard activity and topic participation from the EBTA Study Arcade.</p>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+
+            <select name="grade">
+                {grade_options}
+            </select>
+
+            <select name="subject_id">
+                {subject_options}
+            </select>
+
+            <button class="btn mini success">Filter</button>
+            <a class="btn mini secondary" href="{request.path}">Clear</a>
+        </form>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-top:14px">
+            <div class="card soft"><div class="mini muted">Games Played</div><h2>{summary['games_played'] or 0}</h2></div>
+            <div class="card soft"><div class="mini muted">Active Learners</div><h2>{summary['active_learners'] or 0}</h2></div>
+            <div class="card soft"><div class="mini muted">Average Score</div><h2>{summary['avg_percentage'] or 0}%</h2></div>
+            <div class="card soft"><div class="mini muted">Best Score</div><h2>{round(float(summary['best_percentage'] or 0),1)}%</h2></div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
+
+            <div class="card soft">
+                <h2>Subject Engagement</h2>
+                <div class="scroll-x">
+                    <table>
+                        <thead><tr><th>Subject</th><th>Games</th><th>Average</th></tr></thead>
+                        <tbody>{subject_html or "<tr><td colspan='3'>No data yet.</td></tr>"}</tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Most Active Learners</h2>
+                <div class="scroll-x">
+                    <table>
+                        <thead><tr><th>Learner</th><th>Games</th><th>Average</th><th>Best</th></tr></thead>
+                        <tbody>{learner_html or "<tr><td colspan='4'>No data yet.</td></tr>"}</tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Topic Activity</h2>
+                <p class="mini muted">Shows the topics learners are attempting most often.</p>
+                <div class="scroll-x">
+                    <table>
+                        <thead><tr><th>Topic</th><th>Attempts</th></tr></thead>
+                        <tbody>{topic_html or "<tr><td colspan='2'>No topic data yet.</td></tr>"}</tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </section>
+    """
+
+    return body
+
+
+@app.get('/aqm/learning-games-analytics')
+def aqm_learning_games_analytics():
+
+    r = require_aqm()
+    if r:
+        return r
+
+    body = f"""
+    {aqm_nav()}
+    {learning_games_analytics_body("AQM")}
+    """
+
+    return page("AQM Learning Games Analytics", body)
+
+
+@app.get('/cao/learning-games-analytics')
+def cao_learning_games_analytics():
+
+    r = require_cao_permission("cao_performance_enabled", "learning games analytics")
+    if r:
+        return r
+
+    body = f"""
+    {cao_nav()}
+    {learning_games_analytics_body("CAO")}
+    """
+
+    return page("CAO Learning Games Analytics", body)
+
 
 # --- Payfast IPN stub ---
 
