@@ -9704,13 +9704,13 @@ def home():
 
                 setTimeout(function () {
                     loader.classList.add("hide");
-                }, 80);
+                }, 250);
 
                 setTimeout(function () {
                     if (loader && loader.parentNode) {
                         loader.parentNode.removeChild(loader);
                     }
-                }, 320);
+                }, 600);
             }
 
             if (document.readyState === "loading") {
