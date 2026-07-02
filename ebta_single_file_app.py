@@ -7866,10 +7866,11 @@ if(location.hash && ADMIN_MAP[location.hash]){
 (function(){
 const LS = window.localStorage;
 const apply = () => {
+    if (!document.body) return;
     if (LS.getItem('ebta-wide') === '1') document.body.classList.add('wide-mode'); else document.body.classList.remove('wide-mode');
     if (LS.getItem('ebta-sidebar-collapsed') === '1') document.body.classList.add('sidebar-collapsed'); else document.body.classList.remove('sidebar-collapsed');
 };
-apply();
+if (document.body) apply();
 document.addEventListener('DOMContentLoaded', ()=>{
     apply();
     const tWide = document.getElementById('toggleWide');
@@ -9696,21 +9697,28 @@ def home():
     </div>
 
     <script>
-        window.addEventListener("load", function () {
-            const loader = document.getElementById("ebtaHomeLoader");
+        (function () {
+            function hideEbtaHomeLoader() {
+                const loader = document.getElementById("ebtaHomeLoader");
+                if (!loader) return;
 
-            setTimeout(function () {
-                if (loader) {
+                setTimeout(function () {
                     loader.classList.add("hide");
-                }
-            }, 250);
+                }, 80);
 
-            setTimeout(function () {
-                if (loader) {
-                    loader.remove();
-                }
-            }, 600);
-        });
+                setTimeout(function () {
+                    if (loader && loader.parentNode) {
+                        loader.parentNode.removeChild(loader);
+                    }
+                }, 320);
+            }
+
+            if (document.readyState === "loading") {
+                document.addEventListener("DOMContentLoaded", hideEbtaHomeLoader);
+            } else {
+                hideEbtaHomeLoader();
+            }
+        })();
     </script>
     """.replace("__EBTA_LOADER_LOGO__", escape(str(ebta_loader_logo_url or LOGO_URL), quote=True))
     
@@ -9874,6 +9882,77 @@ def home():
         <div class="mini muted" style="margin-bottom:16px;">
             Watch these videos if you need help using the EBTA Portal.
         </div>
+        <style>
+            .ebta-video-shell {{
+                position:relative;
+                width:100%;
+                aspect-ratio:16/9;
+                overflow:hidden;
+                border-radius:14px;
+                background:linear-gradient(135deg,#14532d,#1b5e20);
+                border:1px solid #e2e8f0;
+                display:flex;
+                align-items:center;
+                justify-content:center;
+                text-align:center;
+                padding:14px;
+            }}
+
+            .ebta-video-load-btn {{
+                border:none;
+                border-radius:999px;
+                padding:10px 16px;
+                background:#ffffff;
+                color:#14532d;
+                font-weight:900;
+                cursor:pointer;
+                box-shadow:0 10px 25px rgba(15,23,42,0.22);
+            }}
+
+            .ebta-video-load-btn small {{
+                display:block;
+                margin-top:3px;
+                color:#64748b;
+                font-size:11px;
+                font-weight:700;
+            }}
+
+            .ebta-video-shell iframe {{
+                position:absolute;
+                inset:0;
+                width:100%;
+                height:100%;
+                border:0;
+            }}
+        </style>
+
+        <script>
+            function loadEbtaHelpVideo(button) {{
+                const shell = button.closest(".ebta-video-shell");
+                if (!shell) return;
+
+                const videoUrl = shell.getAttribute("data-video-src");
+                if (!videoUrl) return;
+
+                shell.innerHTML = "";
+
+                const iframe = document.createElement("iframe");
+                iframe.src = videoUrl;
+                iframe.setAttribute("allow", "autoplay; fullscreen");
+                iframe.setAttribute("allowfullscreen", "true");
+                iframe.setAttribute("webkitallowfullscreen", "true");
+                iframe.setAttribute("mozallowfullscreen", "true");
+                iframe.setAttribute("loading", "lazy");
+                iframe.style.position = "absolute";
+                iframe.style.inset = "0";
+                iframe.style.width = "100%";
+                iframe.style.height = "100%";
+                iframe.style.border = "0";
+
+                shell.appendChild(iframe);
+            }}
+        </script>
+
 
         <div style="
             display:grid;
@@ -9898,30 +9977,13 @@ def home():
                     New Student Portal Enrolment Guide
                 </div>
 
-                <div style="
-                    position:relative;
-                    width:100%;
-                    aspect-ratio:16/9;
-                    overflow:hidden;
-                    border-radius:14px;
-                    background:#000;
-                    border:1px solid #e2e8f0;
-                ">
-                    <iframe
-                        src="https://drive.google.com/file/d/1UjT_-PqCdE9eCqbv30ywBxllVrBUJCh9/preview"
-                        allow="autoplay; fullscreen"
-                        allowfullscreen
-                        webkitallowfullscreen
-                        mozallowfullscreen
-                        loading="lazy"
-                        style="
-                            position:absolute;
-                            inset:0;
-                            width:100%;
-                            height:100%;
-                            border:0;
-                        ">
-                    </iframe>
+                <div class="ebta-video-shell" data-video-src="https://drive.google.com/file/d/1UjT_-PqCdE9eCqbv30ywBxllVrBUJCh9/preview">
+                    <button type="button"
+                            class="ebta-video-load-btn"
+                            onclick="loadEbtaHelpVideo(this)">
+                        ▶ Watch Video
+                        <small>Tap to load only when needed</small>
+                    </button>
                 </div>
             </div>
 
@@ -9941,30 +10003,13 @@ def home():
                     Returning Student Portal Enrolment Guide
                 </div>
 
-                <div style="
-                    position:relative;
-                    width:100%;
-                    aspect-ratio:16/9;
-                    overflow:hidden;
-                    border-radius:14px;
-                    background:#000;
-                    border:1px solid #e2e8f0;
-                ">
-                    <iframe
-                        src="https://drive.google.com/file/d/15RWp9wTETlay1-vE9hGmziSMb9NY306w/preview"
-                        allow="autoplay; fullscreen"
-                        allowfullscreen
-                        webkitallowfullscreen
-                        mozallowfullscreen
-                        loading="lazy"
-                        style="
-                            position:absolute;
-                            inset:0;
-                            width:100%;
-                            height:100%;
-                            border:0;
-                        ">
-                    </iframe>
+                <div class="ebta-video-shell" data-video-src="https://drive.google.com/file/d/15RWp9wTETlay1-vE9hGmziSMb9NY306w/preview">
+                    <button type="button"
+                            class="ebta-video-load-btn"
+                            onclick="loadEbtaHelpVideo(this)">
+                        ▶ Watch Video
+                        <small>Tap to load only when needed</small>
+                    </button>
                 </div>
             </div>
 
@@ -9984,30 +10029,13 @@ def home():
                     How to Log into Portal
                 </div>
 
-                <div style="
-                    position:relative;
-                    width:100%;
-                    aspect-ratio:16/9;
-                    overflow:hidden;
-                    border-radius:14px;
-                    background:#000;
-                    border:1px solid #e2e8f0;
-                ">
-                    <iframe
-                        src="https://drive.google.com/file/d/18J666KbFvxMY2K9PhbgDmZQOWLH-8uz4/preview"
-                        allow="autoplay; fullscreen"
-                        allowfullscreen
-                        webkitallowfullscreen
-                        mozallowfullscreen
-                        loading="lazy"
-                        style="
-                            position:absolute;
-                            inset:0;
-                            width:100%;
-                            height:100%;
-                            border:0;
-                        ">
-                    </iframe>
+                <div class="ebta-video-shell" data-video-src="https://drive.google.com/file/d/18J666KbFvxMY2K9PhbgDmZQOWLH-8uz4/preview">
+                    <button type="button"
+                            class="ebta-video-load-btn"
+                            onclick="loadEbtaHelpVideo(this)">
+                        ▶ Watch Video
+                        <small>Tap to load only when needed</small>
+                    </button>
                 </div>
             </div>
 
