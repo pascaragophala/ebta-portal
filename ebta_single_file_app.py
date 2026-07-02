@@ -9494,7 +9494,10 @@ def home():
     </a>
     """
     
+    ebta_loader_logo_url = LOGO_URL
+    
     enrollment_loader_html = """
+
     <style>
         .ebta-home-loader {
             position:fixed;
@@ -9550,21 +9553,26 @@ def home():
             animation:ebtaLoaderSpin 1s linear infinite;
         }
 
-        .ebta-loader-circle span {
+        .ebta-loader-logo-wrap {
             position:relative;
             z-index:2;
-            width:62px;
-            height:62px;
+            width:64px;
+            height:64px;
             border-radius:50%;
             background:#ffffff;
-            color:#1b5e20;
             display:flex;
             align-items:center;
             justify-content:center;
-            font-size:20px;
-            font-weight:900;
-            letter-spacing:.5px;
+            overflow:hidden;
             border:3px solid rgba(27,94,32,0.18);
+            box-shadow:0 8px 18px rgba(15,23,42,0.12);
+        }
+
+        .ebta-loader-logo-img {
+            width:52px;
+            height:52px;
+            object-fit:contain;
+            display:block;
         }
 
         .ebta-loader-title {
@@ -9645,10 +9653,14 @@ def home():
                 height:82px;
             }
 
-            .ebta-loader-circle span {
-                width:54px;
-                height:54px;
-                font-size:18px;
+            .ebta-loader-logo-wrap {
+                width:56px;
+                height:56px;
+            }
+
+            .ebta-loader-logo-img {
+                width:46px;
+                height:46px;
             }
 
             .ebta-loader-title {
@@ -9660,7 +9672,11 @@ def home():
     <div class="ebta-home-loader" id="ebtaHomeLoader">
         <div class="ebta-loader-card">
             <div class="ebta-loader-circle">
-                <span>EBTA</span>
+                <div class="ebta-loader-logo-wrap">
+                    <img src="__EBTA_LOADER_LOGO__"
+                         alt="EBTA Logo"
+                         class="ebta-loader-logo-img">
+                </div>
             </div>
 
             <div class="ebta-loader-title">
@@ -9696,7 +9712,7 @@ def home():
             }, 600);
         });
     </script>
-    """
+    """.replace("__EBTA_LOADER_LOGO__", escape(str(ebta_loader_logo_url or LOGO_URL), quote=True))
     
     
     if not enrollment_open:
