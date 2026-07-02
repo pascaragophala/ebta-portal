@@ -9510,7 +9510,7 @@ def home():
             display:flex;
             align-items:center;
             justify-content:center;
-            transition:opacity .25s ease, visibility .25s ease;
+            transition:opacity .45s ease, visibility .45s ease;
         }
 
         .ebta-home-loader.hide {
@@ -9704,13 +9704,13 @@ def home():
 
                 setTimeout(function () {
                     loader.classList.add("hide");
-                }, 250);
+                }, 650);
 
                 setTimeout(function () {
                     if (loader && loader.parentNode) {
                         loader.parentNode.removeChild(loader);
                     }
-                }, 600);
+                }, 1300);
             }
 
             if (document.readyState === "loading") {
