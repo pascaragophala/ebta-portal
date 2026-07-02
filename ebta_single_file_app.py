@@ -9494,9 +9494,215 @@ def home():
     </a>
     """
     
+    enrollment_loader_html = """
+    <style>
+        .ebta-home-loader {
+            position:fixed;
+            inset:0;
+            z-index:999999;
+            background:
+                radial-gradient(circle at top left, rgba(255,255,255,0.20), transparent 32%),
+                linear-gradient(135deg, #0f3d16 0%, #1b5e20 45%, #2e7d32 100%);
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            transition:opacity .45s ease, visibility .45s ease;
+        }
+
+        .ebta-home-loader.hide {
+            opacity:0;
+            visibility:hidden;
+            pointer-events:none;
+        }
+
+        .ebta-loader-card {
+            width:min(340px, 88vw);
+            background:rgba(255,255,255,0.96);
+            border-radius:28px;
+            padding:28px 22px;
+            text-align:center;
+            box-shadow:0 24px 70px rgba(15,23,42,0.35);
+            border:1px solid rgba(255,255,255,0.65);
+            animation:ebtaLoaderFloat 1.8s ease-in-out infinite;
+        }
+
+        .ebta-loader-circle {
+            width:96px;
+            height:96px;
+            border-radius:50%;
+            margin:0 auto 16px;
+            position:relative;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            background:linear-gradient(135deg, #1b5e20, #25D366);
+            box-shadow:0 14px 34px rgba(27,94,32,0.35);
+        }
+
+        .ebta-loader-circle::before {
+            content:"";
+            position:absolute;
+            inset:-8px;
+            border-radius:50%;
+            border:5px solid rgba(27,94,32,0.16);
+            border-top-color:#facc15;
+            border-right-color:#ffffff;
+            animation:ebtaLoaderSpin 1s linear infinite;
+        }
+
+        .ebta-loader-circle span {
+            position:relative;
+            z-index:2;
+            width:62px;
+            height:62px;
+            border-radius:50%;
+            background:#ffffff;
+            color:#1b5e20;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            font-size:20px;
+            font-weight:900;
+            letter-spacing:.5px;
+            border:3px solid rgba(27,94,32,0.18);
+        }
+
+        .ebta-loader-title {
+            font-size:21px;
+            font-weight:900;
+            color:#14532d;
+            margin-bottom:6px;
+        }
+
+        .ebta-loader-text {
+            font-size:13px;
+            color:#64748b;
+            font-weight:700;
+        }
+
+        .ebta-loader-dots {
+            margin-top:14px;
+            display:flex;
+            justify-content:center;
+            gap:6px;
+        }
+
+        .ebta-loader-dots i {
+            width:8px;
+            height:8px;
+            border-radius:50%;
+            background:#1b5e20;
+            display:block;
+            animation:ebtaLoaderDots 1.1s ease-in-out infinite;
+        }
+
+        .ebta-loader-dots i:nth-child(2) {
+            animation-delay:.15s;
+            background:#2e7d32;
+        }
+
+        .ebta-loader-dots i:nth-child(3) {
+            animation-delay:.30s;
+            background:#facc15;
+        }
+
+        @keyframes ebtaLoaderSpin {
+            to {
+                transform:rotate(360deg);
+            }
+        }
+
+        @keyframes ebtaLoaderFloat {
+            0%, 100% {
+                transform:translateY(0);
+            }
+
+            50% {
+                transform:translateY(-8px);
+            }
+        }
+
+        @keyframes ebtaLoaderDots {
+            0%, 80%, 100% {
+                transform:scale(.75);
+                opacity:.45;
+            }
+
+            40% {
+                transform:scale(1.15);
+                opacity:1;
+            }
+        }
+
+        @media(max-width:640px) {
+            .ebta-loader-card {
+                padding:24px 18px;
+                border-radius:24px;
+            }
+
+            .ebta-loader-circle {
+                width:82px;
+                height:82px;
+            }
+
+            .ebta-loader-circle span {
+                width:54px;
+                height:54px;
+                font-size:18px;
+            }
+
+            .ebta-loader-title {
+                font-size:18px;
+            }
+        }
+    </style>
+
+    <div class="ebta-home-loader" id="ebtaHomeLoader">
+        <div class="ebta-loader-card">
+            <div class="ebta-loader-circle">
+                <span>EBTA</span>
+            </div>
+
+            <div class="ebta-loader-title">
+                Loading EBTA Portal
+            </div>
+
+            <div class="ebta-loader-text">
+                Preparing your enrollment page...
+            </div>
+
+            <div class="ebta-loader-dots">
+                <i></i>
+                <i></i>
+                <i></i>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        window.addEventListener("load", function () {
+            const loader = document.getElementById("ebtaHomeLoader");
+
+            setTimeout(function () {
+                if (loader) {
+                    loader.classList.add("hide");
+                }
+            }, 650);
+
+            setTimeout(function () {
+                if (loader) {
+                    loader.remove();
+                }
+            }, 1300);
+        });
+    </script>
+    """
+    
+    
     if not enrollment_open:
         conn.close()
         body = f"""
+        {enrollment_loader_html}
         {enrollment_whatsapp_helper}
         <section style="
             min-height:70vh;
@@ -9641,6 +9847,7 @@ def home():
         """
 
     body = fr"""
+    {enrollment_loader_html}
     {celebration_banner_html}
     {enrollment_whatsapp_helper}
     <section class='grid' style='margin-top:10px'>
