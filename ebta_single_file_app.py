@@ -14391,12 +14391,34 @@ def student_upload_report():
         conn.commit()
         conn.close()
 
-        return redirect(url_for('student_home'))
+        session["report_upload_success"] = "Your academic report was uploaded successfully. Thank you for submitting it."
+
+        return redirect(url_for('student_upload_report'))
 
     conn.close()
 
+    success_msg = session.pop("report_upload_success", "")
+
+    success_html = ""
+    if success_msg:
+        success_html = f"""
+        <div class="card soft" style="
+            border-left:5px solid #22c55e;
+            background:#ecfdf5;
+            color:#14532d;
+            margin-bottom:14px;
+        ">
+            <h3 style="margin:0 0 6px 0;">✅ Report Uploaded Successfully</h3>
+            <p class="mini" style="margin:0;">
+                {escape(success_msg)}
+            </p>
+        </div>
+        """
+
     body = f"""
     <div class='card small'>
+
+        {success_html}
 
         <a class='btn mini secondary' href='/student' style="margin-bottom:10px;display:inline-block;">
             ← Back
