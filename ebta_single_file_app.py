@@ -9506,7 +9506,7 @@ def home():
             display:flex;
             align-items:center;
             justify-content:center;
-            transition:opacity .45s ease, visibility .45s ease;
+            transition:opacity .25s ease, visibility .25s ease;
         }
 
         .ebta-home-loader.hide {
@@ -9687,13 +9687,13 @@ def home():
                 if (loader) {
                     loader.classList.add("hide");
                 }
-            }, 650);
+            }, 250);
 
             setTimeout(function () {
                 if (loader) {
                     loader.remove();
                 }
-            }, 1300);
+            }, 600);
         });
     </script>
     """
