@@ -32489,6 +32489,10 @@ def manager_nav():
         <a class="btn mini" href="/manager/tracker/history">
             Session History
         </a>
+        
+        <a class="btn mini" href="/manager/whatsapp-groups">
+            WhatsApp Groups
+        </a>
 
         <a class="btn mini danger" href="/manager/logout">
             Logout
@@ -32496,6 +32500,119 @@ def manager_nav():
 
     </div>
     """
+    
+    
+@app.get('/manager/whatsapp-groups')
+def manager_whatsapp_groups():
+
+    r = require_manager()
+    if r:
+        return r
+
+    manager_id = session.get("manager_id")
+    month = request.args.get("month") or get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT
+            s.grade,
+            s.name AS subject_name,
+            g.invite_link,
+            g.month,
+            t.full_name AS tutor_name
+        FROM manager_tutors mt
+        JOIN tutors t ON t.id = mt.tutor_id
+        JOIN tutor_subjects ts ON ts.tutor_id = t.id
+        JOIN subjects s ON s.id = ts.subject_id
+        JOIN groups g ON g.subject_id = s.id
+        WHERE mt.manager_id = ?
+          AND g.month = ?
+          AND COALESCE(g.is_visible, 1) = 1
+          AND g.invite_link IS NOT NULL
+          AND TRIM(g.invite_link) != ''
+        ORDER BY s.grade, s.name, t.full_name
+    """, (manager_id, month))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    group_cards = ""
+
+    for row in rows:
+        grade_text = grade_label(row["grade"])
+        subject_name = row["subject_name"] or ""
+        tutor_name = row["tutor_name"] or "Assigned tutor"
+        invite_link = row["invite_link"] or ""
+
+        group_cards += f"""
+        <div class="card soft" style="
+            border-left:5px solid #25D366;
+            margin-bottom:12px;
+        ">
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                gap:12px;
+                flex-wrap:wrap;
+                align-items:center;
+            ">
+                <div>
+                    <h3 style="margin:0 0 4px 0;">
+                        {escape(grade_text)} - {escape(subject_name)}
+                    </h3>
+
+                    <div class="mini muted">
+                        Tutor: {escape(tutor_name)}
+                    </div>
+
+                    <div class="mini muted">
+                        Month: {escape(pretty_month_label(month))}
+                    </div>
+                </div>
+
+                <a class="btn"
+                   href="{escape(invite_link, quote=True)}"
+                   target="_blank"
+                   rel="noopener"
+                   style="background:#25D366;color:white;">
+                    Join WhatsApp Group
+                </a>
+            </div>
+        </div>
+        """
+
+    if not group_cards:
+        group_cards = """
+        <div class="card soft" style="border-left:5px solid #f59e0b;">
+            <h3>No WhatsApp group links found</h3>
+            <p class="mini muted">
+                There are no visible WhatsApp group links for the subjects managed by you for this month.
+            </p>
+        </div>
+        """
+
+    body = f"""
+    {manager_nav()}
+
+    <section class="card">
+        <h1>WhatsApp Groups</h1>
+
+        <p class="mini muted">
+            These are the WhatsApp groups for the subjects linked to the tutors you are managing.
+            Only your assigned subjects are shown here.
+        </p>
+
+        {manager_month_selector(month, "/manager/whatsapp-groups")}
+
+        <div style="margin-top:14px;">
+            {group_cards}
+        </div>
+    </section>
+    """
+
+    return page("Tutor Manager WhatsApp Groups", body)    
     
 @app.get('/manager/tracker/history')
 def manager_tracker_history():
