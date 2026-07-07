@@ -32528,12 +32528,12 @@ def manager_whatsapp_groups():
         JOIN subjects s ON s.id = ts.subject_id
         JOIN groups g ON g.subject_id = s.id
         WHERE mt.manager_id = ?
-          AND g.month = ?
+          AND g.month = 'ALL'
           AND COALESCE(g.is_visible, 1) = 1
           AND g.invite_link IS NOT NULL
           AND TRIM(g.invite_link) != ''
         ORDER BY s.grade, s.name, t.full_name
-    """, (manager_id, month))
+    """, (manager_id,))
 
     rows = cur.fetchall()
     conn.close()
@@ -32568,7 +32568,7 @@ def manager_whatsapp_groups():
                     </div>
 
                     <div class="mini muted">
-                        Month: {escape(pretty_month_label(month))}
+                        Link type: Persistent group link
                     </div>
                 </div>
 
@@ -32588,7 +32588,7 @@ def manager_whatsapp_groups():
         <div class="card soft" style="border-left:5px solid #f59e0b;">
             <h3>No WhatsApp group links found</h3>
             <p class="mini muted">
-                There are no visible WhatsApp group links for the subjects managed by you for this month.
+                There are no visible WhatsApp group links for the subjects managed by you.
             </p>
         </div>
         """
@@ -32603,8 +32603,6 @@ def manager_whatsapp_groups():
             These are the WhatsApp groups for the subjects linked to the tutors you are managing.
             Only your assigned subjects are shown here.
         </p>
-
-        {manager_month_selector(month, "/manager/whatsapp-groups")}
 
         <div style="margin-top:14px;">
             {group_cards}
