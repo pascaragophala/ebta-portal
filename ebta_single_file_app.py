@@ -22069,6 +22069,7 @@ def admin_nav():
             ("Follow-Ups", "admin_followups", "/admin/followups"),
             ("Direct Messages", "admin_direct_messages", "/admin/direct-messages"),
             ("Parents Information", "admin_parents_notifications", "/admin/parents-notifications"),
+            ("Parent WhatsApp Follow-Up", "admin_non_enrolled_parent_whatsapp", "/admin/non-enrolled-parent-whatsapp"),
             
         ],
         True
@@ -22347,6 +22348,310 @@ def admin_sms_default_enrollment_message(month):
         "We do not want learners to be left behind for Term 3, as it can be a challenging term.\n\n"
         "Enroll today on the EBTA Portal: ebtaportal.co.za\n"
         "For assistance, contact EBTA Admin on +27 64 865 0013."
+    )
+    
+    
+def non_enrolled_parent_whatsapp_message(parent_name, learner_name, month_label):
+    """
+    Creates the WhatsApp message for parents whose learner is not enrolled.
+    """
+
+    parent_name = (parent_name or "Parent/Guardian").strip()
+    learner_name = (learner_name or "your learner").strip()
+
+    return (
+        f"Good morning {parent_name},\n\n"
+        f"Term 3 is challenging for many learners. Enrollments for {month_label} classes are closing today at EBTA. "
+        f"From our end, {learner_name} seems to not be enrolled.\n\n"
+        "We do not want learners to be left behind for Term 3 enrollments as it is challenging.\n\n"
+        f"Just to confirm, have you enrolled for {month_label} already or would you like assistance from our side? 📚"
+    )
+    
+    
+def render_non_enrolled_parent_whatsapp_page(nav_html, base_path, portal_name="Admin"):
+    """
+    Shared page for Admin, Duty Admin and CEO.
+    Shows non-enrolled learners with parent WhatsApp buttons.
+    """
+
+    month = request.args.get("month") or get_setting("current_month")
+    search = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+
+    try:
+        page_num = int(request.args.get("page", 1))
+    except Exception:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    per_page = 25
+
+    rows, total, total_pages = admin_sms_fetch_not_enrolled_students_page(
+        month=month,
+        search=search,
+        grade=grade,
+        parent_filter="with_parent",
+        page_num=page_num,
+        per_page=per_page
+    )
+
+    grades = admin_sms_get_not_enrolled_grades(month)
+
+    grade_options = "<option value=''>All grades</option>"
+
+    for g in grades:
+        selected = "selected" if g == grade else ""
+        grade_options += f"""
+        <option value="{escape(g or '', quote=True)}" {selected}>
+            {escape(grade_label(g))}
+        </option>
+        """
+
+    month_label = pretty_month_label(month)
+
+    table_rows = ""
+
+    for s in rows:
+        parent_name = s["guardian_name"] or "Parent/Guardian"
+        parent_phone = s["guardian_phone"] or ""
+        learner_name = s["full_name"] or "Learner"
+
+        wa_number = whatsapp_number(parent_phone)
+
+        message = non_enrolled_parent_whatsapp_message(
+            parent_name=parent_name,
+            learner_name=learner_name,
+            month_label=month_label
+        )
+
+        if wa_number:
+            wa_link = "https://wa.me/" + wa_number + "?" + urlencode({"text": message})
+
+            action_btn = f"""
+            <a class="btn success mini"
+               href="{wa_link}"
+               target="_blank"
+               rel="noopener">
+                WhatsApp Parent
+            </a>
+            """
+        else:
+            action_btn = """
+            <span class="chip lapsed">No parent phone</span>
+            """
+
+        table_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(learner_name)}</strong>
+                <div class="mini muted">{escape(grade_label(s["grade"]))}</div>
+            </td>
+
+            <td>
+                {escape(parent_name)}
+                <div class="mini muted">{escape(parent_phone)}</div>
+            </td>
+
+            <td>
+                <div class="mini muted">
+                    {escape(message).replace(chr(10), "<br>")}
+                </div>
+            </td>
+
+            <td>
+                {action_btn}
+            </td>
+        </tr>
+        """
+
+    if not table_rows:
+        table_rows = """
+        <tr>
+            <td colspan="4" class="muted">
+                No non-enrolled parents found for the selected search/filter.
+            </td>
+        </tr>
+        """
+
+    start_item = ((page_num - 1) * per_page) + 1 if total else 0
+    end_item = min(page_num * per_page, total)
+
+    def page_url(page_number):
+        params = {
+            "month": month,
+            "page": page_number
+        }
+
+        if search:
+            params["q"] = search
+
+        if grade:
+            params["grade"] = grade
+
+        return base_path + "?" + urlencode(params)
+
+    links = []
+
+    if page_num > 1:
+        links.append(f"<a class='btn mini secondary' href='{page_url(1)}'>First</a>")
+        links.append(f"<a class='btn mini secondary' href='{page_url(page_num - 1)}'>Prev</a>")
+
+    start_page = max(1, page_num - 2)
+    end_page = min(total_pages, page_num + 2)
+
+    for p in range(start_page, end_page + 1):
+        if p == page_num:
+            links.append(f"<span class='btn mini' style='background:#1b5e20;color:white'>{p}</span>")
+        else:
+            links.append(f"<a class='btn mini secondary' href='{page_url(p)}'>{p}</a>")
+
+    if page_num < total_pages:
+        links.append(f"<a class='btn mini secondary' href='{page_url(page_num + 1)}'>Next</a>")
+        links.append(f"<a class='btn mini secondary' href='{page_url(total_pages)}'>Last</a>")
+
+    pagination_html = f"""
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0;">
+        <div class="mini muted">
+            Showing {start_item} - {end_item} of {total} parents
+        </div>
+
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            {''.join(links)}
+        </div>
+    </div>
+    """
+
+    body = f"""
+    {nav_html}
+
+    <style>
+        @media(max-width:900px){{
+            .parent-wa-filter{{
+                grid-template-columns:1fr !important;
+            }}
+        }}
+    </style>
+
+    <section class="card">
+        <h1>Non-Enrolled Parent WhatsApp Follow-Up</h1>
+
+        <p class="mini muted">
+            This section helps {escape(portal_name)} reach parents whose learners were previously enrolled,
+            but are not enrolled for the selected month. Click WhatsApp Parent to open WhatsApp with a pre-filled message.
+        </p>
+
+        <form method="get"
+              action="{base_path}"
+              class="parent-wa-filter"
+              style="display:grid;grid-template-columns:2fr 1fr auto auto;gap:10px;align-items:end;margin:14px 0;">
+
+            <div>
+                <label>Search learner / parent / phone</label>
+                <input name="q"
+                       value="{escape(search)}"
+                       placeholder="Search learner name, parent name or phone">
+            </div>
+
+            <div>
+                <label>Grade</label>
+                <select name="grade">
+                    {grade_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Month</label>
+                <input type="month" name="month" value="{escape(month)}">
+            </div>
+
+            <button class="btn mini">Filter</button>
+
+            <a class="btn mini secondary" href="{base_path}">
+                Clear
+            </a>
+        </form>
+
+        <div class="stats-mini">
+            <div>
+                <b>{total}</b>
+                <span>Non-enrolled parents with WhatsApp numbers</span>
+            </div>
+            <div>
+                <b>{escape(month_label)}</b>
+                <span>Selected enrollment month</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="card">
+        <h2>Parents to Contact</h2>
+
+        {pagination_html}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Learner</th>
+                        <th>Parent/Guardian</th>
+                        <th>Prefilled Message</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {table_rows}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_html}
+    </section>
+    """
+
+    return page("Non-Enrolled Parent WhatsApp Follow-Up", body)
+    
+@app.get('/admin/non-enrolled-parent-whatsapp')
+def admin_non_enrolled_parent_whatsapp():
+
+    r = require_admin()
+    if r:
+        return r
+
+    return render_non_enrolled_parent_whatsapp_page(
+        nav_html=admin_nav(),
+        base_path="/admin/non-enrolled-parent-whatsapp",
+        portal_name="Admin"
+    )
+    
+
+@app.get('/duty-admin/non-enrolled-parent-whatsapp')
+def duty_admin_non_enrolled_parent_whatsapp():
+
+    r = require_duty_admin()
+    if r:
+        return r
+
+    return render_non_enrolled_parent_whatsapp_page(
+        nav_html=duty_admin_nav(),
+        base_path="/duty-admin/non-enrolled-parent-whatsapp",
+        portal_name="Duty Admin"
+    )
+    
+    
+@app.get('/ceo/non-enrolled-parent-whatsapp')
+def ceo_non_enrolled_parent_whatsapp():
+
+    r = require_ceo()
+    if r:
+        return r
+
+    return render_non_enrolled_parent_whatsapp_page(
+        nav_html=ceo_nav(),
+        base_path="/ceo/non-enrolled-parent-whatsapp",
+        portal_name="CEO"
     )
 
 
@@ -51737,6 +52042,7 @@ def duty_admin_nav():
         <a class="btn secondary" href="{url_for('duty_admin_enrollments')}">Enrollments</a>
         <a class="btn secondary" href="{url_for('duty_admin_students')}">Students</a>
         <a class="btn secondary" href="{url_for('duty_admin_parents_notifications')}">Parents Info</a>
+        <a class="btn secondary" href="{url_for('duty_admin_non_enrolled_parent_whatsapp')}">Parent WhatsApp Follow-Up</a>
         <a class="btn secondary" href="{url_for('duty_admin_groups')}">Groups</a>
         <a class="btn secondary" href="{url_for('duty_admin_sessions')}">Sessions</a>
         <!-- <a class="btn secondary" href="{url_for('duty_admin_inbox')}">Inbox</a> -->
@@ -70299,6 +70605,7 @@ def ceo_nav():
                 ceo_link("Monthly Reports", "ceo_monthly_reports", "/ceo/monthly-reports", "📤"),
                 ceo_link("Risks & Mitigations", "ceo_risks", "/ceo/risks", "⚠️"),
                 ceo_link("Goals", "ceo_goals", "/ceo/goals", "🎯"),
+                ceo_link("Parent WhatsApp Follow-Up", "ceo_non_enrolled_parent_whatsapp", "/ceo/non-enrolled-parent-whatsapp", "💬"),
             ]
         ),
         (
