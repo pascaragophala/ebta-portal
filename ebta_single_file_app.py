@@ -22414,6 +22414,142 @@ def admin_sms_fetch_all_students():
     return rows
 
 
+def admin_sms_fetch_not_enrolled_students_page(month, search="", grade="", parent_filter="", page_num=1, per_page=25):
+    """
+    Paginated manual list for learners who were once enrolled,
+    but are not ACTIVE or PENDING for the selected month.
+    """
+
+    search = (search or "").strip()
+    grade = (grade or "").strip()
+    parent_filter = (parent_filter or "").strip()
+
+    try:
+        page_num = int(page_num)
+    except Exception:
+        page_num = 1
+
+    if page_num < 1:
+        page_num = 1
+
+    offset = (page_num - 1) * per_page
+
+    where = [
+        """
+        EXISTS (
+            SELECT 1
+            FROM enrollments e_any
+            WHERE e_any.student_id = s.id
+        )
+        """,
+        """
+        NOT EXISTS (
+            SELECT 1
+            FROM enrollments e_curr
+            WHERE e_curr.student_id = s.id
+              AND e_curr.month = ?
+              AND e_curr.status IN ('ACTIVE', 'PENDING')
+        )
+        """
+    ]
+
+    params = [month]
+
+    if search:
+        like = f"%{search}%"
+        where.append("""
+            (
+                s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR s.guardian_name LIKE ?
+                OR s.guardian_phone LIKE ?
+                OR s.email LIKE ?
+                OR s.grade LIKE ?
+            )
+        """)
+        params.extend([like, like, like, like, like, like])
+
+    if grade:
+        where.append("s.grade = ?")
+        params.append(grade)
+
+    if parent_filter == "with_parent":
+        where.append("s.guardian_phone IS NOT NULL AND TRIM(s.guardian_phone) != ''")
+
+    elif parent_filter == "without_parent":
+        where.append("(s.guardian_phone IS NULL OR TRIM(s.guardian_phone) = '')")
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS total
+        FROM (
+            SELECT DISTINCT s.id
+            FROM students s
+            {where_sql}
+        ) x
+    """, params)
+
+    total = cur.fetchone()["total"] or 0
+
+    cur.execute(f"""
+        SELECT DISTINCT
+            s.id,
+            s.full_name,
+            s.phone_whatsapp,
+            s.guardian_name,
+            s.guardian_phone,
+            s.email,
+            s.grade
+        FROM students s
+        {where_sql}
+        ORDER BY s.grade, s.full_name
+        LIMIT ? OFFSET ?
+    """, params + [per_page, offset])
+
+    rows = cur.fetchall()
+    conn.close()
+
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    return rows, total, total_pages
+
+
+def admin_sms_get_not_enrolled_grades(month):
+    """
+    Grade filter list for the manual enrollment reminder section.
+    """
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT s.grade
+        FROM students s
+        WHERE EXISTS (
+            SELECT 1
+            FROM enrollments e_any
+            WHERE e_any.student_id = s.id
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM enrollments e_curr
+            WHERE e_curr.student_id = s.id
+              AND e_curr.month = ?
+              AND e_curr.status IN ('ACTIVE', 'PENDING')
+        )
+        ORDER BY s.grade
+    """, (month,))
+
+    grades = [r["grade"] for r in cur.fetchall()]
+    conn.close()
+
+    return grades
+
+
 @app.get('/admin/enrollment-sms')
 @require_high_admin
 def admin_enrollment_sms():
@@ -22445,13 +22581,54 @@ def admin_enrollment_sms():
 
     default_message = admin_sms_default_enrollment_message(month)
 
+    manual_search = request.args.get("q", "").strip()
+    manual_grade = request.args.get("grade", "").strip()
+    manual_parent_filter = request.args.get("parent_filter", "").strip()
+
+    try:
+        manual_page = int(request.args.get("manual_page", 1))
+    except Exception:
+        manual_page = 1
+
+    per_page = 25
+
+    manual_students, manual_total, manual_total_pages = admin_sms_fetch_not_enrolled_students_page(
+        month=month,
+        search=manual_search,
+        grade=manual_grade,
+        parent_filter=manual_parent_filter,
+        page_num=manual_page,
+        per_page=per_page
+    )
+
+    manual_grades = admin_sms_get_not_enrolled_grades(month)
+
+    grade_options = """
+        <option value="">All grades</option>
+    """
+
+    for g in manual_grades:
+        selected = "selected" if g == manual_grade else ""
+        grade_options += f"""
+        <option value="{escape(g or '', quote=True)}" {selected}>
+            {escape(grade_label(g))}
+        </option>
+        """
+
+    parent_all_selected = "selected" if manual_parent_filter == "" else ""
+    parent_with_selected = "selected" if manual_parent_filter == "with_parent" else ""
+    parent_without_selected = "selected" if manual_parent_filter == "without_parent" else ""
+
     manual_rows = ""
 
-    for s in not_enrolled_rows:
+    for s in manual_students:
         manual_rows += f"""
         <tr>
             <td>
-                <input type="checkbox" name="student_ids" value="{s['id']}">
+                <input class="manual-student-check"
+                       type="checkbox"
+                       name="student_ids"
+                       value="{s['id']}">
             </td>
             <td>
                 <strong>{escape(s['full_name'] or '')}</strong>
@@ -22469,13 +22646,86 @@ def admin_enrollment_sms():
         manual_rows = """
         <tr>
             <td colspan="4" class="muted">
-                No previously enrolled learners are missing enrollment for this month.
+                No learners found for the selected search/filter.
             </td>
         </tr>
         """
 
+    manual_start = ((manual_page - 1) * per_page) + 1 if manual_total else 0
+    manual_end = min(manual_page * per_page, manual_total)
+
+    def manual_page_url(page_number):
+        params = {
+            "month": month,
+            "manual_page": page_number
+        }
+
+        if manual_search:
+            params["q"] = manual_search
+
+        if manual_grade:
+            params["grade"] = manual_grade
+
+        if manual_parent_filter:
+            params["parent_filter"] = manual_parent_filter
+
+        return "/admin/enrollment-sms?" + urlencode(params) + "#manual-selection"
+
+    page_links = []
+
+    if manual_page > 1:
+        page_links.append(f"""
+            <a class="btn mini secondary" href="{manual_page_url(1)}">First</a>
+        """)
+        page_links.append(f"""
+            <a class="btn mini secondary" href="{manual_page_url(manual_page - 1)}">Prev</a>
+        """)
+
+    start_page = max(1, manual_page - 2)
+    end_page = min(manual_total_pages, manual_page + 2)
+
+    for p in range(start_page, end_page + 1):
+        if p == manual_page:
+            page_links.append(f"""
+                <span class="btn mini" style="background:#1b5e20;color:white;">
+                    {p}
+                </span>
+            """)
+        else:
+            page_links.append(f"""
+                <a class="btn mini secondary" href="{manual_page_url(p)}">{p}</a>
+            """)
+
+    if manual_page < manual_total_pages:
+        page_links.append(f"""
+            <a class="btn mini secondary" href="{manual_page_url(manual_page + 1)}">Next</a>
+        """)
+        page_links.append(f"""
+            <a class="btn mini secondary" href="{manual_page_url(manual_total_pages)}">Last</a>
+        """)
+
+    manual_pagination = f"""
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0;">
+        <div class="mini muted">
+            Showing {manual_start} - {manual_end} of {manual_total} learners
+        </div>
+
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            {''.join(page_links)}
+        </div>
+    </div>
+    """
+
     body = f"""
     {admin_nav()}
+    
+    <style>
+        @media(max-width:900px){{
+            #manual-selection form[method="get"]{{
+                grid-template-columns:1fr !important;
+            }}
+        }}
+    </style>
 
     <section class="card">
         <h1>Enrollment SMS Reminders</h1>
@@ -22582,6 +22832,44 @@ def admin_enrollment_sms():
             Manually select specific learners who were once enrolled with EBTA but are not enrolled for the selected month. You can send the reminder to the learner, parent/guardian, or both.
         </p>
 
+        <form method="get"
+              action="/admin/enrollment-sms"
+              style="display:grid;grid-template-columns:2fr 1fr 1fr auto auto;gap:10px;align-items:end;margin:14px 0;">
+
+            <input type="hidden" name="month" value="{escape(month)}">
+
+            <div>
+                <label>Search learner / parent / phone</label>
+                <input name="q"
+                       value="{escape(manual_search)}"
+                       placeholder="Search by learner name, parent name, phone, email or grade">
+            </div>
+
+            <div>
+                <label>Grade</label>
+                <select name="grade">
+                    {grade_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Parent phone</label>
+                <select name="parent_filter">
+                    <option value="" {parent_all_selected}>All</option>
+                    <option value="with_parent" {parent_with_selected}>Has parent phone</option>
+                    <option value="without_parent" {parent_without_selected}>Missing parent phone</option>
+                </select>
+            </div>
+
+            <button class="btn mini">
+                Filter
+            </button>
+
+            <a class="btn mini secondary" href="/admin/enrollment-sms?month={escape(month)}#manual-selection">
+                Clear
+            </a>
+        </form>
+
         <form method="post" action="/admin/enrollment-sms/manual-send">
 
             <input type="hidden" name="month" value="{escape(month)}">
@@ -22596,11 +22884,17 @@ def admin_enrollment_sms():
             <label style="margin-top:10px;">SMS Message</label>
             <textarea name="body" rows="4" required>{escape(default_message)}</textarea>
 
+            {manual_pagination}
+
             <div class="scroll-x" style="margin-top:14px;">
                 <table>
                     <thead>
                         <tr>
-                            <th>Select</th>
+                            <th>
+                                <input type="checkbox"
+                                       onclick="document.querySelectorAll('.manual-student-check').forEach(cb => cb.checked = this.checked)">
+                                Select
+                            </th>
                             <th>Learner</th>
                             <th>Learner Phone</th>
                             <th>Parent/Guardian</th>
@@ -22611,6 +22905,8 @@ def admin_enrollment_sms():
                     </tbody>
                 </table>
             </div>
+            
+            {manual_pagination}
 
             <button class="btn success"
                     style="margin-top:14px;"
