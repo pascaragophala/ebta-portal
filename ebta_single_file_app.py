@@ -22144,6 +22144,7 @@ def admin_nav():
                 [
                     ("Settings", "admin_settings", "/admin/settings"),
                     ("SMS Dashboard", "admin_sms_dashboard", "/admin/sms-dashboard"),
+                    ("Enrollment Reminders", "admin_enrollment_sms", "/admin/enrollment-sms"),
                     ("Processed SMS", "admin_process_sms", "/admin/process-sms"),
                     ("Awards Export", "admin_awards_student_export", "/admin/awards-export"),
                 ],
@@ -22301,6 +22302,472 @@ def admin_nav():
         </div>
     </nav>
     """
+
+
+# =============================================================
+# SUPER ADMIN ENROLLMENT SMS REMINDERS
+# =============================================================
+
+def admin_sms_unique_phones(values):
+    """
+    Removes empty phone numbers and duplicates.
+    """
+    phones = []
+    seen = set()
+
+    for value in values:
+        phone = str(value or "").strip()
+
+        if not phone:
+            continue
+
+        if phone in seen:
+            continue
+
+        seen.add(phone)
+        phones.append(phone)
+
+    return phones
+
+
+def admin_sms_default_enrollment_message(month):
+    """
+    Default SMS message for enrollment reminders.
+    Admin can still edit it on the page.
+    """
+    try:
+        month_label = pretty_month_label(month)
+    except Exception:
+        month_label = month
+
+    return (
+        f"EBTA Reminder: Enrollment for {month_label} is open. "
+        "Please complete your learner's enrollment on the EBTA Portal. "
+        "Contact EBTA if you need assistance."
+    )
+
+
+def admin_sms_fetch_not_enrolled_students(month):
+    """
+    Students who were once enrolled with EBTA but are not enrolled
+    for the selected/current month.
+
+    Current month enrollment is counted as ACTIVE or PENDING.
+    """
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT
+            s.id,
+            s.full_name,
+            s.phone_whatsapp,
+            s.guardian_name,
+            s.guardian_phone,
+            s.email,
+            s.grade
+        FROM students s
+        WHERE EXISTS (
+            SELECT 1
+            FROM enrollments e_any
+            WHERE e_any.student_id = s.id
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM enrollments e_curr
+            WHERE e_curr.student_id = s.id
+              AND e_curr.month = ?
+              AND e_curr.status IN ('ACTIVE', 'PENDING')
+        )
+        ORDER BY s.grade, s.full_name
+    """, (month,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return rows
+
+
+def admin_sms_fetch_all_students():
+    """
+    All students on the portal, whether currently enrolled or not.
+    """
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT
+            id,
+            full_name,
+            phone_whatsapp,
+            guardian_name,
+            guardian_phone,
+            email,
+            grade
+        FROM students
+        ORDER BY grade, full_name
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return rows
+
+
+@app.get('/admin/enrollment-sms')
+@require_high_admin
+def admin_enrollment_sms():
+
+    r = require_admin()
+    if r:
+        return r
+
+    month = request.args.get("month") or get_setting("current_month")
+
+    not_enrolled_rows = admin_sms_fetch_not_enrolled_students(month)
+    all_student_rows = admin_sms_fetch_all_students()
+
+    not_enrolled_learner_phones = admin_sms_unique_phones(
+        [r["phone_whatsapp"] for r in not_enrolled_rows]
+    )
+
+    not_enrolled_parent_phones = admin_sms_unique_phones(
+        [r["guardian_phone"] for r in not_enrolled_rows]
+    )
+
+    all_learner_phones = admin_sms_unique_phones(
+        [r["phone_whatsapp"] for r in all_student_rows]
+    )
+
+    all_parent_phones = admin_sms_unique_phones(
+        [r["guardian_phone"] for r in all_student_rows]
+    )
+
+    default_message = admin_sms_default_enrollment_message(month)
+
+    manual_rows = ""
+
+    for s in not_enrolled_rows:
+        manual_rows += f"""
+        <tr>
+            <td>
+                <input type="checkbox" name="student_ids" value="{s['id']}">
+            </td>
+            <td>
+                <strong>{escape(s['full_name'] or '')}</strong>
+                <div class="mini muted">{escape(grade_label(s['grade']))}</div>
+            </td>
+            <td>{escape(s['phone_whatsapp'] or '—')}</td>
+            <td>
+                {escape(s['guardian_name'] or '—')}
+                <div class="mini muted">{escape(s['guardian_phone'] or 'No parent phone')}</div>
+            </td>
+        </tr>
+        """
+
+    if not manual_rows:
+        manual_rows = """
+        <tr>
+            <td colspan="4" class="muted">
+                No previously enrolled learners are missing enrollment for this month.
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Enrollment SMS Reminders</h1>
+
+        <p class="mini muted">
+            Use this page to send SMS enrollment reminders to parents and learners.
+            Messages are queued first, then processed by the SMS system.
+        </p>
+
+        <form method="get"
+              action="/admin/enrollment-sms"
+              style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0 18px;">
+            <label class="mini muted">Enrollment month:</label>
+            <input type="month" name="month" value="{escape(month)}">
+            <button class="btn mini">Apply</button>
+        </form>
+
+        <div class="stats-mini">
+            <div>
+                <b>{len(not_enrolled_rows)}</b>
+                <span>Once-enrolled learners not enrolled now</span>
+            </div>
+            <div>
+                <b>{len(not_enrolled_parent_phones)}</b>
+                <span>Parent phones to remind</span>
+            </div>
+            <div>
+                <b>{len(not_enrolled_learner_phones)}</b>
+                <span>Learner phones to remind</span>
+            </div>
+            <div>
+                <b>{len(all_learner_phones)}</b>
+                <span>All learner phones</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="card">
+        <h2>Bulk Enrollment SMS</h2>
+
+        <form method="post" action="/admin/enrollment-sms/send">
+
+            <input type="hidden" name="month" value="{escape(month)}">
+
+            <label>SMS Message</label>
+            <textarea name="body" rows="4" required>{escape(default_message)}</textarea>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">
+
+                <button class="btn mini"
+                        name="action"
+                        value="parents_not_enrolled"
+                        onclick="return confirm('Send SMS to parents of learners not enrolled for this month?')">
+                    Parents of Not-Enrolled Learners
+                </button>
+
+                <button class="btn mini"
+                        name="action"
+                        value="learners_not_enrolled"
+                        onclick="return confirm('Send SMS to learners not enrolled for this month?')">
+                    Learners Not Enrolled
+                </button>
+
+                <button class="btn mini success"
+                        name="action"
+                        value="both_not_enrolled"
+                        onclick="return confirm('Send SMS to both parents and learners not enrolled for this month?')">
+                    Parents + Learners Not Enrolled
+                </button>
+
+                <button class="btn mini secondary"
+                        name="action"
+                        value="everyone_both"
+                        onclick="return confirm('Send SMS to all parents and all learners on the portal?')">
+                    Remind Everyone: Parents + Learners
+                </button>
+
+                <button class="btn mini secondary"
+                        name="action"
+                        value="all_students"
+                        onclick="return confirm('Send SMS to all learners on the portal?')">
+                    All Learners Only
+                </button>
+
+            </div>
+        </form>
+    </section>
+
+    <section class="card">
+        <h2>Manual Student Selection</h2>
+
+        <p class="mini muted">
+            Select specific learners who were once enrolled but are not enrolled for the selected month.
+        </p>
+
+        <form method="post" action="/admin/enrollment-sms/manual-send">
+
+            <input type="hidden" name="month" value="{escape(month)}">
+
+            <label>Send to</label>
+            <select name="recipient_type" required>
+                <option value="student">Learner only</option>
+                <option value="parent">Parent/guardian only</option>
+                <option value="both">Both learner and parent</option>
+            </select>
+
+            <label style="margin-top:10px;">SMS Message</label>
+            <textarea name="body" rows="4" required>{escape(default_message)}</textarea>
+
+            <div class="scroll-x" style="margin-top:14px;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Select</th>
+                            <th>Learner</th>
+                            <th>Learner Phone</th>
+                            <th>Parent/Guardian</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {manual_rows}
+                    </tbody>
+                </table>
+            </div>
+
+            <button class="btn success"
+                    style="margin-top:14px;"
+                    onclick="return confirm('Queue SMS reminders for the selected learners?')">
+                Send Manual Reminder
+            </button>
+        </form>
+    </section>
+    """
+
+    return page("Enrollment SMS Reminders", body)
+
+
+@app.post('/admin/enrollment-sms/send')
+@require_high_admin
+def admin_enrollment_sms_send():
+
+    r = require_admin()
+    if r:
+        return r
+
+    month = request.form.get("month") or get_setting("current_month")
+    action = request.form.get("action", "").strip()
+    body = request.form.get("body", "").strip()
+
+    if not body:
+        return page("Error", card_msg("SMS message is required."))
+
+    not_enrolled_rows = admin_sms_fetch_not_enrolled_students(month)
+    all_student_rows = admin_sms_fetch_all_students()
+
+    phones = []
+    recipient_type = "enrollment"
+
+    if action == "parents_not_enrolled":
+        phones = admin_sms_unique_phones([r["guardian_phone"] for r in not_enrolled_rows])
+        recipient_type = "parent_not_enrolled"
+
+    elif action == "learners_not_enrolled":
+        phones = admin_sms_unique_phones([r["phone_whatsapp"] for r in not_enrolled_rows])
+        recipient_type = "learner_not_enrolled"
+
+    elif action == "both_not_enrolled":
+        phones = admin_sms_unique_phones(
+            [r["guardian_phone"] for r in not_enrolled_rows] +
+            [r["phone_whatsapp"] for r in not_enrolled_rows]
+        )
+        recipient_type = "parent_learner_not_enrolled"
+
+    elif action == "everyone_both":
+        phones = admin_sms_unique_phones(
+            [r["guardian_phone"] for r in all_student_rows] +
+            [r["phone_whatsapp"] for r in all_student_rows]
+        )
+        recipient_type = "everyone_enrollment"
+
+    elif action == "all_students":
+        phones = admin_sms_unique_phones([r["phone_whatsapp"] for r in all_student_rows])
+        recipient_type = "all_learners_enrollment"
+
+    else:
+        return page("Error", card_msg("Invalid SMS action selected."))
+
+    if not phones:
+        return page("No SMS Queued", card_msg("No valid phone numbers were found for this action."))
+
+    queue_sms_bulk(phones, body, recipient_type)
+
+    return page(
+        "SMS Queued",
+        card_msg(
+            f"{len(phones)} SMS message(s) queued successfully for {pretty_month_label(month)}."
+        ) + f"""
+        <div class="card">
+            <a class="btn" href="/admin/enrollment-sms?month={escape(month)}">
+                Back to Enrollment SMS
+            </a>
+            <a class="btn secondary" href="/admin/sms-dashboard">
+                View SMS Dashboard
+            </a>
+        </div>
+        """
+    )
+
+
+@app.post('/admin/enrollment-sms/manual-send')
+@require_high_admin
+def admin_enrollment_sms_manual_send():
+
+    r = require_admin()
+    if r:
+        return r
+
+    month = request.form.get("month") or get_setting("current_month")
+    body = request.form.get("body", "").strip()
+    recipient_type = request.form.get("recipient_type", "student").strip()
+    student_ids_raw = request.form.getlist("student_ids")
+
+    if not body:
+        return page("Error", card_msg("SMS message is required."))
+
+    student_ids = []
+
+    for sid in student_ids_raw:
+        try:
+            student_ids.append(int(sid))
+        except Exception:
+            pass
+
+    if not student_ids:
+        return page("Error", card_msg("Please select at least one learner."))
+
+    placeholders = ",".join(["?"] * len(student_ids))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT
+            id,
+            full_name,
+            phone_whatsapp,
+            guardian_phone
+        FROM students
+        WHERE id IN ({placeholders})
+    """, student_ids)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    phones = []
+
+    if recipient_type == "student":
+        phones = admin_sms_unique_phones([r["phone_whatsapp"] for r in rows])
+        sms_type = "manual_learner_enrollment"
+
+    elif recipient_type == "parent":
+        phones = admin_sms_unique_phones([r["guardian_phone"] for r in rows])
+        sms_type = "manual_parent_enrollment"
+
+    elif recipient_type == "both":
+        phones = admin_sms_unique_phones(
+            [r["phone_whatsapp"] for r in rows] +
+            [r["guardian_phone"] for r in rows]
+        )
+        sms_type = "manual_parent_learner_enrollment"
+
+    else:
+        return page("Error", card_msg("Invalid recipient type selected."))
+
+    if not phones:
+        return page("No SMS Queued", card_msg("No valid phone numbers were found for the selected learners."))
+
+    queue_sms_bulk(phones, body, sms_type)
+
+    return page(
+        "Manual SMS Queued",
+        card_msg(f"{len(phones)} manual SMS reminder(s) queued successfully.") + f"""
+        <div class="card">
+            <a class="btn" href="/admin/enrollment-sms?month={escape(month)}">
+                Back to Enrollment SMS
+            </a>
+            <a class="btn secondary" href="/admin/sms-dashboard">
+                View SMS Dashboard
+            </a>
+        </div>
+        """
+    )
 
 
 @app.get('/admin')
