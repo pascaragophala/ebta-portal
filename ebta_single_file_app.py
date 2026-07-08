@@ -22386,7 +22386,7 @@ def render_non_enrolled_parent_whatsapp_page(nav_html, base_path, portal_name="A
     if page_num < 1:
         page_num = 1
 
-    per_page = 25
+    per_page = 12
 
     rows, total, total_pages = admin_sms_fetch_not_enrolled_students_page(
         month=month,
