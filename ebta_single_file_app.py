@@ -22341,11 +22341,12 @@ def admin_sms_default_enrollment_message(month):
         month_label = month
 
     return (
-        f"Good day EBTA Learner/Parent. Term 3 is challenging for many learners. "
-        f"Enrollments for {month_label} classes are closing today at EBTA. "
-        "From our side, it seems that you have not enrolled yet. "
-        "Enroll today: ebtaportal.co.za. "
-        "For help, contact EBTA Admin: 064 865 0013."
+        f"Good morning EBTA Parent/Learner,\n\n"
+        f"Term 3 is challenging for many learners. Enrollments for {month_label} classes are closing today at EBTA. "
+        "From our side, it seems that you have not enrolled yet.\n\n"
+        "We do not want learners to be left behind for Term 3, as it can be a challenging term.\n\n"
+        "Enroll today on the EBTA Portal: ebtaportal.co.za\n"
+        "For assistance, contact EBTA Admin on +27 64 865 0013."
     )
 
 
