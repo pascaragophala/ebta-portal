@@ -22342,8 +22342,8 @@ def admin_sms_default_enrollment_message(month):
 
     return (
         f"EBTA Reminder: Enrollment for {month_label} is open. "
-        "Please complete your learner's enrollment on the EBTA Portal. "
-        "Contact EBTA if you need assistance."
+        "Please complete your learner's enrollment on the EBTA Portal: ebtaportal.co.za. "
+        "For assistance, contact EBTA Admin on +27 64 865 0013."
     )
 
 
@@ -22511,6 +22511,17 @@ def admin_enrollment_sms():
                 <span>All learner phones</span>
             </div>
         </div>
+        
+        <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
+            <a class="btn success mini" href="#manual-selection">
+                Manual Selected Learners
+            </a>
+
+            <a class="btn secondary mini" href="/admin/sms-dashboard">
+                View SMS Dashboard
+            </a>
+        </div>
+        
     </section>
 
     <section class="card">
@@ -22564,11 +22575,11 @@ def admin_enrollment_sms():
         </form>
     </section>
 
-    <section class="card">
-        <h2>Manual Student Selection</h2>
+    <section class="card" id="manual-selection" style="border-top:4px solid #1b5e20;">
+        <h2>Manual Selected Learners</h2>
 
         <p class="mini muted">
-            Select specific learners who were once enrolled but are not enrolled for the selected month.
+            Manually select specific learners who were once enrolled with EBTA but are not enrolled for the selected month. You can send the reminder to the learner, parent/guardian, or both.
         </p>
 
         <form method="post" action="/admin/enrollment-sms/manual-send">
