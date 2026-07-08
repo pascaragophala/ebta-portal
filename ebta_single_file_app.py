@@ -24895,7 +24895,7 @@ def admin_students_compare_export():
 
     # ACTIVE students only
     cur.execute("""
-        SELECT DISTINCT s.id, s.full_name, s.phone_whatsapp, s.grade
+        SELECT DISTINCT s.id, s.full_name, s.phone_whatsapp, s.grade, s.guardian_name, s.guardian_phone, s.email
         FROM students s
         JOIN enrollments e ON e.student_id = s.id
         WHERE e.month = ?
@@ -24904,7 +24904,7 @@ def admin_students_compare_export():
     prev_rows = cur.fetchall()
 
     cur.execute("""
-        SELECT DISTINCT s.id, s.full_name, s.phone_whatsapp, s.grade
+        SELECT DISTINCT s.id, s.full_name, s.phone_whatsapp, s.grade, s.guardian_name, s.guardian_phone, s.email
         FROM students s
         JOIN enrollments e ON e.student_id = s.id
         WHERE e.month = ?
@@ -24932,6 +24932,9 @@ def admin_students_compare_export():
             base["full_name"],
             base["phone_whatsapp"],
             grade_label(base["grade"]),
+            base["guardian_name"] or "",
+            base["guardian_phone"] or "",
+            base["email"] or "",
             "YES" if in_prev else "NO",
             "YES" if in_curr else "NO",
         ]
@@ -24953,9 +24956,12 @@ def admin_students_compare_export():
     ws.title = "Summary"
 
     headers = [
-        "Full Name",
-        "Phone",
+        "Learner Full Name",
+        "Learner Phone",
         "Grade",
+        "Parent/Guardian Name",
+        "Parent/Guardian Phone",
+        "Parent/Guardian Email",
         f"Enrolled {prev_month}",
         f"Enrolled {curr_month}",
         "Status"
