@@ -43480,7 +43480,7 @@ def tutor_application_form():
                         </div>
 
                         <div>
-                            <label>Upload Certificate / Transcript</label>
+                            <label>Upload Matric Certificate / Transcript</label>
                             <input type="file"
                                    name="certificate"
                                    accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
@@ -44853,7 +44853,7 @@ def management_application_form():
                         </div>
 
                         <div>
-                            <label>Upload Certificate / Transcript</label>
+                            <label>Upload Matric Certificate / Transcript</label>
                             <input type="file"
                                    name="certificate"
                                    accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
