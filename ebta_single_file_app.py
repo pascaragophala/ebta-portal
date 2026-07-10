@@ -8969,6 +8969,150 @@ def page(title, body_html, extra_head="", extra_js=""):
         </section>
     </div>
     """ if sidebar_html else body_html
+    
+    upload_feedback_js = """
+    <style>
+        .ebta-selected-file-box {
+            margin-top: 8px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px dashed #cbd5e1;
+            background: #f8fafc;
+            color: #64748b;
+            font-size: 13px;
+            line-height: 1.45;
+            font-weight: 700;
+        }
+
+        .ebta-selected-file-box.selected {
+            border: 1px solid rgba(27, 94, 32, 0.35);
+            background: #eef8ef;
+            color: #14532d;
+            box-shadow: 0 6px 16px rgba(27, 94, 32, 0.08);
+        }
+
+        .ebta-selected-file-box .file-main {
+            display: block;
+            font-weight: 900;
+            color: #14532d;
+            margin-bottom: 3px;
+        }
+
+        .ebta-selected-file-box .file-sub {
+            display: block;
+            font-size: 12px;
+            color: #64748b;
+            font-weight: 700;
+            word-break: break-word;
+        }
+
+        .ebta-file-has-selection {
+            border-color: rgba(27, 94, 32, 0.45) !important;
+            background: linear-gradient(180deg, #ffffff, #f3fbf4) !important;
+        }
+
+        input[type="file"].ebta-file-ready {
+            border: 2px solid rgba(27, 94, 32, 0.25);
+            border-radius: 12px;
+            padding: 10px;
+            background: #f8fafc;
+        }
+
+        input[type="file"].ebta-file-ready.has-file {
+            border-color: #1b5e20;
+            background: #eef8ef;
+        }
+    </style>
+
+    <script>
+    document.addEventListener("DOMContentLoaded", function () {
+
+        function ebtaFormatFileSize(bytes) {
+            if (!bytes && bytes !== 0) return "";
+            if (bytes < 1024) return bytes + " B";
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+            return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+        }
+
+        function ebtaGetLabelForInput(input) {
+            let label = null;
+
+            if (input.id === "report_file_upload") {
+                label = document.getElementById("upload_file_name");
+            }
+
+            if (input.id === "report_camera_input") {
+                label = document.getElementById("report_camera_name");
+            }
+
+            if (!label && input.id) {
+                label = document.querySelector('[data-ebta-file-label-for="' + input.id + '"]');
+            }
+
+            if (!label) {
+                label = document.createElement("div");
+                label.setAttribute("data-ebta-file-label-for", input.id || input.name || "file");
+                input.insertAdjacentElement("afterend", label);
+            }
+
+            label.classList.add("ebta-selected-file-box");
+
+            return label;
+        }
+
+        function ebtaUpdateFileInput(input) {
+            const label = ebtaGetLabelForInput(input);
+            const container = input.closest(".card, .soft, .upload-card, .question-card, .file-card");
+
+            input.classList.add("ebta-file-ready");
+
+            if (input.files && input.files.length > 0) {
+                const files = Array.from(input.files);
+                const fileNames = files.map(file => file.name).join(", ");
+                const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+
+                label.classList.add("selected");
+                input.classList.add("has-file");
+
+                if (container) {
+                    container.classList.add("ebta-file-has-selection");
+                }
+
+                if (files.length === 1) {
+                    label.innerHTML =
+                        '<span class="file-main">✅ File selected successfully</span>' +
+                        '<span class="file-sub">' + files[0].name + ' · ' + ebtaFormatFileSize(files[0].size) + '</span>';
+                } else {
+                    label.innerHTML =
+                        '<span class="file-main">✅ ' + files.length + ' files selected successfully</span>' +
+                        '<span class="file-sub">' + fileNames + ' · Total: ' + ebtaFormatFileSize(totalSize) + '</span>';
+                }
+
+            } else {
+                label.classList.remove("selected");
+                input.classList.remove("has-file");
+
+                if (container) {
+                    container.classList.remove("ebta-file-has-selection");
+                }
+
+                label.innerHTML =
+                    '<span class="file-main" style="color:#64748b;">No file selected yet</span>' +
+                    '<span class="file-sub">Please choose a document, image, or photo before submitting.</span>';
+            }
+        }
+
+        document.querySelectorAll('input[type="file"]').forEach(function (input) {
+            ebtaUpdateFileInput(input);
+
+            input.addEventListener("change", function () {
+                ebtaUpdateFileInput(input);
+            });
+        });
+
+    });
+    </script>
+    """
 
     return f"""
     <html><head>
@@ -9108,7 +9252,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 </a>
             </div>
         </div>
-    </footer>{extra_js}{auto_logout_js}
+    </footer>{upload_feedback_js}{extra_js}{auto_logout_js}
     </body></html>
     """
 
