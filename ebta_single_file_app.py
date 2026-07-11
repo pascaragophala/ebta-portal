@@ -8185,8 +8185,7 @@ def page(title, body_html, extra_head="", extra_js=""):
     auth = []
     if not (is_student() or is_tutor() or is_admin() or is_coo() or is_cao() or is_ceo() or is_school_manager()):
         auth += [f"<a href='{url_for('student_login')}'>Student</a>",
-                f"<a href='{url_for('tutor_login')}'>Tutor</a>",
-                f"<a href='{url_for('school_login')}'>School Management</a>"]
+                f"<a href='{url_for('tutor_login')}'>Tutor</a>"]
     else:
         if is_student():
             auth += [f"<a href='{url_for('student_home')}'>My Portal</a>", f"<a href='{url_for('student_logout')}'>Logout</a>"]
