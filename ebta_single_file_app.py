@@ -85040,7 +85040,7 @@ def operations_tasks_body(role_title="My Tasks"):
     {nav_html}
     <section class='card'>
         <h1>{escape(role_title)}</h1>
-        <p class='muted'>These are the operational tasks assigned to you by the CEO. You can start a task and mark it as done once completed. The CEO will see the updated status from her portal.</p>
+        <p class='muted'>These are the operational tasks assigned to you by the CEO. You can start a task and mark it as done once completed.</p>
         <div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px'>{ceo_task_stats_cards(stats)}</div>
     </section>
 
