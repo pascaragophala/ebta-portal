@@ -124,6 +124,9 @@ def get_logged_in_portal_role():
     if session.get("ceo_id"):
         return "ceo"
 
+    if session.get("school_manager_id"):
+        return "school_manager"
+
     return None
 
 
@@ -146,6 +149,7 @@ def logout_path_for_role(role):
         "coo": "/coo/logout",
         "cao": "/cao/logout",
         "ceo": "/ceo/logout",
+        "school_manager": "/school/logout",
     }
 
     return logout_paths.get(role, "/")
@@ -170,6 +174,7 @@ def login_path_for_role(role):
         "coo": "/coo/login",
         "cao": "/cao/login",
         "ceo": "/ceo/login",
+        "school_manager": "/school/login",
     }
 
     return login_paths.get(role, "/")
@@ -1370,6 +1375,46 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_tasks_user ON ceo_operation_tasks(assigned_user_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_tasks_status ON ceo_operation_tasks(status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_tasks_due ON ceo_operation_tasks(due_date)")
+
+    # ================= SCHOOL MOVEMENT / SCHOOL MANAGEMENT PORTAL =================
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS school_managements(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        school_name TEXT NOT NULL,
+        manager_name TEXT NOT NULL,
+        phone TEXT,
+        email TEXT,
+        username TEXT NOT NULL UNIQUE,
+        pin TEXT NOT NULL,
+        notes TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS school_student_notes(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        school_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        note_type TEXT NOT NULL DEFAULT 'General',
+        title TEXT NOT NULL,
+        note TEXT,
+        status TEXT NOT NULL DEFAULT 'OPEN',
+        created_by_name TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        FOREIGN KEY(school_id) REFERENCES school_managements(id) ON DELETE CASCADE,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_school_managements_school ON school_managements(school_name)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_school_managements_username ON school_managements(username)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_school_notes_school ON school_student_notes(school_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_school_notes_student ON school_student_notes(student_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_school_notes_status ON school_student_notes(status)")
     
     cur.execute("""
     CREATE TABLE IF NOT EXISTS discount_coupons(
@@ -4161,6 +4206,27 @@ def is_admission_coordinator():
 def require_admission_coordinator():
     if not is_admission_coordinator():
         return redirect(url_for("admission_login"))
+
+
+def is_school_manager():
+    return session.get("school_manager_id")
+
+
+def require_school_manager():
+    if not is_school_manager():
+        return redirect(url_for("school_login"))
+
+
+def current_school_name():
+    return (session.get("school_name") or "").strip()
+
+
+def current_school_manager_id():
+    return session.get("school_manager_id")
+
+
+def school_match_sql(alias="s"):
+    return f"LOWER(TRIM(COALESCE({alias}.school,''))) = LOWER(TRIM(?))"
 
 
 def is_student(): return session.get("student_id")
@@ -8117,9 +8183,10 @@ body:`manager_id=${manager}&tutor_id=${tutor}&state=${state?1:0}`
 
 def page(title, body_html, extra_head="", extra_js=""):
     auth = []
-    if not (is_student() or is_tutor() or is_admin() or is_coo() or is_cao() or is_ceo()):
+    if not (is_student() or is_tutor() or is_admin() or is_coo() or is_cao() or is_ceo() or is_school_manager()):
         auth += [f"<a href='{url_for('student_login')}'>Student</a>",
-                f"<a href='{url_for('tutor_login')}'>Tutor</a>"]
+                f"<a href='{url_for('tutor_login')}'>Tutor</a>",
+                f"<a href='{url_for('school_login')}'>School Management</a>"]
     else:
         if is_student():
             auth += [f"<a href='{url_for('student_home')}'>My Portal</a>", f"<a href='{url_for('student_logout')}'>Logout</a>"]
@@ -8141,6 +8208,11 @@ def page(title, body_html, extra_head="", extra_js=""):
             auth += [
                 f"<a href='{url_for('ceo_dashboard')}'>CEO</a>",
                 f"<a href='{url_for('ceo_logout')}'>Logout</a>"
+            ]
+        if is_school_manager():
+            auth += [
+                f"<a href='{url_for('school_dashboard')}'>School Portal</a>",
+                f"<a href='{url_for('school_logout')}'>Logout</a>"
             ]
             
     right = " ".join(auth)
@@ -8169,6 +8241,9 @@ def page(title, body_html, extra_head="", extra_js=""):
 
     elif is_ceo():
         body_class = "role-ceo"
+
+    elif is_school_manager():
+        body_class = "role-school-manager"
         
     auto_logout_js = ""
 
@@ -22415,6 +22490,7 @@ def admin_nav():
             ("Parents Information", "admin_parents_notifications", "/admin/parents-notifications"),
             ("Parent WhatsApp Follow-Up", "admin_non_enrolled_parent_whatsapp", "/admin/non-enrolled-parent-whatsapp"),
             ("One-on-One Sessions", "admin_one_on_one", "/admin/one-on-one"),
+            ("School Movement", "admin_school_movement", "/admin/school-movement"),
             ("Tasks from CEO", "admin_operations_tasks", "/admin/tasks"),
             
         ],
@@ -22467,6 +22543,7 @@ def admin_nav():
                     ("Management Applications", "admin_management_applications", "/admin/management-applications"),
                     ("Duty Admins", "admin_duty_admins", "/admin/duty-admins"),
                     ("Admission Coordinators", "admin_admission_coordinators", "/admin/admission-coordinators"),
+                    ("School Management Logins", "admin_school_managements", "/admin/school-managements"),
                     ("Discount Control", "admin_discounts_control", "/admin/discounts-control"),
                     ("Enrollment Approval Control", "admin_enrollment_approval_control", "/admin/enrollment-approval-control"),
                 ],
@@ -55609,6 +55686,7 @@ def admission_nav():
         <a class="btn secondary" href="{url_for('admission_inbox')}">Inbox</a>
         <a class="btn secondary" href="{url_for('admission_discounts')}">Discount Codes</a>
         <a class="btn secondary" href="{url_for('admission_referrals')}">Referrals</a>
+        <a class="btn secondary" href="/admission/school-movement">School Movement</a>
         <a class="btn secondary" href="/admission/one-on-one">One-on-One Sessions</a>
         <a class="btn secondary" href="/admission/tasks">Tasks from CEO</a>
         <a class="btn danger" href="{url_for('admission_logout')}">Logout</a>
@@ -65685,6 +65763,7 @@ def cao_nav():
                 cao_link("Attendance Trends", "cao_attendance", "cao_attendance_enabled", icon="📈"),
                 cao_link("Student Reports", "cao_student_reports", "cao_student_reports_enabled", icon="📄"),
                 cao_link("Learner Movement", "cao_learner_movement", "cao_performance_enabled", icon="🔁"),
+                cao_link("School Movement", "cao_school_movement", "cao_performance_enabled", fallback="/cao/school-movement", icon="🏫"),
             ]
         ),
     ]
@@ -70975,6 +71054,7 @@ def ceo_nav():
                 ceo_link("Operations Tasks", "ceo_operations_tasks", "/ceo/tasks", "✅"),
                 ceo_link("Parent WhatsApp Follow-Up", "ceo_non_enrolled_parent_whatsapp", "/ceo/non-enrolled-parent-whatsapp", "💬"),
                 ceo_link("One-on-One Programme", "ceo_one_on_one_dashboard", "/ceo/one-on-one-dashboard", "👤"),
+                ceo_link("School Movement", "ceo_school_movement", "/ceo/school-movement", "🏫"),
             ]
         ),
         (
@@ -85183,6 +85263,778 @@ def social_media_operations_tasks():
     if r:
         return r
     return operations_tasks_body("Social Media Tasks from CEO")
+
+
+# =============================================================
+# SCHOOL MOVEMENT / SCHOOL MANAGEMENT PORTAL
+# =============================================================
+
+def school_pin():
+    return str(random.randint(10000, 99999))
+
+
+def school_slug(value):
+    value = str(value or "school").strip().lower()
+    cleaned = []
+    for ch in value:
+        if ch.isalnum():
+            cleaned.append(ch)
+        elif ch in [" ", "-", "_"]:
+            cleaned.append("_")
+    slug = "".join(cleaned).strip("_")
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    return slug or "school"
+
+
+def school_nav():
+    school_name = session.get("school_name", "School")
+    return f"""
+    <nav class="admin-nav">
+        <a class="btn secondary" href="{url_for('school_dashboard')}">Dashboard</a>
+        <a class="btn secondary" href="{url_for('school_students')}">Students</a>
+        <a class="btn secondary" href="{url_for('school_notes')}">Follow-Up Notes</a>
+        <span class="chip">{escape(school_name)}</span>
+        <a class="btn danger" href="{url_for('school_logout')}">Logout</a>
+    </nav>
+    """
+
+
+def school_student_allowed(student_id):
+    school_name = current_school_name()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT *
+        FROM students s
+        WHERE s.id=?
+          AND {school_match_sql('s')}
+        LIMIT 1
+    """, (student_id, school_name))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def school_distinct_names():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT TRIM(COALESCE(school,'')) AS school
+        FROM students
+        WHERE TRIM(COALESCE(school,'')) != ''
+        ORDER BY school
+    """)
+    schools = [r["school"] for r in cur.fetchall()]
+    conn.close()
+    return schools
+
+
+def school_stats_for_name(school_name, month=None):
+    month = month or get_setting("current_month")
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM students s
+        WHERE LOWER(TRIM(COALESCE(s.school,''))) = LOWER(TRIM(?))
+    """, (school_name,))
+    total_students = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT s.id) AS c
+        FROM students s
+        JOIN enrollments e ON e.student_id=s.id
+        WHERE LOWER(TRIM(COALESCE(s.school,''))) = LOWER(TRIM(?))
+          AND e.month=?
+    """, (school_name, month))
+    enrolled_this_month = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM students s
+        JOIN student_reports r ON r.student_id=s.id
+        WHERE LOWER(TRIM(COALESCE(s.school,''))) = LOWER(TRIM(?))
+    """, (school_name,))
+    reports = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM school_student_notes n
+        JOIN school_managements sm ON sm.id=n.school_id
+        WHERE LOWER(TRIM(sm.school_name)) = LOWER(TRIM(?))
+          AND n.status != 'RESOLVED'
+    """, (school_name,))
+    open_notes = cur.fetchone()["c"] or 0
+
+    conn.close()
+
+    return {
+        "students": total_students,
+        "enrolled": enrolled_this_month,
+        "reports": reports,
+        "open_notes": open_notes,
+    }
+
+
+def school_movement_overview(title, nav_html, show_credentials=False):
+    month = request.args.get("month") or get_setting("current_month")
+    schools = school_distinct_names()
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT *
+        FROM school_managements
+        ORDER BY school_name, manager_name
+    """)
+    accounts = cur.fetchall()
+    conn.close()
+
+    accounts_by_school = {}
+    for a in accounts:
+        accounts_by_school.setdefault(str(a["school_name"] or "").strip().lower(), []).append(a)
+
+    rows = ""
+    for school in schools:
+        stats_data = school_stats_for_name(school, month)
+        school_accounts = accounts_by_school.get(school.strip().lower(), [])
+        account_text = "<span class='chip lapsed'>No school login yet</span>"
+        if school_accounts:
+            bits = []
+            for acc in school_accounts:
+                status = "Active" if acc["is_active"] else "Inactive"
+                if show_credentials:
+                    bits.append(
+                        f"<strong>{escape(acc['manager_name'])}</strong><br>"
+                        f"Username: <code>{escape(acc['username'])}</code><br>"
+                        f"PIN: <code>{escape(acc['pin'])}</code><br>"
+                        f"Status: {escape(status)}"
+                    )
+                else:
+                    bits.append(f"{escape(acc['manager_name'])} <span class='chip'>{escape(status)}</span>")
+            account_text = "<hr>".join(bits)
+
+        rows += f"""
+        <tr>
+            <td><strong>{escape(school)}</strong></td>
+            <td>{stats_data['students']}</td>
+            <td>{stats_data['enrolled']}</td>
+            <td>{stats_data['reports']}</td>
+            <td>{stats_data['open_notes']}</td>
+            <td>{account_text}</td>
+        </tr>
+        """
+
+    if not rows:
+        rows = "<tr><td colspan='6' class='muted'>No schools are currently captured on learner profiles.</td></tr>"
+
+    credential_note = ""
+    if show_credentials:
+        credential_note = """
+        <div class="card" style="border-left:5px solid #d4a017;background:#fffbea;">
+            <strong>High Admin Credential View</strong>
+            <p class="muted">This page displays school login details. Handle these credentials carefully and only share them with the correct school representative.</p>
+        </div>
+        """
+
+    body = f"""
+    {nav_html}
+    <section class="card">
+        <h1>{escape(title)}</h1>
+        <p class="muted">
+            This page gives EBTA a school-by-school movement overview. Each school management account can only see learners linked to its own school name on the student profile.
+        </p>
+        <form method="get" class="toolbar">
+            <label>Month</label>
+            <input type="month" name="month" value="{escape(month)}">
+            <button class="btn mini">Apply</button>
+        </form>
+    </section>
+    {credential_note}
+    <section class="card">
+        <div class="stats">
+            {stat('Schools captured', str(len(schools)))}
+            {stat('Management accounts', str(len(accounts)))}
+            {stat('Selected month', month)}
+        </div>
+        <div style="overflow:auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>School</th>
+                        <th>Students</th>
+                        <th>Enrolled learners</th>
+                        <th>Reports uploaded</th>
+                        <th>Open school notes</th>
+                        <th>School management account</th>
+                    </tr>
+                </thead>
+                <tbody>{rows}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+    return page(title, body)
+
+
+@app.get('/school/login')
+def school_login():
+    if is_school_manager():
+        return redirect(url_for('school_dashboard'))
+
+    body = """
+    <section class="wrap small">
+        <div class="card auth-card">
+            <h1>School Management Login</h1>
+            <p class="muted">Login using the school management username and PIN provided by EBTA High Admin.</p>
+            <form method="post" action="/school/login" class="grid">
+                <div>
+                    <label>Username</label>
+                    <input name="username" required>
+                </div>
+                <div>
+                    <label>PIN</label>
+                    <input name="pin" type="password" maxlength="5" required>
+                </div>
+                <button class="btn success">Login</button>
+            </form>
+        </div>
+    </section>
+    """
+    return page("School Management Login", body)
+
+
+@app.post('/school/login')
+def school_login_post():
+    username = request.form.get("username", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT *
+        FROM school_managements
+        WHERE LOWER(username)=LOWER(?)
+          AND pin=?
+          AND is_active=1
+        LIMIT 1
+    """, (username, pin))
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return page("Login Failed", card_msg("Invalid school management login details or the account is inactive."))
+
+    session.clear()
+    session["school_manager_id"] = row["id"]
+    session["school_manager_name"] = row["manager_name"]
+    session["school_name"] = row["school_name"]
+
+    return redirect(url_for("school_dashboard"))
+
+
+@app.get('/school/logout')
+def school_logout():
+    session.clear()
+    return redirect(url_for("school_login"))
+
+
+@app.get('/school')
+def school_dashboard():
+    r = require_school_manager()
+    if r:
+        return r
+
+    school_name = current_school_name()
+    month = request.args.get("month") or get_setting("current_month")
+    stats_data = school_stats_for_name(school_name, month)
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT s.*
+        FROM students s
+        WHERE {school_match_sql('s')}
+        ORDER BY s.full_name
+        LIMIT 10
+    """, (school_name,))
+    learners = cur.fetchall()
+
+    cur.execute("""
+        SELECT n.*, s.full_name, s.grade
+        FROM school_student_notes n
+        JOIN students s ON s.id=n.student_id
+        WHERE n.school_id=?
+        ORDER BY n.created_at DESC
+        LIMIT 8
+    """, (current_school_manager_id(),))
+    notes = cur.fetchall()
+    conn.close()
+
+    learner_rows = "".join([
+        f"<tr><td>{escape(x['full_name'])}</td><td>{escape(grade_label(x['grade']))}</td><td>{escape(x['phone_whatsapp'] or '')}</td><td><a class='btn mini' href='{url_for('school_student_detail', student_id=x['id'])}'>View</a></td></tr>"
+        for x in learners
+    ]) or "<tr><td colspan='4' class='muted'>No learners linked to this school yet.</td></tr>"
+
+    note_rows = "".join([
+        f"<tr><td>{escape(n['full_name'])}<div class='mini muted'>{escape(grade_label(n['grade']))}</div></td><td>{escape(n['title'])}</td><td>{escape(n['status'])}</td><td>{format_chat_datetime(n['created_at'])}</td></tr>"
+        for n in notes
+    ]) or "<tr><td colspan='4' class='muted'>No school follow-up notes yet.</td></tr>"
+
+    body = f"""
+    {school_nav()}
+    <section class="card">
+        <h1>{escape(school_name)} School Movement Portal</h1>
+        <p class="muted">
+            Welcome, {escape(session.get('school_manager_name', 'School Manager'))}. This portal allows your school to oversee only learners linked to your school on EBTA.
+        </p>
+        <form method="get" class="toolbar">
+            <label>Month</label>
+            <input type="month" name="month" value="{escape(month)}">
+            <button class="btn mini">Apply</button>
+        </form>
+        <div class="stats">
+            {stat('Students linked to school', str(stats_data['students']))}
+            {stat('Enrolled learners', str(stats_data['enrolled']))}
+            {stat('Reports uploaded', str(stats_data['reports']))}
+            {stat('Open follow-up notes', str(stats_data['open_notes']))}
+        </div>
+    </section>
+    <section class="card">
+        <h2>Recent Learners</h2>
+        <div style="overflow:auto;"><table><thead><tr><th>Name</th><th>Grade</th><th>Phone</th><th>Action</th></tr></thead><tbody>{learner_rows}</tbody></table></div>
+    </section>
+    <section class="card">
+        <h2>Recent School Notes</h2>
+        <div style="overflow:auto;"><table><thead><tr><th>Learner</th><th>Note</th><th>Status</th><th>Date</th></tr></thead><tbody>{note_rows}</tbody></table></div>
+    </section>
+    """
+    return page("School Movement Dashboard", body)
+
+
+@app.get('/school/students')
+def school_students():
+    r = require_school_manager()
+    if r:
+        return r
+
+    school_name = current_school_name()
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+
+    where = [school_match_sql('s')]
+    params = [school_name]
+    if q:
+        like = f"%{q}%"
+        where.append("(s.full_name LIKE ? OR s.phone_whatsapp LIKE ? OR s.guardian_name LIKE ? OR s.guardian_phone LIKE ?)")
+        params.extend([like, like, like, like])
+    if grade:
+        where.append("s.grade=?")
+        params.append(grade)
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT s.*
+        FROM students s
+        WHERE {' AND '.join(where)}
+        ORDER BY s.grade, s.full_name
+    """, params)
+    rows = cur.fetchall()
+
+    cur.execute(f"""
+        SELECT DISTINCT s.grade
+        FROM students s
+        WHERE {school_match_sql('s')}
+        ORDER BY s.grade
+    """, (school_name,))
+    grades = [g["grade"] for g in cur.fetchall()]
+    conn.close()
+
+    grade_options = "<option value=''>All grades</option>" + "".join([
+        f"<option value='{escape(g or '', quote=True)}' {'selected' if g == grade else ''}>{escape(grade_label(g))}</option>"
+        for g in grades
+    ])
+
+    trs = ""
+    for s in rows:
+        trs += f"""
+        <tr>
+            <td><strong>{escape(s['full_name'])}</strong></td>
+            <td>{escape(grade_label(s['grade']))}</td>
+            <td>{escape(s['phone_whatsapp'] or '')}</td>
+            <td>{escape(s['guardian_name'] or '')}<div class='mini muted'>{escape(s['guardian_phone'] or '')}</div></td>
+            <td>{escape(s['email'] or '')}</td>
+            <td><a class="btn mini" href="{url_for('school_student_detail', student_id=s['id'])}">View learner</a></td>
+        </tr>
+        """
+
+    if not trs:
+        trs = "<tr><td colspan='6' class='muted'>No learners found for this school.</td></tr>"
+
+    body = f"""
+    {school_nav()}
+    <section class="card">
+        <h1>{escape(school_name)} Learners</h1>
+        <p class="muted">You can only view learners linked to your own school.</p>
+        <form method="get" class="toolbar">
+            <input name="q" value="{escape(q)}" placeholder="Search learner, phone or parent">
+            <select name="grade">{grade_options}</select>
+            <button class="btn mini">Search</button>
+            <a class="btn mini secondary" href="{url_for('school_students')}">Clear</a>
+        </form>
+        <div style="overflow:auto;">
+            <table>
+                <thead><tr><th>Learner</th><th>Grade</th><th>Phone</th><th>Parent/Guardian</th><th>Email</th><th>Action</th></tr></thead>
+                <tbody>{trs}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+    return page("School Learners", body)
+
+
+@app.get('/school/student/<int:student_id>')
+def school_student_detail(student_id):
+    r = require_school_manager()
+    if r:
+        return r
+
+    s = school_student_allowed(student_id)
+    if not s:
+        return page("Access Denied", card_msg("This learner is not linked to your school."))
+
+    month = request.args.get("month") or get_setting("current_month")
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT e.*, sub.name AS subject_name, sub.grade AS subject_grade
+        FROM enrollments e
+        JOIN subjects sub ON sub.id=e.subject_id
+        WHERE e.student_id=? AND e.month=?
+        ORDER BY sub.name
+    """, (student_id, month))
+    enrollments = cur.fetchall()
+
+    cur.execute("""
+        SELECT *
+        FROM student_reports
+        WHERE student_id=?
+        ORDER BY upload_date DESC
+        LIMIT 10
+    """, (student_id,))
+    reports = cur.fetchall()
+
+    cur.execute("""
+        SELECT n.*
+        FROM school_student_notes n
+        WHERE n.school_id=? AND n.student_id=?
+        ORDER BY n.created_at DESC
+    """, (current_school_manager_id(), student_id))
+    notes = cur.fetchall()
+    conn.close()
+
+    enrollment_rows = "".join([
+        f"<tr><td>{escape(e['subject_name'])}</td><td>{escape(e['status'])}</td><td>{escape(e['month'])}</td></tr>"
+        for e in enrollments
+    ]) or "<tr><td colspan='3' class='muted'>No enrollments found for the selected month.</td></tr>"
+
+    report_rows = "".join([
+        f"<tr><td>{escape(rp['file_name'])}</td><td>{escape(rp['term'] or '')}</td><td>{format_chat_datetime(rp['upload_date'])}</td></tr>"
+        for rp in reports
+    ]) or "<tr><td colspan='3' class='muted'>No reports uploaded yet.</td></tr>"
+
+    note_rows = "".join([
+        f"<tr><td>{escape(n['note_type'])}</td><td><strong>{escape(n['title'])}</strong><div class='mini muted'>{escape(n['note'] or '')}</div></td><td>{escape(n['status'])}</td><td>{format_chat_datetime(n['created_at'])}</td></tr>"
+        for n in notes
+    ]) or "<tr><td colspan='4' class='muted'>No school notes captured yet.</td></tr>"
+
+    body = f"""
+    {school_nav()}
+    <section class="card">
+        <h1>{escape(s['full_name'])}</h1>
+        <p class="muted">School view for {escape(current_school_name())}. Internal EBTA finance and unrelated learner data are not shown here.</p>
+        <div class="stats">
+            {stat('Grade', escape(grade_label(s['grade'])))}
+            {stat('Learner phone', escape(s['phone_whatsapp'] or ''))}
+            {stat('Parent/Guardian', escape(s['guardian_name'] or ''))}
+            {stat('Parent phone', escape(s['guardian_phone'] or ''))}
+        </div>
+        <form method="get" class="toolbar">
+            <label>Month</label>
+            <input type="month" name="month" value="{escape(month)}">
+            <button class="btn mini">Apply</button>
+        </form>
+    </section>
+    <section class="card">
+        <h2>Current Month Enrollments</h2>
+        <div style="overflow:auto;"><table><thead><tr><th>Subject</th><th>Status</th><th>Month</th></tr></thead><tbody>{enrollment_rows}</tbody></table></div>
+    </section>
+    <section class="card">
+        <h2>Reports Uploaded</h2>
+        <div style="overflow:auto;"><table><thead><tr><th>File</th><th>Term</th><th>Uploaded</th></tr></thead><tbody>{report_rows}</tbody></table></div>
+    </section>
+    <section class="card">
+        <h2>Add School Follow-Up Note</h2>
+        <form method="post" action="{url_for('school_student_note_create', student_id=student_id)}" class="grid">
+            <div><label>Note Type</label><select name="note_type"><option>General</option><option>Academic Concern</option><option>Attendance Concern</option><option>Parent Follow-Up</option><option>Improvement</option></select></div>
+            <div><label>Status</label><select name="status"><option>OPEN</option><option>IN_PROGRESS</option><option>RESOLVED</option></select></div>
+            <div style="grid-column:1/-1"><label>Title</label><input name="title" required></div>
+            <div style="grid-column:1/-1"><label>Note</label><textarea name="note" rows="4"></textarea></div>
+            <button class="btn success">Save Note</button>
+        </form>
+    </section>
+    <section class="card">
+        <h2>School Follow-Up Notes</h2>
+        <div style="overflow:auto;"><table><thead><tr><th>Type</th><th>Note</th><th>Status</th><th>Date</th></tr></thead><tbody>{note_rows}</tbody></table></div>
+    </section>
+    """
+    return page("School Learner Detail", body)
+
+
+@app.post('/school/student/<int:student_id>/note')
+def school_student_note_create(student_id):
+    r = require_school_manager()
+    if r:
+        return r
+
+    s = school_student_allowed(student_id)
+    if not s:
+        return page("Access Denied", card_msg("This learner is not linked to your school."))
+
+    note_type = request.form.get("note_type", "General").strip() or "General"
+    title = request.form.get("title", "").strip()
+    note = request.form.get("note", "").strip()
+    status = request.form.get("status", "OPEN").strip() or "OPEN"
+
+    if not title:
+        return page("Missing Title", card_msg("Please enter a note title."))
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO school_student_notes(
+            school_id, student_id, note_type, title, note, status,
+            created_by_name, created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?)
+    """, (
+        current_school_manager_id(), student_id, note_type, title, note, status,
+        session.get("school_manager_name", "School Manager"), now_utc_iso(), now_utc_iso()
+    ))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("school_student_detail", student_id=student_id))
+
+
+@app.get('/school/notes')
+def school_notes():
+    r = require_school_manager()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT n.*, s.full_name, s.grade
+        FROM school_student_notes n
+        JOIN students s ON s.id=n.student_id
+        WHERE n.school_id=?
+        ORDER BY n.created_at DESC
+    """, (current_school_manager_id(),))
+    rows = cur.fetchall()
+    conn.close()
+
+    trs = "".join([
+        f"<tr><td><a href='{url_for('school_student_detail', student_id=r['student_id'])}'>{escape(r['full_name'])}</a><div class='mini muted'>{escape(grade_label(r['grade']))}</div></td><td>{escape(r['note_type'])}</td><td><strong>{escape(r['title'])}</strong><div class='mini muted'>{escape(r['note'] or '')}</div></td><td>{escape(r['status'])}</td><td>{format_chat_datetime(r['created_at'])}</td></tr>"
+        for r in rows
+    ]) or "<tr><td colspan='5' class='muted'>No notes captured yet.</td></tr>"
+
+    body = f"""
+    {school_nav()}
+    <section class="card">
+        <h1>School Follow-Up Notes</h1>
+        <p class="muted">Notes created by your school management account for your learners only.</p>
+        <div style="overflow:auto;"><table><thead><tr><th>Learner</th><th>Type</th><th>Note</th><th>Status</th><th>Date</th></tr></thead><tbody>{trs}</tbody></table></div>
+    </section>
+    """
+    return page("School Notes", body)
+
+
+@app.route('/admin/school-managements', methods=['GET', 'POST'])
+@require_high_admin
+def admin_school_managements():
+    if request.method == 'POST':
+        school_name = request.form.get("school_name", "").strip()
+        manager_name = request.form.get("manager_name", "").strip()
+        phone = request.form.get("phone", "").strip()
+        email = request.form.get("email", "").strip()
+        username = request.form.get("username", "").strip()
+        pin = request.form.get("pin", "").strip()
+        notes = request.form.get("notes", "").strip()
+
+        if not school_name or not manager_name:
+            return page("Missing Details", card_msg("Please enter the school name and manager name."))
+
+        if not username:
+            username = school_slug(school_name) + "_school"
+
+        if not pin:
+            pin = school_pin()
+
+        conn = get_db()
+        cur = conn.cursor()
+        base_username = username
+        counter = 2
+        while True:
+            cur.execute("SELECT id FROM school_managements WHERE LOWER(username)=LOWER(?)", (username,))
+            if not cur.fetchone():
+                break
+            username = f"{base_username}_{counter}"
+            counter += 1
+
+        cur.execute("""
+            INSERT INTO school_managements(
+                school_name, manager_name, phone, email, username, pin, notes,
+                is_active, created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)
+        """, (school_name, manager_name, phone, email, username, pin, notes, 1, now_utc_iso(), now_utc_iso()))
+        conn.commit()
+        conn.close()
+        return redirect(url_for("admin_school_managements"))
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM school_managements ORDER BY school_name, manager_name")
+    accounts = cur.fetchall()
+    cur.execute("""
+        SELECT DISTINCT TRIM(COALESCE(school,'')) AS school
+        FROM students
+        WHERE TRIM(COALESCE(school,'')) != ''
+        ORDER BY school
+    """)
+    school_list = [r["school"] for r in cur.fetchall()]
+    conn.close()
+
+    school_options = "".join([f"<option value='{escape(s, quote=True)}'></option>" for s in school_list])
+
+    rows = ""
+    for a in accounts:
+        status = "<span class='chip active'>Active</span>" if a["is_active"] else "<span class='chip lapsed'>Inactive</span>"
+        rows += f"""
+        <tr>
+            <td><strong>{escape(a['school_name'])}</strong></td>
+            <td>{escape(a['manager_name'])}<div class='mini muted'>{escape(a['phone'] or '')} {escape(a['email'] or '')}</div></td>
+            <td><code>{escape(a['username'])}</code></td>
+            <td><code>{escape(a['pin'])}</code></td>
+            <td>{status}</td>
+            <td>
+                <form method="post" action="{url_for('admin_school_management_toggle', account_id=a['id'])}" style="display:inline;">
+                    <button class="btn mini secondary">Toggle</button>
+                </form>
+                <form method="post" action="{url_for('admin_school_management_reset_pin', account_id=a['id'])}" style="display:inline;">
+                    <button class="btn mini">Reset PIN</button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    if not rows:
+        rows = "<tr><td colspan='6' class='muted'>No school management accounts created yet.</td></tr>"
+
+    body = f"""
+    {admin_nav()}
+    <section class="card">
+        <h1>School Management Logins</h1>
+        <p class="muted">
+            High Admin can create login details for each school. Each school account will only see learners whose student profile school name matches that account's school name.
+        </p>
+        <div class="card" style="border-left:5px solid #d4a017;background:#fffbea;">
+            <strong>Credential security note</strong>
+            <p class="muted">These usernames and PINs must be shared carefully with the correct school representative only.</p>
+        </div>
+    </section>
+    <section class="card">
+        <h2>Create School Management Account</h2>
+        <form method="post" class="grid">
+            <div><label>School Name</label><input name="school_name" list="school_names" required><datalist id="school_names">{school_options}</datalist></div>
+            <div><label>Manager Name</label><input name="manager_name" required></div>
+            <div><label>Phone</label><input name="phone"></div>
+            <div><label>Email</label><input name="email" type="email"></div>
+            <div><label>Username</label><input name="username" placeholder="Leave blank to auto-generate"></div>
+            <div><label>PIN</label><input name="pin" maxlength="5" placeholder="Leave blank to auto-generate"></div>
+            <div style="grid-column:1/-1"><label>Notes</label><textarea name="notes" rows="3"></textarea></div>
+            <button class="btn success">Create School Login</button>
+        </form>
+    </section>
+    <section class="card">
+        <h2>Existing School Management Accounts</h2>
+        <div style="overflow:auto;"><table><thead><tr><th>School</th><th>Manager</th><th>Username</th><th>PIN</th><th>Status</th><th>Actions</th></tr></thead><tbody>{rows}</tbody></table></div>
+    </section>
+    """
+    return page("School Management Logins", body)
+
+
+@app.post('/admin/school-managements/<int:account_id>/toggle')
+@require_high_admin
+def admin_school_management_toggle(account_id):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT is_active FROM school_managements WHERE id=?", (account_id,))
+    row = cur.fetchone()
+    if row:
+        new_status = 0 if row["is_active"] else 1
+        cur.execute("UPDATE school_managements SET is_active=?, updated_at=? WHERE id=?", (new_status, now_utc_iso(), account_id))
+        conn.commit()
+    conn.close()
+    return redirect(url_for("admin_school_managements"))
+
+
+@app.post('/admin/school-managements/<int:account_id>/reset-pin')
+@require_high_admin
+def admin_school_management_reset_pin(account_id):
+    pin = school_pin()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE school_managements SET pin=?, updated_at=? WHERE id=?", (pin, now_utc_iso(), account_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_school_managements"))
+
+
+@app.get('/admin/school-movement')
+def admin_school_movement():
+    r = require_admin()
+    if r:
+        return r
+    return school_movement_overview("School Movement Overview", admin_nav(), show_credentials=is_high_admin())
+
+
+@app.get('/ceo/school-movement')
+def ceo_school_movement():
+    r = require_ceo()
+    if r:
+        return r
+    return school_movement_overview("CEO School Movement Overview", ceo_nav(), show_credentials=False)
+
+
+@app.get('/cao/school-movement')
+def cao_school_movement():
+    r = require_cao()
+    if r:
+        return r
+    return school_movement_overview("CAO School Movement Overview", cao_nav(), show_credentials=False)
+
+
+@app.get('/admission/school-movement')
+def admission_school_movement():
+    r = require_admission_coordinator()
+    if r:
+        return r
+    return school_movement_overview("Admission School Movement Overview", admission_nav(), show_credentials=False)
 
 
 # --- Payfast IPN stub ---
