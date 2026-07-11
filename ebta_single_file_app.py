@@ -55686,7 +55686,6 @@ def admission_nav():
         <a class="btn secondary" href="{url_for('admission_inbox')}">Inbox</a>
         <a class="btn secondary" href="{url_for('admission_discounts')}">Discount Codes</a>
         <a class="btn secondary" href="{url_for('admission_referrals')}">Referrals</a>
-        <a class="btn secondary" href="/admission/school-movement">School Movement</a>
         <a class="btn secondary" href="/admission/one-on-one">One-on-One Sessions</a>
         <a class="btn secondary" href="/admission/tasks">Tasks from CEO</a>
         <a class="btn danger" href="{url_for('admission_logout')}">Logout</a>
