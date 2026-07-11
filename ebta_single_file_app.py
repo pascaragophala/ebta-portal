@@ -1342,6 +1342,34 @@ def init_db():
         updated_at TEXT
     );
     """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS ceo_operation_tasks(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT,
+        assigned_role TEXT NOT NULL,
+        assigned_user_id TEXT,
+        assigned_user_name TEXT,
+        priority TEXT NOT NULL DEFAULT 'MEDIUM',
+        due_date TEXT,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        created_by_ceo_id INTEGER,
+        created_by_name TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        completed_at TEXT,
+        completed_by_role TEXT,
+        completed_by_id TEXT,
+        completed_by_name TEXT,
+        completion_note TEXT
+    );
+    """)
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_tasks_role ON ceo_operation_tasks(assigned_role)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_tasks_user ON ceo_operation_tasks(assigned_user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_tasks_status ON ceo_operation_tasks(status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ceo_tasks_due ON ceo_operation_tasks(due_date)")
     
     cur.execute("""
     CREATE TABLE IF NOT EXISTS discount_coupons(
@@ -22387,6 +22415,7 @@ def admin_nav():
             ("Parents Information", "admin_parents_notifications", "/admin/parents-notifications"),
             ("Parent WhatsApp Follow-Up", "admin_non_enrolled_parent_whatsapp", "/admin/non-enrolled-parent-whatsapp"),
             ("One-on-One Sessions", "admin_one_on_one", "/admin/one-on-one"),
+            ("Tasks from CEO", "admin_operations_tasks", "/admin/tasks"),
             
         ],
         True
@@ -33899,6 +33928,10 @@ def manager_nav():
         <a class="btn mini" href="/manager/one-on-one">
             One-on-One Support
         </a>
+
+        <a class="btn mini" href="/manager/tasks">
+            Tasks from CEO
+        </a>
         
         <a class="btn mini" href="/manager/whatsapp-groups">
             WhatsApp Groups
@@ -35367,6 +35400,7 @@ def aqm_nav():
         <a class="btn mini" href="/aqm/learning-games-analytics">Game Analytics</a>
         <a class="btn mini" href="/aqm/one-on-one">One-on-One Reviews</a>
         <a class="btn mini" href="/aqm/one-on-one/tutor-assignment">Tutor Assignment</a>
+        <a class="btn mini" href="/aqm/tasks">Tasks from CEO</a>
         <a class="btn mini" href="/aqm/ratings">Student Ratings</a>
         <a class="btn mini" href="/aqm/awards">Awards</a>
         <a class="btn mini" href="/aqm/parent-reports">Parent Reports</a>
@@ -46678,6 +46712,7 @@ def treasurer_nav():
         <a class="btn secondary" href="/treasurer/records">Income & Expenses</a>
         <a class="btn secondary" href="/treasurer/payments">Payment Schedule</a>
         <a class="btn secondary" href="/treasurer/monthly-report">Monthly Report</a>
+        <a class="btn secondary" href="/treasurer/tasks">Tasks from CEO</a>
         <a class="btn danger" href="/treasurer/logout">Logout</a>
     </nav>
     """    
@@ -48453,6 +48488,7 @@ def secretary_nav():
         <a class="btn secondary" href="/secretary/communications/new">Create Message</a>
         <a class="btn secondary" href="/secretary/minutes">Meeting Minutes</a>
         <a class="btn secondary" href="/secretary/action-items">Action Items</a>
+        <a class="btn secondary" href="/secretary/tasks">Tasks from CEO</a>
         <a class="btn danger" href="/secretary/logout">Logout</a>
     </nav>
     """
@@ -50777,6 +50813,7 @@ def social_media_nav():
         <a class="btn secondary" href="/social-media/weekly-reports/new">New Weekly Report</a>
         <a class="btn secondary" href="/social-media/crisis-logs">Crisis Logs</a>
         <a class="btn secondary" href="/social-media/crisis-logs/new">Log Crisis</a>
+        <a class="btn secondary" href="/social-media/tasks">Tasks from CEO</a>
         <a class="btn danger" href="/social-media/logout">Logout</a>
     </nav>
     """
@@ -52373,6 +52410,7 @@ def duty_admin_nav():
 
         <!-- <a class="btn secondary" href="{url_for('duty_admin_reports')}">Student Reports</a> -->
         <a class="btn secondary" href="{url_for('duty_admin_followups')}">Follow-Ups</a>
+        <a class="btn secondary" href="/duty-admin/tasks">Tasks from CEO</a>
         <a class="btn danger" href="{url_for('duty_admin_logout')}">Logout</a>
     </nav>
     """
@@ -55572,6 +55610,7 @@ def admission_nav():
         <a class="btn secondary" href="{url_for('admission_discounts')}">Discount Codes</a>
         <a class="btn secondary" href="{url_for('admission_referrals')}">Referrals</a>
         <a class="btn secondary" href="/admission/one-on-one">One-on-One Sessions</a>
+        <a class="btn secondary" href="/admission/tasks">Tasks from CEO</a>
         <a class="btn danger" href="{url_for('admission_logout')}">Logout</a>
     </nav>
     """
@@ -61274,6 +61313,7 @@ def coo_nav():
                 coo_link("Dashboard", "coo_dashboard", icon="🏠"),
                 coo_link("Reports to CEO", "coo_ceo_reports", icon="📤"),
                 coo_link("Operational Team", "coo_team_profiles", "coo_employee_profiles_enabled", icon="👥"),
+                coo_link("Tasks from CEO", "coo_operations_tasks", fallback="/coo/tasks", icon="✅"),
                 coo_link("Enrollments", "coo_enrollments", "coo_enrollments_enabled", icon="📝"),
                 coo_link("All Students", "coo_students", "coo_enrollments_enabled", icon="🎓"),
                 coo_link("Follow-Ups", "coo_followups", "coo_duty_admin_enabled", icon="📌"),
@@ -65618,6 +65658,7 @@ def cao_nav():
             [
                 cao_link("Dashboard", "cao_dashboard", "cao_academic_dashboard_enabled", icon="🏠"),
                 cao_link("Reports to CEO", "cao_ceo_reports", icon="📤"),
+                cao_link("Tasks from CEO", "cao_operations_tasks", fallback="/cao/tasks", icon="✅"),
                 cao_link("Academic Team", "cao_academic_team", "cao_tutors_enabled", icon="👥"),
                 cao_link("Tutors", "cao_tutors", "cao_tutors_enabled", icon="🧑‍🏫"),
                 cao_link("Tutor Managers", "cao_tutor_managers", "cao_tutor_managers_enabled", icon="📋"),
@@ -70931,6 +70972,7 @@ def ceo_nav():
                 ceo_link("Monthly Reports", "ceo_monthly_reports", "/ceo/monthly-reports", "📤"),
                 ceo_link("Risks & Mitigations", "ceo_risks", "/ceo/risks", "⚠️"),
                 ceo_link("Goals", "ceo_goals", "/ceo/goals", "🎯"),
+                ceo_link("Operations Tasks", "ceo_operations_tasks", "/ceo/tasks", "✅"),
                 ceo_link("Parent WhatsApp Follow-Up", "ceo_non_enrolled_parent_whatsapp", "/ceo/non-enrolled-parent-whatsapp", "💬"),
                 ceo_link("One-on-One Programme", "ceo_one_on_one_dashboard", "/ceo/one-on-one-dashboard", "👤"),
             ]
@@ -84516,6 +84558,631 @@ def cao_one_on_one_note_comment(note_id):
     conn.commit()
     conn.close()
     return redirect(url_for("cao_one_on_one_dashboard"))
+
+
+
+# =============================================================
+# CEO OPERATIONS TASKS SYSTEM
+# =============================================================
+
+CEO_TASK_PRIORITIES = ["LOW", "MEDIUM", "HIGH", "URGENT"]
+CEO_TASK_STATUSES = ["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]
+CEO_TASK_ROLE_LABELS = {
+    "ADMIN": "Admin",
+    "COO": "COO",
+    "CAO": "CAO",
+    "AQM": "Academic Quality Manager",
+    "TUTOR_MANAGER": "Tutor Manager",
+    "DUTY_ADMIN": "Duty Admin",
+    "ADMISSION": "Admission Coordinator",
+    "TREASURER": "Treasurer",
+    "SECRETARY": "Secretary",
+    "SOCIAL_MEDIA": "Social Media Manager",
+}
+
+
+def ceo_task_badge(status):
+    status = (status or "PENDING").upper()
+    if status == "COMPLETED":
+        cls = "active"
+    elif status == "IN_PROGRESS":
+        cls = "pending"
+    elif status in ["CANCELLED", "URGENT"]:
+        cls = "lapsed"
+    else:
+        cls = ""
+    return f"<span class='chip {cls}'>{escape(status.replace('_', ' ').title())}</span>"
+
+
+def ceo_task_priority_badge(priority):
+    priority = (priority or "MEDIUM").upper()
+    if priority in ["HIGH", "URGENT"]:
+        cls = "lapsed"
+    elif priority == "MEDIUM":
+        cls = "pending"
+    else:
+        cls = "active"
+    return f"<span class='chip {cls}'>{escape(priority.title())}</span>"
+
+
+def ceo_task_current_actor():
+    """
+    Returns the logged-in staff member as (role_key, user_id, display_name, nav_html, login_redirect).
+    These are the operational roles that can receive tasks from the CEO.
+    """
+    if is_admin():
+        username = str(session.get("admin_username") or "admin")
+        role_name = str(session.get("admin_role") or "ADMIN").title() + " Admin"
+        return "ADMIN", username, role_name + ": " + username, admin_nav(), url_for("admin_login")
+
+    if is_coo():
+        return "COO", str(session.get("coo_id")), session.get("coo_name", "COO"), coo_nav(), url_for("coo_login")
+
+    if is_cao():
+        return "CAO", str(session.get("cao_id")), session.get("cao_name", "CAO"), cao_nav(), url_for("cao_login")
+
+    if is_academic_quality_manager():
+        return "AQM", str(session.get("aqm_id")), session.get("aqm_name", "Academic Quality Manager"), aqm_nav(), url_for("aqm_login")
+
+    if is_tutor_manager():
+        return "TUTOR_MANAGER", str(session.get("manager_id")), session.get("manager_name", "Tutor Manager"), manager_nav(), url_for("manager_login")
+
+    if is_duty_admin():
+        return "DUTY_ADMIN", str(session.get("duty_admin_id")), session.get("duty_admin_name", "Duty Admin"), duty_admin_nav(), url_for("duty_admin_login")
+
+    if is_admission_coordinator():
+        return "ADMISSION", str(session.get("admission_coordinator_id")), session.get("admission_coordinator_name", "Admission Coordinator"), admission_nav(), url_for("admission_login")
+
+    if is_treasurer():
+        return "TREASURER", str(session.get("treasurer_id")), session.get("treasurer_name", "Treasurer"), treasurer_nav(), url_for("treasurer_login")
+
+    if is_secretary():
+        return "SECRETARY", str(session.get("secretary_id")), session.get("secretary_name", "Secretary"), secretary_nav(), url_for("secretary_login")
+
+    if is_social_media_manager():
+        return "SOCIAL_MEDIA", str(session.get("social_media_manager_id")), session.get("social_media_manager_name", "Social Media Manager"), social_media_nav(), url_for("social_media_login")
+
+    return None, None, None, "", "/"
+
+
+def require_ceo_task_actor():
+    role_key, user_id, display_name, nav_html, login_path = ceo_task_current_actor()
+    if not role_key:
+        return redirect(login_path)
+    return None
+
+
+def ceo_task_can_access(row):
+    role_key, user_id, display_name, nav_html, login_path = ceo_task_current_actor()
+    if not role_key:
+        return False
+    if row["assigned_role"] != role_key:
+        return False
+    assigned_user_id = str(row["assigned_user_id"] or "").strip()
+    return assigned_user_id == "" or assigned_user_id == str(user_id)
+
+
+def ceo_task_assignee_options(selected_value=""):
+    """
+    Builds the CEO task assignee dropdown.
+    Value format: ROLE|USER_ID|DISPLAY_NAME
+    USER_ID can be blank for role-wide tasks.
+    """
+    options = []
+
+    def add_option(role, user_id, name):
+        label = f"{CEO_TASK_ROLE_LABELS.get(role, role)} - {name}"
+        value = f"{role}|{user_id}|{name}"
+        selected = "selected" if value == selected_value else ""
+        options.append(f"<option value='{escape(value, quote=True)}' {selected}>{escape(label)}</option>")
+
+    # Role-wide assignment options.
+    for role, label in CEO_TASK_ROLE_LABELS.items():
+        add_option(role, "", "All " + label + "s")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    role_queries = [
+        ("COO", "coos", "full_name", "is_active=1"),
+        ("CAO", "caos", "full_name", "is_active=1"),
+        ("AQM", "academic_quality_managers", "full_name", "1=1"),
+        ("TUTOR_MANAGER", "tutor_managers", "full_name", "1=1"),
+        ("DUTY_ADMIN", "duty_admins", "full_name", "is_active=1"),
+        ("ADMISSION", "admission_coordinators", "full_name", "is_active=1"),
+        ("TREASURER", "treasurers", "full_name", "is_active=1"),
+        ("SECRETARY", "secretaries", "full_name", "is_active=1"),
+        ("SOCIAL_MEDIA", "social_media_managers", "full_name", "is_active=1"),
+    ]
+
+    for role, table, name_col, where_sql in role_queries:
+        try:
+            cur.execute(f"SELECT id, {name_col} AS full_name FROM {table} WHERE {where_sql} ORDER BY {name_col}")
+            for row in cur.fetchall():
+                add_option(role, str(row["id"]), row["full_name"] or CEO_TASK_ROLE_LABELS.get(role, role))
+        except Exception:
+            pass
+
+    conn.close()
+
+    # Admin accounts come from the existing environment-based admin login setup.
+    try:
+        for username, data in parse_admin_accounts().items():
+            role_label = str(data.get("role") or "ADMIN").title() + " Admin"
+            add_option("ADMIN", username, f"{role_label}: {username}")
+    except Exception:
+        pass
+
+    return "".join(options)
+
+
+def ceo_task_form_options(values, selected=""):
+    html = ""
+    selected = selected or ""
+    for value in values:
+        is_selected = "selected" if str(value) == str(selected) else ""
+        html += f"<option value='{escape(str(value), quote=True)}' {is_selected}>{escape(str(value).replace('_', ' ').title())}</option>"
+    return html
+
+
+def ceo_task_stats(where_sql="1=1", params=None):
+    params = params or []
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN status='PENDING' THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN status='IN_PROGRESS' THEN 1 ELSE 0 END) AS in_progress,
+            SUM(CASE WHEN status='COMPLETED' THEN 1 ELSE 0 END) AS completed,
+            SUM(CASE WHEN status!='COMPLETED' AND status!='CANCELLED' AND due_date IS NOT NULL AND due_date!='' AND due_date < date('now') THEN 1 ELSE 0 END) AS overdue
+        FROM ceo_operation_tasks
+        WHERE {where_sql}
+    """, params)
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def ceo_task_stats_cards(stats):
+    def card(label, value):
+        return f"""
+        <div class='card soft' style='text-align:center'>
+            <div class='mini muted'>{escape(label)}</div>
+            <h2 style='margin:4px 0'>{int(value or 0)}</h2>
+        </div>
+        """
+    return "".join([
+        card("Total Tasks", stats["total"] if stats else 0),
+        card("Pending", stats["pending"] if stats else 0),
+        card("In Progress", stats["in_progress"] if stats else 0),
+        card("Completed", stats["completed"] if stats else 0),
+        card("Overdue", stats["overdue"] if stats else 0),
+    ])
+
+
+@app.get('/ceo/tasks')
+def ceo_operations_tasks():
+    r = require_ceo()
+    if r:
+        return r
+
+    status = request.args.get("status", "").strip()
+    q = request.args.get("q", "").strip()
+
+    where = []
+    params = []
+    if status:
+        where.append("status=?")
+        params.append(status)
+    if q:
+        where.append("(title LIKE ? OR description LIKE ? OR assigned_user_name LIKE ? OR assigned_role LIKE ?)")
+        like = f"%{q}%"
+        params.extend([like, like, like, like])
+
+    where_sql = " AND ".join(where) if where else "1=1"
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT *
+        FROM ceo_operation_tasks
+        WHERE {where_sql}
+        ORDER BY
+            CASE status WHEN 'PENDING' THEN 1 WHEN 'IN_PROGRESS' THEN 2 WHEN 'COMPLETED' THEN 3 ELSE 4 END,
+            COALESCE(due_date, '9999-12-31'),
+            created_at DESC
+    """, params)
+    rows = cur.fetchall()
+    conn.close()
+
+    stats = ceo_task_stats()
+    status_options = "<option value=''>All statuses</option>" + ceo_task_form_options(CEO_TASK_STATUSES, status)
+
+    table_rows = ""
+    for row in rows:
+        assignee = row["assigned_user_name"] or ("All " + CEO_TASK_ROLE_LABELS.get(row["assigned_role"], row["assigned_role"]))
+        completed_line = ""
+        if row["status"] == "COMPLETED":
+            completed_line = f"<div class='mini muted'>Done by {escape(row['completed_by_name'] or '')}<br>{escape(row['completed_at'] or '')}</div>"
+
+        action_button = ""
+        if row["status"] != "CANCELLED":
+            action_button = f"""
+            <form method='post' action='/ceo/tasks/{row['id']}/status' style='display:inline'>
+                <input type='hidden' name='status' value='CANCELLED'>
+                <button class='btn danger mini' onclick="return confirm('Cancel this task?')">Cancel</button>
+            </form>
+            """
+        else:
+            action_button = f"""
+            <form method='post' action='/ceo/tasks/{row['id']}/status' style='display:inline'>
+                <input type='hidden' name='status' value='PENDING'>
+                <button class='btn secondary mini'>Reopen</button>
+            </form>
+            """
+
+        table_rows += f"""
+        <tr>
+            <td><strong>{escape(row['title'])}</strong><div class='mini muted'>{escape(row['description'] or '')}</div></td>
+            <td>{escape(CEO_TASK_ROLE_LABELS.get(row['assigned_role'], row['assigned_role']))}<div class='mini muted'>{escape(assignee)}</div></td>
+            <td>{ceo_task_priority_badge(row['priority'])}</td>
+            <td>{escape(row['due_date'] or 'No due date')}</td>
+            <td>{ceo_task_badge(row['status'])}{completed_line}</td>
+            <td>{escape(row['completion_note'] or '')}</td>
+            <td>{action_button}</td>
+        </tr>
+        """
+
+    body = f"""
+    {ceo_nav()}
+    <section class='card'>
+        <h1>CEO Operations Tasks</h1>
+        <p class='muted'>Create operational tasks and assign them to the relevant EBTA team member. Each staff member will only see tasks assigned to their role or directly to them.</p>
+        <div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px'>{ceo_task_stats_cards(stats)}</div>
+    </section>
+
+    <section class='card'>
+        <h2>Create New Task</h2>
+        <form method='post' action='/ceo/tasks/create' class='grid'>
+            <div>
+                <label>Task Title</label>
+                <input name='title' required placeholder='Example: Follow up on pending enrolments'>
+            </div>
+            <div>
+                <label>Assign To</label>
+                <select name='assignee' required>{ceo_task_assignee_options()}</select>
+            </div>
+            <div>
+                <label>Priority</label>
+                <select name='priority'>{ceo_task_form_options(CEO_TASK_PRIORITIES, 'MEDIUM')}</select>
+            </div>
+            <div>
+                <label>Due Date</label>
+                <input type='date' name='due_date'>
+            </div>
+            <div class='full'>
+                <label>Description / Instructions</label>
+                <textarea name='description' placeholder='Give clear instructions for the task.'></textarea>
+            </div>
+            <button class='btn success'>Create Task</button>
+        </form>
+    </section>
+
+    <section class='card'>
+        <h2>All Tasks</h2>
+        <form method='get' class='toolbar'>
+            <input name='q' value='{escape(q, quote=True)}' placeholder='Search tasks, assignee or role'>
+            <select name='status'>{status_options}</select>
+            <button class='btn secondary mini'>Filter</button>
+            <a class='btn mini' href='/ceo/tasks'>Clear</a>
+        </form>
+        <div class='scroll-x'>
+            <table>
+                <thead><tr><th>Task</th><th>Assigned To</th><th>Priority</th><th>Due</th><th>Status</th><th>Completion Note</th><th>Action</th></tr></thead>
+                <tbody>{table_rows or "<tr><td colspan='7'>No tasks created yet.</td></tr>"}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("CEO Operations Tasks", body)
+
+
+@app.post('/ceo/tasks/create')
+def ceo_operations_tasks_create():
+    r = require_ceo()
+    if r:
+        return r
+
+    title = request.form.get("title", "").strip()
+    description = request.form.get("description", "").strip()
+    assignee = request.form.get("assignee", "").strip()
+    priority = request.form.get("priority", "MEDIUM").strip().upper()
+    due_date = request.form.get("due_date", "").strip()
+
+    if not title or "|" not in assignee:
+        return page("Task Error", card_msg("Please provide a task title and select who the task is assigned to."))
+
+    parts = assignee.split("|", 2)
+    assigned_role = parts[0].strip()
+    assigned_user_id = parts[1].strip() if len(parts) > 1 else ""
+    assigned_user_name = parts[2].strip() if len(parts) > 2 else ""
+
+    if assigned_role not in CEO_TASK_ROLE_LABELS:
+        return page("Task Error", card_msg("Invalid assignee selected."))
+
+    if priority not in CEO_TASK_PRIORITIES:
+        priority = "MEDIUM"
+
+    now = now_utc_iso()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO ceo_operation_tasks(
+            title, description, assigned_role, assigned_user_id, assigned_user_name,
+            priority, due_date, status, created_by_ceo_id, created_by_name,
+            created_at, updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        title, description, assigned_role, assigned_user_id, assigned_user_name,
+        priority, due_date, "PENDING", session.get("ceo_id"), session.get("ceo_name", "CEO"),
+        now, now
+    ))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("ceo_operations_tasks"))
+
+
+@app.post('/ceo/tasks/<int:task_id>/status')
+def ceo_operations_task_status(task_id):
+    r = require_ceo()
+    if r:
+        return r
+
+    status = request.form.get("status", "PENDING").strip().upper()
+    if status not in CEO_TASK_STATUSES:
+        status = "PENDING"
+
+    now = now_utc_iso()
+    conn = get_db()
+    cur = conn.cursor()
+    if status == "COMPLETED":
+        cur.execute("""
+            UPDATE ceo_operation_tasks
+            SET status=?, completed_at=?, completed_by_role=?, completed_by_id=?, completed_by_name=?, updated_at=?
+            WHERE id=?
+        """, (status, now, "CEO", str(session.get("ceo_id")), session.get("ceo_name", "CEO"), now, task_id))
+    else:
+        cur.execute("""
+            UPDATE ceo_operation_tasks
+            SET status=?, updated_at=?
+            WHERE id=?
+        """, (status, now, task_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("ceo_operations_tasks"))
+
+
+def operations_tasks_body(role_title="My Tasks"):
+    r = require_ceo_task_actor()
+    if r:
+        return r
+
+    role_key, user_id, display_name, nav_html, login_path = ceo_task_current_actor()
+    status = request.args.get("status", "").strip()
+
+    where = "assigned_role=? AND (assigned_user_id IS NULL OR assigned_user_id='' OR assigned_user_id=?)"
+    params = [role_key, str(user_id)]
+    if status:
+        where += " AND status=?"
+        params.append(status)
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT *
+        FROM ceo_operation_tasks
+        WHERE {where}
+        ORDER BY
+            CASE status WHEN 'PENDING' THEN 1 WHEN 'IN_PROGRESS' THEN 2 WHEN 'COMPLETED' THEN 3 ELSE 4 END,
+            COALESCE(due_date, '9999-12-31'),
+            created_at DESC
+    """, params)
+    rows = cur.fetchall()
+    conn.close()
+
+    stats = ceo_task_stats(where, params)
+    status_options = "<option value=''>All statuses</option>" + ceo_task_form_options(CEO_TASK_STATUSES, status)
+
+    table_rows = ""
+    for row in rows:
+        action_html = ""
+        if row["status"] in ["PENDING", "IN_PROGRESS"]:
+            start_button = ""
+            if row["status"] == "PENDING":
+                start_button = f"""
+                <form method='post' action='/tasks/{row['id']}/update' style='display:inline'>
+                    <input type='hidden' name='status' value='IN_PROGRESS'>
+                    <button class='btn secondary mini'>Start</button>
+                </form>
+                """
+
+            action_html = f"""
+            {start_button}
+            <details style='margin-top:8px'>
+                <summary class='btn success mini' style='display:inline-block;cursor:pointer'>Mark Done</summary>
+                <form method='post' action='/tasks/{row['id']}/update' style='margin-top:8px'>
+                    <input type='hidden' name='status' value='COMPLETED'>
+                    <label>Completion note</label>
+                    <textarea name='completion_note' placeholder='Briefly explain what was completed.'></textarea>
+                    <button class='btn success mini'>Submit Done</button>
+                </form>
+            </details>
+            """
+        elif row["status"] == "COMPLETED":
+            action_html = f"<span class='chip active'>Done</span><div class='mini muted'>{escape(row['completed_at'] or '')}</div>"
+        else:
+            action_html = ceo_task_badge(row["status"])
+
+        table_rows += f"""
+        <tr>
+            <td><strong>{escape(row['title'])}</strong><div class='mini muted'>{escape(row['description'] or '')}</div></td>
+            <td>{ceo_task_priority_badge(row['priority'])}</td>
+            <td>{escape(row['due_date'] or 'No due date')}</td>
+            <td>{ceo_task_badge(row['status'])}</td>
+            <td>{escape(row['completion_note'] or '')}</td>
+            <td>{action_html}</td>
+        </tr>
+        """
+
+    body = f"""
+    {nav_html}
+    <section class='card'>
+        <h1>{escape(role_title)}</h1>
+        <p class='muted'>These are the operational tasks assigned to you by the CEO. You can start a task and mark it as done once completed. The CEO will see the updated status from her portal.</p>
+        <div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px'>{ceo_task_stats_cards(stats)}</div>
+    </section>
+
+    <section class='card'>
+        <div class='toolbar' style='justify-content:space-between'>
+            <h2 style='margin:0'>Assigned Tasks</h2>
+            <form method='get' class='toolbar'>
+                <select name='status'>{status_options}</select>
+                <button class='btn secondary mini'>Filter</button>
+                <a class='btn mini' href='{request.path}'>Clear</a>
+            </form>
+        </div>
+        <div class='scroll-x'>
+            <table>
+                <thead><tr><th>Task</th><th>Priority</th><th>Due Date</th><th>Status</th><th>Completion Note</th><th>Action</th></tr></thead>
+                <tbody>{table_rows or "<tr><td colspan='6'>No tasks assigned to you yet.</td></tr>"}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+    return page(role_title, body)
+
+
+@app.post('/tasks/<int:task_id>/update')
+def operations_task_update(task_id):
+    r = require_ceo_task_actor()
+    if r:
+        return r
+
+    role_key, user_id, display_name, nav_html, login_path = ceo_task_current_actor()
+    new_status = request.form.get("status", "IN_PROGRESS").strip().upper()
+    completion_note = request.form.get("completion_note", "").strip()
+
+    if new_status not in ["IN_PROGRESS", "COMPLETED"]:
+        new_status = "IN_PROGRESS"
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM ceo_operation_tasks WHERE id=?", (task_id,))
+    row = cur.fetchone()
+
+    if not row or not ceo_task_can_access(row):
+        conn.close()
+        return page("Access Denied", card_msg("This task is not assigned to you."))
+
+    now = now_utc_iso()
+    if new_status == "COMPLETED":
+        cur.execute("""
+            UPDATE ceo_operation_tasks
+            SET status='COMPLETED', completion_note=?, completed_at=?, completed_by_role=?, completed_by_id=?, completed_by_name=?, updated_at=?
+            WHERE id=?
+        """, (completion_note, now, role_key, str(user_id), display_name, now, task_id))
+    else:
+        cur.execute("""
+            UPDATE ceo_operation_tasks
+            SET status='IN_PROGRESS', updated_at=?
+            WHERE id=?
+        """, (now, task_id))
+
+    conn.commit()
+    conn.close()
+    return redirect(request.referrer or "/")
+
+
+@app.get('/admin/tasks')
+def admin_operations_tasks():
+    r = require_admin()
+    if r:
+        return r
+    return operations_tasks_body("Admin Tasks from CEO")
+
+
+@app.get('/coo/tasks')
+def coo_operations_tasks():
+    r = require_coo()
+    if r:
+        return r
+    return operations_tasks_body("COO Tasks from CEO")
+
+
+@app.get('/cao/tasks')
+def cao_operations_tasks():
+    r = require_cao()
+    if r:
+        return r
+    return operations_tasks_body("CAO Tasks from CEO")
+
+
+@app.get('/aqm/tasks')
+def aqm_operations_tasks():
+    r = require_aqm()
+    if r:
+        return r
+    return operations_tasks_body("AQM Tasks from CEO")
+
+
+@app.get('/manager/tasks')
+def manager_operations_tasks():
+    r = require_manager()
+    if r:
+        return r
+    return operations_tasks_body("Tutor Manager Tasks from CEO")
+
+
+@app.get('/duty-admin/tasks')
+def duty_admin_operations_tasks():
+    r = require_duty_admin()
+    if r:
+        return r
+    return operations_tasks_body("Duty Admin Tasks from CEO")
+
+
+@app.get('/admission/tasks')
+def admission_operations_tasks():
+    r = require_admission_coordinator()
+    if r:
+        return r
+    return operations_tasks_body("Admission Coordinator Tasks from CEO")
+
+
+@app.get('/treasurer/tasks')
+def treasurer_operations_tasks():
+    r = require_treasurer()
+    if r:
+        return r
+    return operations_tasks_body("Treasurer Tasks from CEO")
+
+
+@app.get('/secretary/tasks')
+def secretary_operations_tasks():
+    r = require_secretary()
+    if r:
+        return r
+    return operations_tasks_body("Secretary Tasks from CEO")
+
+
+@app.get('/social-media/tasks')
+def social_media_operations_tasks():
+    r = require_social_media_manager()
+    if r:
+        return r
+    return operations_tasks_body("Social Media Tasks from CEO")
 
 
 # --- Payfast IPN stub ---
