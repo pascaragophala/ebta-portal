@@ -54,6 +54,9 @@ APPLICATIONS_DIR.mkdir(parents=True, exist_ok=True)
 CEO_REPORTS_DIR = UPLOADS_DIR / "ceo_reports"
 CEO_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
+ONE_ON_ONE_DIR = UPLOADS_DIR / "one_on_one"
+ONE_ON_ONE_DIR.mkdir(parents=True, exist_ok=True)
+
 UPLOAD_DIR = UPLOADS_DIR
 MATERIALS_DIR = Path(BASE_DATA_DIR) / "materials"
 SUBMISSIONS_DIR = Path(BASE_DATA_DIR) / "submissions"
@@ -61,7 +64,7 @@ QR_DIR = Path(BASE_DATA_DIR) / "qr"
 
 ASSESSMENT_FILES_DIR = Path(BASE_DATA_DIR) / "assessment_files"
 
-for d in (UPLOADS_DIR, MATERIALS_DIR, SUBMISSIONS_DIR, QR_DIR, ASSESSMENT_FILES_DIR):
+for d in (UPLOADS_DIR, MATERIALS_DIR, SUBMISSIONS_DIR, QR_DIR, ASSESSMENT_FILES_DIR, ONE_ON_ONE_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 LOGO_URL = os.environ.get("EBTA_LOGO_URL", "https://i.imgur.com/SqocnYt.png")
@@ -2433,6 +2436,144 @@ def init_db():
             DELETE FROM subjects
             WHERE name=? AND grade=?
         """, (name, grade))
+
+
+    # ================= ONE-ON-ONE PROGRAMME =================
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS one_on_one_requests(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id INTEGER,
+        learner_name TEXT NOT NULL,
+        parent_name TEXT,
+        parent_phone TEXT,
+        parent_email TEXT,
+        grade TEXT,
+        subject_id INTEGER,
+        subject TEXT,
+        topic_or_problem_area TEXT,
+        school_current_topic TEXT,
+        session_type TEXT,
+        package_type TEXT,
+        parent_fee REAL NOT NULL DEFAULT 0,
+        tutor_payment REAL NOT NULL DEFAULT 0,
+        ebta_allocation REAL NOT NULL DEFAULT 0,
+        total_sessions INTEGER NOT NULL DEFAULT 1,
+        preferred_days TEXT,
+        preferred_time TEXT,
+        urgency_level TEXT,
+        notes_from_parent TEXT,
+        proof_of_payment_path TEXT,
+        proof_of_payment_name TEXT,
+        payment_status TEXT NOT NULL DEFAULT 'Pending',
+        request_status TEXT NOT NULL DEFAULT 'Pending',
+        assigned_tutor_id INTEGER,
+        assigned_tutor_manager_id INTEGER,
+        assigned_by TEXT,
+        internal_notes TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE SET NULL,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL,
+        FOREIGN KEY(assigned_tutor_id) REFERENCES tutors(id) ON DELETE SET NULL,
+        FOREIGN KEY(assigned_tutor_manager_id) REFERENCES tutor_managers(id) ON DELETE SET NULL
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS one_on_one_bookings(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        request_id INTEGER NOT NULL,
+        tutor_id INTEGER,
+        student_id INTEGER,
+        subject_id INTEGER,
+        subject TEXT,
+        grade TEXT,
+        session_number INTEGER NOT NULL DEFAULT 1,
+        total_sessions INTEGER NOT NULL DEFAULT 1,
+        scheduled_date TEXT,
+        start_time TEXT,
+        end_time TEXT,
+        meeting_link TEXT,
+        booking_status TEXT NOT NULL DEFAULT 'Scheduled',
+        attendance_status TEXT,
+        recording_link TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        FOREIGN KEY(request_id) REFERENCES one_on_one_requests(id) ON DELETE CASCADE,
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE SET NULL,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE SET NULL,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS one_on_one_session_notes(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        booking_id INTEGER NOT NULL UNIQUE,
+        tutor_id INTEGER,
+        learner_name TEXT,
+        grade TEXT,
+        subject TEXT,
+        topic_covered TEXT,
+        learner_strengths TEXT,
+        learner_challenges TEXT,
+        activities_completed TEXT,
+        practice_given TEXT,
+        recommended_next_step TEXT,
+        tutor_comment TEXT,
+        aqm_comment TEXT,
+        cao_comment TEXT,
+        quality_status TEXT NOT NULL DEFAULT 'Pending Review',
+        submitted_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        FOREIGN KEY(booking_id) REFERENCES one_on_one_bookings(id) ON DELETE CASCADE,
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE SET NULL
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS one_on_one_tutor_availability(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tutor_id INTEGER NOT NULL,
+        subject TEXT,
+        grade_level TEXT,
+        available_day TEXT,
+        available_start_time TEXT,
+        available_end_time TEXT,
+        notes TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS one_on_one_payment_logs(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        request_id INTEGER NOT NULL,
+        amount_paid REAL NOT NULL DEFAULT 0,
+        payment_reference TEXT,
+        proof_of_payment TEXT,
+        payment_status TEXT NOT NULL DEFAULT 'Pending',
+        verified_by TEXT,
+        verified_at TEXT,
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(request_id) REFERENCES one_on_one_requests(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_requests_student ON one_on_one_requests(student_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_requests_status ON one_on_one_requests(request_status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_requests_payment ON one_on_one_requests(payment_status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_requests_subject ON one_on_one_requests(subject_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_requests_tutor ON one_on_one_requests(assigned_tutor_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_bookings_request ON one_on_one_bookings(request_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_bookings_tutor ON one_on_one_bookings(tutor_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_bookings_date ON one_on_one_bookings(scheduled_date)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_notes_booking ON one_on_one_session_notes(booking_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_availability_tutor ON one_on_one_tutor_availability(tutor_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_payments_request ON one_on_one_payment_logs(request_id)")
 
 
     conn.commit()
@@ -13898,6 +14039,8 @@ def student_home():
     <div class="toolbar" style="margin:16px 0;">
         <a class="btn" href="/student/materials">View Learning Materials</a>
         <a class="btn success" href="/student/assignments">View Assignments</a>
+        <a class="btn secondary" href="/one-on-one/request">Request 1-on-1 Support</a>
+        <a class="btn secondary" href="/one-on-one/my-sessions">My 1-on-1 Sessions</a>
     </div>
 
     {feedback_card}
@@ -18343,6 +18486,15 @@ def tutor_home():
     
     {tutor_referral_section}
     
+    <div class='card' style="border-left:5px solid #1b5e20">
+        <h2>One-on-One Sessions</h2>
+        <p class="mini muted">View assigned individual sessions, update availability and submit session notes.</p>
+        <div class="toolbar">
+            <a class="btn success mini" href="/tutor/one-on-one">My One-on-One Sessions</a>
+            <a class="btn secondary mini" href="/tutor/one-on-one/availability">My Availability</a>
+        </div>
+    </div>
+
     <div class='card'><h2>WhatsApp Group Links</h2>{groups_html}</div>
 
     <div class='card'><h2>Your sessions</h2>
@@ -22232,6 +22384,7 @@ def admin_nav():
             ("Direct Messages", "admin_direct_messages", "/admin/direct-messages"),
             ("Parents Information", "admin_parents_notifications", "/admin/parents-notifications"),
             ("Parent WhatsApp Follow-Up", "admin_non_enrolled_parent_whatsapp", "/admin/non-enrolled-parent-whatsapp"),
+            ("One-on-One Sessions", "admin_one_on_one", "/admin/one-on-one"),
             
         ],
         True
@@ -22310,6 +22463,7 @@ def admin_nav():
                     ("Enrollment Reminders", "admin_enrollment_sms", "/admin/enrollment-sms"),
                     ("Processed SMS", "admin_process_sms", "/admin/process-sms"),
                     ("Awards Export", "admin_awards_student_export", "/admin/awards-export"),
+                    ("One-on-One Dashboard", "admin_one_on_one_dashboard", "/admin/one-on-one-dashboard"),
                 ],
                 False
             ),
@@ -33740,6 +33894,10 @@ def manager_nav():
             Session History
         </a>
         
+        <a class="btn mini" href="/manager/one-on-one">
+            One-on-One Support
+        </a>
+        
         <a class="btn mini" href="/manager/whatsapp-groups">
             WhatsApp Groups
         </a>
@@ -35205,6 +35363,7 @@ def aqm_nav():
         <a class="btn mini" href="/aqm/tutors">Tutor Work Progress</a>
         <a class="btn mini" href="/aqm/assessment-analysis">Assessment Analysis</a>
         <a class="btn mini" href="/aqm/learning-games-analytics">Game Analytics</a>
+        <a class="btn mini" href="/aqm/one-on-one">One-on-One Reviews</a>
         <a class="btn mini" href="/aqm/ratings">Student Ratings</a>
         <a class="btn mini" href="/aqm/awards">Awards</a>
         <a class="btn mini" href="/aqm/parent-reports">Parent Reports</a>
@@ -55409,6 +55568,7 @@ def admission_nav():
         <a class="btn secondary" href="{url_for('admission_inbox')}">Inbox</a>
         <a class="btn secondary" href="{url_for('admission_discounts')}">Discount Codes</a>
         <a class="btn secondary" href="{url_for('admission_referrals')}">Referrals</a>
+        <a class="btn secondary" href="/admission/one-on-one">One-on-One Sessions</a>
         <a class="btn danger" href="{url_for('admission_logout')}">Logout</a>
     </nav>
     """
@@ -65471,6 +65631,7 @@ def cao_nav():
                 cao_link("Materials", "cao_materials", "cao_materials_enabled", icon="📚"),
                 cao_link("Assignments", "cao_assignments", "cao_assignments_enabled", icon="📝"),
                 cao_link("Game Analytics", "cao_learning_games_analytics", "cao_performance_enabled", icon="🎮"),
+                cao_link("One-on-One Dashboard", "cao_one_on_one_dashboard", "cao_performance_enabled", icon="👤"),
             ]
         ),
         (
@@ -70768,6 +70929,7 @@ def ceo_nav():
                 ceo_link("Risks & Mitigations", "ceo_risks", "/ceo/risks", "⚠️"),
                 ceo_link("Goals", "ceo_goals", "/ceo/goals", "🎯"),
                 ceo_link("Parent WhatsApp Follow-Up", "ceo_non_enrolled_parent_whatsapp", "/ceo/non-enrolled-parent-whatsapp", "💬"),
+                ceo_link("One-on-One Programme", "ceo_one_on_one_dashboard", "/ceo/one-on-one-dashboard", "👤"),
             ]
         ),
         (
@@ -82184,6 +82346,1938 @@ def cao_learning_games_analytics():
     """
 
     return page("CAO Learning Games Analytics", body)
+
+
+# =============================================================
+# EBTA ONE-ON-ONE PROGRAMME
+# =============================================================
+
+ONE_ON_ONE_SESSION_TYPES = [
+    "Catch-up Session",
+    "Topic-Focused Session",
+    "Exam/Test Preparation",
+    "Homework/Assignment Guidance",
+    "Low-Enrolment Subject Support",
+    "Progress Intervention",
+    "Grade 12/Matric Support",
+    "Grade 13/Upgrading Support",
+    "Other",
+]
+
+ONE_ON_ONE_REQUEST_STATUSES = [
+    "Pending", "Payment Pending", "Payment Verified", "Approved", "Assigned",
+    "Confirmed", "In Progress", "Completed", "Cancelled", "Refunded", "Rejected"
+]
+
+ONE_ON_ONE_PAYMENT_STATUSES = ["Pending", "Verified", "Rejected"]
+
+ONE_ON_ONE_BOOKING_STATUSES = [
+    "Scheduled", "Completed", "Missed by Learner", "Cancelled by Parent",
+    "Cancelled by Tutor", "Rescheduled"
+]
+
+ONE_ON_ONE_QUALITY_STATUSES = ["Pending Review", "Reviewed", "Needs Follow-up"]
+
+ONE_ON_ONE_PACKAGES = {
+    "Single Session": {"parent_fee": 80, "tutor_payment": 50, "ebta_allocation": 30, "total_sessions": 1},
+    "Standard Monthly Package": {"parent_fee": 320, "tutor_payment": 200, "ebta_allocation": 120, "total_sessions": 4},
+    "Extended Monthly Package": {"parent_fee": 480, "tutor_payment": 300, "ebta_allocation": 180, "total_sessions": 6},
+    "Intensive Monthly Package": {"parent_fee": 640, "tutor_payment": 400, "ebta_allocation": 240, "total_sessions": 8},
+    "Special Case": {"parent_fee": 0, "tutor_payment": 0, "ebta_allocation": 0, "total_sessions": 1},
+}
+
+ONE_ON_ONE_PROOF_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
+
+
+def one_on_one_money(value):
+    try:
+        return f"R{float(value or 0):,.2f}".replace(",", " ")
+    except Exception:
+        return "R0.00"
+
+
+def one_on_one_package_values(package_type, parent_fee=None, tutor_payment=None, ebta_allocation=None, total_sessions=None):
+    package_type = package_type or "Single Session"
+    base = dict(ONE_ON_ONE_PACKAGES.get(package_type, ONE_ON_ONE_PACKAGES["Single Session"]))
+
+    if package_type == "Special Case":
+        try:
+            base["parent_fee"] = float(parent_fee or 0)
+        except Exception:
+            base["parent_fee"] = 0
+
+        try:
+            base["tutor_payment"] = float(tutor_payment or 0)
+        except Exception:
+            base["tutor_payment"] = 0
+
+        try:
+            base["ebta_allocation"] = float(ebta_allocation or (base["parent_fee"] - base["tutor_payment"]))
+        except Exception:
+            base["ebta_allocation"] = max(0, base["parent_fee"] - base["tutor_payment"])
+
+        try:
+            base["total_sessions"] = int(total_sessions or 1)
+        except Exception:
+            base["total_sessions"] = 1
+
+        if base["total_sessions"] < 1:
+            base["total_sessions"] = 1
+
+    return base
+
+
+def one_on_one_badge(value):
+    value = value or "Pending"
+    lower = str(value).lower()
+
+    if any(x in lower for x in ["verified", "approved", "assigned", "confirmed", "completed", "reviewed", "scheduled"]):
+        cls = "active"
+    elif any(x in lower for x in ["cancel", "reject", "refund", "missed", "follow"]):
+        cls = "lapsed"
+    else:
+        cls = "pending"
+
+    return f"<span class='chip {cls}'>{escape(value)}</span>"
+
+
+def one_on_one_options(values, selected="", blank_label=None):
+    html = ""
+    if blank_label is not None:
+        html += f"<option value=''>{escape(blank_label)}</option>"
+
+    for value in values:
+        sel = "selected" if str(value) == str(selected or "") else ""
+        html += f"<option value='{escape(str(value), quote=True)}' {sel}>{escape(str(value))}</option>"
+
+    return html
+
+
+def one_on_one_subject_options(selected_id="", selected_grade=""):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
+    """)
+    rows = cur.fetchall()
+    conn.close()
+
+    html = "<option value=''>Select subject</option>"
+    for row in rows:
+        sel = "selected" if str(row["id"]) == str(selected_id or "") else ""
+        html += f"<option value='{row['id']}' {sel}>{escape(grade_label(row['grade']))} - {escape(row['name'])}</option>"
+
+    return html
+
+
+def one_on_one_tutor_options(selected_id="", subject_id=None):
+    conn = get_db()
+    cur = conn.cursor()
+
+    if subject_id:
+        cur.execute("""
+            SELECT DISTINCT t.id, t.full_name
+            FROM tutors t
+            JOIN tutor_subjects ts ON ts.tutor_id=t.id
+            WHERE ts.subject_id=?
+              AND COALESCE(t.is_active,1)=1
+            ORDER BY t.full_name
+        """, (subject_id,))
+    else:
+        cur.execute("""
+            SELECT id, full_name
+            FROM tutors
+            WHERE COALESCE(is_active,1)=1
+            ORDER BY full_name
+        """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    html = "<option value=''>Not assigned yet</option>"
+    for row in rows:
+        sel = "selected" if str(row["id"]) == str(selected_id or "") else ""
+        html += f"<option value='{row['id']}' {sel}>{escape(row['full_name'])}</option>"
+
+    return html
+
+
+def one_on_one_manager_options(selected_id=""):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, full_name
+        FROM tutor_managers
+        ORDER BY full_name
+    """)
+    rows = cur.fetchall()
+    conn.close()
+
+    html = "<option value=''>No tutor manager assigned</option>"
+    for row in rows:
+        sel = "selected" if str(row["id"]) == str(selected_id or "") else ""
+        html += f"<option value='{row['id']}' {sel}>{escape(row['full_name'])}</option>"
+
+    return html
+
+
+def one_on_one_save_proof(file_storage, prefix="proof"):
+    if not file_storage or not file_storage.filename:
+        return "", ""
+
+    original = secure_name(file_storage.filename)
+    ext = Path(original).suffix.lower()
+
+    if ext not in ONE_ON_ONE_PROOF_EXTENSIONS:
+        raise ValueError("Only PDF, PNG, JPG and JPEG files are allowed for proof of payment.")
+
+    ONE_ON_ONE_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{int(time.time())}_{secrets.token_hex(4)}_{secure_name(prefix)}_{original}"
+    file_storage.save(ONE_ON_ONE_DIR / filename)
+    return filename, original
+
+
+def one_on_one_whatsapp_link(phone, message):
+    number = whatsapp_number(phone)
+    if not number:
+        return ""
+    return "https://wa.me/" + number + "?" + urlencode({"text": message})
+
+
+def one_on_one_parent_interest_message():
+    return "Good day, thank you for showing interest in EBTA One-on-One Academic Support. Please kindly confirm the learner's grade, subject, topic they need help with, and preferred time so that we can check tutor availability."
+
+
+def one_on_one_payment_reminder_message(row):
+    return f"Good day {row['parent_name'] or 'Parent/Guardian'}, your EBTA one-on-one request for {row['learner_name']} has been received. Please kindly upload your proof of payment on the portal so that we can confirm the booking."
+
+
+def one_on_one_booking_confirmation_message(row, booking=None, tutor_name=""):
+    date_time = "to be confirmed"
+    if booking:
+        date_time = f"{booking['scheduled_date'] or 'Date TBC'} {booking['start_time'] or ''}".strip()
+    return f"Good day {row['parent_name'] or 'Parent/Guardian'}, your EBTA one-on-one session has been confirmed. Learner: {row['learner_name']}. Subject: {row['subject'] or 'Subject TBC'}. Date/Time: {date_time}. Tutor: {tutor_name or 'Tutor TBC'}. Please ensure the learner joins on time and has their school notes/questions ready."
+
+
+def one_on_one_session_reminder_message(row, booking=None):
+    date_time = "to be confirmed"
+    if booking:
+        date_time = f"{booking['scheduled_date'] or 'Date TBC'} {booking['start_time'] or ''}".strip()
+    return f"Good day, this is a reminder for the EBTA one-on-one session scheduled for {date_time}. Please ensure the learner is ready, joins on time and has the relevant notes or questions available."
+
+
+def one_on_one_tutor_allocation_message(row, booking=None, tutor_name="Tutor"):
+    date_time = "to be confirmed"
+    if booking:
+        date_time = f"{booking['scheduled_date'] or 'Date TBC'} {booking['start_time'] or ''}".strip()
+    return f"Good day {tutor_name}, you have been allocated a one-on-one session for {row['learner_name']}, {grade_label(row['grade'])}, {row['subject'] or 'Subject TBC'}. Topic: {row['topic_or_problem_area'] or 'Not specified'}. Date/Time: {date_time}. Please prepare accordingly and submit a short session note after the session."
+
+
+def one_on_one_followup_after_session_message(row, note=None):
+    topic = note['topic_covered'] if note and note['topic_covered'] else (row['topic_or_problem_area'] or 'the requested topic')
+    practice = note['practice_given'] if note and note['practice_given'] else 'the recommended practice tasks'
+    return f"Good day, the one-on-one session has been completed. The tutor covered {topic}. The learner should continue practising {practice}. We will continue monitoring progress and supporting the learner."
+
+
+def one_on_one_request_by_id(request_id):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT r.*, t.full_name AS tutor_name, t.phone AS tutor_phone, tm.full_name AS manager_name
+        FROM one_on_one_requests r
+        LEFT JOIN tutors t ON t.id=r.assigned_tutor_id
+        LEFT JOIN tutor_managers tm ON tm.id=r.assigned_tutor_manager_id
+        WHERE r.id=?
+    """, (request_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def one_on_one_stats():
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS c FROM one_on_one_requests")
+    total = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM one_on_one_requests WHERE request_status IN ('Pending','Payment Pending')")
+    pending = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM one_on_one_requests WHERE payment_status='Pending'")
+    payment_pending = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM one_on_one_requests WHERE payment_status='Verified'")
+    payment_verified = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM one_on_one_bookings WHERE booking_status='Scheduled'")
+    scheduled = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM one_on_one_bookings WHERE booking_status='Completed'")
+    completed = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM one_on_one_bookings WHERE booking_status LIKE 'Missed%'")
+    missed = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM one_on_one_bookings WHERE booking_status LIKE 'Cancelled%'")
+    cancelled = cur.fetchone()["c"] or 0
+
+    cur.execute("SELECT COALESCE(SUM(parent_fee),0) AS v FROM one_on_one_requests WHERE payment_status='Verified'")
+    revenue = cur.fetchone()["v"] or 0
+
+    cur.execute("SELECT COALESCE(SUM(tutor_payment),0) AS v FROM one_on_one_requests WHERE payment_status='Verified'")
+    tutor_due = cur.fetchone()["v"] or 0
+
+    cur.execute("SELECT COALESCE(SUM(ebta_allocation),0) AS v FROM one_on_one_requests WHERE payment_status='Verified'")
+    ebta_allocation = cur.fetchone()["v"] or 0
+
+    cur.execute("SELECT COUNT(*) AS c FROM one_on_one_session_notes WHERE quality_status='Needs Follow-up'")
+    followups = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM one_on_one_bookings b
+        LEFT JOIN one_on_one_session_notes n ON n.booking_id=b.id
+        WHERE b.booking_status='Completed' AND n.id IS NULL
+    """)
+    pending_notes = cur.fetchone()["c"] or 0
+
+    conn.close()
+
+    return {
+        "total": total,
+        "pending": pending,
+        "payment_pending": payment_pending,
+        "payment_verified": payment_verified,
+        "scheduled": scheduled,
+        "completed": completed,
+        "missed": missed,
+        "cancelled": cancelled,
+        "revenue": revenue,
+        "tutor_due": tutor_due,
+        "ebta_allocation": ebta_allocation,
+        "followups": followups,
+        "pending_notes": pending_notes,
+    }
+
+
+def one_on_one_stats_cards(stats):
+    items = [
+        ("Total Requests", stats["total"]),
+        ("Pending Requests", stats["pending"]),
+        ("Payment Pending", stats["payment_pending"]),
+        ("Payment Verified", stats["payment_verified"]),
+        ("Scheduled Sessions", stats["scheduled"]),
+        ("Completed Sessions", stats["completed"]),
+        ("Missed Sessions", stats["missed"]),
+        ("Cancelled Sessions", stats["cancelled"]),
+        ("Revenue Collected", one_on_one_money(stats["revenue"])),
+        ("Tutor Payments Due", one_on_one_money(stats["tutor_due"])),
+        ("EBTA Allocation", one_on_one_money(stats["ebta_allocation"])),
+        ("Learners Needing Follow-Up", stats["followups"]),
+        ("Tutor Notes Pending", stats["pending_notes"]),
+    ]
+
+    return "".join([
+        f"<div class='card soft'><div class='mini muted'>{escape(label)}</div><h2>{value}</h2></div>"
+        for label, value in items
+    ])
+
+
+def one_on_one_filter_form(base_path, q="", status="", payment_status="", grade="", subject_id="", package_type="", session_type=""):
+    return f"""
+    <form method="get" action="{base_path}" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:12px 0;align-items:end">
+        <div>
+            <label>Search</label>
+            <input name="q" value="{escape(q)}" placeholder="Learner, parent, phone or topic">
+        </div>
+        <div>
+            <label>Status</label>
+            <select name="status">{one_on_one_options(ONE_ON_ONE_REQUEST_STATUSES, status, 'All statuses')}</select>
+        </div>
+        <div>
+            <label>Payment</label>
+            <select name="payment_status">{one_on_one_options(ONE_ON_ONE_PAYMENT_STATUSES, payment_status, 'All payment statuses')}</select>
+        </div>
+        <div>
+            <label>Grade</label>
+            <select name="grade">{one_on_one_options(['G8','G9','G10','G11','G12','G13'], grade, 'All grades')}</select>
+        </div>
+        <div>
+            <label>Subject</label>
+            <select name="subject_id">{one_on_one_subject_options(subject_id)}</select>
+        </div>
+        <div>
+            <label>Package</label>
+            <select name="package_type">{one_on_one_options(list(ONE_ON_ONE_PACKAGES.keys()), package_type, 'All packages')}</select>
+        </div>
+        <div>
+            <label>Session Type</label>
+            <select name="session_type">{one_on_one_options(ONE_ON_ONE_SESSION_TYPES, session_type, 'All types')}</select>
+        </div>
+        <button class="btn success mini">Filter</button>
+        <a class="btn secondary mini" href="{base_path}">Clear</a>
+    </form>
+    """
+
+
+@app.get('/one-on-one/proof/<path:filename>')
+def one_on_one_proof_file(filename):
+    if not (is_admin() or is_student() or is_tutor() or is_tutor_manager() or is_academic_quality_manager() or is_cao() or is_ceo()):
+        return redirect(url_for('student_login'))
+
+    filename = os.path.basename(filename)
+    return send_from_directory(ONE_ON_ONE_DIR, filename)
+
+
+@app.get('/one-on-one/request')
+def one_on_one_request_form():
+    sid = is_student()
+    student = None
+
+    if sid:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM students WHERE id=?", (sid,))
+        student = cur.fetchone()
+        conn.close()
+
+    learner_name = student['full_name'] if student else ""
+    parent_name = student['guardian_name'] if student and 'guardian_name' in student.keys() else ""
+    parent_phone = student['guardian_phone'] if student else ""
+    parent_email = student['email'] if student else ""
+    grade = student['grade'] if student else ""
+
+    body = f"""
+    <section class="card">
+        <h1>Request EBTA One-on-One Academic Support</h1>
+        <p class="muted">
+            One-on-one support is available throughout the academic year for catch-up support,
+            topic recovery, exam preparation, intervention support, low-enrolment subjects,
+            Grade 12, Grade 13/upgrading learners and focused individual help.
+        </p>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:12px 0">
+            <div class="card soft"><b>Single</b><br><span class="muted">1 session - R80</span></div>
+            <div class="card soft"><b>Standard</b><br><span class="muted">4 sessions - R320</span></div>
+            <div class="card soft"><b>Extended</b><br><span class="muted">6 sessions - R480</span></div>
+            <div class="card soft"><b>Intensive</b><br><span class="muted">8 sessions - R640</span></div>
+        </div>
+
+        <form method="post" enctype="multipart/form-data" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px">
+            <div>
+                <label>Learner Full Name</label>
+                <input name="learner_name" value="{escape(learner_name)}" required>
+            </div>
+            <div>
+                <label>Grade</label>
+                <select name="grade" required>{one_on_one_options(['G8','G9','G10','G11','G12','G13'], grade, 'Select grade')}</select>
+            </div>
+            <div>
+                <label>Parent/Guardian Name</label>
+                <input name="parent_name" value="{escape(parent_name or '')}">
+            </div>
+            <div>
+                <label>Parent WhatsApp Number</label>
+                <input name="parent_phone" value="{escape(parent_phone or '')}" required>
+            </div>
+            <div>
+                <label>Parent Email Optional</label>
+                <input name="parent_email" value="{escape(parent_email or '')}">
+            </div>
+            <div>
+                <label>Subject</label>
+                <select name="subject_id" required>{one_on_one_subject_options()}</select>
+            </div>
+            <div>
+                <label>Session Type</label>
+                <select name="session_type" required>{one_on_one_options(ONE_ON_ONE_SESSION_TYPES, '', 'Select session type')}</select>
+            </div>
+            <div>
+                <label>Package</label>
+                <select name="package_type" required>{one_on_one_options(list(ONE_ON_ONE_PACKAGES.keys()), '', 'Select package')}</select>
+            </div>
+            <div>
+                <label>Preferred Days</label>
+                <input name="preferred_days" placeholder="Example: Saturday, Sunday">
+            </div>
+            <div>
+                <label>Preferred Time</label>
+                <input name="preferred_time" placeholder="Example: 15:00 - 16:00">
+            </div>
+            <div>
+                <label>Urgency Level</label>
+                <select name="urgency_level">
+                    <option>Normal</option>
+                    <option>Urgent</option>
+                    <option>High Risk / Intervention</option>
+                </select>
+            </div>
+            <div>
+                <label>Proof of Payment Optional</label>
+                <input type="file" name="proof_of_payment" accept=".pdf,.png,.jpg,.jpeg">
+            </div>
+            <div style="grid-column:1/-1">
+                <label>Topic or Problem Area</label>
+                <textarea name="topic_or_problem_area" required placeholder="Example: Euclidean Geometry, Paper 2 revision, balancing equations"></textarea>
+            </div>
+            <div style="grid-column:1/-1">
+                <label>Current School Topic Optional</label>
+                <textarea name="school_current_topic" placeholder="What is the learner currently doing at school?"></textarea>
+            </div>
+            <div style="grid-column:1/-1">
+                <label>Extra Notes From Parent/Learner</label>
+                <textarea name="notes_from_parent" placeholder="Anything EBTA should know before assigning a tutor?"></textarea>
+            </div>
+            <div style="grid-column:1/-1">
+                <button class="btn success">Submit One-on-One Request</button>
+                <a class="btn secondary" href="/one-on-one/my-requests">My Requests</a>
+            </div>
+        </form>
+    </section>
+    """
+
+    return page("Request One-on-One Support", body)
+
+
+@app.post('/one-on-one/request')
+def one_on_one_request_submit():
+    sid = is_student()
+    learner_name = request.form.get("learner_name", "").strip()
+    parent_name = request.form.get("parent_name", "").strip()
+    parent_phone = request.form.get("parent_phone", "").strip()
+    parent_email = request.form.get("parent_email", "").strip()
+    grade = request.form.get("grade", "").strip()
+    subject_id = request.form.get("subject_id", "").strip()
+    topic = request.form.get("topic_or_problem_area", "").strip()
+    school_topic = request.form.get("school_current_topic", "").strip()
+    session_type = request.form.get("session_type", "").strip()
+    package_type = request.form.get("package_type", "").strip()
+    preferred_days = request.form.get("preferred_days", "").strip()
+    preferred_time = request.form.get("preferred_time", "").strip()
+    urgency = request.form.get("urgency_level", "Normal").strip()
+    notes = request.form.get("notes_from_parent", "").strip()
+
+    if not learner_name or not parent_phone or not grade or not subject_id or not topic or not session_type or not package_type:
+        return page("Missing Details", card_msg("Please complete all required one-on-one request fields."))
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, grade FROM subjects WHERE id=?", (subject_id,))
+    subject = cur.fetchone()
+
+    if not subject:
+        conn.close()
+        return page("Invalid Subject", card_msg("Please select a valid EBTA subject."))
+
+    package = one_on_one_package_values(package_type)
+    proof_path = ""
+    proof_name = ""
+
+    try:
+        proof_path, proof_name = one_on_one_save_proof(request.files.get("proof_of_payment"), f"one_on_one_{learner_name}")
+    except ValueError as exc:
+        conn.close()
+        return page("Invalid Proof", card_msg(str(exc)))
+
+    now = now_utc_iso()
+    payment_status = "Pending"
+    request_status = "Payment Pending" if not proof_path else "Pending"
+
+    cur.execute("""
+        INSERT INTO one_on_one_requests(
+            student_id, learner_name, parent_name, parent_phone, parent_email,
+            grade, subject_id, subject, topic_or_problem_area, school_current_topic,
+            session_type, package_type, parent_fee, tutor_payment, ebta_allocation,
+            total_sessions, preferred_days, preferred_time, urgency_level, notes_from_parent,
+            proof_of_payment_path, proof_of_payment_name, payment_status, request_status,
+            created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        sid, learner_name, parent_name, parent_phone, parent_email,
+        grade, subject["id"], subject["name"], topic, school_topic,
+        session_type, package_type, package["parent_fee"], package["tutor_payment"], package["ebta_allocation"],
+        package["total_sessions"], preferred_days, preferred_time, urgency, notes,
+        proof_path, proof_name, payment_status, request_status,
+        now, now
+    ))
+
+    request_id = cur.lastrowid
+
+    if proof_path:
+        cur.execute("""
+            INSERT INTO one_on_one_payment_logs(
+                request_id, amount_paid, proof_of_payment, payment_status, notes, created_at
+            ) VALUES(?,?,?,?,?,?)
+        """, (request_id, package["parent_fee"], proof_path, "Pending", "Proof uploaded by parent/learner on request submission.", now))
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "One-on-One Request Submitted",
+        card_msg("Your one-on-one request was submitted successfully. EBTA Admin will review it and confirm the next step.") +
+        "<div class='card'><a class='btn success' href='/one-on-one/my-requests'>View My Requests</a></div>"
+    )
+
+
+@app.get('/one-on-one/my-requests')
+def one_on_one_my_requests():
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT *
+        FROM one_on_one_requests
+        WHERE student_id=?
+        ORDER BY created_at DESC
+    """, (sid,))
+    rows = cur.fetchall()
+    conn.close()
+
+    table = ""
+    for row in rows:
+        remaining = int(row["total_sessions"] or 0)
+        table += f"""
+        <tr>
+            <td>{escape(row['learner_name'])}</td>
+            <td>{escape(grade_label(row['grade']))} - {escape(row['subject'] or '')}</td>
+            <td>{escape(row['package_type'] or '')}<div class='mini muted'>{remaining} session(s)</div></td>
+            <td>{one_on_one_badge(row['payment_status'])}</td>
+            <td>{one_on_one_badge(row['request_status'])}</td>
+            <td>
+                <a class='btn mini secondary' href='/one-on-one/my-sessions?request_id={row['id']}'>View Sessions</a>
+                <a class='btn mini success' href='/one-on-one/upload-proof/{row['id']}'>Upload Proof</a>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    <section class="card">
+        <h1>My One-on-One Requests</h1>
+        <div class="toolbar">
+            <a class="btn success" href="/one-on-one/request">New Request</a>
+            <a class="btn secondary" href="/student">Back to Student Portal</a>
+        </div>
+        <div class="scroll-x">
+            <table>
+                <thead><tr><th>Learner</th><th>Subject</th><th>Package</th><th>Payment</th><th>Status</th><th>Sessions</th></tr></thead>
+                <tbody>{table or "<tr><td colspan='6'>No one-on-one requests yet.</td></tr>"}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+    return page("My One-on-One Requests", body)
+
+
+@app.get('/one-on-one/upload-proof/<int:request_id>')
+def one_on_one_upload_proof(request_id):
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM one_on_one_requests WHERE id=? AND student_id=?", (request_id, sid))
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return page("Not Found", card_msg("This request was not found on your student profile."))
+
+    body = f"""
+    <section class="card">
+        <div class="toolbar"><a class="btn mini secondary" href="/one-on-one/my-requests">← Back</a></div>
+        <h1>Upload Proof of Payment</h1>
+        <p class="muted">Request #{row['id']} | {escape(row['learner_name'])} | {escape(row['package_type'] or '')} | Amount: {one_on_one_money(row['parent_fee'])}</p>
+        <form method="post" enctype="multipart/form-data">
+            <label>Proof of Payment PDF/Image</label>
+            <input type="file" name="proof_of_payment" accept=".pdf,.png,.jpg,.jpeg" required>
+            <button class="btn success" style="margin-top:12px">Upload Proof</button>
+        </form>
+    </section>
+    """
+    return page("Upload One-on-One Proof", body)
+
+
+@app.post('/one-on-one/upload-proof/<int:request_id>')
+def one_on_one_upload_proof_post(request_id):
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM one_on_one_requests WHERE id=? AND student_id=?", (request_id, sid))
+    row = cur.fetchone()
+
+    if not row:
+        conn.close()
+        return page("Not Found", card_msg("This request was not found on your student profile."))
+
+    try:
+        proof_path, proof_name = one_on_one_save_proof(request.files.get("proof_of_payment"), f"one_on_one_request_{request_id}")
+    except ValueError as exc:
+        conn.close()
+        return page("Invalid Proof", card_msg(str(exc)))
+
+    if not proof_path:
+        conn.close()
+        return page("No File Selected", card_msg("Please choose a proof of payment file before submitting."))
+
+    cur.execute("""
+        UPDATE one_on_one_requests
+        SET proof_of_payment_path=?, proof_of_payment_name=?, payment_status='Pending', request_status='Pending', updated_at=?
+        WHERE id=? AND student_id=?
+    """, (proof_path, proof_name, now_utc_iso(), request_id, sid))
+
+    cur.execute("""
+        INSERT INTO one_on_one_payment_logs(
+            request_id, amount_paid, proof_of_payment, payment_status, notes, created_at
+        ) VALUES(?,?,?,?,?,?)
+    """, (request_id, row['parent_fee'] or 0, proof_path, "Pending", "Proof uploaded by learner/parent after request submission.", now_utc_iso()))
+
+    conn.commit()
+    conn.close()
+    return redirect(url_for("one_on_one_my_requests"))
+
+
+@app.get('/one-on-one/my-sessions')
+def one_on_one_my_sessions():
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+    request_id = request.args.get("request_id", "").strip()
+
+    where = ["r.student_id=?"]
+    params = [sid]
+
+    if request_id:
+        where.append("r.id=?")
+        params.append(request_id)
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT b.*, r.learner_name, r.package_type, r.total_sessions AS request_total, t.full_name AS tutor_name,
+               n.topic_covered, n.practice_given, n.recommended_next_step
+        FROM one_on_one_bookings b
+        JOIN one_on_one_requests r ON r.id=b.request_id
+        LEFT JOIN tutors t ON t.id=b.tutor_id
+        LEFT JOIN one_on_one_session_notes n ON n.booking_id=b.id
+        WHERE {' AND '.join(where)}
+        ORDER BY b.scheduled_date, b.start_time, b.session_number
+    """, params)
+    rows = cur.fetchall()
+    conn.close()
+
+    table = ""
+    for row in rows:
+        link_html = ""
+        if row["meeting_link"] and row["booking_status"] in ["Scheduled", "Rescheduled"]:
+            link_html = f"<a class='btn mini success' target='_blank' href='{escape(row['meeting_link'], quote=True)}'>Join</a>"
+        summary = ""
+        if row["topic_covered"]:
+            summary = f"<div class='mini muted'>Covered: {escape(row['topic_covered'])}<br>Practice: {escape(row['practice_given'] or '—')}</div>"
+        table += f"""
+        <tr>
+            <td>Session {row['session_number']} / {row['total_sessions']}</td>
+            <td>{escape(row['scheduled_date'] or 'TBC')}<div class='mini muted'>{escape(row['start_time'] or '')} - {escape(row['end_time'] or '')}</div></td>
+            <td>{escape(row['subject'] or '')}</td>
+            <td>{escape(row['tutor_name'] or 'Tutor TBC')}</td>
+            <td>{one_on_one_badge(row['booking_status'])}{summary}</td>
+            <td>{link_html}</td>
+        </tr>
+        """
+
+    body = f"""
+    <section class="card">
+        <h1>My One-on-One Sessions</h1>
+        <div class="toolbar">
+            <a class="btn success" href="/one-on-one/request">Request Support</a>
+            <a class="btn secondary" href="/one-on-one/my-requests">My Requests</a>
+        </div>
+        <div class="scroll-x">
+            <table>
+                <thead><tr><th>Session</th><th>Date/Time</th><th>Subject</th><th>Tutor</th><th>Status/Summary</th><th>Link</th></tr></thead>
+                <tbody>{table or "<tr><td colspan='6'>No confirmed one-on-one sessions yet.</td></tr>"}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+    return page("My One-on-One Sessions", body)
+
+
+def one_on_one_admin_rows(q="", status="", payment_status="", grade="", subject_id="", package_type="", session_type=""):
+    where = ["1=1"]
+    params = []
+
+    if q:
+        like = f"%{q}%"
+        where.append("(r.learner_name LIKE ? OR r.parent_name LIKE ? OR r.parent_phone LIKE ? OR r.topic_or_problem_area LIKE ?)")
+        params.extend([like, like, like, like])
+    if status:
+        where.append("r.request_status=?")
+        params.append(status)
+    if payment_status:
+        where.append("r.payment_status=?")
+        params.append(payment_status)
+    if grade:
+        where.append("r.grade=?")
+        params.append(grade)
+    if subject_id:
+        where.append("r.subject_id=?")
+        params.append(subject_id)
+    if package_type:
+        where.append("r.package_type=?")
+        params.append(package_type)
+    if session_type:
+        where.append("r.session_type=?")
+        params.append(session_type)
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT r.*, t.full_name AS tutor_name, tm.full_name AS manager_name,
+               (SELECT COUNT(*) FROM one_on_one_bookings b WHERE b.request_id=r.id) AS booking_count,
+               (SELECT COUNT(*) FROM one_on_one_bookings b WHERE b.request_id=r.id AND b.booking_status='Completed') AS completed_count
+        FROM one_on_one_requests r
+        LEFT JOIN tutors t ON t.id=r.assigned_tutor_id
+        LEFT JOIN tutor_managers tm ON tm.id=r.assigned_tutor_manager_id
+        WHERE {' AND '.join(where)}
+        ORDER BY r.created_at DESC
+        LIMIT 400
+    """, params)
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def require_one_on_one_operations():
+    """
+    Allows one-on-one operational access to:
+    - Admin accounts (LOWER and HIGH)
+    - Admission Coordinators
+
+    This is because Admission Coordinators handle student/enrolment approval,
+    while both low and high admins must still be able to assist.
+    """
+    if is_admin() or is_admission_coordinator():
+        return None
+
+    if is_admission_coordinator():
+        return redirect(url_for("admission_login"))
+
+    return redirect(url_for("admin_login"))
+
+
+def one_on_one_operations_nav():
+    """
+    Shows the correct navigation for the person currently managing one-on-one requests.
+    """
+    if is_admission_coordinator() and not is_admin():
+        return admission_nav()
+    return admin_nav()
+
+
+def one_on_one_operations_base_path():
+    if is_admission_coordinator() and not is_admin():
+        return "/admission/one-on-one"
+    return "/admin/one-on-one"
+
+
+def one_on_one_operations_actor_label():
+    if is_admission_coordinator() and not is_admin():
+        return "Admission Coordinator: " + str(session.get("admission_coordinator_name", "Admission Coordinator"))
+
+    if is_admin():
+        admin_name = session.get("admin_username") or "Admin"
+        admin_role = session.get("admin_role") or "ADMIN"
+        return f"{admin_role} Admin: {admin_name}"
+
+    return "EBTA Operations"
+
+
+@app.get('/admission/one-on-one')
+@app.get('/admin/one-on-one')
+def admin_one_on_one():
+    r = require_one_on_one_operations()
+    if r:
+        return r
+
+    base_path = one_on_one_operations_base_path()
+    detail_base_path = base_path + "/request"
+    payments_path = base_path + "/payments"
+    export_path = base_path + "/export"
+    nav_html = one_on_one_operations_nav()
+
+    q = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    payment_status = request.args.get("payment_status", "").strip()
+    grade = request.args.get("grade", "").strip()
+    subject_id = request.args.get("subject_id", "").strip()
+    package_type = request.args.get("package_type", "").strip()
+    session_type = request.args.get("session_type", "").strip()
+
+    rows = one_on_one_admin_rows(q, status, payment_status, grade, subject_id, package_type, session_type)
+    stats = one_on_one_stats()
+
+    table = ""
+    for row in rows:
+        wa_links = ""
+        pay_msg = one_on_one_payment_reminder_message(row)
+        pay_link = one_on_one_whatsapp_link(row["parent_phone"], pay_msg)
+        if pay_link:
+            wa_links += f"<a class='btn mini secondary' target='_blank' href='{pay_link}'>Payment WA</a>"
+
+        table += f"""
+        <tr>
+            <td><strong>{escape(row['learner_name'])}</strong><div class='mini muted'>{escape(row['parent_name'] or '')} - {escape(row['parent_phone'] or '')}</div></td>
+            <td>{escape(grade_label(row['grade']))}<div class='mini muted'>{escape(row['subject'] or '')}</div></td>
+            <td>{escape(row['session_type'] or '')}<div class='mini muted'>{escape(row['topic_or_problem_area'] or '')[:90]}</div></td>
+            <td>{escape(row['package_type'] or '')}<div class='mini muted'>{one_on_one_money(row['parent_fee'])} | {row['total_sessions']} session(s)</div></td>
+            <td>{one_on_one_badge(row['payment_status'])}</td>
+            <td>{one_on_one_badge(row['request_status'])}<div class='mini muted'>{row['completed_count'] or 0}/{row['booking_count'] or 0} completed</div></td>
+            <td>{escape(row['tutor_name'] or 'Not assigned')}</td>
+            <td><a class='btn mini success' href='{detail_base_path}/{row['id']}'>Open</a>{wa_links}</td>
+        </tr>
+        """
+
+    body = f"""
+    {nav_html}
+    <section class="card">
+        <h1>One-on-One Sessions</h1>
+        <p class="muted">Manage EBTA individual academic support requests, payments, tutor allocation, bookings and quality tracking.</p>
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
+            {one_on_one_stats_cards(stats)}
+        </div>
+        <div class="toolbar" style="margin-top:12px">
+            <a class="btn success mini" href="/one-on-one/request">Create Parent Request</a>
+            <a class="btn secondary mini" href="{payments_path}">Payment Logs</a>
+            <a class="btn secondary mini" href="{export_path}">Export Excel</a>
+            {("<a class=\"btn secondary mini\" href=\"/admin/one-on-one-dashboard\">High Admin Dashboard</a>" if is_high_admin() else "")}
+        </div>
+        {one_on_one_filter_form(base_path, q, status, payment_status, grade, subject_id, package_type, session_type)}
+    </section>
+
+    <section class="card">
+        <h2>Requests</h2>
+        <div class="scroll-x">
+            <table>
+                <thead><tr><th>Learner/Parent</th><th>Grade/Subject</th><th>Type/Topic</th><th>Package</th><th>Payment</th><th>Status</th><th>Tutor</th><th>Action</th></tr></thead>
+                <tbody>{table or "<tr><td colspan='8'>No one-on-one requests found.</td></tr>"}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+    return page("Admin One-on-One Sessions", body)
+
+
+def one_on_one_create_missing_bookings(conn, request_id, scheduled_date="", start_time="", end_time="", meeting_link=""):
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM one_on_one_requests WHERE id=?", (request_id,))
+    row = cur.fetchone()
+
+    if not row:
+        return 0
+
+    total_sessions = int(row["total_sessions"] or 1)
+    created = 0
+
+    for n in range(1, total_sessions + 1):
+        cur.execute("SELECT id FROM one_on_one_bookings WHERE request_id=? AND session_number=?", (request_id, n))
+        if cur.fetchone():
+            continue
+
+        cur.execute("""
+            INSERT INTO one_on_one_bookings(
+                request_id, tutor_id, student_id, subject_id, subject, grade,
+                session_number, total_sessions, scheduled_date, start_time, end_time,
+                meeting_link, booking_status, attendance_status, created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            row["id"], row["assigned_tutor_id"], row["student_id"], row["subject_id"], row["subject"], row["grade"],
+            n, total_sessions, scheduled_date, start_time, end_time,
+            meeting_link, "Scheduled", "Pending", now_utc_iso(), now_utc_iso()
+        ))
+        created += 1
+
+    return created
+
+
+@app.get('/admission/one-on-one/request/<int:request_id>')
+@app.get('/admin/one-on-one/request/<int:request_id>')
+def admin_one_on_one_request_detail(request_id):
+    r = require_one_on_one_operations()
+    if r:
+        return r
+
+    base_path = one_on_one_operations_base_path()
+    nav_html = one_on_one_operations_nav()
+    booking_update_base = base_path + "/booking"
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT r.*, t.full_name AS tutor_name, t.phone AS tutor_phone, tm.full_name AS manager_name
+        FROM one_on_one_requests r
+        LEFT JOIN tutors t ON t.id=r.assigned_tutor_id
+        LEFT JOIN tutor_managers tm ON tm.id=r.assigned_tutor_manager_id
+        WHERE r.id=?
+    """, (request_id,))
+    row = cur.fetchone()
+
+    if not row:
+        conn.close()
+        return page("Not Found", card_msg("One-on-one request not found."))
+
+    cur.execute("""
+        SELECT b.*, n.id AS note_id, n.quality_status
+        FROM one_on_one_bookings b
+        LEFT JOIN one_on_one_session_notes n ON n.booking_id=b.id
+        WHERE b.request_id=?
+        ORDER BY b.session_number
+    """, (request_id,))
+    bookings = cur.fetchall()
+
+    cur.execute("SELECT * FROM one_on_one_payment_logs WHERE request_id=? ORDER BY created_at DESC", (request_id,))
+    payments = cur.fetchall()
+    conn.close()
+
+    proof_html = "<span class='muted'>No proof uploaded</span>"
+    if row["proof_of_payment_path"]:
+        proof_html = f"<a class='btn mini secondary' target='_blank' href='/one-on-one/proof/{escape(row['proof_of_payment_path'], quote=True)}'>Open Proof</a>"
+
+    package_note = f"{one_on_one_money(row['parent_fee'])} parent fee | {one_on_one_money(row['tutor_payment'])} tutor | {one_on_one_money(row['ebta_allocation'])} EBTA | {row['total_sessions']} session(s)"
+
+    booking_rows = ""
+    for b in bookings:
+        booking_rows += f"""
+        <tr>
+            <td>{b['session_number']} / {b['total_sessions']}</td>
+            <td>
+                <form method='post' action='{booking_update_base}/{b['id']}/update' class='grid' style='grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px'>
+                    <input type='date' name='scheduled_date' value='{escape(b['scheduled_date'] or '')}'>
+                    <input type='time' name='start_time' value='{escape(b['start_time'] or '')}'>
+                    <input type='time' name='end_time' value='{escape(b['end_time'] or '')}'>
+                    <input name='meeting_link' value='{escape(b['meeting_link'] or '')}' placeholder='Meeting link'>
+                    <select name='booking_status'>{one_on_one_options(ONE_ON_ONE_BOOKING_STATUSES, b['booking_status'])}</select>
+                    <button class='btn mini success'>Save</button>
+                </form>
+            </td>
+            <td>{one_on_one_badge(b['booking_status'])}</td>
+            <td>{one_on_one_badge(b['quality_status'] or 'No Note')}</td>
+        </tr>
+        """
+
+    payment_rows = "".join([
+        f"<tr><td>{escape(p['created_at'][:16].replace('T',' '))}</td><td>{one_on_one_money(p['amount_paid'])}</td><td>{escape(p['payment_reference'] or '')}</td><td>{one_on_one_badge(p['payment_status'])}</td><td>{escape(p['verified_by'] or '')}</td></tr>"
+        for p in payments
+    ])
+
+    first_booking = bookings[0] if bookings else None
+    parent_confirm_link = one_on_one_whatsapp_link(row["parent_phone"], one_on_one_booking_confirmation_message(row, first_booking, row["tutor_name"] or "Tutor TBC"))
+    parent_reminder_link = one_on_one_whatsapp_link(row["parent_phone"], one_on_one_session_reminder_message(row, first_booking))
+    payment_reminder_link = one_on_one_whatsapp_link(row["parent_phone"], one_on_one_payment_reminder_message(row))
+    tutor_link = one_on_one_whatsapp_link(row["tutor_phone"], one_on_one_tutor_allocation_message(row, first_booking, row["tutor_name"] or "Tutor"))
+
+    wa_buttons = ""
+    for label, link in [
+        ("Payment Reminder", payment_reminder_link),
+        ("Booking Confirmation", parent_confirm_link),
+        ("Session Reminder", parent_reminder_link),
+        ("Tutor Allocation", tutor_link),
+    ]:
+        if link:
+            wa_buttons += f"<a class='btn mini secondary' target='_blank' href='{link}'>{label}</a>"
+
+    body = f"""
+    {nav_html}
+    <section class="card">
+        <div class="toolbar"><a class="btn mini secondary" href="{base_path}">← Back</a>{wa_buttons}</div>
+        <h1>One-on-One Request #{row['id']}</h1>
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+            <div class="card soft"><b>Learner</b><br>{escape(row['learner_name'])}<br><span class='mini muted'>{escape(grade_label(row['grade']))} - {escape(row['subject'] or '')}</span></div>
+            <div class="card soft"><b>Parent</b><br>{escape(row['parent_name'] or '—')}<br><span class='mini muted'>{escape(row['parent_phone'] or '—')}</span></div>
+            <div class="card soft"><b>Package</b><br>{escape(row['package_type'] or '')}<br><span class='mini muted'>{package_note}</span></div>
+            <div class="card soft"><b>Status</b><br>{one_on_one_badge(row['request_status'])} {one_on_one_badge(row['payment_status'])}</div>
+        </div>
+        <div class="card soft" style="margin-top:12px"><b>Topic/Problem Area</b><br>{escape(row['topic_or_problem_area'] or '')}<br><span class='mini muted'>School topic: {escape(row['school_current_topic'] or '—')}</span></div>
+    </section>
+
+    <section class="card">
+        <h2>Manage Request</h2>
+        <form method="post" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+            <input type="hidden" name="action" value="update_request">
+            <div><label>Payment Status</label><select name="payment_status">{one_on_one_options(ONE_ON_ONE_PAYMENT_STATUSES, row['payment_status'])}</select></div>
+            <div><label>Request Status</label><select name="request_status">{one_on_one_options(ONE_ON_ONE_REQUEST_STATUSES, row['request_status'])}</select></div>
+            <div><label>Assigned Tutor</label><select name="assigned_tutor_id">{one_on_one_tutor_options(row['assigned_tutor_id'], row['subject_id'])}</select></div>
+            <div><label>Assigned Tutor Manager</label><select name="assigned_tutor_manager_id">{one_on_one_manager_options(row['assigned_tutor_manager_id'])}</select></div>
+            <div><label>Package</label><select name="package_type">{one_on_one_options(list(ONE_ON_ONE_PACKAGES.keys()), row['package_type'])}</select></div>
+            <div><label>Parent Fee</label><input name="parent_fee" type="number" step="0.01" value="{row['parent_fee'] or 0}"></div>
+            <div><label>Tutor Payment</label><input name="tutor_payment" type="number" step="0.01" value="{row['tutor_payment'] or 0}"></div>
+            <div><label>EBTA Allocation</label><input name="ebta_allocation" type="number" step="0.01" value="{row['ebta_allocation'] or 0}"></div>
+            <div><label>Total Sessions</label><input name="total_sessions" type="number" min="1" value="{row['total_sessions'] or 1}"></div>
+            <div style="grid-column:1/-1"><label>Internal Notes</label><textarea name="internal_notes">{escape(row['internal_notes'] or '')}</textarea></div>
+            <div style="grid-column:1/-1">{proof_html}</div>
+            <div style="grid-column:1/-1"><button class="btn success">Save Request</button></div>
+        </form>
+    </section>
+
+    <section class="card">
+        <h2>Create Missing Bookings</h2>
+        <form method="post" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+            <input type="hidden" name="action" value="create_bookings">
+            <div><label>Start Date</label><input type="date" name="scheduled_date"></div>
+            <div><label>Start Time</label><input type="time" name="start_time"></div>
+            <div><label>End Time</label><input type="time" name="end_time"></div>
+            <div><label>Meeting Link</label><input name="meeting_link" placeholder="Teams/Meet link"></div>
+            <div style="align-self:end"><button class="btn success mini">Create Missing Sessions</button></div>
+        </form>
+    </section>
+
+    <section class="card">
+        <h2>Bookings</h2>
+        <div class="scroll-x"><table><thead><tr><th>Session</th><th>Schedule</th><th>Status</th><th>Note</th></tr></thead><tbody>{booking_rows or "<tr><td colspan='4'>No bookings created yet.</td></tr>"}</tbody></table></div>
+    </section>
+
+    <section class="card">
+        <h2>Payment Logs</h2>
+        <div class="scroll-x"><table><thead><tr><th>Date</th><th>Amount</th><th>Reference</th><th>Status</th><th>Verified By</th></tr></thead><tbody>{payment_rows or "<tr><td colspan='5'>No payment log yet.</td></tr>"}</tbody></table></div>
+    </section>
+    """
+    return page("One-on-One Request Detail", body)
+
+
+@app.post('/admission/one-on-one/request/<int:request_id>')
+@app.post('/admin/one-on-one/request/<int:request_id>')
+def admin_one_on_one_request_update(request_id):
+    r = require_one_on_one_operations()
+    if r:
+        return r
+
+    base_path = one_on_one_operations_base_path()
+    actor_label = one_on_one_operations_actor_label()
+
+    action = request.form.get("action")
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM one_on_one_requests WHERE id=?", (request_id,))
+    old = cur.fetchone()
+
+    if not old:
+        conn.close()
+        return page("Not Found", card_msg("One-on-one request not found."))
+
+    if action == "create_bookings":
+        created = one_on_one_create_missing_bookings(
+            conn,
+            request_id,
+            request.form.get("scheduled_date", "").strip(),
+            request.form.get("start_time", "").strip(),
+            request.form.get("end_time", "").strip(),
+            request.form.get("meeting_link", "").strip()
+        )
+        cur.execute("UPDATE one_on_one_requests SET request_status=?, updated_at=? WHERE id=?", ("Confirmed" if created else old["request_status"], now_utc_iso(), request_id))
+        conn.commit()
+        conn.close()
+        return redirect(f"{base_path}/request/{request_id}")
+
+    payment_status = request.form.get("payment_status", old["payment_status"]).strip()
+    request_status = request.form.get("request_status", old["request_status"]).strip()
+    assigned_tutor_id = request.form.get("assigned_tutor_id") or None
+    assigned_manager_id = request.form.get("assigned_tutor_manager_id") or None
+    package_type = request.form.get("package_type", old["package_type"]).strip()
+    internal_notes = request.form.get("internal_notes", "").strip()
+
+    vals = one_on_one_package_values(
+        package_type,
+        request.form.get("parent_fee"),
+        request.form.get("tutor_payment"),
+        request.form.get("ebta_allocation"),
+        request.form.get("total_sessions")
+    )
+
+    if payment_status == "Verified" and request_status in ["Pending", "Payment Pending"]:
+        request_status = "Approved"
+    if assigned_tutor_id and request_status in ["Pending", "Payment Pending", "Payment Verified", "Approved"]:
+        request_status = "Assigned"
+
+    cur.execute("""
+        UPDATE one_on_one_requests
+        SET payment_status=?, request_status=?, assigned_tutor_id=?, assigned_tutor_manager_id=?, assigned_by=?,
+            package_type=?, parent_fee=?, tutor_payment=?, ebta_allocation=?, total_sessions=?, internal_notes=?, updated_at=?
+        WHERE id=?
+    """, (
+        payment_status, request_status, assigned_tutor_id, assigned_manager_id, actor_label,
+        package_type, vals["parent_fee"], vals["tutor_payment"], vals["ebta_allocation"], vals["total_sessions"], internal_notes, now_utc_iso(), request_id
+    ))
+
+    if payment_status != old["payment_status"]:
+        cur.execute("""
+            INSERT INTO one_on_one_payment_logs(
+                request_id, amount_paid, payment_reference, proof_of_payment, payment_status, verified_by, verified_at, notes, created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?)
+        """, (
+            request_id,
+            vals["parent_fee"],
+            f"OOO-{request_id}-{int(time.time())}",
+            old["proof_of_payment_path"],
+            payment_status,
+            actor_label,
+            now_utc_iso() if payment_status == "Verified" else None,
+            "Payment status updated from Admin detail page.",
+            now_utc_iso()
+        ))
+
+    cur.execute("UPDATE one_on_one_bookings SET tutor_id=?, total_sessions=?, updated_at=? WHERE request_id=?", (assigned_tutor_id, vals["total_sessions"], now_utc_iso(), request_id))
+
+    conn.commit()
+    conn.close()
+    return redirect(f"{base_path}/request/{request_id}")
+
+
+@app.post('/admission/one-on-one/booking/<int:booking_id>/update')
+@app.post('/admin/one-on-one/booking/<int:booking_id>/update')
+def admin_one_on_one_booking_update(booking_id):
+    r = require_one_on_one_operations()
+    if r:
+        return r
+
+    base_path = one_on_one_operations_base_path()
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT request_id FROM one_on_one_bookings WHERE id=?", (booking_id,))
+    row = cur.fetchone()
+
+    if not row:
+        conn.close()
+        return page("Not Found", card_msg("Booking not found."))
+
+    cur.execute("""
+        UPDATE one_on_one_bookings
+        SET scheduled_date=?, start_time=?, end_time=?, meeting_link=?, booking_status=?, updated_at=?
+        WHERE id=?
+    """, (
+        request.form.get("scheduled_date", "").strip(),
+        request.form.get("start_time", "").strip(),
+        request.form.get("end_time", "").strip(),
+        request.form.get("meeting_link", "").strip(),
+        request.form.get("booking_status", "Scheduled").strip(),
+        now_utc_iso(),
+        booking_id
+    ))
+    conn.commit()
+    conn.close()
+    return redirect(f"{base_path}/request/{row['request_id']}")
+
+
+@app.get('/admission/one-on-one/payments')
+@app.get('/admin/one-on-one/payments')
+def admin_one_on_one_payments():
+    r = require_one_on_one_operations()
+    if r:
+        return r
+
+    base_path = one_on_one_operations_base_path()
+    nav_html = one_on_one_operations_nav()
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT p.*, r.learner_name, r.parent_name, r.parent_phone, r.package_type
+        FROM one_on_one_payment_logs p
+        JOIN one_on_one_requests r ON r.id=p.request_id
+        ORDER BY p.created_at DESC
+        LIMIT 500
+    """)
+    rows = cur.fetchall()
+    conn.close()
+
+    table = "".join([
+        f"<tr><td>{escape(p['created_at'][:16].replace('T',' '))}</td><td>{escape(p['learner_name'])}</td><td>{escape(p['parent_name'] or '')}<div class='mini muted'>{escape(p['parent_phone'] or '')}</div></td><td>{one_on_one_money(p['amount_paid'])}</td><td>{one_on_one_badge(p['payment_status'])}</td><td><a class='btn mini secondary' href='{base_path}/request/{p['request_id']}'>Open</a></td></tr>"
+        for p in rows
+    ])
+
+    body = f"""
+    {nav_html}
+    <section class="card">
+        <div class="toolbar"><a class="btn mini secondary" href="{base_path}">← Back</a></div>
+        <h1>One-on-One Payment Logs</h1>
+        <div class="scroll-x"><table><thead><tr><th>Date</th><th>Learner</th><th>Parent</th><th>Amount</th><th>Status</th><th>Request</th></tr></thead><tbody>{table or "<tr><td colspan='6'>No payment logs yet.</td></tr>"}</tbody></table></div>
+    </section>
+    """
+    return page("One-on-One Payments", body)
+
+
+@app.get('/admission/one-on-one/export')
+@app.get('/admin/one-on-one/export')
+def admin_one_on_one_export():
+    r = require_one_on_one_operations()
+    if r:
+        return r
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM one_on_one_requests ORDER BY created_at DESC")
+    requests_rows = cur.fetchall()
+    cur.execute("SELECT * FROM one_on_one_bookings ORDER BY scheduled_date, start_time")
+    bookings_rows = cur.fetchall()
+    cur.execute("SELECT * FROM one_on_one_session_notes ORDER BY submitted_at DESC")
+    notes_rows = cur.fetchall()
+    conn.close()
+
+    wb = Workbook()
+    green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+
+    def add_sheet(ws, rows):
+        if not rows:
+            ws.append(["No data"])
+            return
+        headers = rows[0].keys()
+        ws.append(list(headers))
+        for c in ws[1]:
+            c.font = Font(bold=True)
+            c.fill = green
+            c.alignment = Alignment(horizontal="center")
+        for row in rows:
+            ws.append([row[h] for h in headers])
+        for col in ws.columns:
+            width = max(len(str(cell.value)) if cell.value is not None else 0 for cell in col)
+            ws.column_dimensions[col[0].column_letter].width = min(width + 3, 45)
+
+    ws = wb.active
+    ws.title = "Requests"
+    add_sheet(ws, requests_rows)
+    add_sheet(wb.create_sheet("Bookings"), bookings_rows)
+    add_sheet(wb.create_sheet("Session Notes"), notes_rows)
+
+    file_name = f"ebta_one_on_one_export_{datetime.date.today().isoformat()}.xlsx"
+    file_path = f"/tmp/{file_name}"
+    wb.save(file_path)
+    return send_from_directory("/tmp", file_name, as_attachment=True)
+
+
+@app.get('/tutor/one-on-one')
+def tutor_one_on_one():
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT b.*, r.learner_name, r.parent_name, r.parent_phone, r.topic_or_problem_area,
+               r.school_current_topic, r.session_type, n.id AS note_id, n.quality_status
+        FROM one_on_one_bookings b
+        JOIN one_on_one_requests r ON r.id=b.request_id
+        LEFT JOIN one_on_one_session_notes n ON n.booking_id=b.id
+        WHERE b.tutor_id=?
+        ORDER BY COALESCE(b.scheduled_date,'9999-12-31'), b.start_time, b.session_number
+    """, (tid,))
+    rows = cur.fetchall()
+    conn.close()
+
+    table = ""
+    for row in rows:
+        note_btn = f"<a class='btn mini success' href='/tutor/one-on-one/session-note/{row['id']}'>Session Note</a>"
+        table += f"""
+        <tr>
+            <td><strong>{escape(row['learner_name'])}</strong><div class='mini muted'>{escape(row['parent_name'] or '')} - {escape(row['parent_phone'] or '')}</div></td>
+            <td>{escape(grade_label(row['grade']))}<div class='mini muted'>{escape(row['subject'] or '')}</div></td>
+            <td>Session {row['session_number']} / {row['total_sessions']}<div class='mini muted'>{escape(row['scheduled_date'] or 'TBC')} {escape(row['start_time'] or '')}</div></td>
+            <td>{escape(row['topic_or_problem_area'] or '')}</td>
+            <td>{one_on_one_badge(row['booking_status'])}<div class='mini muted'>{one_on_one_badge(row['quality_status'] or 'No Note')}</div></td>
+            <td><a class='btn mini secondary' href='/tutor/one-on-one/booking/{row['id']}'>Open</a>{note_btn}</td>
+        </tr>
+        """
+
+    body = f"""
+    <section class="card">
+        <div class="toolbar"><a class="btn mini secondary" href="/tutor">← Back</a><a class="btn mini success" href="/tutor/one-on-one/availability">My Availability</a></div>
+        <h1>My One-on-One Sessions</h1>
+        <div class="scroll-x"><table><thead><tr><th>Learner</th><th>Subject</th><th>Session</th><th>Topic</th><th>Status</th><th>Action</th></tr></thead><tbody>{table or "<tr><td colspan='6'>No one-on-one sessions assigned yet.</td></tr>"}</tbody></table></div>
+    </section>
+    """
+    return page("Tutor One-on-One Sessions", body)
+
+
+@app.get('/tutor/one-on-one/booking/<int:booking_id>')
+def tutor_one_on_one_booking(booking_id):
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT b.*, r.learner_name, r.parent_name, r.topic_or_problem_area, r.school_current_topic, r.notes_from_parent
+        FROM one_on_one_bookings b
+        JOIN one_on_one_requests r ON r.id=b.request_id
+        WHERE b.id=? AND b.tutor_id=?
+    """, (booking_id, tid))
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return page("Not Found", card_msg("This one-on-one booking was not found or is not assigned to you."))
+
+    body = f"""
+    <section class="card">
+        <div class="toolbar"><a class="btn mini secondary" href="/tutor/one-on-one">← Back</a><a class="btn mini success" href="/tutor/one-on-one/session-note/{row['id']}">Submit Session Note</a></div>
+        <h1>One-on-One Booking</h1>
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+            <div class="card soft"><b>Learner</b><br>{escape(row['learner_name'])}</div>
+            <div class="card soft"><b>Subject</b><br>{escape(grade_label(row['grade']))} - {escape(row['subject'] or '')}</div>
+            <div class="card soft"><b>Date/Time</b><br>{escape(row['scheduled_date'] or 'TBC')} {escape(row['start_time'] or '')} - {escape(row['end_time'] or '')}</div>
+            <div class="card soft"><b>Status</b><br>{one_on_one_badge(row['booking_status'])}</div>
+        </div>
+        <div class="card soft" style="margin-top:12px"><b>Topic</b><br>{escape(row['topic_or_problem_area'] or '')}<br><span class='mini muted'>School topic: {escape(row['school_current_topic'] or '—')}</span></div>
+        <form method="post" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:12px">
+            <div><label>Booking Status</label><select name="booking_status">{one_on_one_options(ONE_ON_ONE_BOOKING_STATUSES, row['booking_status'])}</select></div>
+            <div><label>Attendance Status</label><select name="attendance_status">{one_on_one_options(['Pending','Learner Attended','Learner Missed','Tutor Missed'], row['attendance_status'] or 'Pending')}</select></div>
+            <div><label>Recording Link Optional</label><input name="recording_link" value="{escape(row['recording_link'] or '')}"></div>
+            <div style="align-self:end"><button class="btn success">Save Update</button></div>
+        </form>
+    </section>
+    """
+    return page("Tutor One-on-One Booking", body)
+
+
+@app.post('/tutor/one-on-one/booking/<int:booking_id>')
+def tutor_one_on_one_booking_update(booking_id):
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE one_on_one_bookings
+        SET booking_status=?, attendance_status=?, recording_link=?, updated_at=?
+        WHERE id=? AND tutor_id=?
+    """, (
+        request.form.get("booking_status", "Scheduled"),
+        request.form.get("attendance_status", "Pending"),
+        request.form.get("recording_link", "").strip(),
+        now_utc_iso(),
+        booking_id,
+        tid
+    ))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("tutor_one_on_one_booking", booking_id=booking_id))
+
+
+@app.get('/tutor/one-on-one/session-note/<int:booking_id>')
+def tutor_one_on_one_session_note(booking_id):
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT b.*, r.learner_name, r.topic_or_problem_area
+        FROM one_on_one_bookings b
+        JOIN one_on_one_requests r ON r.id=b.request_id
+        WHERE b.id=? AND b.tutor_id=?
+    """, (booking_id, tid))
+    booking = cur.fetchone()
+
+    if not booking:
+        conn.close()
+        return page("Not Found", card_msg("Booking not found or not assigned to you."))
+
+    cur.execute("SELECT * FROM one_on_one_session_notes WHERE booking_id=?", (booking_id,))
+    note = cur.fetchone()
+    conn.close()
+
+    def val(key):
+        return escape(note[key] if note and note[key] else "")
+
+    body = f"""
+    <section class="card">
+        <div class="toolbar"><a class="btn mini secondary" href="/tutor/one-on-one">← Back</a></div>
+        <h1>Submit One-on-One Session Note</h1>
+        <p class="muted">Learner: <b>{escape(booking['learner_name'])}</b> | {escape(grade_label(booking['grade']))} {escape(booking['subject'] or '')} | Session {booking['session_number']} / {booking['total_sessions']}</p>
+        <form method="post" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
+            <div style="grid-column:1/-1"><label>Topic Covered</label><textarea name="topic_covered" required>{val('topic_covered')}</textarea></div>
+            <div><label>Learner Strengths</label><textarea name="learner_strengths">{val('learner_strengths')}</textarea></div>
+            <div><label>Learner Challenges</label><textarea name="learner_challenges">{val('learner_challenges')}</textarea></div>
+            <div><label>Activities Completed</label><textarea name="activities_completed">{val('activities_completed')}</textarea></div>
+            <div><label>Practice/Homework Given</label><textarea name="practice_given">{val('practice_given')}</textarea></div>
+            <div><label>Recommended Next Step</label><textarea name="recommended_next_step">{val('recommended_next_step')}</textarea></div>
+            <div style="grid-column:1/-1"><label>Tutor Comment</label><textarea name="tutor_comment">{val('tutor_comment')}</textarea></div>
+            <div style="grid-column:1/-1"><label>Recording Link Optional</label><input name="recording_link" value="{escape(booking['recording_link'] or '')}"></div>
+            <div style="grid-column:1/-1"><button class="btn success">Submit Session Note</button></div>
+        </form>
+    </section>
+    """
+    return page("One-on-One Session Note", body)
+
+
+@app.post('/tutor/one-on-one/session-note/<int:booking_id>')
+def tutor_one_on_one_session_note_post(booking_id):
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT b.*, r.learner_name
+        FROM one_on_one_bookings b
+        JOIN one_on_one_requests r ON r.id=b.request_id
+        WHERE b.id=? AND b.tutor_id=?
+    """, (booking_id, tid))
+    b = cur.fetchone()
+
+    if not b:
+        conn.close()
+        return page("Not Found", card_msg("Booking not found or not assigned to you."))
+
+    data = {
+        "topic_covered": request.form.get("topic_covered", "").strip(),
+        "learner_strengths": request.form.get("learner_strengths", "").strip(),
+        "learner_challenges": request.form.get("learner_challenges", "").strip(),
+        "activities_completed": request.form.get("activities_completed", "").strip(),
+        "practice_given": request.form.get("practice_given", "").strip(),
+        "recommended_next_step": request.form.get("recommended_next_step", "").strip(),
+        "tutor_comment": request.form.get("tutor_comment", "").strip(),
+    }
+
+    if not data["topic_covered"]:
+        conn.close()
+        return page("Missing Topic", card_msg("Please enter the topic covered."))
+
+    cur.execute("SELECT id FROM one_on_one_session_notes WHERE booking_id=?", (booking_id,))
+    old = cur.fetchone()
+
+    if old:
+        cur.execute("""
+            UPDATE one_on_one_session_notes
+            SET topic_covered=?, learner_strengths=?, learner_challenges=?, activities_completed=?, practice_given=?,
+                recommended_next_step=?, tutor_comment=?, quality_status='Pending Review', submitted_at=?
+            WHERE booking_id=?
+        """, (
+            data["topic_covered"], data["learner_strengths"], data["learner_challenges"], data["activities_completed"], data["practice_given"],
+            data["recommended_next_step"], data["tutor_comment"], now_utc_iso(), booking_id
+        ))
+    else:
+        cur.execute("""
+            INSERT INTO one_on_one_session_notes(
+                booking_id, tutor_id, learner_name, grade, subject, topic_covered, learner_strengths,
+                learner_challenges, activities_completed, practice_given, recommended_next_step,
+                tutor_comment, quality_status, submitted_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            booking_id, tid, b["learner_name"], b["grade"], b["subject"], data["topic_covered"], data["learner_strengths"],
+            data["learner_challenges"], data["activities_completed"], data["practice_given"], data["recommended_next_step"],
+            data["tutor_comment"], "Pending Review", now_utc_iso()
+        ))
+
+    cur.execute("UPDATE one_on_one_bookings SET booking_status='Completed', attendance_status='Learner Attended', recording_link=COALESCE(NULLIF(?,''), recording_link), updated_at=? WHERE id=?", (request.form.get("recording_link", "").strip(), now_utc_iso(), booking_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("tutor_one_on_one"))
+
+
+@app.get('/tutor/one-on-one/availability')
+def tutor_one_on_one_availability():
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM one_on_one_tutor_availability WHERE tutor_id=? ORDER BY is_active DESC, available_day, available_start_time", (tid,))
+    rows = cur.fetchall()
+    cur.execute("""
+        SELECT s.name, s.grade
+        FROM tutor_subjects ts
+        JOIN subjects s ON s.id=ts.subject_id
+        WHERE ts.tutor_id=?
+        ORDER BY s.grade, s.name
+    """, (tid,))
+    subjects = cur.fetchall()
+    conn.close()
+
+    subject_opts = "<option value=''>General / Any assigned subject</option>" + "".join([f"<option value='{escape(s['name'], quote=True)}'>{escape(grade_label(s['grade']))} - {escape(s['name'])}</option>" for s in subjects])
+    rows_html = "".join([
+        f"<tr><td>{escape(rw['available_day'] or '')}</td><td>{escape(rw['available_start_time'] or '')} - {escape(rw['available_end_time'] or '')}</td><td>{escape(rw['grade_level'] or '')}</td><td>{escape(rw['subject'] or 'General')}</td><td>{one_on_one_badge('Active' if rw['is_active'] else 'Inactive')}</td></tr>"
+        for rw in rows
+    ])
+
+    body = f"""
+    <section class="card">
+        <div class="toolbar"><a class="btn mini secondary" href="/tutor/one-on-one">← Back</a></div>
+        <h1>My One-on-One Availability</h1>
+        <form method="post" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px">
+            <div><label>Day</label><select name="available_day">{one_on_one_options(['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'])}</select></div>
+            <div><label>Start Time</label><input type="time" name="available_start_time" required></div>
+            <div><label>End Time</label><input type="time" name="available_end_time" required></div>
+            <div><label>Grade Level</label><select name="grade_level">{one_on_one_options(['G8','G9','G10','G11','G12','G13'], '', 'Any grade')}</select></div>
+            <div><label>Subject</label><select name="subject">{subject_opts}</select></div>
+            <div><label>Notes</label><input name="notes" placeholder="Optional notes"></div>
+            <div style="align-self:end"><button class="btn success mini">Add Availability</button></div>
+        </form>
+        <div class="scroll-x" style="margin-top:14px"><table><thead><tr><th>Day</th><th>Time</th><th>Grade</th><th>Subject</th><th>Status</th></tr></thead><tbody>{rows_html or "<tr><td colspan='5'>No availability added yet.</td></tr>"}</tbody></table></div>
+    </section>
+    """
+    return page("Tutor One-on-One Availability", body)
+
+
+@app.post('/tutor/one-on-one/availability')
+def tutor_one_on_one_availability_post():
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO one_on_one_tutor_availability(
+            tutor_id, subject, grade_level, available_day, available_start_time, available_end_time, notes, is_active, created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?)
+    """, (
+        tid,
+        request.form.get("subject", "").strip(),
+        request.form.get("grade_level", "").strip(),
+        request.form.get("available_day", "").strip(),
+        request.form.get("available_start_time", "").strip(),
+        request.form.get("available_end_time", "").strip(),
+        request.form.get("notes", "").strip(),
+        1,
+        now_utc_iso()
+    ))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("tutor_one_on_one_availability"))
+
+
+@app.get('/manager/one-on-one')
+def manager_one_on_one():
+    r = require_manager()
+    if r:
+        return r
+
+    mid = session.get("manager_id")
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT r.*, t.full_name AS tutor_name
+        FROM one_on_one_requests r
+        LEFT JOIN tutors t ON t.id=r.assigned_tutor_id
+        LEFT JOIN manager_tutors mt ON mt.tutor_id=r.assigned_tutor_id
+        WHERE r.assigned_tutor_manager_id=? OR mt.manager_id=?
+        ORDER BY r.created_at DESC
+    """, (mid, mid))
+    rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT a.*, t.full_name AS tutor_name
+        FROM one_on_one_tutor_availability a
+        JOIN tutors t ON t.id=a.tutor_id
+        JOIN manager_tutors mt ON mt.tutor_id=t.id
+        WHERE mt.manager_id=? AND a.is_active=1
+        ORDER BY t.full_name, a.available_day, a.available_start_time
+    """, (mid,))
+    availability = cur.fetchall()
+    conn.close()
+
+    table = "".join([
+        f"<tr><td>{escape(rw['learner_name'])}</td><td>{escape(grade_label(rw['grade']))} - {escape(rw['subject'] or '')}</td><td>{escape(rw['topic_or_problem_area'] or '')}</td><td>{one_on_one_badge(rw['request_status'])}</td><td>{escape(rw['tutor_name'] or 'Not assigned')}</td><td><a class='btn mini secondary' href='/manager/one-on-one/recommend-tutor/{rw['id']}'>Recommend Tutor</a></td></tr>"
+        for rw in rows
+    ])
+    avail_html = "".join([
+        f"<tr><td>{escape(a['tutor_name'])}</td><td>{escape(a['available_day'] or '')}</td><td>{escape(a['available_start_time'] or '')} - {escape(a['available_end_time'] or '')}</td><td>{escape(a['grade_level'] or 'Any')}</td><td>{escape(a['subject'] or 'General')}</td></tr>"
+        for a in availability
+    ])
+
+    body = f"""
+    {manager_nav()}
+    <section class="card"><h1>Tutor Manager One-on-One Support</h1><p class="muted">Monitor requests and bookings linked to your managed tutors, recommend suitable tutors and track readiness.</p></section>
+    <section class="card"><h2>Managed One-on-One Requests</h2><div class="scroll-x"><table><thead><tr><th>Learner</th><th>Subject</th><th>Topic</th><th>Status</th><th>Tutor</th><th>Action</th></tr></thead><tbody>{table or "<tr><td colspan='6'>No linked one-on-one requests yet.</td></tr>"}</tbody></table></div></section>
+    <section class="card"><h2>Managed Tutor Availability</h2><div class="scroll-x"><table><thead><tr><th>Tutor</th><th>Day</th><th>Time</th><th>Grade</th><th>Subject</th></tr></thead><tbody>{avail_html or "<tr><td colspan='5'>No tutor availability added yet.</td></tr>"}</tbody></table></div></section>
+    """
+    return page("Tutor Manager One-on-One", body)
+
+
+@app.get('/tutor-manager/one-on-one')
+def tutor_manager_one_on_one_alias():
+    return manager_one_on_one()
+
+
+@app.get('/manager/one-on-one/recommend-tutor/<int:request_id>')
+def manager_one_on_one_recommend(request_id):
+    r = require_manager()
+    if r:
+        return r
+
+    mid = session.get("manager_id")
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM one_on_one_requests WHERE id=?", (request_id,))
+    row = cur.fetchone()
+    cur.execute("""
+        SELECT t.id, t.full_name
+        FROM tutors t
+        JOIN manager_tutors mt ON mt.tutor_id=t.id
+        WHERE mt.manager_id=? AND COALESCE(t.is_active,1)=1
+        ORDER BY t.full_name
+    """, (mid,))
+    tutors = cur.fetchall()
+    conn.close()
+
+    if not row:
+        return page("Not Found", card_msg("Request not found."))
+
+    opts = "".join([f"<option value='{t['id']}'>{escape(t['full_name'])}</option>" for t in tutors])
+    body = f"""
+    {manager_nav()}
+    <section class="card">
+        <h1>Recommend Tutor</h1>
+        <p class="muted">{escape(row['learner_name'])} | {escape(grade_label(row['grade']))} {escape(row['subject'] or '')} | {escape(row['topic_or_problem_area'] or '')}</p>
+        <form method="post">
+            <label>Select managed tutor</label>
+            <select name="tutor_id" required>{opts}</select>
+            <label>Manager note optional</label>
+            <textarea name="note"></textarea>
+            <button class="btn success" style="margin-top:10px">Recommend / Assign Tutor</button>
+        </form>
+    </section>
+    """
+    return page("Recommend One-on-One Tutor", body)
+
+
+@app.post('/manager/one-on-one/recommend-tutor/<int:request_id>')
+def manager_one_on_one_recommend_post(request_id):
+    r = require_manager()
+    if r:
+        return r
+
+    mid = session.get("manager_id")
+    tutor_id = request.form.get("tutor_id")
+    note = request.form.get("note", "").strip()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT 1 FROM manager_tutors WHERE manager_id=? AND tutor_id=?
+    """, (mid, tutor_id))
+    if not cur.fetchone():
+        conn.close()
+        return page("Access Denied", card_msg("You can only recommend tutors that you manage."))
+
+    cur.execute("""
+        UPDATE one_on_one_requests
+        SET assigned_tutor_id=?, assigned_tutor_manager_id=?, request_status='Assigned', internal_notes=COALESCE(internal_notes,'') || ?, updated_at=?
+        WHERE id=?
+    """, (tutor_id, mid, f"\nTutor Manager recommendation: {note}", now_utc_iso(), request_id))
+    cur.execute("UPDATE one_on_one_bookings SET tutor_id=?, updated_at=? WHERE request_id=?", (tutor_id, now_utc_iso(), request_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("manager_one_on_one"))
+
+
+@app.get('/aqm/one-on-one')
+def aqm_one_on_one():
+    r = require_aqm()
+    if r:
+        return r
+    return redirect(url_for("aqm_one_on_one_session_notes"))
+
+
+@app.get('/aqm/one-on-one/session-notes')
+def aqm_one_on_one_session_notes():
+    r = require_aqm()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT n.*, b.scheduled_date, b.session_number, b.total_sessions, t.full_name AS tutor_name
+        FROM one_on_one_session_notes n
+        LEFT JOIN one_on_one_bookings b ON b.id=n.booking_id
+        LEFT JOIN tutors t ON t.id=n.tutor_id
+        ORDER BY CASE n.quality_status WHEN 'Pending Review' THEN 0 WHEN 'Needs Follow-up' THEN 1 ELSE 2 END, n.submitted_at DESC
+    """)
+    rows = cur.fetchall()
+    conn.close()
+
+    table = "".join([
+        f"<tr><td>{escape(rw['learner_name'] or '')}<div class='mini muted'>{escape(grade_label(rw['grade']))} - {escape(rw['subject'] or '')}</div></td><td>{escape(rw['tutor_name'] or '')}</td><td>{escape(rw['topic_covered'] or '')}</td><td>{one_on_one_badge(rw['quality_status'])}</td><td><a class='btn mini success' href='/aqm/one-on-one/review/{rw['id']}'>Review</a></td></tr>"
+        for rw in rows
+    ])
+
+    body = f"""
+    {aqm_nav()}
+    <section class="card"><h1>One-on-One Session Notes Review</h1><p class="muted">Review tutor session notes, add quality comments and flag learners needing academic follow-up.</p></section>
+    <section class="card"><div class="scroll-x"><table><thead><tr><th>Learner</th><th>Tutor</th><th>Topic Covered</th><th>Status</th><th>Review</th></tr></thead><tbody>{table or "<tr><td colspan='5'>No session notes submitted yet.</td></tr>"}</tbody></table></div></section>
+    """
+    return page("AQM One-on-One Reviews", body)
+
+
+@app.get('/aqm/one-on-one/review/<int:note_id>')
+def aqm_one_on_one_review(note_id):
+    r = require_aqm()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM one_on_one_session_notes WHERE id=?", (note_id,))
+    note = cur.fetchone()
+    conn.close()
+
+    if not note:
+        return page("Not Found", card_msg("Session note not found."))
+
+    body = f"""
+    {aqm_nav()}
+    <section class="card">
+        <h1>Review One-on-One Session Note</h1>
+        <div class="card soft"><b>Learner:</b> {escape(note['learner_name'] or '')}<br><b>Topic:</b> {escape(note['topic_covered'] or '')}<br><b>Strengths:</b> {escape(note['learner_strengths'] or '')}<br><b>Challenges:</b> {escape(note['learner_challenges'] or '')}<br><b>Practice:</b> {escape(note['practice_given'] or '')}</div>
+        <form method="post" style="margin-top:12px">
+            <label>AQM Comment</label>
+            <textarea name="aqm_comment">{escape(note['aqm_comment'] or '')}</textarea>
+            <label>Quality Status</label>
+            <select name="quality_status">{one_on_one_options(ONE_ON_ONE_QUALITY_STATUSES, note['quality_status'])}</select>
+            <button class="btn success" style="margin-top:10px">Save Review</button>
+        </form>
+    </section>
+    """
+    return page("AQM Review One-on-One Note", body)
+
+
+@app.post('/aqm/one-on-one/review/<int:note_id>')
+def aqm_one_on_one_review_post(note_id):
+    r = require_aqm()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE one_on_one_session_notes
+        SET aqm_comment=?, quality_status=?, reviewed_at=?
+        WHERE id=?
+    """, (request.form.get("aqm_comment", "").strip(), request.form.get("quality_status", "Reviewed"), now_utc_iso(), note_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("aqm_one_on_one_session_notes"))
+
+
+def one_on_one_leadership_body(nav_html, role_label):
+    stats = one_on_one_stats()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT subject, grade, COUNT(*) AS c
+        FROM one_on_one_requests
+        GROUP BY subject, grade
+        ORDER BY c DESC
+        LIMIT 15
+    """)
+    subject_rows = cur.fetchall()
+    cur.execute("""
+        SELECT t.full_name, COUNT(*) AS completed_sessions
+        FROM one_on_one_bookings b
+        JOIN tutors t ON t.id=b.tutor_id
+        WHERE b.booking_status='Completed'
+        GROUP BY t.id
+        ORDER BY completed_sessions DESC
+        LIMIT 15
+    """)
+    tutor_rows = cur.fetchall()
+    cur.execute("""
+        SELECT n.*, t.full_name AS tutor_name
+        FROM one_on_one_session_notes n
+        LEFT JOIN tutors t ON t.id=n.tutor_id
+        ORDER BY n.submitted_at DESC
+        LIMIT 30
+    """)
+    notes = cur.fetchall()
+    conn.close()
+
+    subject_html = "".join([f"<tr><td>{escape(grade_label(r['grade']))} - {escape(r['subject'] or '')}</td><td>{r['c']}</td></tr>" for r in subject_rows])
+    tutor_html = "".join([f"<tr><td>{escape(r['full_name'] or '')}</td><td>{r['completed_sessions']}</td></tr>" for r in tutor_rows])
+    note_html = "".join([f"<tr><td>{escape(n['learner_name'] or '')}</td><td>{escape(n['tutor_name'] or '')}</td><td>{escape(n['topic_covered'] or '')}</td><td>{one_on_one_badge(n['quality_status'])}</td><td>{escape(n['aqm_comment'] or '')}</td></tr>" for n in notes])
+
+    return f"""
+    {nav_html}
+    <section class="card">
+        <h1>{escape(role_label)} One-on-One Programme Dashboard</h1>
+        <p class="muted">Leadership overview for one-on-one requests, bookings, tutor payments, EBTA allocation, academic quality and learners needing follow-up.</p>
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">{one_on_one_stats_cards(stats)}</div>
+    </section>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px">
+        <section class="card"><h2>Requests by Subject</h2><div class="scroll-x"><table><thead><tr><th>Subject</th><th>Requests</th></tr></thead><tbody>{subject_html or "<tr><td colspan='2'>No data yet.</td></tr>"}</tbody></table></div></section>
+        <section class="card"><h2>Top One-on-One Tutors</h2><div class="scroll-x"><table><thead><tr><th>Tutor</th><th>Completed</th></tr></thead><tbody>{tutor_html or "<tr><td colspan='2'>No data yet.</td></tr>"}</tbody></table></div></section>
+    </div>
+    <section class="card"><h2>Recent Session Notes</h2><div class="scroll-x"><table><thead><tr><th>Learner</th><th>Tutor</th><th>Topic</th><th>Quality</th><th>AQM Comment</th></tr></thead><tbody>{note_html or "<tr><td colspan='5'>No notes submitted yet.</td></tr>"}</tbody></table></div></section>
+    """
+
+
+@app.get('/admin/one-on-one-dashboard')
+def admin_one_on_one_dashboard():
+    r = require_admin()
+    if r:
+        return r
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can access the One-on-One Programme dashboard."))
+    return page("High Admin One-on-One Dashboard", one_on_one_leadership_body(admin_nav(), "High Admin"))
+
+
+@app.get('/cao/one-on-one-dashboard')
+def cao_one_on_one_dashboard():
+    r = require_cao_permission("cao_performance_enabled", "one-on-one dashboard")
+    if r:
+        return r
+    return page("CAO One-on-One Dashboard", one_on_one_leadership_body(cao_nav(), "CAO"))
+
+
+@app.get('/ceo/one-on-one-dashboard')
+def ceo_one_on_one_dashboard():
+    r = require_ceo()
+    if r:
+        return r
+    return page("CEO One-on-One Dashboard", one_on_one_leadership_body(ceo_nav(), "CEO"))
+
+
+@app.post('/cao/one-on-one/note/<int:note_id>/comment')
+def cao_one_on_one_note_comment(note_id):
+    r = require_cao()
+    if r:
+        return r
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE one_on_one_session_notes SET cao_comment=?, reviewed_at=? WHERE id=?", (request.form.get("cao_comment", "").strip(), now_utc_iso(), note_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("cao_one_on_one_dashboard"))
 
 
 # --- Payfast IPN stub ---
