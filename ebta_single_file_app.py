@@ -8456,6 +8456,8 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("💬 Messages", "#messages"),
                 ("📤 Upload Report", url_for('student_upload_report')),
                 ("📄 My Reports", url_for('student_my_reports')),
+                ("🤝 My 1-on-1 Requests", url_for('one_on_one_my_requests')),
+                ("🎓 My 1-on-1 Sessions", url_for('one_on_one_my_sessions')),
                 ("🚪 Logout", url_for('student_logout'))
             ]
             stats_grid = f"""
@@ -14039,7 +14041,7 @@ def student_home():
     <div class="toolbar" style="margin:16px 0;">
         <a class="btn" href="/student/materials">View Learning Materials</a>
         <a class="btn success" href="/student/assignments">View Assignments</a>
-        <a class="btn secondary" href="/one-on-one/request">Request 1-on-1 Support</a>
+        <a class="btn secondary" href="/one-on-one/my-requests">My 1-on-1 Requests</a>
         <a class="btn secondary" href="/one-on-one/my-sessions">My 1-on-1 Sessions</a>
     </div>
 
@@ -35364,6 +35366,7 @@ def aqm_nav():
         <a class="btn mini" href="/aqm/assessment-analysis">Assessment Analysis</a>
         <a class="btn mini" href="/aqm/learning-games-analytics">Game Analytics</a>
         <a class="btn mini" href="/aqm/one-on-one">One-on-One Reviews</a>
+        <a class="btn mini" href="/aqm/one-on-one/tutor-assignment">Tutor Assignment</a>
         <a class="btn mini" href="/aqm/ratings">Student Ratings</a>
         <a class="btn mini" href="/aqm/awards">Awards</a>
         <a class="btn mini" href="/aqm/parent-reports">Parent Reports</a>
@@ -82663,7 +82666,33 @@ def one_on_one_stats():
     }
 
 
-def one_on_one_stats_cards(stats):
+def one_on_one_can_view_finances():
+    """
+    One-on-one financial figures must only be visible to High Admin and CEO.
+    Other roles may still manage operational steps, but they must not see
+    revenue, tutor payment totals or EBTA allocation figures.
+    """
+    return bool(is_high_admin() or is_ceo())
+
+
+def one_on_one_can_assign_tutors():
+    """
+    Tutor assignment is restricted to High Admin, Tutor Managers and AQM.
+    Low Admin and Admission Coordinator can still manage requests/payment status,
+    but tutor allocation is controlled by academic/leadership roles.
+    """
+    return bool(is_high_admin() or is_tutor_manager() or is_academic_quality_manager())
+
+
+def one_on_one_package_summary(row, show_finances=False):
+    total_sessions = row["total_sessions"] if row and "total_sessions" in row.keys() else ""
+    package = row["package_type"] if row and "package_type" in row.keys() else ""
+    if show_finances:
+        return f"{one_on_one_money(row['parent_fee'])} parent fee | {one_on_one_money(row['tutor_payment'])} tutor | {one_on_one_money(row['ebta_allocation'])} EBTA | {total_sessions} session(s)"
+    return f"{escape(package or 'Package')} | {total_sessions} session(s)"
+
+
+def one_on_one_stats_cards(stats, show_finances=False):
     items = [
         ("Total Requests", stats["total"]),
         ("Pending Requests", stats["pending"]),
@@ -82673,18 +82702,21 @@ def one_on_one_stats_cards(stats):
         ("Completed Sessions", stats["completed"]),
         ("Missed Sessions", stats["missed"]),
         ("Cancelled Sessions", stats["cancelled"]),
-        ("Revenue Collected", one_on_one_money(stats["revenue"])),
-        ("Tutor Payments Due", one_on_one_money(stats["tutor_due"])),
-        ("EBTA Allocation", one_on_one_money(stats["ebta_allocation"])),
         ("Learners Needing Follow-Up", stats["followups"]),
         ("Tutor Notes Pending", stats["pending_notes"]),
     ]
+
+    if show_finances:
+        items.extend([
+            ("Revenue Collected", one_on_one_money(stats["revenue"])),
+            ("Tutor Payments Due", one_on_one_money(stats["tutor_due"])),
+            ("EBTA Allocation", one_on_one_money(stats["ebta_allocation"])),
+        ])
 
     return "".join([
         f"<div class='card soft'><div class='mini muted'>{escape(label)}</div><h2>{value}</h2></div>"
         for label, value in items
     ])
-
 
 def one_on_one_filter_form(base_path, q="", status="", payment_status="", grade="", subject_id="", package_type="", session_type=""):
     return f"""
@@ -82725,7 +82757,7 @@ def one_on_one_filter_form(base_path, q="", status="", payment_status="", grade=
 
 @app.get('/one-on-one/proof/<path:filename>')
 def one_on_one_proof_file(filename):
-    if not (is_admin() or is_student() or is_tutor() or is_tutor_manager() or is_academic_quality_manager() or is_cao() or is_ceo()):
+    if not (is_admin() or is_admission_coordinator() or is_student() or is_ceo()):
         return redirect(url_for('student_login'))
 
     filename = os.path.basename(filename)
@@ -82818,6 +82850,7 @@ def one_on_one_request_form():
             <div>
                 <label>Proof of Payment Optional</label>
                 <input type="file" name="proof_of_payment" accept=".pdf,.png,.jpg,.jpeg">
+                <div class="mini muted">Parents pay manually and upload proof of payment. No payment gateway is used.</div>
             </div>
             <div style="grid-column:1/-1">
                 <label>Topic or Problem Area</label>
@@ -82962,8 +82995,8 @@ def one_on_one_my_requests():
     <section class="card">
         <h1>My One-on-One Requests</h1>
         <div class="toolbar">
-            <a class="btn success" href="/one-on-one/request">New Request</a>
             <a class="btn secondary" href="/student">Back to Student Portal</a>
+            <a class="btn secondary" href="/one-on-one/my-sessions">My Sessions</a>
         </div>
         <div class="scroll-x">
             <table>
@@ -83104,8 +83137,8 @@ def one_on_one_my_sessions():
     <section class="card">
         <h1>My One-on-One Sessions</h1>
         <div class="toolbar">
-            <a class="btn success" href="/one-on-one/request">Request Support</a>
             <a class="btn secondary" href="/one-on-one/my-requests">My Requests</a>
+            <a class="btn secondary" href="/student">Back to Student Portal</a>
         </div>
         <div class="scroll-x">
             <table>
@@ -83231,6 +83264,14 @@ def admin_one_on_one():
 
     rows = one_on_one_admin_rows(q, status, payment_status, grade, subject_id, package_type, session_type)
     stats = one_on_one_stats()
+    show_finances = one_on_one_can_view_finances()
+
+    finance_toolbar_links = ""
+    if show_finances:
+        finance_toolbar_links = f"""
+            <a class="btn secondary mini" href="{payments_path}">Payment Logs</a>
+            <a class="btn secondary mini" href="{export_path}">Export Excel</a>
+        """
 
     table = ""
     for row in rows:
@@ -83240,12 +83281,16 @@ def admin_one_on_one():
         if pay_link:
             wa_links += f"<a class='btn mini secondary' target='_blank' href='{pay_link}'>Payment WA</a>"
 
+        package_line = f"{row['total_sessions']} session(s)"
+        if show_finances:
+            package_line = f"{one_on_one_money(row['parent_fee'])} | {row['total_sessions']} session(s)"
+
         table += f"""
         <tr>
             <td><strong>{escape(row['learner_name'])}</strong><div class='mini muted'>{escape(row['parent_name'] or '')} - {escape(row['parent_phone'] or '')}</div></td>
             <td>{escape(grade_label(row['grade']))}<div class='mini muted'>{escape(row['subject'] or '')}</div></td>
             <td>{escape(row['session_type'] or '')}<div class='mini muted'>{escape(row['topic_or_problem_area'] or '')[:90]}</div></td>
-            <td>{escape(row['package_type'] or '')}<div class='mini muted'>{one_on_one_money(row['parent_fee'])} | {row['total_sessions']} session(s)</div></td>
+            <td>{escape(row['package_type'] or '')}<div class='mini muted'>{package_line}</div></td>
             <td>{one_on_one_badge(row['payment_status'])}</td>
             <td>{one_on_one_badge(row['request_status'])}<div class='mini muted'>{row['completed_count'] or 0}/{row['booking_count'] or 0} completed</div></td>
             <td>{escape(row['tutor_name'] or 'Not assigned')}</td>
@@ -83257,14 +83302,13 @@ def admin_one_on_one():
     {nav_html}
     <section class="card">
         <h1>One-on-One Sessions</h1>
-        <p class="muted">Manage EBTA individual academic support requests, payments, tutor allocation, bookings and quality tracking.</p>
+        <p class="muted">Manage EBTA individual academic support requests, proof of payment uploads, approvals, tutor allocation, bookings and quality tracking.</p>
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
-            {one_on_one_stats_cards(stats)}
+            {one_on_one_stats_cards(stats, show_finances=show_finances)}
         </div>
         <div class="toolbar" style="margin-top:12px">
             <a class="btn success mini" href="/one-on-one/request">Create Parent Request</a>
-            <a class="btn secondary mini" href="{payments_path}">Payment Logs</a>
-            <a class="btn secondary mini" href="{export_path}">Export Excel</a>
+            {finance_toolbar_links}
             {("<a class=\"btn secondary mini\" href=\"/admin/one-on-one-dashboard\">High Admin Dashboard</a>" if is_high_admin() else "")}
         </div>
         {one_on_one_filter_form(base_path, q, status, payment_status, grade, subject_id, package_type, session_type)}
@@ -83354,11 +83398,14 @@ def admin_one_on_one_request_detail(request_id):
     payments = cur.fetchall()
     conn.close()
 
+    show_finances = one_on_one_can_view_finances()
+    can_assign_tutor = one_on_one_can_assign_tutors()
+
     proof_html = "<span class='muted'>No proof uploaded</span>"
     if row["proof_of_payment_path"]:
         proof_html = f"<a class='btn mini secondary' target='_blank' href='/one-on-one/proof/{escape(row['proof_of_payment_path'], quote=True)}'>Open Proof</a>"
 
-    package_note = f"{one_on_one_money(row['parent_fee'])} parent fee | {one_on_one_money(row['tutor_payment'])} tutor | {one_on_one_money(row['ebta_allocation'])} EBTA | {row['total_sessions']} session(s)"
+    package_note = one_on_one_package_summary(row, show_finances=show_finances)
 
     booking_rows = ""
     for b in bookings:
@@ -83380,10 +83427,20 @@ def admin_one_on_one_request_detail(request_id):
         </tr>
         """
 
-    payment_rows = "".join([
-        f"<tr><td>{escape(p['created_at'][:16].replace('T',' '))}</td><td>{one_on_one_money(p['amount_paid'])}</td><td>{escape(p['payment_reference'] or '')}</td><td>{one_on_one_badge(p['payment_status'])}</td><td>{escape(p['verified_by'] or '')}</td></tr>"
-        for p in payments
-    ])
+    if show_finances:
+        payment_rows = "".join([
+            f"<tr><td>{escape(p['created_at'][:16].replace('T',' '))}</td><td>{one_on_one_money(p['amount_paid'])}</td><td>{escape(p['payment_reference'] or '')}</td><td>{one_on_one_badge(p['payment_status'])}</td><td>{escape(p['verified_by'] or '')}</td></tr>"
+            for p in payments
+        ])
+        payment_table_head = "<tr><th>Date</th><th>Amount</th><th>Reference</th><th>Status</th><th>Verified By</th></tr>"
+        payment_colspan = 5
+    else:
+        payment_rows = "".join([
+            f"<tr><td>{escape(p['created_at'][:16].replace('T',' '))}</td><td>{one_on_one_badge(p['payment_status'])}</td><td>{escape(p['verified_by'] or '')}</td></tr>"
+            for p in payments
+        ])
+        payment_table_head = "<tr><th>Date</th><th>Status</th><th>Verified By</th></tr>"
+        payment_colspan = 3
 
     first_booking = bookings[0] if bookings else None
     parent_confirm_link = one_on_one_whatsapp_link(row["parent_phone"], one_on_one_booking_confirmation_message(row, first_booking, row["tutor_name"] or "Tutor TBC"))
@@ -83400,6 +83457,37 @@ def admin_one_on_one_request_detail(request_id):
     ]:
         if link:
             wa_buttons += f"<a class='btn mini secondary' target='_blank' href='{link}'>{label}</a>"
+
+    if can_assign_tutor:
+        assignment_fields = f"""
+            <div><label>Assigned Tutor</label><select name="assigned_tutor_id">{one_on_one_tutor_options(row['assigned_tutor_id'], row['subject_id'])}</select></div>
+            <div><label>Assigned Tutor Manager</label><select name="assigned_tutor_manager_id">{one_on_one_manager_options(row['assigned_tutor_manager_id'])}</select></div>
+        """
+    else:
+        assignment_fields = f"""
+            <div><label>Assigned Tutor</label><div class="card soft">{escape(row['tutor_name'] or 'Not assigned yet')}</div></div>
+            <div><label>Tutor Manager</label><div class="card soft">{escape(row['manager_name'] or 'Not assigned yet')}</div></div>
+            <div style="grid-column:1/-1" class="mini muted">
+                Tutor assignment is handled by High Admin, Tutor Managers or AQM.
+            </div>
+        """
+
+    if show_finances:
+        package_fields = f"""
+            <div><label>Package</label><select name="package_type">{one_on_one_options(list(ONE_ON_ONE_PACKAGES.keys()), row['package_type'])}</select></div>
+            <div><label>Parent Fee</label><input name="parent_fee" type="number" step="0.01" value="{row['parent_fee'] or 0}"></div>
+            <div><label>Tutor Payment</label><input name="tutor_payment" type="number" step="0.01" value="{row['tutor_payment'] or 0}"></div>
+            <div><label>EBTA Allocation</label><input name="ebta_allocation" type="number" step="0.01" value="{row['ebta_allocation'] or 0}"></div>
+            <div><label>Total Sessions</label><input name="total_sessions" type="number" min="1" value="{row['total_sessions'] or 1}"></div>
+        """
+    else:
+        package_fields = f"""
+            <div><label>Package</label><div class="card soft">{escape(row['package_type'] or 'Not selected')}</div></div>
+            <div><label>Sessions</label><div class="card soft">{row['total_sessions'] or 1} session(s)</div></div>
+            <div style="grid-column:1/-1" class="mini muted">
+                Financial values are restricted to High Admin and CEO.
+            </div>
+        """
 
     body = f"""
     {nav_html}
@@ -83421,13 +83509,8 @@ def admin_one_on_one_request_detail(request_id):
             <input type="hidden" name="action" value="update_request">
             <div><label>Payment Status</label><select name="payment_status">{one_on_one_options(ONE_ON_ONE_PAYMENT_STATUSES, row['payment_status'])}</select></div>
             <div><label>Request Status</label><select name="request_status">{one_on_one_options(ONE_ON_ONE_REQUEST_STATUSES, row['request_status'])}</select></div>
-            <div><label>Assigned Tutor</label><select name="assigned_tutor_id">{one_on_one_tutor_options(row['assigned_tutor_id'], row['subject_id'])}</select></div>
-            <div><label>Assigned Tutor Manager</label><select name="assigned_tutor_manager_id">{one_on_one_manager_options(row['assigned_tutor_manager_id'])}</select></div>
-            <div><label>Package</label><select name="package_type">{one_on_one_options(list(ONE_ON_ONE_PACKAGES.keys()), row['package_type'])}</select></div>
-            <div><label>Parent Fee</label><input name="parent_fee" type="number" step="0.01" value="{row['parent_fee'] or 0}"></div>
-            <div><label>Tutor Payment</label><input name="tutor_payment" type="number" step="0.01" value="{row['tutor_payment'] or 0}"></div>
-            <div><label>EBTA Allocation</label><input name="ebta_allocation" type="number" step="0.01" value="{row['ebta_allocation'] or 0}"></div>
-            <div><label>Total Sessions</label><input name="total_sessions" type="number" min="1" value="{row['total_sessions'] or 1}"></div>
+            {assignment_fields}
+            {package_fields}
             <div style="grid-column:1/-1"><label>Internal Notes</label><textarea name="internal_notes">{escape(row['internal_notes'] or '')}</textarea></div>
             <div style="grid-column:1/-1">{proof_html}</div>
             <div style="grid-column:1/-1"><button class="btn success">Save Request</button></div>
@@ -83452,8 +83535,8 @@ def admin_one_on_one_request_detail(request_id):
     </section>
 
     <section class="card">
-        <h2>Payment Logs</h2>
-        <div class="scroll-x"><table><thead><tr><th>Date</th><th>Amount</th><th>Reference</th><th>Status</th><th>Verified By</th></tr></thead><tbody>{payment_rows or "<tr><td colspan='5'>No payment log yet.</td></tr>"}</tbody></table></div>
+        <h2>Proof of Payment Logs</h2>
+        <div class="scroll-x"><table><thead>{payment_table_head}</thead><tbody>{payment_rows or f"<tr><td colspan='{payment_colspan}'>No proof/payment log yet.</td></tr>"}</tbody></table></div>
     </section>
     """
     return page("One-on-One Request Detail", body)
@@ -83495,18 +83578,32 @@ def admin_one_on_one_request_update(request_id):
 
     payment_status = request.form.get("payment_status", old["payment_status"]).strip()
     request_status = request.form.get("request_status", old["request_status"]).strip()
-    assigned_tutor_id = request.form.get("assigned_tutor_id") or None
-    assigned_manager_id = request.form.get("assigned_tutor_manager_id") or None
-    package_type = request.form.get("package_type", old["package_type"]).strip()
     internal_notes = request.form.get("internal_notes", "").strip()
 
-    vals = one_on_one_package_values(
-        package_type,
-        request.form.get("parent_fee"),
-        request.form.get("tutor_payment"),
-        request.form.get("ebta_allocation"),
-        request.form.get("total_sessions")
-    )
+    if one_on_one_can_assign_tutors():
+        assigned_tutor_id = request.form.get("assigned_tutor_id") or None
+        assigned_manager_id = request.form.get("assigned_tutor_manager_id") or None
+    else:
+        assigned_tutor_id = old["assigned_tutor_id"]
+        assigned_manager_id = old["assigned_tutor_manager_id"]
+
+    if one_on_one_can_view_finances():
+        package_type = request.form.get("package_type", old["package_type"]).strip()
+        vals = one_on_one_package_values(
+            package_type,
+            request.form.get("parent_fee"),
+            request.form.get("tutor_payment"),
+            request.form.get("ebta_allocation"),
+            request.form.get("total_sessions")
+        )
+    else:
+        package_type = old["package_type"]
+        vals = {
+            "parent_fee": old["parent_fee"] or 0,
+            "tutor_payment": old["tutor_payment"] or 0,
+            "ebta_allocation": old["ebta_allocation"] or 0,
+            "total_sessions": old["total_sessions"] or 1,
+        }
 
     if payment_status == "Verified" and request_status in ["Pending", "Payment Pending"]:
         request_status = "Approved"
@@ -83590,6 +83687,9 @@ def admin_one_on_one_payments():
     if r:
         return r
 
+    if not one_on_one_can_view_finances():
+        return page("Access Denied", card_msg("One-on-One payment logs are restricted to High Admin and CEO only."))
+
     base_path = one_on_one_operations_base_path()
     nav_html = one_on_one_operations_nav()
 
@@ -83627,6 +83727,9 @@ def admin_one_on_one_export():
     r = require_one_on_one_operations()
     if r:
         return r
+
+    if not one_on_one_can_view_finances():
+        return page("Access Denied", card_msg("One-on-One exports include sensitive information and are restricted to High Admin and CEO only."))
 
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
@@ -83991,7 +84094,9 @@ def manager_one_on_one():
         FROM one_on_one_requests r
         LEFT JOIN tutors t ON t.id=r.assigned_tutor_id
         LEFT JOIN manager_tutors mt ON mt.tutor_id=r.assigned_tutor_id
-        WHERE r.assigned_tutor_manager_id=? OR mt.manager_id=?
+        WHERE r.assigned_tutor_manager_id=?
+           OR mt.manager_id=?
+           OR r.assigned_tutor_id IS NULL
         ORDER BY r.created_at DESC
     """, (mid, mid))
     rows = cur.fetchall()
@@ -84099,6 +84204,137 @@ def manager_one_on_one_recommend_post(request_id):
     conn.commit()
     conn.close()
     return redirect(url_for("manager_one_on_one"))
+
+
+
+@app.get('/aqm/one-on-one/tutor-assignment')
+def aqm_one_on_one_tutor_assignment():
+    r = require_aqm()
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    grade = request.args.get("grade", "").strip()
+    subject_id = request.args.get("subject_id", "").strip()
+
+    rows = one_on_one_admin_rows(
+        q=q,
+        status=status,
+        payment_status="",
+        grade=grade,
+        subject_id=subject_id,
+        package_type="",
+        session_type=""
+    )
+
+    table = ""
+    for row in rows:
+        table += f"""
+        <tr>
+            <td>
+                <strong>{escape(row['learner_name'])}</strong>
+                <div class="mini muted">{escape(row['parent_name'] or '')}</div>
+            </td>
+            <td>{escape(grade_label(row['grade']))}<div class="mini muted">{escape(row['subject'] or '')}</div></td>
+            <td>{escape(row['topic_or_problem_area'] or '')[:120]}</td>
+            <td>{one_on_one_badge(row['request_status'])}<div class="mini muted">Payment: {escape(row['payment_status'] or '')}</div></td>
+            <td>{escape(row['tutor_name'] or 'Not assigned')}</td>
+            <td>
+                <form method="post" action="/aqm/one-on-one/assign-tutor/{row['id']}" class="grid" style="grid-template-columns:1fr 1fr auto;gap:6px;align-items:end">
+                    <select name="assigned_tutor_id" required>
+                        {one_on_one_tutor_options(row['assigned_tutor_id'], row['subject_id'])}
+                    </select>
+                    <select name="assigned_tutor_manager_id">
+                        {one_on_one_manager_options(row['assigned_tutor_manager_id'])}
+                    </select>
+                    <button class="btn success mini">Assign</button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {aqm_nav()}
+    <section class="card">
+        <h1>One-on-One Tutor Assignment</h1>
+        <p class="muted">
+            AQM can support academic tutor allocation without seeing sensitive finance totals.
+            Tutor assignment is also available to High Admin and Tutor Managers.
+        </p>
+
+        <form method="get" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end">
+            <div><label>Search</label><input name="q" value="{escape(q)}" placeholder="Learner, parent or topic"></div>
+            <div><label>Status</label><select name="status">{one_on_one_options(ONE_ON_ONE_REQUEST_STATUSES, status, 'All statuses')}</select></div>
+            <div><label>Grade</label><select name="grade">{one_on_one_options(['G8','G9','G10','G11','G12','G13'], grade, 'All grades')}</select></div>
+            <div><label>Subject</label><select name="subject_id">{one_on_one_subject_options(subject_id)}</select></div>
+            <button class="btn mini success">Filter</button>
+            <a class="btn mini secondary" href="/aqm/one-on-one/tutor-assignment">Clear</a>
+        </form>
+    </section>
+
+    <section class="card">
+        <h2>Assign Tutors</h2>
+        <div class="scroll-x">
+            <table>
+                <thead><tr><th>Learner</th><th>Subject</th><th>Topic</th><th>Status</th><th>Current Tutor</th><th>Assign Tutor</th></tr></thead>
+                <tbody>{table or "<tr><td colspan='6'>No one-on-one requests found.</td></tr>"}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+    return page("AQM One-on-One Tutor Assignment", body)
+
+
+@app.post('/aqm/one-on-one/assign-tutor/<int:request_id>')
+def aqm_one_on_one_assign_tutor_post(request_id):
+    r = require_aqm()
+    if r:
+        return r
+
+    tutor_id = request.form.get("assigned_tutor_id") or None
+    manager_id = request.form.get("assigned_tutor_manager_id") or None
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT id FROM one_on_one_requests WHERE id=?", (request_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return page("Not Found", card_msg("One-on-one request not found."))
+
+    cur.execute("SELECT id FROM tutors WHERE id=? AND COALESCE(is_active,1)=1", (tutor_id,))
+    if not cur.fetchone():
+        conn.close()
+        return page("Invalid Tutor", card_msg("Please select an active tutor."))
+
+    cur.execute("""
+        UPDATE one_on_one_requests
+        SET assigned_tutor_id=?,
+            assigned_tutor_manager_id=?,
+            assigned_by=?,
+            request_status=CASE
+                WHEN request_status IN ('Pending','Payment Pending','Payment Verified','Approved') THEN 'Assigned'
+                ELSE request_status
+            END,
+            internal_notes=COALESCE(internal_notes,'') || ?,
+            updated_at=?
+        WHERE id=?
+    """, (
+        tutor_id,
+        manager_id,
+        "AQM Tutor Assignment",
+        "\nAQM assigned tutor from the One-on-One Tutor Assignment section.",
+        now_utc_iso(),
+        request_id
+    ))
+
+    cur.execute("UPDATE one_on_one_bookings SET tutor_id=?, updated_at=? WHERE request_id=?", (tutor_id, now_utc_iso(), request_id))
+
+    conn.commit()
+    conn.close()
+    return redirect(url_for("aqm_one_on_one_tutor_assignment"))
 
 
 @app.get('/aqm/one-on-one')
@@ -84226,12 +84462,14 @@ def one_on_one_leadership_body(nav_html, role_label):
     tutor_html = "".join([f"<tr><td>{escape(r['full_name'] or '')}</td><td>{r['completed_sessions']}</td></tr>" for r in tutor_rows])
     note_html = "".join([f"<tr><td>{escape(n['learner_name'] or '')}</td><td>{escape(n['tutor_name'] or '')}</td><td>{escape(n['topic_covered'] or '')}</td><td>{one_on_one_badge(n['quality_status'])}</td><td>{escape(n['aqm_comment'] or '')}</td></tr>" for n in notes])
 
+    finance_text = "including finance" if one_on_one_can_view_finances() else "excluding sensitive finance totals"
+
     return f"""
     {nav_html}
     <section class="card">
         <h1>{escape(role_label)} One-on-One Programme Dashboard</h1>
-        <p class="muted">Leadership overview for one-on-one requests, bookings, tutor payments, EBTA allocation, academic quality and learners needing follow-up.</p>
-        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">{one_on_one_stats_cards(stats)}</div>
+        <p class="muted">Leadership overview for one-on-one requests, bookings, academic quality and learners needing follow-up, {finance_text}.</p>
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">{one_on_one_stats_cards(stats, show_finances=one_on_one_can_view_finances())}</div>
     </section>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px">
         <section class="card"><h2>Requests by Subject</h2><div class="scroll-x"><table><thead><tr><th>Subject</th><th>Requests</th></tr></thead><tbody>{subject_html or "<tr><td colspan='2'>No data yet.</td></tr>"}</tbody></table></div></section>
