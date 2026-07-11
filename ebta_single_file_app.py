@@ -8456,8 +8456,8 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("💬 Messages", "#messages"),
                 ("📤 Upload Report", url_for('student_upload_report')),
                 ("📄 My Reports", url_for('student_my_reports')),
-                ("🤝 My 1-on-1 Requests", url_for('one_on_one_my_requests')),
-                ("🎓 My 1-on-1 Sessions", url_for('one_on_one_my_sessions')),
+                #("🤝 My 1-on-1 Requests", url_for('one_on_one_my_requests')),
+                #("🎓 My 1-on-1 Sessions", url_for('one_on_one_my_sessions')),
                 ("🚪 Logout", url_for('student_logout'))
             ]
             stats_grid = f"""
