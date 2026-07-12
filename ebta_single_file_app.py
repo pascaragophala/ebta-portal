@@ -2228,153 +2228,579 @@ def init_db():
     # It creates a light starter bank for every subject, every game type and every difficulty.
     # It only seeds a subject/game/difficulty combination when that exact combination has zero active questions.
 
-    def starter_questions_for_subject(subject_name, grade):
+    def starter_questions_for_subject(subject_name, grade, game_type, difficulty):
+        """
+        CAPS-aligned starter questions for Learning Games.
+
+        This version intentionally avoids repeating the same basic question across
+        game modes. Each game mode asks the concept differently:
+        - Speed Quiz: direct skill check
+        - Match the Concept: concept meaning / method
+        - Boss Battle: scenario-based application
+        - Career Quest: real-life or study/career application
+        """
+
         name = str(subject_name or "").strip()
-        grade_text_raw = str(grade or "").strip()
+        grade_code = str(grade or "").strip()
 
-        if grade_text_raw.startswith("G"):
-            grade_label_text = grade_text_raw.replace("G", "Grade ")
+        if grade_code.startswith("G"):
+            grade_text = grade_code.replace("G", "Grade ")
         else:
-            grade_label_text = grade_text_raw
+            grade_text = grade_code or "Grade"
 
-        subject_banks = {
-            "Mathematics": [
-                ("Algebra", "Which expression is the same as 3x + 2x?", "5x", "6x", "x + 5", "3x2x", "Like terms are added by adding their coefficients."),
-                ("Number Patterns", "In the pattern 2, 4, 6, 8, what is the next number?", "10", "9", "12", "16", "The pattern increases by 2 each time."),
-                ("Geometry", "A triangle has how many sides?", "3", "4", "5", "6", "A triangle is a three-sided polygon."),
-                ("Measurement", "Which unit is best for measuring distance between two towns?", "kilometres", "millilitres", "grams", "degrees", "Kilometres are used for longer distances."),
-                ("Data Handling", "The average of 2, 4 and 6 is?", "4", "6", "3", "12", "The mean is found by adding values and dividing by the number of values."),
-            ],
-            "Mathematical Literacy": [
-                ("Finance", "If an item costs R100 and the discount is 10%, what is the discount amount?", "R10", "R90", "R110", "R1", "10% of R100 is R10."),
-                ("Measurement", "Which tool is used to measure length?", "ruler", "scale", "thermometer", "clock", "A ruler measures length."),
-                ("Maps and Plans", "A map scale helps you find?", "real distance", "temperature", "mass", "age", "A scale compares map distance to real distance."),
-                ("Data", "A bar graph is mainly used to compare?", "categories", "paragraphs", "sentences", "directions", "Bar graphs compare categories clearly."),
-                ("Percentages", "50% means the same as?", "one half", "one quarter", "double", "zero", "50% is half of a whole."),
-            ],
-            "Physical Sciences": [
-                ("Forces", "Which formula represents force in Newton's second law?", "F = ma", "V = IR", "p = mv", "E = hf", "Newton's second law links force, mass and acceleration."),
-                ("Energy", "Energy cannot be created or destroyed. This is called the law of?", "conservation of energy", "reflection", "refraction", "diffusion", "Energy changes form but the total amount remains constant."),
-                ("Electricity", "The unit of electric current is?", "ampere", "volt", "ohm", "watt", "Current is measured in amperes."),
-                ("Matter", "A solid has?", "fixed shape and fixed volume", "no shape and no volume", "fixed shape only", "fixed volume only", "Solids keep their shape and volume."),
-                ("Waves", "Frequency is measured in?", "hertz", "newtons", "joules", "kilograms", "Frequency is the number of cycles per second, measured in hertz."),
-            ],
-            "Life Sciences": [
-                ("Cells", "The basic unit of life is the?", "cell", "organ", "tissue", "system", "Cells are the smallest living units."),
-                ("Photosynthesis", "Photosynthesis mainly happens in the?", "chloroplast", "nucleus", "ribosome", "cell wall", "Chloroplasts contain chlorophyll for photosynthesis."),
-                ("Human Body", "The organ that pumps blood is the?", "heart", "lung", "stomach", "kidney", "The heart pumps blood around the body."),
-                ("Genetics", "DNA carries?", "genetic information", "oxygen", "digested food", "water only", "DNA stores hereditary information."),
-                ("Ecology", "A producer in an ecosystem is usually a?", "plant", "lion", "fungus", "virus", "Plants produce food using sunlight."),
-            ],
-            "Accounting": [
-                ("Accounting Equation", "The accounting equation is?", "Assets = Equity + Liabilities", "Assets = Expenses + Sales", "Profit = Assets + Drawings", "Cash = Bank + Capital", "The accounting equation shows how assets are financed."),
-                ("Assets", "Which one is an asset?", "equipment", "loan owed", "rent expense", "drawings", "Equipment is owned by the business."),
-                ("Income", "Money earned from selling goods is called?", "sales", "drawings", "liability", "asset", "Sales are income from trading activities."),
-                ("Expenses", "Rent paid by a business is an example of?", "expense", "asset", "capital", "income", "Rent reduces profit and is recorded as an expense."),
-                ("Source Documents", "A receipt is proof of?", "payment received or made", "future profit", "bank interest only", "owner's capital only", "Receipts provide evidence of payment."),
-            ],
-            "Business Studies": [
-                ("Business Environments", "Which environment is outside the direct control of a business?", "macro environment", "micro environment", "internal staff", "business owner", "The macro environment includes external forces."),
-                ("Entrepreneurship", "An entrepreneur is someone who?", "starts and runs a business", "only buys products", "only works for government", "avoids risk completely", "Entrepreneurs identify opportunities and take risks."),
-                ("Marketing", "Advertising is used to?", "promote products", "calculate tax only", "record expenses", "hire staff only", "Advertising communicates product value to customers."),
-                ("Management", "Planning helps a business to?", "set goals and actions", "ignore competition", "avoid customers", "remove all risk", "Planning guides business activities."),
-                ("Ethics", "Ethical business behaviour means acting?", "honestly and responsibly", "secretly and unfairly", "without rules", "against customers", "Ethics is about responsible and fair conduct."),
-            ],
-            "EMS": [
-                ("Economy", "A need is something people?", "must have to survive", "only want for fun", "never use", "sell only", "Needs are essential, like food and shelter."),
-                ("Entrepreneurship", "A business sells goods or services to make?", "profit", "noise", "weather", "homework", "Businesses aim to make profit by meeting needs and wants."),
-                ("Accounting", "Income is money that?", "comes into the business", "leaves the business only", "is always debt", "is never recorded", "Income increases business resources."),
-                ("Financial Literacy", "A budget helps you plan?", "income and spending", "sport only", "weather", "language", "Budgets help people control money."),
-                ("Markets", "Customers are people who?", "buy goods or services", "only make laws", "only teach", "never spend", "Customers buy from businesses."),
-            ],
-            "Natural Sciences": [
-                ("Matter", "Water changing from liquid to gas is called?", "evaporation", "freezing", "melting", "condensation", "Evaporation is liquid changing to gas."),
-                ("Energy", "The Sun is a source of?", "light and heat energy", "plastic", "soil", "metal", "The Sun provides light and heat energy."),
-                ("Life and Living", "Plants need sunlight, water and carbon dioxide for?", "photosynthesis", "rusting", "evaporation", "magnetism", "Photosynthesis is how plants make food."),
-                ("Planet Earth", "Earth is part of the?", "solar system", "digestive system", "nervous system", "accounting system", "Earth is one of the planets in the solar system."),
-                ("Forces", "A push or pull is called a?", "force", "cell", "planet", "solution", "Forces can change motion or shape."),
-            ],
-            "English FAL": [
-                ("Vocabulary", "Which word means the same as 'happy'?", "glad", "angry", "tired", "late", "Glad is a synonym for happy."),
-                ("Parts of Speech", "A noun is a word that names a?", "person, place or thing", "sound only", "colour only", "question only", "Nouns name people, places and things."),
-                ("Comprehension", "The main idea of a paragraph is its?", "central point", "last letter", "page number", "font size", "The main idea is what the paragraph is mostly about."),
-                ("Grammar", "Which sentence starts with a capital letter?", "The learner is reading.", "the learner is reading.", "learner the is reading.", "reading learner the is.", "Sentences should start with a capital letter."),
-                ("Writing", "A good paragraph should have?", "one main idea", "no topic", "only numbers", "random words", "A paragraph focuses on one main idea."),
-            ],
-            "Afrikaans FAL": [
-                ("Woordeskat", "Wat beteken 'huis' in English?", "house", "school", "book", "water", "'Huis' means house."),
-                ("Groete", "Which Afrikaans word means 'good morning'?", "goeie more", "totsiens", "asseblief", "dankie", "'Goeie more' means good morning."),
-                ("Werkwoorde", "A verb is an action word. Which one is an action?", "hardloop", "tafel", "boek", "stoel", "'Hardloop' means run and is an action."),
-                ("Sinne", "A sentence in Afrikaans is called a?", "sin", "woord", "boek", "klas", "'Sin' means sentence."),
-                ("Begrip", "The word 'lees' means?", "read", "sleep", "walk", "write only", "'Lees' means read."),
-            ],
-            "Geography": [
-                ("Mapwork", "A compass is used to find?", "direction", "mass", "temperature", "profit", "A compass shows direction."),
-                ("Climate", "Weather describes conditions over a?", "short time", "hundred years only", "business cycle", "school term only", "Weather changes daily or over short periods."),
-                ("Population", "Population density means people per?", "area", "book", "bank account", "subject", "Population density compares people to land area."),
-                ("Settlement", "Urban areas usually have?", "many buildings and services", "no people", "only farms", "only rivers", "Urban areas are built-up places."),
-                ("Resources", "A renewable resource can?", "be replaced naturally", "never return", "only be imported", "only be sold once", "Renewable resources can be replenished."),
-            ],
+        try:
+            grade_num = int(str(grade_code).replace("G", "").strip())
+        except Exception:
+            grade_num = 0
+
+        difficulty = str(difficulty or "Medium").strip().title()
+        game_type = str(game_type or "Speed Quiz").strip()
+
+        def item(topic, question, correct, wrong1, wrong2, wrong3, explanation):
+            return {
+                "topic": topic,
+                "question": question,
+                "correct": correct,
+                "wrong1": wrong1,
+                "wrong2": wrong2,
+                "wrong3": wrong3,
+                "explanation": explanation,
+            }
+
+        def common_study_bank():
+            return [
+                item("Active revision", f"A {grade_text} learner keeps getting the same type of {name} question wrong. What is the best next step?",
+                     "Identify the error pattern, correct it, then practise similar questions", "Memorise only the final answers", "Stop practising that topic", "Wait until the test to try again",
+                     "CAPS learning improves when learners correct misconceptions and practise similar tasks."),
+                item("Question analysis", f"Before answering a longer {name} question, what should a learner do first?",
+                     "Underline the instruction words and identify what is being asked", "Choose the longest option", "Skip the context completely", "Answer before reading all the information",
+                     "Understanding the instruction and context helps learners answer accurately."),
+                item("Feedback use", f"A tutor gives feedback after a {name} activity. Which response shows good learning behaviour?",
+                     "Use the feedback to redo the incorrect parts and improve the method", "Ignore the feedback if the mark is low", "Only look at the mark", "Delete the activity",
+                     "Feedback supports improvement when learners act on it."),
+                item("Exam preparation", f"Which revision plan best supports success in {grade_text} {name}?",
+                     "Short repeated revision sessions with practice questions and corrections", "One rushed session the night before", "Reading notes once without practice", "Only studying topics already mastered",
+                     "Regular revision with practice and correction supports long-term understanding."),
+            ]
+
+        def maths_bank():
+            if grade_num in (8, 9):
+                return [
+                    item("Algebraic expressions", "Simplify the expression 4x + 3x - 2x.",
+                         "5x", "9x", "5x^2", "x + 5",
+                         "Only like terms are combined by adding or subtracting their coefficients."),
+                    item("Integers", "A temperature changes from -3°C to 5°C. What is the increase?",
+                         "8°C", "2°C", "-8°C", "15°C",
+                         "The change is 5 - (-3), which equals 8."),
+                    item("Ratio and rate", "A juice mixture uses 2 cups concentrate for every 5 cups water. How many cups of water are needed for 6 cups concentrate?",
+                         "15 cups", "10 cups", "12 cups", "20 cups",
+                         "The concentrate is multiplied by 3, so the water must also be multiplied by 3."),
+                    item("Geometry", "A triangle has angles 45° and 65°. What is the size of the third angle?",
+                         "70°", "80°", "90°", "110°",
+                         "The angles in a triangle add up to 180°."),
+                    item("Exponents", "Which value is equal to 2^4?",
+                         "16", "8", "24", "6",
+                         "2^4 means 2 x 2 x 2 x 2."),
+                    item("Data handling", "The values 4, 6, 8, 10 have a mean of?",
+                         "7", "6", "8", "28",
+                         "Add the values and divide by 4: 28 ÷ 4 = 7."),
+                ]
+            if grade_num == 10:
+                return [
+                    item("Linear functions", "For the function y = 2x - 3, what is the gradient?",
+                         "2", "-3", "x", "3",
+                         "In y = mx + c, m is the gradient."),
+                    item("Quadratic patterns", "Which expression has x = 3 as a solution?",
+                         "x - 3 = 0", "x + 3 = 0", "3x = 0", "x^2 = 0",
+                         "If x = 3, then x - 3 equals 0."),
+                    item("Trigonometry", "In a right-angled triangle, which ratio represents sin θ?",
+                         "opposite ÷ hypotenuse", "adjacent ÷ hypotenuse", "opposite ÷ adjacent", "hypotenuse ÷ opposite",
+                         "Sine is the ratio of the opposite side to the hypotenuse."),
+                    item("Probability", "A bag has 3 red and 2 blue counters. What is the probability of choosing blue?",
+                         "2/5", "3/5", "2/3", "5/2",
+                         "There are 2 blue counters out of 5 counters in total."),
+                    item("Analytical geometry", "What does the distance formula help you find?",
+                         "The length between two points on a coordinate plane", "The average of a data set", "The probability of an event", "The area of a circle only",
+                         "The distance formula calculates the length between two coordinate points."),
+                    item("Finance", "If an amount grows by simple interest, which value stays constant each year?",
+                         "The interest calculated from the original principal", "The interest calculated from a changing balance", "The exchange rate only", "The number of subjects",
+                         "Simple interest is calculated on the original principal amount."),
+                ]
+            if grade_num == 11:
+                return [
+                    item("Quadratic functions", "A parabola opens upwards when the coefficient of x^2 is?",
+                         "positive", "negative", "zero", "a fraction only",
+                         "A positive leading coefficient makes the parabola open upwards."),
+                    item("Trigonometric identities", "Which identity is always true?",
+                         "sin²θ + cos²θ = 1", "sinθ + cosθ = 1", "tanθ = sinθ + cosθ", "cos²θ - sin²θ = 1 always",
+                         "The fundamental identity is sin²θ + cos²θ = 1."),
+                    item("Exponents", "Which expression is equivalent to a^3 × a^2?",
+                         "a^5", "a^6", "a", "a^1",
+                         "When multiplying powers with the same base, add the exponents."),
+                    item("Analytical geometry", "The midpoint formula is mainly used to find?",
+                         "The point exactly halfway between two points", "The gradient of a curve", "The probability of two events", "The area of a sector",
+                         "A midpoint divides a line segment into two equal parts."),
+                    item("Sequences", "In an arithmetic sequence, what is constant?",
+                         "The common difference", "The common ratio", "The final term only", "The square of each term",
+                         "Arithmetic sequences have a constant difference between consecutive terms."),
+                    item("Finance", "Compound interest differs from simple interest because it is calculated on?",
+                         "The changing accumulated amount", "Only the original amount forever", "Only the tax amount", "The number of months only",
+                         "Compound interest earns interest on previous interest as well as the principal."),
+                ]
+            return [
+                item("Differential calculus", "If f(x) = x², what is f'(x)?",
+                     "2x", "x", "x³", "2",
+                     "The derivative of x² is 2x."),
+                item("Functions", "The inverse of a one-to-one function reverses what?",
+                     "The input and output values", "Only the gradient", "Only the y-intercept", "The domain without changing range",
+                     "An inverse function swaps the input and output relationship."),
+                item("Probability", "Two independent events A and B occur together. Which rule applies?",
+                     "P(A and B) = P(A) × P(B)", "P(A and B) = P(A) + P(B)", "P(A and B) = P(A) - P(B)", "P(A and B) = P(A) ÷ P(B)",
+                     "For independent events, multiply the probabilities."),
+                item("Trigonometry", "Which expression is equivalent to tan θ?",
+                     "sin θ ÷ cos θ", "cos θ ÷ sin θ", "sin θ + cos θ", "1 - cos θ",
+                     "The tangent identity is tan θ = sin θ / cos θ."),
+                item("Sequences and series", "A geometric sequence is identified by a constant?",
+                     "ratio", "difference", "sum", "median",
+                     "Consecutive terms in a geometric sequence are multiplied by a common ratio."),
+                item("Analytical geometry", "What does a tangent to a circle touch?",
+                     "The circle at exactly one point", "The centre only", "Two points on the circle", "All points on the radius",
+                     "A tangent touches a circle at one point and is perpendicular to the radius at that point."),
+            ]
+
+        def math_lit_bank():
+            return [
+                item("Personal finance", "A monthly cellphone contract costs R199 plus R0.80 per extra minute. What must be calculated to compare different usage levels?",
+                     "The total cost for each number of extra minutes", "Only the contract name", "Only the phone colour", "The learner's grade",
+                     "Mathematical Literacy uses formulae and tables to compare real-life costs."),
+                item("Measurement", "A room is 4 m by 3 m. Which calculation finds the floor area?",
+                     "4 × 3", "4 + 3", "4 ÷ 3", "4 - 3",
+                     "Area of a rectangle is length multiplied by width."),
+                item("Maps and scale", "On a map, 1 cm represents 5 km. If two places are 3 cm apart on the map, the real distance is?",
+                     "15 km", "8 km", "5 km", "3 km",
+                     "Multiply the map distance by the scale value."),
+                item("Data handling", "A median is useful because it shows?",
+                     "The middle value when data is ordered", "The biggest value only", "The total of all values", "The number of categories",
+                     "The median is the central value in an ordered data set."),
+                item("Tariffs", "Which information is needed to calculate electricity cost?",
+                     "Units used and cost per unit", "Only the house number", "Only the meter colour", "Only the month name",
+                     "Cost depends on consumption and tariff rate."),
+                item("VAT", "If VAT is included in a price, the price is called?",
+                     "VAT-inclusive", "VAT-free always", "Discount-only", "Profit-only",
+                     "A VAT-inclusive price already contains VAT."),
+            ]
+
+        def physical_sciences_bank():
+            if grade_num == 10:
+                return [
+                    item("Vectors", "A force has both magnitude and direction. This makes it a?",
+                         "vector quantity", "scalar quantity", "chemical formula", "wavefront",
+                         "Vectors have magnitude and direction."),
+                    item("Motion", "A car increases speed at a steady rate. Which quantity describes this change?",
+                         "acceleration", "displacement only", "mass", "density",
+                         "Acceleration is the rate of change of velocity."),
+                    item("Matter", "Which model explains particles in solids as closely packed and vibrating?",
+                         "particle model of matter", "atomic number model only", "wave model", "economic model",
+                         "The particle model describes arrangement and movement of particles."),
+                    item("Electric circuits", "In a simple circuit, current is measured using a?",
+                         "ammeter in series", "voltmeter in parallel only", "thermometer", "barometer",
+                         "An ammeter is connected in series to measure current."),
+                    item("Chemical reactions", "A balanced chemical equation must have the same number of?",
+                         "atoms of each element on both sides", "words in each sentence", "liquids only", "products only",
+                         "Atoms are conserved in chemical reactions."),
+                ]
+            if grade_num == 11:
+                return [
+                    item("Newton's laws", "A learner pushes a trolley and it accelerates. Which factor would increase the acceleration if mass stays the same?",
+                         "A larger net force", "A smaller net force", "Zero resultant force", "Removing direction",
+                         "According to F = ma, acceleration increases when net force increases."),
+                    item("Electrostatics", "Two like charges are brought close together. What happens?",
+                         "They repel each other", "They always attract", "They become neutral instantly", "They disappear",
+                         "Like charges repel and unlike charges attract."),
+                    item("Electric circuits", "In a parallel circuit, the potential difference across each branch is?",
+                         "the same", "always zero", "divided by mass", "measured in newtons",
+                         "Parallel branches have the same potential difference."),
+                    item("Waves", "If frequency increases while wave speed stays constant, wavelength will?",
+                         "decrease", "increase", "stay impossible to calculate", "become mass",
+                         "For v = fλ, wavelength decreases when frequency increases at constant speed."),
+                    item("Acids and bases", "A solution with pH 2 is best described as?",
+                         "strongly acidic", "neutral", "strongly basic", "a salt only",
+                         "Low pH values indicate acidic solutions."),
+                ]
+            return [
+                item("Momentum", "A moving object has momentum because it has?",
+                     "mass and velocity", "colour and shape", "temperature only", "volume only",
+                     "Momentum depends on mass and velocity."),
+                item("Work and energy", "Work is done when a force causes?",
+                     "displacement in the direction of the force", "only a colour change", "no movement at all", "mass to disappear",
+                     "Mechanical work requires force and displacement."),
+                item("Electricity", "A resistor of 4 Ω has a current of 2 A through it. What is the potential difference?",
+                     "8 V", "2 V", "6 V", "0.5 V",
+                     "Using V = IR, V = 2 × 4 = 8 V."),
+                item("Organic chemistry", "Which family contains a hydroxyl group (-OH)?",
+                     "alcohols", "alkanes", "alkenes", "haloalkanes only",
+                     "Alcohols contain the hydroxyl functional group."),
+                item("Reaction rates", "Increasing temperature usually increases reaction rate because particles?",
+                     "collide more often with more energy", "stop moving", "lose all kinetic energy", "turn into atoms only",
+                     "Higher temperature increases effective collisions."),
+            ]
+
+        def life_sciences_bank():
+            if grade_num == 10:
+                return [
+                    item("Cell structure", "Which organelle controls most activities of a eukaryotic cell?",
+                         "nucleus", "cell wall", "vacuole only", "chlorophyll",
+                         "The nucleus contains genetic material and controls cell activities."),
+                    item("Biodiversity", "Classification helps scientists to?",
+                         "organise organisms according to shared characteristics", "make organisms identical", "remove ecosystems", "stop reproduction",
+                         "Classification groups organisms based on similarities and differences."),
+                    item("Photosynthesis", "Which raw materials are needed for photosynthesis?",
+                         "carbon dioxide and water", "oxygen and glucose", "nitrogen and protein", "starch and oxygen",
+                         "Plants use carbon dioxide and water to produce glucose and oxygen."),
+                    item("Human systems", "The function of red blood cells is mainly to?",
+                         "transport oxygen", "digest food", "produce bile", "filter urine",
+                         "Red blood cells contain haemoglobin that carries oxygen."),
+                    item("Ecology", "A food web shows?",
+                         "feeding relationships in an ecosystem", "only one straight food chain", "the age of animals", "the weather forecast",
+                         "Food webs show interconnected feeding relationships."),
+                ]
+            if grade_num == 11:
+                return [
+                    item("Cellular respiration", "The main purpose of cellular respiration is to release?",
+                         "energy from glucose", "oxygen from water", "DNA from chromosomes", "starch from leaves",
+                         "Respiration releases energy stored in glucose."),
+                    item("Plant transport", "Xylem mainly transports?",
+                         "water and mineral salts", "glucose only", "oxygen only", "hormones only",
+                         "Xylem carries water and mineral salts from roots upward."),
+                    item("Animal nutrition", "Where does most absorption of digested food take place?",
+                         "small intestine", "stomach", "oesophagus", "large intestine only",
+                         "The small intestine is adapted for absorption."),
+                    item("Excretion", "The kidneys help maintain homeostasis by?",
+                         "removing urea and regulating water/salt balance", "pumping blood", "digesting proteins", "producing bile",
+                         "Kidneys remove nitrogenous waste and regulate internal balance."),
+                    item("Biodiversity", "Adaptation is best described as a feature that helps an organism?",
+                         "survive and reproduce in its environment", "become invisible always", "avoid all competition", "stop evolving",
+                         "Adaptations improve survival and reproduction chances."),
+                ]
+            return [
+                item("DNA and genetics", "A gene is best described as?",
+                     "a section of DNA that codes for a characteristic", "a whole organ", "a type of blood cell", "a food molecule",
+                     "Genes are sections of DNA linked to inherited characteristics."),
+                item("Meiosis", "Meiosis is important because it produces?",
+                     "gametes with half the chromosome number", "identical body cells", "only skin cells", "double the chromosome number in gametes",
+                     "Meiosis halves the chromosome number to form gametes."),
+                item("Inheritance", "If an allele is recessive, it is expressed in the phenotype when?",
+                     "two recessive alleles are present", "one dominant allele is present", "the environment is cold only", "the chromosome disappears",
+                     "A recessive trait shows when no dominant allele masks it."),
+                item("Evolution", "Natural selection occurs when organisms with favourable characteristics?",
+                     "survive and reproduce more successfully", "all die immediately", "stop passing on genes", "never compete",
+                     "Natural selection changes populations over generations."),
+                item("Homeostasis", "Blood glucose levels are regulated mainly by hormones from the?",
+                     "pancreas", "lungs", "stomach", "skin",
+                     "The pancreas releases insulin and glucagon to regulate glucose levels."),
+            ]
+
+        def accounting_bank():
+            if grade_num == 10:
+                return [
+                    item("Accounting equation", "A business buys equipment for cash. What happens to total assets?",
+                         "No overall change in total assets", "Assets increase and liabilities increase", "Assets decrease only", "Equity disappears",
+                         "One asset increases while another asset decreases."),
+                    item("Source documents", "A cash register roll is mainly used as evidence for?",
+                         "cash sales", "credit purchases", "owner's capital only", "bank charges only",
+                         "Cash register rolls support cash sales entries."),
+                    item("Journals", "Credit sales are first recorded in the?",
+                         "Debtors Journal", "Cash Payments Journal", "Creditors Journal", "Petty Cash Journal",
+                         "Credit sales are recorded in the Debtors Journal."),
+                    item("Ledger accounts", "Posting from journals to ledgers helps to?",
+                         "summarise transactions in individual accounts", "delete source documents", "avoid balancing", "replace financial statements",
+                         "Ledgers group transactions by account."),
+                    item("Trial balance", "A trial balance checks whether?",
+                         "debits equal credits", "profit is guaranteed", "cash is always available", "inventory is sold",
+                         "The trial balance tests arithmetic equality of debit and credit totals."),
+                ]
+            if grade_num == 11:
+                return [
+                    item("Bank reconciliation", "An outstanding deposit appears in the Cash Receipts Journal but not yet on the bank statement. It should be?",
+                         "added in the bank reconciliation", "subtracted from sales", "recorded as drawings", "ignored forever",
+                         "Outstanding deposits are added when reconciling to the bank statement balance."),
+                    item("Inventory systems", "The perpetual inventory system updates inventory?",
+                         "after each purchase and sale", "only once a year", "only when tax is paid", "never",
+                         "Perpetual systems keep continuous inventory records."),
+                    item("VAT", "Output VAT is VAT charged on?",
+                         "sales", "purchases", "drawings", "bank loans only",
+                         "Output VAT is charged to customers on sales."),
+                    item("Partnerships", "A partner's current account is used to record?",
+                         "appropriations such as salary, interest and drawings", "only cash sales", "only fixed assets", "only bad debts",
+                         "Current accounts record partner-specific appropriations."),
+                    item("Internal control", "Separation of duties helps a business reduce?",
+                         "fraud and errors", "sales only", "assets only", "VAT rates",
+                         "Internal control reduces the risk of fraud and mistakes."),
+                ]
+            return [
+                item("Company financial statements", "A Statement of Comprehensive Income is used to determine?",
+                     "profit or loss for the period", "only bank balance", "only share price", "number of directors",
+                     "Income and expenses are used to calculate profit or loss."),
+                item("Cash flow statements", "Depreciation is added back in the cash flow statement because it is?",
+                     "a non-cash expense", "a cash sale", "a loan repayment", "a dividend paid",
+                     "Depreciation affects profit but does not involve a cash outflow."),
+                item("Financial indicators", "The current ratio is used to assess?",
+                     "liquidity", "profit sharing only", "employee attendance", "advertising design",
+                     "Liquidity ratios indicate ability to meet short-term obligations."),
+                item("Budgets", "A cash budget helps management plan?",
+                     "expected cash receipts and payments", "essay structure", "weather patterns", "physical stock count only",
+                     "Cash budgets forecast inflows and outflows."),
+                item("Audit reports", "An unqualified audit opinion generally means financial statements are?",
+                     "fairly presented in all material respects", "always showing high profit", "free from any transaction", "not checked",
+                     "An unqualified opinion indicates fair presentation according to accounting standards."),
+            ]
+
+        def business_studies_bank():
+            return [
+                item("Business environments", "A new law affecting labour practices is part of which business environment?",
+                     "Macro environment", "Micro environment only", "Internal environment only", "Personal environment",
+                     "Legislation is an external macro-environment factor."),
+                item("Management functions", "Which management function involves setting goals and deciding actions in advance?",
+                     "Planning", "Controlling only", "Delegating only", "Packaging",
+                     "Planning sets direction before work is done."),
+                item("Human resources", "A fair recruitment process should focus mainly on?",
+                     "skills, requirements and equal opportunity", "favouritism", "family connections only", "random selection",
+                     "Fair recruitment uses job requirements and equal opportunity principles."),
+                item("Marketing", "Market segmentation means dividing customers according to?",
+                     "shared characteristics and needs", "alphabetical order only", "employee salaries", "business debt",
+                     "Segmentation helps businesses target groups more effectively."),
+                item("Legislation", "Consumer protection laws mainly aim to protect consumers from?",
+                     "unfair or misleading business practices", "all forms of advertising", "studying economics", "saving money",
+                     "Consumer laws promote fairness and transparency."),
+                item("Entrepreneurship", "A business idea is more likely to succeed when it solves?",
+                     "a real customer need or problem", "no problem at all", "only the owner's timetable", "a random unrelated issue",
+                     "Entrepreneurs create value by solving real needs."),
+            ]
+
+        def ems_bank():
+            return [
+                item("Needs and wants", "Which item is a need rather than a want?",
+                     "Basic food", "Designer shoes", "Gaming skins", "Luxury jewellery",
+                     "Needs are essential for survival."),
+                item("Entrepreneurship", "A learner sells study cards to classmates. Which factor best shows entrepreneurship?",
+                     "Identifying a need and offering a product", "Copying without planning", "Avoiding customers", "Spending all income",
+                     "Entrepreneurship involves identifying opportunities and taking action."),
+                item("Accounting cycle", "Why are source documents important?",
+                     "They provide evidence for transactions", "They replace all calculations", "They are only decorations", "They stop businesses from selling",
+                     "Source documents prove that a transaction took place."),
+                item("Budgets", "A personal budget helps a learner to?",
+                     "plan income and spending", "increase prices in shops", "avoid saving", "guess all expenses",
+                     "Budgets help control money."),
+                item("Markets", "A market exists when buyers and sellers?",
+                     "exchange goods or services", "avoid communication", "only study maps", "never agree on value",
+                     "Markets involve exchange between buyers and sellers."),
+            ]
+
+        def natural_sciences_bank():
+            return [
+                item("Particles of matter", "When a solid melts, its particles generally?",
+                     "gain energy and move more freely", "stop moving", "become smaller atoms", "lose all mass",
+                     "Melting happens when particles gain enough energy to move out of fixed positions."),
+                item("Energy transfer", "A metal spoon gets hot in soup mainly because of?",
+                     "conduction", "photosynthesis", "evaporation", "magnetism",
+                     "Conduction transfers heat through solids."),
+                item("Electricity", "A closed circuit is needed because current must have?",
+                     "a complete path", "no battery", "only plastic parts", "an open switch",
+                     "Current flows only when the circuit is complete."),
+                item("Planet Earth", "Seasons are mainly caused by Earth's?",
+                     "tilt and revolution around the Sun", "distance from the Moon only", "daily weather changes", "magnetic field only",
+                     "Earth's tilt and orbit cause seasonal changes."),
+                item("Life and living", "In an ecosystem, decomposers are important because they?",
+                     "break down dead matter and recycle nutrients", "produce sunlight", "stop food chains", "remove all plants",
+                     "Decomposers recycle nutrients back into ecosystems."),
+            ]
+
+        def english_bank():
+            return [
+                item("Comprehension", "When answering a comprehension question, why should a learner refer back to the passage?",
+                     "To support answers with evidence from the text", "To copy random sentences", "To avoid reading the question", "To check the font size",
+                     "Textual evidence strengthens comprehension answers."),
+                item("Inference", "An inference is made when a reader?",
+                     "uses clues in the text and prior knowledge to work out meaning", "only counts paragraphs", "ignores context", "copies the title",
+                     "Inference requires reading between the lines."),
+                item("Parts of speech", "In the sentence 'The determined learner practised daily', which word is an adjective?",
+                     "determined", "learner", "practised", "daily",
+                     "An adjective describes a noun."),
+                item("Editing", "Which error is shown in: 'She dont understand the question'?",
+                     "subject-verb agreement", "capitalisation only", "punctuation only", "paragraphing",
+                     "The correct form is 'She does not understand'."),
+                item("Writing", "A strong argumentative paragraph should include?",
+                     "a clear point, evidence and explanation", "only emojis", "unrelated ideas", "no topic sentence",
+                     "Argumentative writing needs a point supported by evidence and reasoning."),
+                item("Literature", "A character's actions and words help reveal their?",
+                     "characterisation", "page number", "font style", "heading only",
+                     "Characterisation is how a character is presented."),
+            ]
+
+        def afrikaans_bank():
+            return [
+                item("Begrip", "Wanneer jy 'n begripstoets antwoord, wat moet jy eerste doen?",
+                     "Lees die vraag en soek bewyse in die teks", "Raai die antwoord", "Ignoreer die teks", "Skryf net Engelse woorde",
+                     "Begrip vereis dat antwoorde uit die teks ondersteun word."),
+                item("Woordeskat", "Watter woord pas die beste by 'vinnig'?",
+                     "gou", "stadig", "koud", "stil",
+                     "'Gou' beteken vinnig."),
+                item("Tye", "Kies die korrekte verlede tyd: 'Ek speel sokker.'",
+                     "Ek het sokker gespeel.", "Ek sal sokker speel.", "Ek speel sokker.", "Ek is sokker.",
+                     "Verlede tyd gebruik gewoonlik 'het' en die ge-vorm."),
+                item("Sinstruktuur", "Watter sin is die netjiesste Afrikaans?",
+                     "Die leerder lees die boek.", "Leerder die boek lees.", "Boek lees die leerder die.", "Die lees boek leerder.",
+                     "Afrikaans sinne moet duidelike woordorde hê."),
+                item("Taalgebruik", "Wat is 'n werkwoord?",
+                     "’n Aksiewoord", "’n Naamwoord", "’n Kleur", "’n Pleknaam",
+                     "Werkwoorde wys aksies of toestande."),
+            ]
+
+        def geography_bank():
+            return [
+                item("Mapwork", "On a 1:50 000 map, 1 cm represents?",
+                     "0.5 km", "5 km", "50 km", "500 km",
+                     "1:50 000 means 1 cm on the map represents 50 000 cm, which is 0.5 km."),
+                item("Climate and weather", "A synoptic weather map is mainly used to show?",
+                     "weather systems and conditions over an area", "business profit", "population pyramids only", "school attendance",
+                     "Synoptic maps show pressure systems, fronts and weather conditions."),
+                item("Geomorphology", "River meanders are most associated with?",
+                     "lateral erosion and deposition", "volcanic eruptions only", "urban zoning", "ocean tides only",
+                     "Meanders form as rivers erode and deposit material sideways."),
+                item("Settlement geography", "A settlement hierarchy ranks settlements according to?",
+                     "size and services offered", "temperature only", "soil colour", "river speed",
+                     "Settlements can be ranked from small villages to large cities."),
+                item("Economic geography", "A break-of-bulk point often develops where?",
+                     "goods change from one transport mode to another", "rainfall is measured", "learners write exams", "soil is classified only",
+                     "Break-of-bulk points are linked to transport and trade."),
+            ]
+
+        banks = {
+            "Mathematics": maths_bank,
+            "Mathematical Literacy": math_lit_bank,
+            "Physical Sciences": physical_sciences_bank,
+            "Life Sciences": life_sciences_bank,
+            "Accounting": accounting_bank,
+            "Business Studies": business_studies_bank,
+            "EMS": ems_bank,
+            "Natural Sciences": natural_sciences_bank,
+            "English FAL": english_bank,
+            "Afrikaans FAL": afrikaans_bank,
+            "Geography": geography_bank,
         }
 
-        default_bank = [
-            ("CAPS Concepts", f"Which action best supports success in {grade_label_text} {name}?", "attending lessons and practising regularly", "guessing all answers", "avoiding revision", "ignoring feedback", "Consistent practice and lesson attendance improve learning."),
-            ("Study Skills", f"What should a learner do after making a mistake in {name}?", "review the correction and practise again", "delete the work", "stop studying", "blame the subject", "Mistakes are useful when learners learn from them."),
-            ("Revision", f"Which method is best for revising {name}?", "short regular revision sessions", "one rushed session only", "never testing yourself", "reading without focus", "Regular revision improves memory."),
-            ("Assessment", f"Before answering a {name} question, a learner should first?", "read the question carefully", "choose randomly", "skip all instructions", "copy without thinking", "Understanding the question comes before answering."),
-            ("Portal Learning", f"How can the EBTA Portal help with {name}?", "by giving access to resources and practice", "by replacing all studying", "by doing exams for learners", "by hiding feedback", "The portal supports learning through resources and practice."),
-        ]
+        base_bank = banks.get(name, common_study_bank)()
 
-        return subject_banks.get(name, default_bank)
+        # Keep enough questions per game mode without repeating exact wording across modes.
+        # We rotate the order so each mode starts from a different point in the CAPS bank.
+        rotation = {
+            "Speed Quiz": 0,
+            "Match the Concept": 1,
+            "Boss Battle": 2,
+            "Career Quest": 3,
+        }.get(game_type, 0)
+
+        if base_bank:
+            base_bank = base_bank[rotation:] + base_bank[:rotation]
+
+        selected = base_bank[:5]
+
+        converted = []
+        for base_item in selected:
+            topic = base_item["topic"]
+            question = base_item["question"]
+            correct = base_item["correct"]
+            wrong1 = base_item["wrong1"]
+            wrong2 = base_item["wrong2"]
+            wrong3 = base_item["wrong3"]
+            explanation = base_item["explanation"]
+
+            if difficulty == "Easy":
+                prefix = "Choose the best answer."
+                points = 1
+            elif difficulty == "Medium":
+                prefix = "Apply the concept carefully before choosing."
+                points = 2
+            else:
+                prefix = "Think deeper and avoid the distractors."
+                points = 3
+
+            if game_type == "Speed Quiz":
+                question_text = f"⚡ {grade_text} {name} Speed Quiz: {question} {prefix}"
+                options = [correct, wrong1, wrong2, wrong3]
+                final_topic = f"Speed Skill: {topic}"
+                final_explanation = explanation
+
+            elif game_type == "Match the Concept":
+                question_text = f"🧩 Match the Concept: Which explanation best matches '{topic}' in {grade_text} {name}?"
+                options = [
+                    explanation,
+                    f"{topic} means guessing without using the method.",
+                    f"{topic} is only about memorising words with no application.",
+                    f"{topic} is unrelated to the CAPS content for this subject.",
+                ]
+                final_topic = f"Concept Match: {topic}"
+                final_explanation = f"The correct match is: {explanation}"
+
+            elif game_type == "Boss Battle":
+                question_text = f"👾 Boss Battle ({difficulty}): A learner is challenged with this CAPS question: {question} Which answer defeats the boss?"
+                options = [
+                    f"{correct}",
+                    f"{wrong1}",
+                    f"{wrong2}",
+                    f"{wrong3}",
+                ]
+                final_topic = f"Boss Battle: {topic}"
+                final_explanation = f"{explanation} This is why the strongest answer is '{correct}'."
+
+            elif game_type == "Career Quest":
+                question_text = f"🚀 Career Quest: How can understanding '{topic}' in {grade_text} {name} help beyond one class activity?"
+                options = [
+                    f"It builds subject knowledge, problem-solving and confidence for tests, school tasks and future study.",
+                    "It only helps for one random question and should not be revised again.",
+                    "It is useful only if the learner memorises without understanding.",
+                    "It has no connection to real-life thinking, academic progress or careers.",
+                ]
+                final_topic = f"Career Quest: {topic}"
+                final_explanation = f"{topic} is part of the CAPS learning pathway and supports stronger thinking in {name}."
+
+            else:
+                question_text = question
+                options = [correct, wrong1, wrong2, wrong3]
+                final_topic = topic
+                final_explanation = explanation
+
+            converted.append((final_topic, question_text, options, 0, final_explanation, points))
+
+        return converted
 
 
-    def adapt_learning_game_question(subject_name, grade, base_item, game_type, difficulty):
-        topic, question, correct, wrong1, wrong2, wrong3, explanation = base_item
-        name = str(subject_name or "Subject")
-        
-        grade_text_raw = str(grade or "").strip()
+    GAME_QUESTION_BANK_VERSION = "CAPS_COMPLEX_V2_2026_07"
 
-        if grade_text_raw.startswith("G"):
-            grade_text = grade_text_raw.replace("G", "Grade ")
+    cur.execute("SELECT value FROM settings WHERE key='learning_games_question_bank_version'")
+    existing_game_version = cur.fetchone()
+
+    if not existing_game_version or existing_game_version["value"] != GAME_QUESTION_BANK_VERSION:
+        # Archive only EBTA system starter questions. Tutor-created questions are preserved.
+        cur.execute("""
+            UPDATE learning_game_questions
+            SET status='ARCHIVED',
+                updated_at=?
+            WHERE created_by_tutor_id IS NULL
+              AND status='ACTIVE'
+        """, (now_utc_iso(),))
+
+        if existing_game_version:
+            cur.execute("""
+                UPDATE settings
+                SET value=?
+                WHERE key='learning_games_question_bank_version'
+            """, (GAME_QUESTION_BANK_VERSION,))
         else:
-            grade_text = grade_text_raw
-
-        if game_type == "Speed Quiz":
-            question_text = f"⚡ Quick challenge ({difficulty}): {question}"
-            options = [correct, wrong1, wrong2, wrong3]
-            final_topic = topic
-            final_explanation = explanation
-
-        elif game_type == "Match the Concept":
-            question_text = f"🧩 Match the concept for {grade_text} {name}: {question}"
-            options = [correct, wrong1, wrong2, wrong3]
-            final_topic = f"Concept Match: {topic}"
-            final_explanation = explanation
-
-        elif game_type == "Boss Battle":
-            question_text = f"👾 Boss Battle ({difficulty}): {question} Choose the strongest answer."
-            options = [correct, wrong1, wrong2, wrong3]
-            final_topic = f"Boss Battle: {topic}"
-            final_explanation = explanation
-
-        elif game_type == "Career Quest":
-            question_text = f"🚀 Career Quest: How can {topic} in {grade_text} {name} help a learner grow?"
-            options = [
-                f"It builds useful knowledge and problem-solving skills for future study and careers.",
-                "It is only useful for one quiz and never again.",
-                "It should be ignored if it feels difficult.",
-                "It has no link to real life or future opportunities."
-            ]
-            final_topic = f"Career Quest: {topic}"
-            final_explanation = f"{topic} can build skills, confidence and career awareness when learners practise it properly."
-
-        else:
-            question_text = question
-            options = [correct, wrong1, wrong2, wrong3]
-            final_topic = topic
-            final_explanation = explanation
-
-        return final_topic, question_text, options, 0, final_explanation
+            cur.execute("""
+                INSERT INTO settings(key,value)
+                VALUES(?,?)
+            """, ("learning_games_question_bank_version", GAME_QUESTION_BANK_VERSION))
 
 
     cur.execute("SELECT id, name, grade FROM subjects ORDER BY id")
@@ -2387,7 +2813,6 @@ def init_db():
         subject_id = game_subject["id"]
         subject_name = game_subject["name"]
         subject_grade = game_subject["grade"]
-        base_questions = starter_questions_for_subject(subject_name, subject_grade)
 
         for seed_game_type in game_seed_types:
             for seed_difficulty in game_seed_difficulties:
@@ -2406,15 +2831,14 @@ def init_db():
                 if existing_count > 0:
                     continue
 
-                for base_item in base_questions:
-                    topic, question_text, options, correct_index, explanation = adapt_learning_game_question(
-                        subject_name,
-                        subject_grade,
-                        base_item,
-                        seed_game_type,
-                        seed_difficulty
-                    )
+                game_questions = starter_questions_for_subject(
+                    subject_name,
+                    subject_grade,
+                    seed_game_type,
+                    seed_difficulty
+                )
 
+                for topic, question_text, options, correct_index, explanation, points in game_questions:
                     cur.execute("""
                         INSERT INTO learning_game_questions(
                             subject_id,
@@ -2443,7 +2867,7 @@ def init_db():
                         json.dumps(options),
                         correct_index,
                         explanation,
-                        1,
+                        points,
                         None,
                         "ACTIVE",
                         now_utc_iso(),
