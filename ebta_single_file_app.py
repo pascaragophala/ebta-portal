@@ -180,6 +180,32 @@ def login_path_for_role(role):
     return login_paths.get(role, "/")
 
 
+def home_path_for_logged_in_role(role):
+    """
+    Sends already logged-in users to their correct portal dashboard.
+    This prevents the public Home / enrolment page from showing inside a logged-in session.
+    """
+
+    home_paths = {
+        "student": "/student",
+        "tutor": "/tutor",
+        "admin": "/admin",
+        "manager": "/manager/dashboard",
+        "aqm": "/aqm/dashboard",
+        "treasurer": "/treasurer",
+        "secretary": "/secretary",
+        "social_media": "/social-media",
+        "duty_admin": "/duty-admin",
+        "admission": "/admission",
+        "coo": "/coo",
+        "cao": "/cao",
+        "ceo": "/ceo",
+        "school_manager": "/school",
+    }
+
+    return home_paths.get(role, "/")
+
+
 @app.before_request
 def auto_logout_after_inactivity():
     """
@@ -9708,6 +9734,10 @@ def logo():
 
 @app.get('/')
 def home():
+    logged_in_role = get_logged_in_portal_role()
+    if logged_in_role:
+        return redirect(home_path_for_logged_in_role(logged_in_role))
+
     conn = get_db()
     cur = conn.cursor()
     
