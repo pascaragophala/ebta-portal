@@ -206,6 +206,27 @@ def home_path_for_logged_in_role(role):
     return home_paths.get(role, "/")
 
 
+def is_tutor_student_view_mode():
+    """
+    True when a tutor is logged in and intentionally previewing the learner side.
+    This never gives the tutor access to a real learner account; it is only a
+    read-only preview built from the tutor's own subjects and portal tools.
+    """
+
+    if not is_tutor():
+        return False
+
+    try:
+        endpoint = request.endpoint or ""
+    except Exception:
+        endpoint = ""
+
+    return (
+        session.get("tutor_view_mode") == "student"
+        or endpoint in ("tutor_student_view", "tutor_switch_student_view")
+    )
+
+
 @app.before_request
 def auto_logout_after_inactivity():
     """
@@ -8640,7 +8661,16 @@ def page(title, body_html, extra_head="", extra_js=""):
         if is_student():
             auth += [f"<a href='{url_for('student_home')}'>My Portal</a>", f"<a href='{url_for('student_logout')}'>Logout</a>"]
         if is_tutor():
-            auth += [f"<a href='{url_for('tutor_home')}'>Tutor</a>", f"<a href='{url_for('tutor_logout')}'>Logout</a>"]
+            if is_tutor_student_view_mode():
+                auth += [
+                    f"<a href='{url_for('tutor_switch_tutor_view')}'>Tutor View</a>",
+                    f"<a href='{url_for('tutor_logout')}'>Logout</a>"
+                ]
+            else:
+                auth += [
+                    f"<a href='{url_for('tutor_home')}'>Tutor</a>",
+                    f"<a href='{url_for('tutor_logout')}'>Logout</a>"
+                ]
         if is_admin():
             auth += [f"<a href='{safe_url('admin_home','/admin')}'>Admin</a>", f"<a href='{url_for('admin_logout')}'>Logout</a>"]
         if is_coo():
@@ -8673,8 +8703,11 @@ def page(title, body_html, extra_head="", extra_js=""):
     
     body_class = ""
 
-    if is_student():
+    if is_student() or is_tutor_student_view_mode():
         body_class = "role-student"
+
+        if is_tutor_student_view_mode():
+            body_class += " role-tutor-student-preview"
 
     elif is_tutor():
         body_class = "role-tutor"
@@ -8978,6 +9011,7 @@ def page(title, body_html, extra_head="", extra_js=""):
             student_sidebar_name = student_sidebar["full_name"] if student_sidebar else session.get("student_name", "Student")
             student_sidebar_grade = grade_label(student_sidebar["grade"]) if student_sidebar and student_sidebar["grade"] else "Student"
             student_sidebar_phone = student_sidebar["phone_whatsapp"] if student_sidebar and student_sidebar["phone_whatsapp"] else ""
+            student_profile_link = url_for('student_profile_page')
             
             month = get_active_month('student')
             
@@ -9019,6 +9053,114 @@ def page(title, body_html, extra_head="", extra_js=""):
             <div class='s'><div class='k'>{graded}</div><div class='t'>Marks released</div></div>
             <div class='s'><div class='k'>{unread}</div><div class='t'>Unread messages</div></div>
             </div>"""
+        elif is_tutor_student_view_mode():
+            tid = is_tutor()
+            month = get_active_month('tutor')
+
+            cur.execute("""
+                SELECT full_name, profile_picture_path
+                FROM tutors
+                WHERE id=?
+                LIMIT 1
+            """, (tid,))
+
+            tutor_sidebar = cur.fetchone()
+            tutor_name_preview = tutor_sidebar["full_name"] if tutor_sidebar else session.get('tutor_name', 'Tutor')
+
+            cur.execute("SELECT COUNT(*) FROM tutor_subjects WHERE tutor_id=?", (tid,))
+            active_subjects = cur.fetchone()[0] or 0
+
+            cur.execute("""
+                SELECT COUNT(*)
+                FROM materials
+                WHERE tutor_id=?
+                  AND month=?
+                  AND (is_assignment=1 OR kind='assignment')
+            """, (tid, month))
+            pending = cur.fetchone()[0] or 0
+
+            cur.execute("""
+                SELECT COUNT(*)
+                FROM assessments
+                WHERE tutor_id=?
+                  AND month=?
+                  AND is_published=1
+            """, (tid, month))
+            graded = cur.fetchone()[0] or 0
+
+            cur.execute("""
+                SELECT COUNT(*)
+                FROM materials
+                WHERE tutor_id=?
+                  AND month=?
+                  AND COALESCE(is_assignment,0)=0
+                  AND kind!='assignment'
+            """, (tid, month))
+            unread = cur.fetchone()[0] or 0
+
+            initials = "".join([
+                x[0].upper()
+                for x in (tutor_name_preview or "Tutor").split()[:2]
+            ])
+
+            if tutor_sidebar and tutor_sidebar["profile_picture_path"]:
+                student_sidebar_photo = f"""
+                <img src="/tutor-profile-picture/{tid}"
+                     style="
+                        width:56px;
+                        height:56px;
+                        border-radius:50%;
+                        object-fit:cover;
+                        border:3px solid #1b5e20;
+                     ">
+                """
+            else:
+                student_sidebar_photo = f"""
+                <div style="
+                    width:56px;
+                    height:56px;
+                    border-radius:50%;
+                    background:#eef6ee;
+                    display:flex;
+                    align-items:center;
+                    justify-content:center;
+                    border:3px solid #1b5e20;
+                    font-weight:800;
+                    color:#1b5e20;
+                    font-size:16px;
+                ">
+                    {escape(initials or "TP")}
+                </div>
+                """
+
+            student_sidebar_name = f"{tutor_name_preview}"
+            student_sidebar_grade = "Tutor Student View"
+            student_sidebar_phone = "Preview mode"
+            student_profile_link = url_for('tutor_student_view') + "#profile"
+
+            role_title, user_name = "Student", tutor_name_preview
+            links = [
+                ("🏠 Dashboard", url_for('tutor_student_view')),
+                ("📊 Academic Progress", url_for('tutor_student_view') + "#progress"),
+                ("👤 My Profile", url_for('tutor_student_view') + "#profile"),
+                ("✅ Status", url_for('tutor_student_view') + "#status"),
+                ("📝 Assignments", url_for('tutor_student_view') + "#assignments"),
+                ("🧪 Assessments", url_for('tutor_student_view') + "#assessments"),
+                ("🎮 Learning Games", url_for('tutor_student_view') + "#games"),
+                ("📚 Learning Materials", url_for('tutor_student_view') + "#materials"),
+                ("💬 Messages", url_for('tutor_student_view') + "#messages"),
+                ("⬅️ Switch to Tutor View", url_for('tutor_switch_tutor_view')),
+                ("🚪 Logout", url_for('tutor_logout'))
+            ]
+
+            stats_grid = f"""
+            <div class='stats-mini'>
+            <div class='s'><div class='k'>{active_subjects}</div><div class='t'>Tutor subjects</div></div>
+            <div class='s'><div class='k'>{pending}</div><div class='t'>Assignments shown</div></div>
+            <div class='s'><div class='k'>{graded}</div><div class='t'>Published assessments</div></div>
+            <div class='s'><div class='k'>{unread}</div><div class='t'>Materials shown</div></div>
+            </div>"""
+
         elif is_tutor():
             tid = is_tutor()
             month = get_active_month('tutor')
@@ -9100,6 +9242,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("🎮 Game Questions", url_for('tutor_learning_game_questions')),
                 ("💬 Messages", url_for('tutor_home') + "#messages"),
                 ("👥 Students", url_for('tutor_home') + "#students"),
+                ("👀 Student View", url_for('tutor_switch_student_view')),
                 ("🚪 Logout", url_for('tutor_logout'))
             ]
 
@@ -9271,7 +9414,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                     </div>
 
                     <a class="mini"
-                       href="{url_for('student_profile_page')}"
+                       href="{student_profile_link}"
                        style="color:#1b5e20;font-weight:700;text-decoration:none">
                         View / Edit Profile
                     </a>
@@ -17592,11 +17735,305 @@ def tutor_logout():
     return redirect(url_for('tutor_login'))
 
 
+
+@app.get('/tutor/switch/student-view')
+def tutor_switch_student_view():
+    r = require_tutor()
+    if r:
+        return r
+
+    session["tutor_view_mode"] = "student"
+    return redirect(url_for('tutor_student_view'))
+
+
+@app.get('/tutor/switch/tutor-view')
+def tutor_switch_tutor_view():
+    r = require_tutor()
+    if r:
+        return r
+
+    session.pop("tutor_view_mode", None)
+    return redirect(url_for('tutor_home'))
+
+
+@app.get('/tutor/student-view')
+def tutor_student_view():
+    r = require_tutor()
+    if r:
+        return r
+
+    session["tutor_view_mode"] = "student"
+
+    tid = is_tutor()
+    month = get_active_month('tutor')
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT full_name
+        FROM tutors
+        WHERE id=?
+        LIMIT 1
+    """, (tid,))
+    tutor_row = cur.fetchone()
+    tutor_name = tutor_row["full_name"] if tutor_row else session.get("tutor_name", "Tutor")
+
+    cur.execute("""
+        SELECT s.id, s.name, s.grade
+        FROM tutor_subjects ts
+        JOIN subjects s ON s.id = ts.subject_id
+        WHERE ts.tutor_id=?
+        ORDER BY s.grade, s.name
+    """, (tid,))
+    subject_rows = cur.fetchall()
+
+    subject_ids = [row["id"] for row in subject_rows]
+    subject_count = len(subject_ids)
+
+    if subject_ids:
+        placeholders = ",".join(["?"] * len(subject_ids))
+
+        cur.execute(f"""
+            SELECT COUNT(DISTINCT e.student_id) AS c
+            FROM enrollments e
+            WHERE e.month=?
+              AND e.status='ACTIVE'
+              AND e.subject_id IN ({placeholders})
+        """, [month] + subject_ids)
+        learners_count = cur.fetchone()["c"] or 0
+
+        cur.execute(f"""
+            SELECT m.id, m.title, m.kind, m.month, m.created_at,
+                   COALESCE(m.is_assignment,0) AS is_assignment,
+                   m.due_date,
+                   s.name AS subject_name,
+                   s.grade
+            FROM materials m
+            JOIN subjects s ON s.id = m.subject_id
+            WHERE m.tutor_id=?
+              AND m.month=?
+              AND m.subject_id IN ({placeholders})
+            ORDER BY m.created_at DESC
+            LIMIT 12
+        """, [tid, month] + subject_ids)
+        material_rows = cur.fetchall()
+
+        cur.execute(f"""
+            SELECT a.id, a.title, a.duration_minutes, a.opens_at, a.closes_at,
+                   a.is_published, s.name AS subject_name, s.grade
+            FROM assessments a
+            JOIN subjects s ON s.id = a.subject_id
+            WHERE a.tutor_id=?
+              AND a.month=?
+              AND a.subject_id IN ({placeholders})
+            ORDER BY a.created_at DESC
+            LIMIT 12
+        """, [tid, month] + subject_ids)
+        assessment_rows = cur.fetchall()
+
+        cur.execute(f"""
+            SELECT se.id, se.day_of_week, se.start_time, se.end_time, se.meet_link,
+                   s.name AS subject_name, s.grade
+            FROM sessions se
+            JOIN subjects s ON s.id = se.subject_id
+            WHERE se.tutor_id=?
+              AND se.active=1
+              AND COALESCE(se.is_visible,1)=1
+              AND se.subject_id IN ({placeholders})
+            ORDER BY s.grade, s.name, se.day_of_week, se.start_time
+            LIMIT 12
+        """, [tid] + subject_ids)
+        session_rows = cur.fetchall()
+
+        cur.execute(f"""
+            SELECT subject_id, COUNT(*) AS c
+            FROM learning_game_questions
+            WHERE status='ACTIVE'
+              AND subject_id IN ({placeholders})
+            GROUP BY subject_id
+        """, subject_ids)
+        game_counts = {r["subject_id"]: r["c"] for r in cur.fetchall()}
+    else:
+        learners_count = 0
+        material_rows = []
+        assessment_rows = []
+        session_rows = []
+        game_counts = {}
+
+    conn.close()
+
+    subject_cards = ""
+    for row in subject_rows:
+        subject_cards += f"""
+        <div class="card soft">
+            <h3>{escape(grade_label(row['grade']))} {escape(row['name'])}</h3>
+            <p class="mini muted">This is how the subject would appear as an available learner subject.</p>
+        </div>
+        """
+
+    if not subject_cards:
+        subject_cards = """
+        <div class="card soft">
+            <h3>No tutor subjects found</h3>
+            <p class="muted">Assign subjects to this tutor first, then the student preview will show the learner-side content.</p>
+        </div>
+        """
+
+    assignment_rows = [m for m in material_rows if (m["is_assignment"] == 1 or m["kind"] == "assignment")]
+    learning_material_rows = [m for m in material_rows if not (m["is_assignment"] == 1 or m["kind"] == "assignment")]
+
+    def material_card(row, label):
+        due = f"<div class='mini muted'>Due: {escape(row['due_date'])}</div>" if row["due_date"] else ""
+        return f"""
+        <div class="card soft">
+            <h3>{escape(row['title'])}</h3>
+            <p class="mini muted">{escape(grade_label(row['grade']))} • {escape(row['subject_name'])} • {escape(label)}</p>
+            {due}
+            <span class="chip">Preview only</span>
+        </div>
+        """
+
+    materials_html = "".join(material_card(row, "Learning material") for row in learning_material_rows) or """
+        <div class="card soft"><p class="muted">No learning materials for this tutor and month yet.</p></div>
+    """
+
+    assignments_html = "".join(material_card(row, "Assignment") for row in assignment_rows) or """
+        <div class="card soft"><p class="muted">No assignments for this tutor and month yet.</p></div>
+    """
+
+    assessments_html = ""
+    for row in assessment_rows:
+        pub = "Published" if row["is_published"] else "Draft"
+        assessments_html += f"""
+        <div class="card soft">
+            <h3>{escape(row['title'])}</h3>
+            <p class="mini muted">{escape(grade_label(row['grade']))} • {escape(row['subject_name'])} • {int(row['duration_minutes'] or 0)} minutes</p>
+            <span class="chip">{escape(pub)}</span>
+            <span class="chip">Preview only</span>
+        </div>
+        """
+    if not assessments_html:
+        assessments_html = """
+        <div class="card soft"><p class="muted">No assessments for this tutor and month yet.</p></div>
+        """
+
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    sessions_html = ""
+    for row in session_rows:
+        try:
+            day_label = days[int(row["day_of_week"])]
+        except Exception:
+            day_label = "Session day"
+        sessions_html += f"""
+        <div class="card soft">
+            <h3>{escape(row['subject_name'])}</h3>
+            <p class="mini muted">{escape(grade_label(row['grade']))} • {escape(day_label)} • {escape(row['start_time'])} - {escape(row['end_time'])}</p>
+            <span class="chip">Learner would see this class session</span>
+        </div>
+        """
+    if not sessions_html:
+        sessions_html = """
+        <div class="card soft"><p class="muted">No visible sessions have been added for this tutor yet.</p></div>
+        """
+
+    games_html = ""
+    for row in subject_rows:
+        count = game_counts.get(row["id"], 0)
+        games_html += f"""
+        <div class="card soft">
+            <h3>{escape(row['name'])}</h3>
+            <p class="mini muted">{escape(grade_label(row['grade']))}</p>
+            <span class="chip">{count} active game question(s)</span>
+        </div>
+        """
+    if not games_html:
+        games_html = """
+        <div class="card soft"><p class="muted">No game subjects found for this tutor yet.</p></div>
+        """
+
+    body = f"""
+    <section class="card" style="border-left:5px solid #1b5e20">
+        <div style="display:flex;gap:12px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap">
+            <div>
+                <h1>Student View Preview</h1>
+                <p class="muted">
+                    You are viewing the EBTA learner side as a tutor. This is a safe preview only.
+                    You are not logged in as any real learner and you cannot submit learner work here.
+                </p>
+            </div>
+            <a class="btn success" href="{url_for('tutor_switch_tutor_view')}">Switch back to Tutor View</a>
+        </div>
+    </section>
+
+    <section id="status" class="grid cards" style="margin-top:14px">
+        <div class="card"><h2>{subject_count}</h2><p class="muted">Subjects you teach</p></div>
+        <div class="card"><h2>{learners_count}</h2><p class="muted">Active learners in your subjects</p></div>
+        <div class="card"><h2>{pretty_month_label(month)}</h2><p class="muted">Preview month</p></div>
+    </section>
+
+    <section id="profile" class="card" style="margin-top:14px">
+        <h2>My Profile</h2>
+        <p class="muted">
+            In a real learner account, this section shows the learner profile. In tutor student-view mode,
+            it shows your tutor name only so you can understand the student-side layout.
+        </p>
+        <div class="card soft">
+            <strong>{escape(tutor_name)}</strong><br>
+            <span class="mini muted">Tutor Student View • Preview only</span>
+        </div>
+    </section>
+
+    <section id="progress" class="card" style="margin-top:14px">
+        <h2>Academic Progress</h2>
+        <p class="muted">
+            A real learner sees their marks, submitted work, progress and feedback here. As a tutor,
+            this preview only shows how the section is positioned.
+        </p>
+        <div class="grid cards">{subject_cards}</div>
+    </section>
+
+    <section id="assignments" class="card" style="margin-top:14px">
+        <h2>Assignments</h2>
+        <p class="muted">These are assignments uploaded by you for the selected month. Learner submission buttons are disabled in preview mode.</p>
+        <div class="grid cards">{assignments_html}</div>
+    </section>
+
+    <section id="assessments" class="card" style="margin-top:14px">
+        <h2>Assessments</h2>
+        <p class="muted">This section shows the assessments learners would see from your tutor account.</p>
+        <div class="grid cards">{assessments_html}</div>
+    </section>
+
+    <section id="games" class="card" style="margin-top:14px">
+        <h2>Learning Games</h2>
+        <p class="muted">This preview shows the learner-side game subjects linked to the subjects you teach.</p>
+        <div class="grid cards">{games_html}</div>
+    </section>
+
+    <section id="materials" class="card" style="margin-top:14px">
+        <h2>Learning Materials</h2>
+        <p class="muted">These are learning materials uploaded by you for the selected month.</p>
+        <div class="grid cards">{materials_html}</div>
+    </section>
+
+    <section id="messages" class="card" style="margin-top:14px">
+        <h2>Messages</h2>
+        <p class="muted">
+            Learners use this area to communicate with EBTA. In preview mode, tutors do not send messages as learners.
+        </p>
+    </section>
+    """
+
+    return page("Tutor Student View Preview", body)
+
+
 @app.get('/tutor')
 def tutor_home():
   
     r=require_tutor()
     if r: return r
+    session.pop("tutor_view_mode", None)
     tid = is_tutor()
     month = get_active_month('tutor')
 
