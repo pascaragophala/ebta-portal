@@ -8707,7 +8707,7 @@ def page(title, body_html, extra_head="", extra_js=""):
         body_class = "role-student"
 
         if is_tutor_student_view_mode():
-            body_class += " role-tutor-student-preview"
+            body_class += " role-tutor-student-view"
 
     elif is_tutor():
         body_class = "role-tutor"
@@ -9135,7 +9135,7 @@ def page(title, body_html, extra_head="", extra_js=""):
 
             student_sidebar_name = f"{tutor_name_preview}"
             student_sidebar_grade = "Tutor Student View"
-            student_sidebar_phone = "Preview mode"
+            student_sidebar_phone = "Read-only tutor access"
             student_profile_link = url_for('tutor_student_view') + "#profile"
 
             role_title, user_name = "Student", tutor_name_preview
@@ -17791,6 +17791,12 @@ def tutor_student_view():
     subject_ids = [row["id"] for row in subject_rows]
     subject_count = len(subject_ids)
 
+    learners_count = 0
+    material_rows = []
+    assessment_rows = []
+    session_rows = []
+    game_counts = {}
+
     if subject_ids:
         placeholders = ",".join(["?"] * len(subject_ids))
 
@@ -17805,30 +17811,40 @@ def tutor_student_view():
 
         cur.execute(f"""
             SELECT m.id, m.title, m.kind, m.month, m.created_at,
+                   m.file_path, m.youtube_url,
                    COALESCE(m.is_assignment,0) AS is_assignment,
                    m.due_date,
                    s.name AS subject_name,
-                   s.grade
+                   s.grade,
+                   t.full_name AS tutor_name
             FROM materials m
             JOIN subjects s ON s.id = m.subject_id
+            JOIN tutors t ON t.id = m.tutor_id
             WHERE m.tutor_id=?
               AND m.month=?
               AND m.subject_id IN ({placeholders})
-            ORDER BY m.created_at DESC
-            LIMIT 12
+            ORDER BY s.grade, s.name, m.created_at DESC
         """, [tid, month] + subject_ids)
         material_rows = cur.fetchall()
 
         cur.execute(f"""
-            SELECT a.id, a.title, a.duration_minutes, a.opens_at, a.closes_at,
-                   a.is_published, s.name AS subject_name, s.grade
+            SELECT a.id, a.title, a.description, a.instructions,
+                   a.duration_minutes, a.opens_at, a.closes_at,
+                   a.is_published, a.max_attempts,
+                   s.name AS subject_name, s.grade,
+                   t.full_name AS tutor_name,
+                   COUNT(q.id) AS question_count,
+                   COALESCE(SUM(q.points),0) AS total_points
             FROM assessments a
             JOIN subjects s ON s.id = a.subject_id
+            JOIN tutors t ON t.id = a.tutor_id
+            LEFT JOIN assessment_questions q ON q.assessment_id = a.id
             WHERE a.tutor_id=?
               AND a.month=?
               AND a.subject_id IN ({placeholders})
+              AND a.is_published=1
+            GROUP BY a.id
             ORDER BY a.created_at DESC
-            LIMIT 12
         """, [tid, month] + subject_ids)
         assessment_rows = cur.fetchall()
 
@@ -17842,7 +17858,6 @@ def tutor_student_view():
               AND COALESCE(se.is_visible,1)=1
               AND se.subject_id IN ({placeholders})
             ORDER BY s.grade, s.name, se.day_of_week, se.start_time
-            LIMIT 12
         """, [tid] + subject_ids)
         session_rows = cur.fetchall()
 
@@ -17854,21 +17869,40 @@ def tutor_student_view():
             GROUP BY subject_id
         """, subject_ids)
         game_counts = {r["subject_id"]: r["c"] for r in cur.fetchall()}
-    else:
-        learners_count = 0
-        material_rows = []
-        assessment_rows = []
-        session_rows = []
-        game_counts = {}
 
     conn.close()
+
+    assignment_rows = [m for m in material_rows if (m["is_assignment"] == 1 or m["kind"] == "assignment")]
+    learning_material_rows = [m for m in material_rows if not (m["is_assignment"] == 1 or m["kind"] == "assignment")]
+
+    def safe(value):
+        return escape(str(value or ""))
+
+    def material_open_button(row, label="Open"):
+        if row["file_path"]:
+            return f"""
+            <a class='btn success mini'
+               target='_blank'
+               href='{url_for('tutor_student_view_open_material', mid=row['id'])}'>
+               ⬇ {escape(label)}
+            </a>
+            """
+        if row["youtube_url"]:
+            return f"""
+            <a class='btn mini'
+               target='_blank'
+               href='{url_for('tutor_student_view_open_material', mid=row['id'])}'>
+               ▶ Watch
+            </a>
+            """
+        return "<span class='mini muted'>No file/link attached</span>"
 
     subject_cards = ""
     for row in subject_rows:
         subject_cards += f"""
-        <div class="card soft">
-            <h3>{escape(grade_label(row['grade']))} {escape(row['name'])}</h3>
-            <p class="mini muted">This is how the subject would appear as an available learner subject.</p>
+        <div class="card soft student-view-card">
+            <h3>{escape(grade_label(row['grade']))} {safe(row['name'])}</h3>
+            <p class="mini muted">This is one of the subjects learners see when they are actively enrolled in your class.</p>
         </div>
         """
 
@@ -17876,47 +17910,122 @@ def tutor_student_view():
         subject_cards = """
         <div class="card soft">
             <h3>No tutor subjects found</h3>
-            <p class="muted">Assign subjects to this tutor first, then the student preview will show the learner-side content.</p>
+            <p class="muted">Assign subjects to this tutor first, then this learner-side view will show the relevant student content.</p>
         </div>
         """
 
-    assignment_rows = [m for m in material_rows if (m["is_assignment"] == 1 or m["kind"] == "assignment")]
-    learning_material_rows = [m for m in material_rows if not (m["is_assignment"] == 1 or m["kind"] == "assignment")]
+    materials_html = ""
+    grouped_materials = {}
+    for m in learning_material_rows:
+        subject_key = f"{grade_label(m['grade'])} — {m['subject_name']}"
+        grouped_materials.setdefault(subject_key, []).append(m)
 
-    def material_card(row, label):
-        due = f"<div class='mini muted'>Due: {escape(row['due_date'])}</div>" if row["due_date"] else ""
-        return f"""
-        <div class="card soft">
-            <h3>{escape(row['title'])}</h3>
-            <p class="mini muted">{escape(grade_label(row['grade']))} • {escape(row['subject_name'])} • {escape(label)}</p>
-            {due}
-            <span class="chip">Preview only</span>
+    for subject, items in grouped_materials.items():
+        item_html = ""
+        for m in items:
+            item_html += f"""
+            <div class='card soft material-item-card'>
+                <div class='student-row-flex'>
+                    <div>
+                        <div style='font-weight:800'>📘 {safe(m['title'])}</div>
+                        <div class='mini muted'>👨‍🏫 {safe(m['tutor_name'])}</div>
+                    </div>
+                    <div>{material_open_button(m, 'Download' if m['file_path'] else 'Open')}</div>
+                </div>
+            </div>
+            """
+        materials_html += f"""
+        <details class='material-subject-section' open>
+            <summary>
+                <div>
+                    <h3>🎓 {safe(subject)}</h3>
+                    <div class='mini muted'>Learning materials visible to enrolled learners.</div>
+                </div>
+                <span class='chip'>{len(items)} resource(s)</span>
+            </summary>
+            <div class='material-subject-content'>{item_html}</div>
+        </details>
+        """
+
+    if not materials_html:
+        materials_html = "<div class='empty'>No learning materials for your subjects in this month yet.</div>"
+
+    assignments_html = ""
+    for a in assignment_rows:
+        due = a["due_date"] or "—"
+        assignments_html += f"""
+        <div class='card soft assignment-student-card'>
+            <div class='student-row-flex'>
+                <div>
+                    <h3>📝 {safe(a['title'])}</h3>
+                    <div class='mini muted'>{escape(grade_label(a['grade']))} — {safe(a['subject_name'])}</div>
+                    <div class='mini muted'>Due date: {safe(due)}</div>
+                </div>
+                <div>{material_open_button(a, 'Open Assignment')}</div>
+            </div>
+
+            <div class='assignment-actions disabled-student-actions' style='margin-top:12px'>
+                <button type='button' class='btn mini secondary' disabled>📄 Upload</button>
+                <button type='button' class='btn mini' disabled>📸 Take Photo</button>
+                <button type='button' class='btn success mini' disabled>Submit</button>
+                <div class='mini muted' style='margin-top:6px'>
+                    Submission is disabled because you are viewing as a tutor. Learners will see these controls when they are logged into their own accounts.
+                </div>
+            </div>
         </div>
         """
 
-    materials_html = "".join(material_card(row, "Learning material") for row in learning_material_rows) or """
-        <div class="card soft"><p class="muted">No learning materials for this tutor and month yet.</p></div>
-    """
-
-    assignments_html = "".join(material_card(row, "Assignment") for row in assignment_rows) or """
-        <div class="card soft"><p class="muted">No assignments for this tutor and month yet.</p></div>
-    """
+    if not assignments_html:
+        assignments_html = "<div class='empty'>No assignments for your subjects in this month yet.</div>"
 
     assessments_html = ""
     for row in assessment_rows:
-        pub = "Published" if row["is_published"] else "Draft"
+        try:
+            max_attempts = int(row["max_attempts"] or 1)
+        except Exception:
+            max_attempts = 1
+
+        open_status = "Open" if assessment_is_open(row) else "Closed / Not Open"
+        description = row["description"] or "No description added for this assessment."
+
         assessments_html += f"""
-        <div class="card soft">
-            <h3>{escape(row['title'])}</h3>
-            <p class="mini muted">{escape(grade_label(row['grade']))} • {escape(row['subject_name'])} • {int(row['duration_minutes'] or 0)} minutes</p>
-            <span class="chip">{escape(pub)}</span>
-            <span class="chip">Preview only</span>
-        </div>
+        <details class='student-assessment-card'>
+            <summary>
+                <div class='assessment-summary-left'>
+                    <h3>🧪 {safe(row['title'])}</h3>
+                    <div class='mini muted'>{escape(grade_label(row['grade']))} - {safe(row['subject_name'])}</div>
+                    <div class='assessment-mobile-chips'>
+                        <span class='chip'>{safe(open_status)}</span>
+                        <span class='chip'>{int(row['question_count'] or 0)} question(s)</span>
+                        <span class='chip'>{int(row['total_points'] or 0)} mark(s)</span>
+                    </div>
+                </div>
+                <div class='assessment-summary-right'><span class='mini muted'>Open / Close</span></div>
+            </summary>
+            <div class='assessment-details'>
+                <div class='assessment-description-box'>
+                    <strong>Assessment Details</strong>
+                    <p>{safe(description)}</p>
+                </div>
+                <div class='assessment-info-grid'>
+                    <div><span class='mini muted'>Month</span><strong>{pretty_month_label(month)}</strong></div>
+                    <div><span class='mini muted'>Tutor</span><strong>{safe(row['tutor_name'])}</strong></div>
+                    <div><span class='mini muted'>Duration</span><strong>{int(row['duration_minutes'] or 0)} min</strong></div>
+                    <div><span class='mini muted'>Attempts learners get</span><strong>{max_attempts}</strong></div>
+                    <div><span class='mini muted'>Status for learners</span><strong>{safe(open_status)}</strong></div>
+                    <div><span class='mini muted'>Questions</span><strong>{int(row['question_count'] or 0)}</strong></div>
+                </div>
+                <div style='margin-top:14px'>
+                    <a class='btn mini success' href='{url_for('tutor_student_view_assessment_questions', assessment_id=row['id'])}'>
+                        View Questions as Learner
+                    </a>
+                </div>
+            </div>
+        </details>
         """
+
     if not assessments_html:
-        assessments_html = """
-        <div class="card soft"><p class="muted">No assessments for this tutor and month yet.</p></div>
-        """
+        assessments_html = "<div class='empty'>No published assessments for your subjects in this month yet.</div>"
 
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     sessions_html = ""
@@ -17926,40 +18035,122 @@ def tutor_student_view():
         except Exception:
             day_label = "Session day"
         sessions_html += f"""
-        <div class="card soft">
-            <h3>{escape(row['subject_name'])}</h3>
-            <p class="mini muted">{escape(grade_label(row['grade']))} • {escape(day_label)} • {escape(row['start_time'])} - {escape(row['end_time'])}</p>
-            <span class="chip">Learner would see this class session</span>
+        <div class="card soft student-view-card">
+            <h3>{safe(row['subject_name'])}</h3>
+            <p class="mini muted">{escape(grade_label(row['grade']))} • {safe(day_label)} • {safe(row['start_time'])} - {safe(row['end_time'])}</p>
         </div>
         """
     if not sessions_html:
-        sessions_html = """
-        <div class="card soft"><p class="muted">No visible sessions have been added for this tutor yet.</p></div>
-        """
+        sessions_html = "<div class='empty'>No visible class sessions for your subjects yet.</div>"
 
     games_html = ""
     for row in subject_rows:
         count = game_counts.get(row["id"], 0)
         games_html += f"""
-        <div class="card soft">
-            <h3>{escape(row['name'])}</h3>
+        <div class="card soft student-view-card">
+            <h3>🎮 {safe(row['name'])}</h3>
             <p class="mini muted">{escape(grade_label(row['grade']))}</p>
             <span class="chip">{count} active game question(s)</span>
         </div>
         """
     if not games_html:
-        games_html = """
-        <div class="card soft"><p class="muted">No game subjects found for this tutor yet.</p></div>
-        """
+        games_html = "<div class='empty'>No learning game content for your subjects yet.</div>"
 
     body = f"""
-    <section class="card" style="border-left:5px solid #1b5e20">
+    <style>
+        .tutor-student-mode-banner {{
+            border-left:6px solid #1b5e20;
+            background:linear-gradient(135deg,#ffffff,#f0fdf4);
+        }}
+        .student-view-card,
+        .assignment-student-card,
+        .material-item-card {{
+            border-left:5px solid #25D366;
+        }}
+        .student-row-flex {{
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:12px;
+            flex-wrap:wrap;
+        }}
+        .material-subject-section,
+        .student-assessment-card {{
+            border:1px solid #e2e8f0;
+            border-left:6px solid #1b5e20;
+            border-radius:16px;
+            background:#ffffff;
+            box-shadow:0 2px 8px rgba(15,23,42,0.05);
+            margin-bottom:14px;
+            overflow:hidden;
+        }}
+        .material-subject-section summary,
+        .student-assessment-card summary {{
+            cursor:pointer;
+            list-style:none;
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:12px;
+            padding:16px;
+            background:#f8fafc;
+        }}
+        .material-subject-section summary::-webkit-details-marker,
+        .student-assessment-card summary::-webkit-details-marker {{
+            display:none;
+        }}
+        .material-subject-content,
+        .assessment-details {{
+            padding:14px;
+            border-top:1px solid #e2e8f0;
+            background:#ffffff;
+        }}
+        .assessment-mobile-chips {{
+            display:flex;
+            flex-wrap:wrap;
+            gap:6px;
+            margin-top:8px;
+        }}
+        .assessment-info-grid {{
+            display:grid;
+            grid-template-columns:repeat(3,minmax(0,1fr));
+            gap:10px;
+        }}
+        .assessment-info-grid > div,
+        .assessment-description-box {{
+            border:1px solid #e2e8f0;
+            border-radius:12px;
+            padding:10px;
+            background:#f8fafc;
+        }}
+        .assessment-info-grid span {{
+            display:block;
+            margin-bottom:4px;
+        }}
+        .disabled-student-actions button:disabled {{
+            opacity:.65;
+            cursor:not-allowed;
+        }}
+        @media(max-width:760px) {{
+            .student-row-flex,
+            .material-subject-section summary,
+            .student-assessment-card summary {{
+                flex-direction:column;
+                align-items:flex-start;
+            }}
+            .assessment-info-grid {{
+                grid-template-columns:1fr;
+            }}
+        }}
+    </style>
+
+    <section class="card tutor-student-mode-banner">
         <div style="display:flex;gap:12px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap">
             <div>
-                <h1>Student View Preview</h1>
+                <h1>Tutor Student View</h1>
                 <p class="muted">
-                    You are viewing the EBTA learner side as a tutor. This is a safe preview only.
-                    You are not logged in as any real learner and you cannot submit learner work here.
+                    This view shows how learners see your uploaded learning materials, assignments and published assessments when they are enrolled in your subjects.
+                    Actions that would submit learner work are disabled for tutors.
                 </p>
             </div>
             <a class="btn success" href="{url_for('tutor_switch_tutor_view')}">Switch back to Tutor View</a>
@@ -17969,63 +18160,283 @@ def tutor_student_view():
     <section id="status" class="grid cards" style="margin-top:14px">
         <div class="card"><h2>{subject_count}</h2><p class="muted">Subjects you teach</p></div>
         <div class="card"><h2>{learners_count}</h2><p class="muted">Active learners in your subjects</p></div>
-        <div class="card"><h2>{pretty_month_label(month)}</h2><p class="muted">Preview month</p></div>
+        <div class="card"><h2>{pretty_month_label(month)}</h2><p class="muted">Student-view month</p></div>
     </section>
 
     <section id="profile" class="card" style="margin-top:14px">
         <h2>My Profile</h2>
-        <p class="muted">
-            In a real learner account, this section shows the learner profile. In tutor student-view mode,
-            it shows your tutor name only so you can understand the student-side layout.
-        </p>
         <div class="card soft">
             <strong>{escape(tutor_name)}</strong><br>
-            <span class="mini muted">Tutor Student View • Preview only</span>
+            <span class="mini muted">Tutor Student View • read-only learner-side access</span>
         </div>
     </section>
 
     <section id="progress" class="card" style="margin-top:14px">
         <h2>Academic Progress</h2>
         <p class="muted">
-            A real learner sees their marks, submitted work, progress and feedback here. As a tutor,
-            this preview only shows how the section is positioned.
+            This area shows the learner-side academic layout for the subjects connected to your tutor profile.
         </p>
         <div class="grid cards">{subject_cards}</div>
     </section>
 
     <section id="assignments" class="card" style="margin-top:14px">
         <h2>Assignments</h2>
-        <p class="muted">These are assignments uploaded by you for the selected month. Learner submission buttons are disabled in preview mode.</p>
+        <p class="muted">These are the assignments learners would see for your subjects. Submission buttons are visible but disabled for tutors.</p>
         <div class="grid cards">{assignments_html}</div>
     </section>
 
     <section id="assessments" class="card" style="margin-top:14px">
         <h2>Assessments</h2>
-        <p class="muted">This section shows the assessments learners would see from your tutor account.</p>
-        <div class="grid cards">{assessments_html}</div>
+        <p class="muted">These are your published assessments as enrolled learners would see them. Open an assessment to view the actual questions and options.</p>
+        <div class="student-assessments-list">{assessments_html}</div>
     </section>
 
     <section id="games" class="card" style="margin-top:14px">
         <h2>Learning Games</h2>
-        <p class="muted">This preview shows the learner-side game subjects linked to the subjects you teach.</p>
+        <p class="muted">These are learner-side learning game subjects linked to the subjects you teach.</p>
         <div class="grid cards">{games_html}</div>
     </section>
 
     <section id="materials" class="card" style="margin-top:14px">
         <h2>Learning Materials</h2>
-        <p class="muted">These are learning materials uploaded by you for the selected month.</p>
-        <div class="grid cards">{materials_html}</div>
+        <p class="muted">These are the learning materials learners would access after enrolment.</p>
+        {materials_html}
     </section>
 
     <section id="messages" class="card" style="margin-top:14px">
         <h2>Messages</h2>
         <p class="muted">
-            Learners use this area to communicate with EBTA. In preview mode, tutors do not send messages as learners.
+            Learners use this area to communicate with EBTA. Sending learner messages is disabled for tutors.
         </p>
     </section>
     """
 
-    return page("Tutor Student View Preview", body)
+    return page("Tutor Student View", body)
+
+
+@app.get('/tutor/student-view/material/<int:mid>/open')
+def tutor_student_view_open_material(mid):
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT m.*
+        FROM materials m
+        WHERE m.id=?
+          AND m.tutor_id=?
+        LIMIT 1
+    """, (mid, tid))
+    material = cur.fetchone()
+    conn.close()
+
+    if not material:
+        return page("Not allowed", card_msg("You are not allowed to access this material."))
+
+    if material["file_path"]:
+        return redirect(material["file_path"])
+
+    if material["youtube_url"]:
+        return redirect(material["youtube_url"])
+
+    return page("No resource", card_msg("This material has no file or link attached."))
+
+
+@app.get('/tutor/student-view/assessment/<int:assessment_id>/questions')
+def tutor_student_view_assessment_questions(assessment_id):
+    r = require_tutor()
+    if r:
+        return r
+
+    session["tutor_view_mode"] = "student"
+    tid = is_tutor()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT a.*, s.name AS subject_name, s.grade, t.full_name AS tutor_name
+        FROM assessments a
+        JOIN subjects s ON s.id=a.subject_id
+        JOIN tutors t ON t.id=a.tutor_id
+        WHERE a.id=?
+          AND a.tutor_id=?
+          AND a.is_published=1
+        LIMIT 1
+    """, (assessment_id, tid))
+    a = cur.fetchone()
+
+    if not a:
+        conn.close()
+        return page("Assessment Not Visible", card_msg("This assessment is not published to learners or does not belong to your tutor account."))
+
+    cur.execute("""
+        SELECT *
+        FROM assessment_questions
+        WHERE assessment_id=?
+        ORDER BY question_order ASC, id ASC
+    """, (assessment_id,))
+    questions = cur.fetchall()
+    conn.close()
+
+    q_html = ""
+    for i, q in enumerate(questions, start=1):
+        question_file_html = ""
+        if q["question_file_path"]:
+            question_file_html = f"""
+            <div class="card soft" style="border-left:5px solid #2563eb;margin-top:10px">
+                <strong>Question file:</strong>
+                <a class="links" target="_blank" href="/assessment-file/question/{q['id']}">
+                    {escape(q['question_file_name'] or 'Open file')}
+                </a>
+            </div>
+            """
+
+        if q["question_type"] == "MCQ":
+            try:
+                options = json.loads(q["options_json"] or "[]")
+            except Exception:
+                options = []
+
+            options_html = ""
+            for index, opt in enumerate(options):
+                options_html += f"""
+                <label class="assessment-option-label read-only-option">
+                    <input type="radio" disabled name="q_{q['id']}" value="{index}">
+                    <span>{escape(str(opt or ''))}</span>
+                </label>
+                """
+            answer_html = options_html or "<div class='mini muted'>No MCQ options added yet.</div>"
+        else:
+            answer_html = f"""
+            <textarea rows="6" disabled placeholder="Learners type their answer here..." style="width:100%"></textarea>
+            """
+
+        upload_html = f"""
+        <div style="margin-top:12px">
+            <label>Upload supporting file(s) optional</label>
+            <input type="file" disabled multiple>
+            <div class="mini muted">
+                Learners can upload supporting files here. This upload is disabled for tutors.
+            </div>
+        </div>
+        """
+
+        q_html += f"""
+        <div class="card soft assessment-question">
+            <h3>Question {i} <span class="mini muted">({q['points']} mark(s))</span></h3>
+            <p class="assessment-text-mobile" style="white-space:pre-wrap">{escape(q['question_text'] or '')}</p>
+            {question_file_html}
+            {answer_html}
+            {upload_html}
+        </div>
+        """
+
+    if not q_html:
+        q_html = "<div class='empty'>No questions have been added to this assessment yet.</div>"
+
+    open_status = "Open" if assessment_is_open(a) else "Closed / Not Open"
+
+    body = f"""
+    <style>
+        .assessment-writing-page {{
+            max-width:100%;
+            overflow-x:visible;
+        }}
+        .assessment-header {{
+            border-left:6px solid #1b5e20;
+            margin-bottom:14px;
+        }}
+        .assessment-rules-box {{
+            border-left:5px solid #dc2626;
+            margin-bottom:14px;
+        }}
+        .assessment-question {{
+            overflow-x:hidden;
+            word-break:break-word;
+            overflow-wrap:anywhere;
+        }}
+        .assessment-question p {{
+            line-height:1.6;
+            white-space:pre-wrap;
+            word-break:break-word;
+            overflow-wrap:anywhere;
+        }}
+        .read-only-option {{
+            display:flex !important;
+            align-items:flex-start;
+            gap:10px;
+            width:100%;
+            box-sizing:border-box;
+            white-space:normal;
+            word-break:break-word;
+            overflow-wrap:anywhere;
+            margin:6px 0;
+            padding:8px;
+            border:1px solid #e5e7eb;
+            border-radius:10px;
+            background:#ffffff;
+        }}
+        .read-only-option input[type="radio"] {{
+            width:auto;
+            margin-top:3px;
+            flex-shrink:0;
+        }}
+        .assessment-question textarea,
+        .assessment-question input[type="file"] {{
+            width:100%;
+            max-width:100%;
+            box-sizing:border-box;
+        }}
+        @media(max-width:760px) {{
+            .assessment-writing-page h1 {{
+                font-size:22px;
+                line-height:1.25;
+            }}
+            .assessment-writing-page .card {{
+                padding:14px;
+            }}
+        }}
+    </style>
+
+    <section class="card assessment-writing-page assessment-header">
+        <a class="btn mini secondary" href="{url_for('tutor_student_view')}#assessments">← Back to Student View</a>
+        <a class="btn mini success" href="{url_for('tutor_switch_tutor_view')}">Switch back to Tutor View</a>
+
+        <h1>{escape(a['title'] or '')}</h1>
+        <p class="muted">
+            {escape(grade_label(a['grade']))} - {escape(a['subject_name'] or '')} |
+            Tutor: {escape(a['tutor_name'] or '')} |
+            Duration: {int(a['duration_minutes'] or 0)} minutes |
+            Status for learners: {escape(open_status)}
+        </p>
+
+        <div class="card soft assessment-rules-box">
+            <h2>Assessment Rules</h2>
+            <p style="white-space:pre-wrap">
+                {escape(a['instructions'] or 'Answer all questions. Do not leave the assessment tab while writing.')}
+            </p>
+            <p class="mini muted">
+                Learners see the questions below when they open this assessment. Answer submission is disabled for tutors.
+            </p>
+        </div>
+
+        {q_html}
+
+        <div class="card soft" style="border-left:5px solid #1b5e20">
+            <button type="button" class="btn success" disabled>Submit Assessment</button>
+            <div class="mini muted" style="margin-top:6px">
+                This button is disabled because tutors are only viewing how the learner side displays the assessment.
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("Assessment Questions", body)
 
 
 @app.get('/tutor')
