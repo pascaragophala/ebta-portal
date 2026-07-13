@@ -9377,6 +9377,7 @@ def page(title, body_html, extra_head="", extra_js=""):
             "student_take_assessment",
             "student_submit_assessment",
             "student_review_assessment",
+            "student_review_assessment_attempt",
             "student_materials",
             "student_assignments",
         ]
@@ -9628,6 +9629,98 @@ def page(title, body_html, extra_head="", extra_js=""):
             body.role-tutor .header .links button {
                 font-size:12px;
                 padding:8px 10px;
+            }
+        }
+
+        /* =========================================================
+           STUDENT ASSESSMENT MOBILE VISIBILITY FIX
+           Keeps questions visible on phones where wide cards/text can
+           otherwise be clipped into a blank white area.
+           ========================================================= */
+        @media(max-width:860px) {
+            body.role-student {
+                overflow-x:hidden;
+            }
+
+            body.role-student .layout,
+            body.role-student .dashboard-main,
+            body.role-student .wrap {
+                min-width:0 !important;
+                width:100% !important;
+                max-width:100% !important;
+            }
+
+            body.role-student .dashboard-main {
+                overflow-x:visible !important;
+            }
+
+            body.role-student .assessment-writing-page,
+            body.role-student .assessment-review-page,
+            body.role-student .assessment-question,
+            body.role-student .assessment-answer-card,
+            body.role-student .assessment-mobile-card {
+                display:block !important;
+                width:100% !important;
+                max-width:100% !important;
+                min-width:0 !important;
+                margin-left:0 !important;
+                margin-right:0 !important;
+                overflow:visible !important;
+                box-sizing:border-box !important;
+            }
+
+            body.role-student .assessment-writing-page .card,
+            body.role-student .assessment-review-page .card {
+                width:100% !important;
+                max-width:100% !important;
+                min-width:0 !important;
+                overflow:visible !important;
+                box-sizing:border-box !important;
+            }
+
+            body.role-student .assessment-question p,
+            body.role-student .assessment-answer-card p,
+            body.role-student .assessment-text-mobile,
+            body.role-student .assessment-review-page .muted,
+            body.role-student .assessment-review-page h1,
+            body.role-student .assessment-review-page h2,
+            body.role-student .assessment-review-page h3 {
+                max-width:100% !important;
+                white-space:normal !important;
+                word-break:break-word !important;
+                overflow-wrap:anywhere !important;
+            }
+
+            body.role-student .assessment-question label,
+            body.role-student .assessment-option-label {
+                width:100% !important;
+                max-width:100% !important;
+                min-width:0 !important;
+                white-space:normal !important;
+                word-break:break-word !important;
+                overflow-wrap:anywhere !important;
+            }
+
+            body.role-student .assessment-question input[type="radio"] {
+                width:auto !important;
+                min-width:18px !important;
+                height:18px !important;
+                flex:0 0 auto !important;
+                margin-top:3px !important;
+            }
+
+            body.role-student .assessment-question input[type="file"],
+            body.role-student .assessment-question textarea,
+            body.role-student .assessment-writing-page button,
+            body.role-student .assessment-writing-page .btn,
+            body.role-student .assessment-review-page .btn {
+                max-width:100% !important;
+                box-sizing:border-box !important;
+            }
+
+            body.role-student .assessment-writing-page .stats,
+            body.role-student .assessment-review-page .stats {
+                grid-template-columns:1fr !important;
             }
         }
     </style>
@@ -80059,7 +80152,7 @@ def student_take_assessment(assessment_id):
 
             for index, opt in enumerate(options):
                 options_html += f"""
-                <label style="display:block;margin:6px 0;padding:8px;border:1px solid #e5e7eb;border-radius:10px">
+                <label class="assessment-option-label" style="display:block;margin:6px 0;padding:8px;border:1px solid #e5e7eb;border-radius:10px">
                     <input type="radio"
                            name="q_{q['id']}"
                            value="{index}">
@@ -80081,7 +80174,7 @@ def student_take_assessment(assessment_id):
         <div class="card soft assessment-question">
             <h3>Question {i} <span class="mini muted">({q['points']} mark(s))</span></h3>
 
-            <p style="white-space:pre-wrap">{escape(q['question_text'])}</p>
+            <p class="assessment-text-mobile" style="white-space:pre-wrap">{escape(q['question_text'])}</p>
 
             {question_file_html}
             {answer_html}
@@ -80167,7 +80260,7 @@ def student_take_assessment(assessment_id):
     <style>
         body.role-student .assessment-writing-page {{
             max-width:100%;
-            overflow-x:hidden;
+            overflow-x:visible;
         }}
 
         body.role-student .assessment-writing-page .assessment-header {{
@@ -80277,7 +80370,7 @@ def student_take_assessment(assessment_id):
         window.addEventListener("load", function() {{
             const assessmentPage = document.querySelector(".assessment-writing-page");
 
-            if (assessmentPage) {{
+            if (assessmentPage && window.innerWidth > 760) {{
                 assessmentPage.scrollIntoView({{
                     behavior: "smooth",
                     block: "start"
@@ -80807,7 +80900,7 @@ def student_review_assessment_attempt(assessment_id):
             """
 
         answer_cards += f"""
-        <div class="card soft" style="margin-bottom:14px;border-left:5px solid #1b5e20">
+        <div class="card soft assessment-answer-card" style="margin-bottom:14px;border-left:5px solid #1b5e20">
             <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
                 <h3 style="margin-top:0">Question {index}</h3>
                 <div>{status_label}</div>
@@ -80817,7 +80910,7 @@ def student_review_assessment_attempt(assessment_id):
                 {escape(question_type)} · {points:g} mark(s)
             </div>
 
-            <p style="white-space:pre-wrap">
+            <p class="assessment-text-mobile" style="white-space:pre-wrap">
                 {escape(q["question_text"] or "")}
             </p>
 
@@ -80840,7 +80933,37 @@ def student_review_assessment_attempt(assessment_id):
     body = f"""
     {student_nav() if 'student_nav' in globals() else ''}
 
-    <section class="card">
+    <style>
+        body.role-student .assessment-review-page {{
+            max-width:100%;
+            overflow-x:visible;
+        }}
+
+        body.role-student .assessment-answer-card {{
+            word-break:break-word;
+            overflow-wrap:anywhere;
+            overflow-x:visible;
+        }}
+
+        body.role-student .assessment-answer-card p {{
+            white-space:normal;
+            word-break:break-word;
+            overflow-wrap:anywhere;
+            line-height:1.6;
+        }}
+
+        @media(max-width:760px) {{
+            body.role-student .assessment-review-page {{
+                padding:14px;
+            }}
+
+            body.role-student .assessment-review-page .stats {{
+                grid-template-columns:1fr !important;
+            }}
+        }}
+    </style>
+
+    <section class="card assessment-review-page">
         <div class="toolbar">
             <a class="btn mini secondary" href="/student/assessments">
                 ← Back to Assessments
