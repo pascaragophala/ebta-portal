@@ -18326,14 +18326,43 @@ def tutor_student_view_assessment_questions(assessment_id):
         </div>
         """
 
+        open_attr = "open" if i == 1 else ""
+
         q_html += f"""
-        <div class="card soft assessment-question">
-            <h3>Question {i} <span class="mini muted">({q['points']} mark(s))</span></h3>
-            <p class="assessment-text-mobile" style="white-space:pre-wrap">{escape(q['question_text'] or '')}</p>
-            {question_file_html}
-            {answer_html}
-            {upload_html}
-        </div>
+        <details class="card soft assessment-question tutor-student-assessment-question"
+                 data-tutor-view-question-index="{i}"
+                 {open_attr}>
+            <summary class="assessment-question-summary">
+                <div class="assessment-question-title-wrap">
+                    <span class="assessment-question-number">Question {i} of {len(questions)}</span>
+                    <strong>Question {i}</strong>
+                    <span class="mini muted">({q['points']} mark(s))</span>
+                </div>
+            </summary>
+
+            <div class="assessment-question-content">
+                <p class="assessment-text-mobile" style="white-space:pre-wrap">{escape(q['question_text'] or '')}</p>
+                {question_file_html}
+                {answer_html}
+                {upload_html}
+
+                <div class="assessment-question-actions">
+                    <button type="button"
+                            class="btn mini secondary"
+                            data-open-tutor-view-question="{i - 1}"
+                            {'disabled' if i == 1 else ''}>
+                        ← Previous
+                    </button>
+
+                    <button type="button"
+                            class="btn mini success"
+                            data-open-tutor-view-question="{i + 1}"
+                            {'disabled' if i == len(questions) else ''}>
+                        Next Question →
+                    </button>
+                </div>
+            </div>
+        </details>
         """
 
     if not q_html:
@@ -18345,27 +18374,103 @@ def tutor_student_view_assessment_questions(assessment_id):
     <style>
         .assessment-writing-page {{
             max-width:100%;
-            overflow-x:visible;
+            width:100%;
+            overflow-x:hidden;
+            box-sizing:border-box;
         }}
+
+        .assessment-writing-page,
+        .assessment-writing-page * {{
+            box-sizing:border-box;
+        }}
+
         .assessment-header {{
             border-left:6px solid #1b5e20;
             margin-bottom:14px;
         }}
+
         .assessment-rules-box {{
             border-left:5px solid #dc2626;
             margin-bottom:14px;
         }}
+
         .assessment-question {{
-            overflow-x:hidden;
+            overflow:hidden;
             word-break:break-word;
             overflow-wrap:anywhere;
+            margin-bottom:12px;
         }}
+
+        details.assessment-question {{
+            padding:0 !important;
+        }}
+
+        .assessment-question-summary {{
+            list-style:none;
+            cursor:pointer;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            padding:16px;
+            background:#f8fafc;
+            border-bottom:1px solid #e2e8f0;
+        }}
+
+        .assessment-question-summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        .assessment-question-summary::after {{
+            content:"Open";
+            flex-shrink:0;
+            border:1px solid #1b5e20;
+            color:#1b5e20;
+            background:#ffffff;
+            border-radius:999px;
+            padding:6px 10px;
+            font-size:12px;
+            font-weight:800;
+        }}
+
+        details.assessment-question[open] .assessment-question-summary::after {{
+            content:"Close";
+            background:#1b5e20;
+            color:#ffffff;
+        }}
+
+        .assessment-question-title-wrap {{
+            display:flex;
+            align-items:center;
+            gap:8px;
+            flex-wrap:wrap;
+            min-width:0;
+        }}
+
+        .assessment-question-number {{
+            display:inline-flex;
+            align-items:center;
+            border-radius:999px;
+            background:#eef6ee;
+            color:#1b5e20;
+            border:1px solid #cfe7d1;
+            padding:4px 8px;
+            font-size:12px;
+            font-weight:800;
+        }}
+
+        .assessment-question-content {{
+            padding:16px;
+            background:#ffffff;
+        }}
+
         .assessment-question p {{
             line-height:1.6;
             white-space:pre-wrap;
             word-break:break-word;
             overflow-wrap:anywhere;
         }}
+
         .read-only-option {{
             display:flex !important;
             align-items:flex-start;
@@ -18381,24 +18486,94 @@ def tutor_student_view_assessment_questions(assessment_id):
             border-radius:10px;
             background:#ffffff;
         }}
+
+        .read-only-option span {{
+            display:block;
+            min-width:0;
+            overflow-wrap:anywhere;
+            word-break:break-word;
+            line-height:1.5;
+        }}
+
         .read-only-option input[type="radio"] {{
             width:auto;
             margin-top:3px;
             flex-shrink:0;
         }}
+
         .assessment-question textarea,
         .assessment-question input[type="file"] {{
             width:100%;
             max-width:100%;
             box-sizing:border-box;
         }}
+
+        .assessment-question-actions {{
+            display:flex;
+            gap:10px;
+            flex-wrap:wrap;
+            justify-content:space-between;
+            margin-top:14px;
+            padding-top:12px;
+            border-top:1px solid #e2e8f0;
+        }}
+
+        .assessment-question-actions button[disabled] {{
+            opacity:.45;
+            cursor:not-allowed;
+        }}
+
         @media(max-width:760px) {{
+            .assessment-writing-page {{
+                padding:10px !important;
+                border-radius:16px;
+                margin:0;
+            }}
+
             .assessment-writing-page h1 {{
-                font-size:22px;
+                font-size:21px;
                 line-height:1.25;
             }}
+
             .assessment-writing-page .card {{
-                padding:14px;
+                padding:12px;
+            }}
+
+            details.assessment-question {{
+                border-radius:16px;
+            }}
+
+            .assessment-question-summary {{
+                padding:12px;
+                align-items:flex-start;
+                flex-direction:column;
+            }}
+
+            .assessment-question-summary::after {{
+                align-self:flex-start;
+            }}
+
+            .assessment-question-content {{
+                padding:12px;
+            }}
+
+            .assessment-text-mobile {{
+                font-size:15px;
+                line-height:1.65 !important;
+            }}
+
+            .read-only-option {{
+                padding:12px !important;
+                font-size:15px;
+            }}
+
+            .assessment-question-actions {{
+                flex-direction:column;
+            }}
+
+            .assessment-question-actions .btn {{
+                width:100%;
+                justify-content:center;
             }}
         }}
     </style>
@@ -18434,6 +18609,64 @@ def tutor_student_view_assessment_questions(assessment_id):
             </div>
         </div>
     </section>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {{
+            const questionDetails = Array.from(document.querySelectorAll(".tutor-student-assessment-question"));
+
+            function closeOtherQuestions(activeQuestion) {{
+                questionDetails.forEach(function(detail) {{
+                    if (detail !== activeQuestion) {{
+                        detail.open = false;
+                    }}
+                }});
+            }}
+
+            function openQuestion(questionNumber) {{
+                const target = document.querySelector('.tutor-student-assessment-question[data-tutor-view-question-index="' + questionNumber + '"]');
+
+                if (!target) {{
+                    return;
+                }}
+
+                target.open = true;
+                closeOtherQuestions(target);
+
+                setTimeout(function() {{
+                    target.scrollIntoView({{
+                        behavior: "smooth",
+                        block: "start"
+                    }});
+                }}, 80);
+            }}
+
+            questionDetails.forEach(function(detail) {{
+                detail.addEventListener("toggle", function() {{
+                    if (detail.open) {{
+                        closeOtherQuestions(detail);
+                    }}
+                }});
+            }});
+
+            document.querySelectorAll("[data-open-tutor-view-question]").forEach(function(button) {{
+                button.addEventListener("click", function() {{
+                    if (button.disabled) {{
+                        return;
+                    }}
+
+                    const questionNumber = parseInt(button.getAttribute("data-open-tutor-view-question"), 10);
+
+                    if (!Number.isNaN(questionNumber)) {{
+                        openQuestion(questionNumber);
+                    }}
+                }});
+            }});
+
+            if (questionDetails.length && !questionDetails.some(function(detail) {{ return detail.open; }})) {{
+                questionDetails[0].open = true;
+            }}
+        }});
+    </script>
     """
 
     return page("Assessment Questions", body)
@@ -81004,7 +81237,7 @@ def student_take_assessment(assessment_id):
                     <input type="radio"
                            name="q_{q['id']}"
                            value="{index}">
-                    {escape(opt)}
+                    <span>{escape(opt)}</span>
                 </label>
                 """
 
@@ -81018,16 +81251,48 @@ def student_take_assessment(assessment_id):
                       style="width:100%"></textarea>
             """
 
+        open_attr = "open" if i == 1 else ""
+
         q_html += f"""
-        <div class="card soft assessment-question">
-            <h3>Question {i} <span class="mini muted">({q['points']} mark(s))</span></h3>
+        <details class="card soft assessment-question assessment-question-details"
+                 data-question-index="{i}"
+                 {open_attr}>
+            <summary class="assessment-question-summary">
+                <div class="assessment-question-title-wrap">
+                    <span class="assessment-question-number">Question {i} of {len(questions_list)}</span>
+                    <strong>Question {i}</strong>
+                    <span class="mini muted">({q['points']} mark(s))</span>
+                </div>
 
-            <p class="assessment-text-mobile" style="white-space:pre-wrap">{escape(q['question_text'])}</p>
+                <span class="assessment-answer-status" data-answer-status="{i}">
+                    Not answered
+                </span>
+            </summary>
 
-            {question_file_html}
-            {answer_html}
-            {upload_html}
-        </div>
+            <div class="assessment-question-content">
+                <p class="assessment-text-mobile" style="white-space:pre-wrap">{escape(q['question_text'])}</p>
+
+                {question_file_html}
+                {answer_html}
+                {upload_html}
+
+                <div class="assessment-question-actions">
+                    <button type="button"
+                            class="btn mini secondary"
+                            data-open-question="{i - 1}"
+                            {'disabled' if i == 1 else ''}>
+                        ← Previous
+                    </button>
+
+                    <button type="button"
+                            class="btn mini success"
+                            data-open-question="{i + 1}"
+                            {'disabled' if i == len(questions_list) else ''}>
+                        Next Question →
+                    </button>
+                </div>
+            </div>
+        </details>
         """
 
     lockdown_script = ""
@@ -81108,7 +81373,14 @@ def student_take_assessment(assessment_id):
     <style>
         body.role-student .assessment-writing-page {{
             max-width:100%;
-            overflow-x:visible;
+            width:100%;
+            overflow-x:hidden;
+            box-sizing:border-box;
+        }}
+
+        body.role-student .assessment-writing-page,
+        body.role-student .assessment-writing-page * {{
+            box-sizing:border-box;
         }}
 
         body.role-student .assessment-writing-page .assessment-header {{
@@ -81122,9 +81394,92 @@ def student_take_assessment(assessment_id):
         }}
 
         body.role-student .assessment-question {{
-            overflow-x:hidden;
+            overflow:hidden;
             word-break:break-word;
             overflow-wrap:anywhere;
+            margin-bottom:12px;
+        }}
+
+        body.role-student details.assessment-question {{
+            padding:0 !important;
+        }}
+
+        body.role-student .assessment-question-summary {{
+            list-style:none;
+            cursor:pointer;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            padding:16px;
+            background:#f8fafc;
+            border-bottom:1px solid #e2e8f0;
+        }}
+
+        body.role-student .assessment-question-summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        body.role-student .assessment-question-summary::after {{
+            content:"Open";
+            flex-shrink:0;
+            border:1px solid #1b5e20;
+            color:#1b5e20;
+            background:#ffffff;
+            border-radius:999px;
+            padding:6px 10px;
+            font-size:12px;
+            font-weight:800;
+        }}
+
+        body.role-student details.assessment-question[open] .assessment-question-summary::after {{
+            content:"Close";
+            background:#1b5e20;
+            color:#ffffff;
+        }}
+
+        body.role-student .assessment-question-title-wrap {{
+            display:flex;
+            align-items:center;
+            gap:8px;
+            flex-wrap:wrap;
+            min-width:0;
+        }}
+
+        body.role-student .assessment-question-number {{
+            display:inline-flex;
+            align-items:center;
+            border-radius:999px;
+            background:#eef6ee;
+            color:#1b5e20;
+            border:1px solid #cfe7d1;
+            padding:4px 8px;
+            font-size:12px;
+            font-weight:800;
+        }}
+
+        body.role-student .assessment-answer-status {{
+            display:inline-flex;
+            align-items:center;
+            border-radius:999px;
+            background:#fff7ed;
+            color:#9a3412;
+            border:1px solid #fed7aa;
+            padding:5px 9px;
+            font-size:12px;
+            font-weight:800;
+            white-space:nowrap;
+        }}
+
+        body.role-student .assessment-answer-status.answered {{
+            background:#dcfce7;
+            color:#166534;
+            border-color:#86efac;
+        }}
+
+        body.role-student .assessment-question-content {{
+            padding:16px;
+            background:#ffffff;
         }}
 
         body.role-student .assessment-question p {{
@@ -81139,10 +81494,19 @@ def student_take_assessment(assessment_id):
             align-items:flex-start;
             gap:10px;
             width:100%;
+            max-width:100%;
             box-sizing:border-box;
             white-space:normal;
             word-break:break-word;
             overflow-wrap:anywhere;
+        }}
+
+        body.role-student .assessment-question label span {{
+            display:block;
+            min-width:0;
+            overflow-wrap:anywhere;
+            word-break:break-word;
+            line-height:1.5;
         }}
 
         body.role-student .assessment-question input[type="radio"] {{
@@ -81155,6 +81519,7 @@ def student_take_assessment(assessment_id):
             width:100%;
             max-width:100%;
             box-sizing:border-box;
+            min-height:140px;
         }}
 
         body.role-student .assessment-question input[type="file"] {{
@@ -81163,14 +81528,74 @@ def student_take_assessment(assessment_id):
             box-sizing:border-box;
         }}
 
+        body.role-student .assessment-question-actions {{
+            display:flex;
+            gap:10px;
+            flex-wrap:wrap;
+            justify-content:space-between;
+            margin-top:14px;
+            padding-top:12px;
+            border-top:1px solid #e2e8f0;
+        }}
+
+        body.role-student .assessment-question-actions button[disabled] {{
+            opacity:.45;
+            cursor:not-allowed;
+        }}
+
         @media(max-width:760px) {{
+            body.role-student .assessment-writing-page {{
+                padding:10px !important;
+                border-radius:16px;
+                margin:0;
+            }}
+
             body.role-student .assessment-writing-page h1 {{
-                font-size:22px;
+                font-size:21px;
                 line-height:1.25;
             }}
 
             body.role-student .assessment-writing-page .card {{
-                padding:14px;
+                padding:12px;
+            }}
+
+            body.role-student details.assessment-question {{
+                border-radius:16px;
+                margin-left:0;
+                margin-right:0;
+            }}
+
+            body.role-student .assessment-question-summary {{
+                padding:12px;
+                align-items:flex-start;
+                flex-direction:column;
+            }}
+
+            body.role-student .assessment-question-summary::after {{
+                align-self:flex-start;
+            }}
+
+            body.role-student .assessment-question-content {{
+                padding:12px;
+            }}
+
+            body.role-student .assessment-text-mobile {{
+                font-size:15px;
+                line-height:1.65 !important;
+            }}
+
+            body.role-student .assessment-option-label {{
+                padding:12px !important;
+                font-size:15px;
+            }}
+
+            body.role-student .assessment-question-actions {{
+                flex-direction:column;
+            }}
+
+            body.role-student .assessment-question-actions .btn {{
+                width:100%;
+                justify-content:center;
             }}
         }}
     </style>
@@ -81215,7 +81640,104 @@ def student_take_assessment(assessment_id):
     {lockdown_script}
 
     <script>
-        window.addEventListener("load", function() {{
+        document.addEventListener("DOMContentLoaded", function() {{
+            const questionDetails = Array.from(document.querySelectorAll(".assessment-question-details"));
+
+            function closeOtherQuestions(activeQuestion) {{
+                questionDetails.forEach(function(detail) {{
+                    if (detail !== activeQuestion) {{
+                        detail.open = false;
+                    }}
+                }});
+            }}
+
+            function openQuestion(questionNumber) {{
+                const target = document.querySelector('.assessment-question-details[data-question-index="' + questionNumber + '"]');
+
+                if (!target) {{
+                    return;
+                }}
+
+                target.open = true;
+                closeOtherQuestions(target);
+
+                setTimeout(function() {{
+                    target.scrollIntoView({{
+                        behavior: "smooth",
+                        block: "start"
+                    }});
+                }}, 80);
+            }}
+
+            function questionIsAnswered(detail) {{
+                const checkedRadio = detail.querySelector('input[type="radio"]:checked');
+                const textarea = detail.querySelector("textarea");
+
+                if (checkedRadio) {{
+                    return true;
+                }}
+
+                if (textarea && textarea.value.trim().length > 0) {{
+                    return true;
+                }}
+
+                return false;
+            }}
+
+            function updateAnsweredStatus(detail) {{
+                const status = detail.querySelector(".assessment-answer-status");
+
+                if (!status) {{
+                    return;
+                }}
+
+                if (questionIsAnswered(detail)) {{
+                    status.textContent = "Answered";
+                    status.classList.add("answered");
+                }} else {{
+                    status.textContent = "Not answered";
+                    status.classList.remove("answered");
+                }}
+            }}
+
+            questionDetails.forEach(function(detail, index) {{
+                detail.addEventListener("toggle", function() {{
+                    if (detail.open) {{
+                        closeOtherQuestions(detail);
+                    }}
+                }});
+
+                detail.querySelectorAll("input, textarea").forEach(function(field) {{
+                    field.addEventListener("change", function() {{
+                        updateAnsweredStatus(detail);
+                    }});
+
+                    field.addEventListener("input", function() {{
+                        updateAnsweredStatus(detail);
+                    }});
+                }});
+
+                updateAnsweredStatus(detail);
+            }});
+
+            document.querySelectorAll("[data-open-question]").forEach(function(button) {{
+                button.addEventListener("click", function() {{
+                    if (button.disabled) {{
+                        return;
+                    }}
+
+                    const questionNumber = parseInt(button.getAttribute("data-open-question"), 10);
+
+                    if (!Number.isNaN(questionNumber)) {{
+                        openQuestion(questionNumber);
+                    }}
+                }});
+            }});
+
+            if (questionDetails.length && !questionDetails.some(function(detail) {{ return detail.open; }})) {{
+                questionDetails[0].open = true;
+            }}
+
             const assessmentPage = document.querySelector(".assessment-writing-page");
 
             if (assessmentPage && window.innerWidth > 760) {{
@@ -81747,35 +82269,59 @@ def student_review_assessment_attempt(assessment_id):
             </details>
             """
 
+        open_attr = "open" if index == 1 else ""
+
         answer_cards += f"""
-        <div class="card soft assessment-answer-card" style="margin-bottom:14px;border-left:5px solid #1b5e20">
-            <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
-                <h3 style="margin-top:0">Question {index}</h3>
+        <details class="card soft assessment-answer-card assessment-review-details"
+                 data-review-question-index="{index}"
+                 style="margin-bottom:14px;border-left:5px solid #1b5e20"
+                 {open_attr}>
+            <summary class="assessment-review-summary">
+                <div class="assessment-review-title-wrap">
+                    <span class="assessment-question-number">Question {index} of {len(answers)}</span>
+                    <strong>Question {index}</strong>
+                    <span class="mini muted">{escape(question_type)} · {points:g} mark(s)</span>
+                </div>
+
                 <div>{status_label}</div>
+            </summary>
+
+            <div class="assessment-review-content">
+                <p class="assessment-text-mobile" style="white-space:pre-wrap">
+                    {escape(q["question_text"] or "")}
+                </p>
+
+                {question_file_html}
+
+                {selected_answer_html}
+
+                {correct_answer_html}
+
+                {mark_html}
+
+                {feedback_html}
+
+                {learner_files_html}
+
+                {memo_html}
+
+                <div class="assessment-question-actions">
+                    <button type="button"
+                            class="btn mini secondary"
+                            data-open-review-question="{index - 1}"
+                            {'disabled' if index == 1 else ''}>
+                        ← Previous
+                    </button>
+
+                    <button type="button"
+                            class="btn mini success"
+                            data-open-review-question="{index + 1}"
+                            {'disabled' if index == len(answers) else ''}>
+                        Next Question →
+                    </button>
+                </div>
             </div>
-
-            <div class="mini muted" style="margin-bottom:8px">
-                {escape(question_type)} · {points:g} mark(s)
-            </div>
-
-            <p class="assessment-text-mobile" style="white-space:pre-wrap">
-                {escape(q["question_text"] or "")}
-            </p>
-
-            {question_file_html}
-
-            {selected_answer_html}
-
-            {correct_answer_html}
-
-            {mark_html}
-
-            {feedback_html}
-
-            {learner_files_html}
-
-            {memo_html}
-        </div>
+        </details>
         """
 
     body = f"""
@@ -81784,13 +82330,83 @@ def student_review_assessment_attempt(assessment_id):
     <style>
         body.role-student .assessment-review-page {{
             max-width:100%;
-            overflow-x:visible;
+            width:100%;
+            overflow-x:hidden;
+            box-sizing:border-box;
+        }}
+
+        body.role-student .assessment-review-page,
+        body.role-student .assessment-review-page * {{
+            box-sizing:border-box;
         }}
 
         body.role-student .assessment-answer-card {{
             word-break:break-word;
             overflow-wrap:anywhere;
-            overflow-x:visible;
+            overflow:hidden;
+        }}
+
+        body.role-student details.assessment-answer-card {{
+            padding:0 !important;
+        }}
+
+        body.role-student .assessment-review-summary {{
+            list-style:none;
+            cursor:pointer;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            padding:16px;
+            background:#f8fafc;
+            border-bottom:1px solid #e2e8f0;
+        }}
+
+        body.role-student .assessment-review-summary::-webkit-details-marker {{
+            display:none;
+        }}
+
+        body.role-student .assessment-review-summary::after {{
+            content:"Open";
+            flex-shrink:0;
+            border:1px solid #1b5e20;
+            color:#1b5e20;
+            background:#ffffff;
+            border-radius:999px;
+            padding:6px 10px;
+            font-size:12px;
+            font-weight:800;
+        }}
+
+        body.role-student details.assessment-answer-card[open] .assessment-review-summary::after {{
+            content:"Close";
+            background:#1b5e20;
+            color:#ffffff;
+        }}
+
+        body.role-student .assessment-review-title-wrap {{
+            display:flex;
+            align-items:center;
+            gap:8px;
+            flex-wrap:wrap;
+            min-width:0;
+        }}
+
+        body.role-student .assessment-question-number {{
+            display:inline-flex;
+            align-items:center;
+            border-radius:999px;
+            background:#eef6ee;
+            color:#1b5e20;
+            border:1px solid #cfe7d1;
+            padding:4px 8px;
+            font-size:12px;
+            font-weight:800;
+        }}
+
+        body.role-student .assessment-review-content {{
+            padding:16px;
+            background:#ffffff;
         }}
 
         body.role-student .assessment-answer-card p {{
@@ -81800,13 +82416,67 @@ def student_review_assessment_attempt(assessment_id):
             line-height:1.6;
         }}
 
+        body.role-student .assessment-question-actions {{
+            display:flex;
+            gap:10px;
+            flex-wrap:wrap;
+            justify-content:space-between;
+            margin-top:14px;
+            padding-top:12px;
+            border-top:1px solid #e2e8f0;
+        }}
+
+        body.role-student .assessment-question-actions button[disabled] {{
+            opacity:.45;
+            cursor:not-allowed;
+        }}
+
         @media(max-width:760px) {{
             body.role-student .assessment-review-page {{
-                padding:14px;
+                padding:10px !important;
+                border-radius:16px;
+                margin:0;
+            }}
+
+            body.role-student .assessment-review-page h1 {{
+                font-size:21px;
+                line-height:1.25;
             }}
 
             body.role-student .assessment-review-page .stats {{
                 grid-template-columns:1fr !important;
+            }}
+
+            body.role-student details.assessment-answer-card {{
+                border-radius:16px;
+            }}
+
+            body.role-student .assessment-review-summary {{
+                padding:12px;
+                align-items:flex-start;
+                flex-direction:column;
+            }}
+
+            body.role-student .assessment-review-summary::after {{
+                align-self:flex-start;
+            }}
+
+            body.role-student .assessment-review-content {{
+                padding:12px;
+            }}
+
+            body.role-student .assessment-text-mobile {{
+                font-size:15px;
+                line-height:1.65 !important;
+            }}
+
+            body.role-student .assessment-question-actions {{
+                flex-direction:column;
+            }}
+
+            body.role-student .assessment-question-actions .btn {{
+                width:100%;
+                justify-content:center;
             }}
         }}
     </style>
@@ -81844,6 +82514,64 @@ def student_review_assessment_attempt(assessment_id):
 
         {answer_cards or "<div class='card soft'>No answers found for this attempt.</div>"}
     </section>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {{
+            const reviewDetails = Array.from(document.querySelectorAll(".assessment-review-details"));
+
+            function closeOtherReviews(activeReview) {{
+                reviewDetails.forEach(function(detail) {{
+                    if (detail !== activeReview) {{
+                        detail.open = false;
+                    }}
+                }});
+            }}
+
+            function openReviewQuestion(questionNumber) {{
+                const target = document.querySelector('.assessment-review-details[data-review-question-index="' + questionNumber + '"]');
+
+                if (!target) {{
+                    return;
+                }}
+
+                target.open = true;
+                closeOtherReviews(target);
+
+                setTimeout(function() {{
+                    target.scrollIntoView({{
+                        behavior: "smooth",
+                        block: "start"
+                    }});
+                }}, 80);
+            }}
+
+            reviewDetails.forEach(function(detail) {{
+                detail.addEventListener("toggle", function() {{
+                    if (detail.open) {{
+                        closeOtherReviews(detail);
+                    }}
+                }});
+            }});
+
+            document.querySelectorAll("[data-open-review-question]").forEach(function(button) {{
+                button.addEventListener("click", function() {{
+                    if (button.disabled) {{
+                        return;
+                    }}
+
+                    const questionNumber = parseInt(button.getAttribute("data-open-review-question"), 10);
+
+                    if (!Number.isNaN(questionNumber)) {{
+                        openReviewQuestion(questionNumber);
+                    }}
+                }});
+            }});
+
+            if (reviewDetails.length && !reviewDetails.some(function(detail) {{ return detail.open; }})) {{
+                reviewDetails[0].open = true;
+            }}
+        }});
+    </script>
     """
 
     return page("Assessment Review", body)
