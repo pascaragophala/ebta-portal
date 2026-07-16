@@ -870,9 +870,27 @@ def init_db():
         "Secretary",
         "Treasurer",
         "Social Media Manager",
+        "Graphic Designer",
         "Academic Quality Manager",
         "Tutor Manager"
     ]
+
+    management_role_default_descriptions = {
+        "Graphic Designer": (
+            "The Graphic Designer supports EBTA with professional visual content for academic, marketing and operational communication.\n\n"
+            "Main duties may include:\n"
+            "- Designing posters, learner announcements and social media graphics.\n"
+            "- Creating certificates, event designs and promotional material.\n"
+            "- Working with the Social Media Manager, COO and CEO on brand-aligned content.\n"
+            "- Preparing clean, professional designs for EBTA campaigns, awards, tutor announcements and learner reminders.\n"
+            "- Following EBTA colours, branding and communication standards.\n\n"
+            "Requirements:\n"
+            "- Good design skills using Canva, Adobe tools or similar design platforms.\n"
+            "- Creativity, attention to detail and ability to meet deadlines.\n"
+            "- Reliable internet access and a device suitable for design work.\n"
+            "- Ability to communicate professionally and accept feedback from EBTA leadership."
+        )
+    }
 
     for role in management_roles_seed:
         cur.execute("""
@@ -887,10 +905,24 @@ def init_db():
         """, (
             role,
             0,
-            "",
+            management_role_default_descriptions.get(role, ""),
             now_utc_iso(),
             now_utc_iso()
         ))
+
+        default_description = management_role_default_descriptions.get(role, "")
+        if default_description:
+            cur.execute("""
+                UPDATE management_roles
+                SET description=?,
+                    updated_at=?
+                WHERE role_name=?
+                  AND (description IS NULL OR TRIM(description) = '')
+            """, (
+                default_description,
+                now_utc_iso(),
+                role
+            ))
     
     cur.execute("""
     CREATE TABLE IF NOT EXISTS material_views(
