@@ -1908,6 +1908,13 @@ def init_db():
             ("English FAL","G11"),
             ("English FAL","G12"),
             
+            # English HL
+            ("English HL","G8"),
+            ("English HL","G9"),
+            ("English HL","G10"),
+            ("English HL","G11"),
+            ("English HL","G12"),
+            
             #Afrikaans
             ("Afrikaans FAL","G9"),
         ]
@@ -1958,6 +1965,13 @@ def init_db():
             ("English FAL","G10"),
             ("English FAL","G11"),
             ("English FAL","G12"),
+            
+            # English HL
+            ("English HL","G8"),
+            ("English HL","G9"),
+            ("English HL","G10"),
+            ("English HL","G11"),
+            ("English HL","G12"),
             
             #Afrikaans
             ("Afrikaans FAL","G9"),
@@ -2689,6 +2703,28 @@ def init_db():
                      "characterisation", "page number", "font style", "heading only",
                      "Characterisation is how a character is presented."),
             ]
+            
+        def englishhl_bank():
+            return [
+                item("Comprehension", "When answering a comprehension question, why should a learner refer back to the passage?",
+                     "To support answers with evidence from the text", "To copy random sentences", "To avoid reading the question", "To check the font size",
+                     "Textual evidence strengthens comprehension answers."),
+                item("Inference", "An inference is made when a reader?",
+                     "uses clues in the text and prior knowledge to work out meaning", "only counts paragraphs", "ignores context", "copies the title",
+                     "Inference requires reading between the lines."),
+                item("Parts of speech", "In the sentence 'The determined learner practised daily', which word is an adjective?",
+                     "determined", "learner", "practised", "daily",
+                     "An adjective describes a noun."),
+                item("Editing", "Which error is shown in: 'She dont understand the question'?",
+                     "subject-verb agreement", "capitalisation only", "punctuation only", "paragraphing",
+                     "The correct form is 'She does not understand'."),
+                item("Writing", "A strong argumentative paragraph should include?",
+                     "a clear point, evidence and explanation", "only emojis", "unrelated ideas", "no topic sentence",
+                     "Argumentative writing needs a point supported by evidence and reasoning."),
+                item("Literature", "A character's actions and words help reveal their?",
+                     "characterisation", "page number", "font style", "heading only",
+                     "Characterisation is how a character is presented."),
+            ]            
 
         def afrikaans_bank():
             return [
@@ -2738,6 +2774,7 @@ def init_db():
             "EMS": ems_bank,
             "Natural Sciences": natural_sciences_bank,
             "English FAL": english_bank,
+            "English HL": englishhl_bank,
             "Afrikaans FAL": afrikaans_bank,
             "Geography": geography_bank,
         }
@@ -10485,6 +10522,13 @@ def home():
         ("English FAL","G10"),
         ("English FAL","G11"),
         ("English FAL","G12"),
+        
+        # English HL
+        ("English HL","G8"),
+        ("English HL","G9"),
+        ("English HL","G10"),
+        ("English HL","G11"),
+        ("English HL","G12"),
         
         #Afrikaans
         ("Afrikaans FAL","G9"),
