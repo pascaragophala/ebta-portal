@@ -1577,6 +1577,12 @@ def init_db():
     ensure_column(conn, "students", "province", "TEXT")
     ensure_column(conn, "students", "school", "TEXT")
     ensure_column(conn, "enrollments", "amount_paid", "INTEGER")
+    ensure_column(conn, "enrollments", "enrollment_period_ref", "TEXT")
+    ensure_column(conn, "enrollments", "period_month_count", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "enrollments", "period_start_month", "TEXT")
+    ensure_column(conn, "enrollments", "period_end_month", "TEXT")
+    ensure_column(conn, "enrollments", "period_total_amount", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "enrollments", "period_auto_active", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "groups", "is_visible", "INTEGER NOT NULL DEFAULT 1")
     ensure_column(conn, "sessions", "is_visible", "INTEGER NOT NULL DEFAULT 1")
     ensure_column(conn, "subjects", "uploads_locked", "INTEGER NOT NULL DEFAULT 0")
@@ -3926,22 +3932,30 @@ def get_subject_fee_map(conn, subject_ids):
     return fee_map
 
 
-def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", student_id=None):
+def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", student_id=None, month_count=1):
     """
-    Calculates enrollment fees using the selected subjects.
+    Calculates enrolment fees using selected subjects and the selected number of months.
 
     Rules:
     - Each selected subject uses its own grade fee.
     - Bulk discount still applies when 3+ subjects are selected.
-    - A valid 50% or 100% discount coupon applies to ONE selected subject only.
+    - A valid 50% or 100% discount coupon applies to ONE selected subject per month.
     - Referral-only codes do not reduce the total.
+    - Final amount is multiplied by the number of months selected.
     """
 
+    month_count = normalize_enrollment_month_count(month_count)
     subject_ids = [str(x) for x in subject_ids if str(x).strip()]
 
     result = {
         "valid": True,
         "message": "",
+        "month_count": month_count,
+        "monthly_subtotal": 0,
+        "monthly_bulk_discount": 0,
+        "monthly_coupon_discount": 0,
+        "monthly_total_discount": 0,
+        "monthly_total_due": 0,
         "subtotal": 0,
         "bulk_discount": 0,
         "coupon_discount": 0,
@@ -3986,19 +4000,23 @@ def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", studen
     for row in subjects:
         fee_map[str(row["id"])] = fee_for_grade(row["grade"])
 
-    subtotal = sum(fee_map.values())
+    monthly_subtotal = sum(fee_map.values())
     count = len(subject_ids)
 
-    result["subtotal"] = subtotal
+    result["monthly_subtotal"] = monthly_subtotal
 
-    # Existing EBTA bulk discount rule
+    monthly_bulk_discount = 0
+
+    # Existing EBTA bulk discount rule, calculated per month.
     if count >= 3:
         grades = [row["grade"] for row in subjects]
 
         if all(g == "G13" for g in grades):
-            result["bulk_discount"] = int(round(subtotal * 0.10))
+            monthly_bulk_discount = int(round(monthly_subtotal * 0.10))
         else:
-            result["bulk_discount"] = int(round(subtotal * 0.05))
+            monthly_bulk_discount = int(round(monthly_subtotal * 0.05))
+
+    result["monthly_bulk_discount"] = monthly_bulk_discount
 
     coupon_code = (coupon_code or "").strip().upper()
 
@@ -4009,14 +4027,14 @@ def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", studen
                 coupon_code,
                 student_id,
                 subject_ids,
-                subtotal
+                monthly_subtotal
             )
         else:
             coupon_result = preview_discount_code_for_subjects(
                 conn,
                 coupon_code,
                 subject_ids,
-                subtotal
+                monthly_subtotal
             )
 
         result["coupon_result"] = coupon_result
@@ -4026,9 +4044,9 @@ def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", studen
             result["message"] = coupon_result.get("message", "Invalid discount code.")
             return result
 
-        result["coupon_discount"] = int(coupon_result.get("discount_amount", 0) or 0)
+        result["monthly_coupon_discount"] = int(coupon_result.get("discount_amount", 0) or 0)
 
-        # Work out visible discount percent for the front page
+        # Work out visible discount percent for the front page.
         cur.execute("""
             SELECT discount_percent
             FROM discount_coupons
@@ -4041,13 +4059,21 @@ def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", studen
         if c:
             result["discount_percent"] = int(c["discount_percent"] or 0)
 
-    total_discount = result["bulk_discount"] + result["coupon_discount"]
+    monthly_total_discount = result["monthly_bulk_discount"] + result["monthly_coupon_discount"]
 
-    if total_discount > subtotal:
-        total_discount = subtotal
+    if monthly_total_discount > monthly_subtotal:
+        monthly_total_discount = monthly_subtotal
 
-    result["total_discount"] = total_discount
-    result["total_due"] = subtotal - total_discount
+    monthly_total_due = monthly_subtotal - monthly_total_discount
+
+    result["monthly_total_discount"] = monthly_total_discount
+    result["monthly_total_due"] = monthly_total_due
+
+    result["subtotal"] = monthly_subtotal * month_count
+    result["bulk_discount"] = result["monthly_bulk_discount"] * month_count
+    result["coupon_discount"] = result["monthly_coupon_discount"] * month_count
+    result["total_discount"] = monthly_total_discount * month_count
+    result["total_due"] = monthly_total_due * month_count
 
     return result
     
@@ -5626,6 +5652,173 @@ def pretty_month_label(month_str: str) -> str:
         return datetime.date(y, m, 1).strftime('%B %Y')
     except Exception:
         return month_str
+        
+        
+def normalize_enrollment_month_count(value):
+    """
+    Keeps parent-selected enrollment duration safe.
+    The portal currently allows 1 to 12 months in one enrolment period.
+    """
+    try:
+        n = int(value)
+    except Exception:
+        n = 1
+
+    if n < 1:
+        n = 1
+    if n > 12:
+        n = 12
+
+    return n
+
+
+def add_months_to_ym(month_str, offset=0):
+    """Add months to a YYYY-MM value and return YYYY-MM."""
+    try:
+        y, m = map(int, str(month_str).split('-')[:2])
+    except Exception:
+        base = get_setting('current_month', datetime.date.today().strftime('%Y-%m'))
+        y, m = map(int, str(base).split('-')[:2])
+
+    absolute = (y * 12 + (m - 1)) + int(offset or 0)
+    new_y = absolute // 12
+    new_m = (absolute % 12) + 1
+
+    return f"{new_y:04d}-{new_m:02d}"
+
+
+def enrollment_month_sequence(start_month=None, month_count=1):
+    """Return consecutive enrolment months from the selected start month."""
+    if not start_month:
+        start_month = get_setting('current_month', datetime.date.today().strftime('%Y-%m'))
+
+    count = normalize_enrollment_month_count(month_count)
+
+    return [add_months_to_ym(start_month, i) for i in range(count)]
+
+
+def allowed_enrollment_start_months(base_month=None, limit=12):
+    """Start months parents can select on the public enrolment form."""
+    if not base_month:
+        base_month = get_setting('current_month', datetime.date.today().strftime('%Y-%m'))
+
+    try:
+        limit = int(limit)
+    except Exception:
+        limit = 12
+
+    limit = max(1, min(limit, 12))
+
+    return enrollment_month_sequence(base_month, limit)
+
+
+def active_enrollment_period_summary(conn, student_id, subject_id=None, from_month=None):
+    """
+    Summarises current/future ACTIVE enrolment months only.
+    This ignores old history so staff can quickly see when a learner's paid period ends.
+    """
+    if not from_month:
+        from_month = get_setting('current_month', datetime.date.today().strftime('%Y-%m'))
+
+    cur = conn.cursor()
+    params = [student_id, from_month]
+    subject_filter = ""
+
+    if subject_id:
+        subject_filter = "AND subject_id=?"
+        params.append(subject_id)
+
+    cur.execute(f"""
+        SELECT DISTINCT month
+        FROM enrollments
+        WHERE student_id=?
+          AND UPPER(status)='ACTIVE'
+          AND month>=?
+          {subject_filter}
+        ORDER BY month
+    """, params)
+
+    months = [r["month"] for r in cur.fetchall()]
+
+    return {
+        "months": months,
+        "count": len(months),
+        "start_month": months[0] if months else None,
+        "end_month": months[-1] if months else None,
+    }
+
+
+def active_enrollment_period_badge(conn, student_id, subject_id=None, from_month=None):
+    summary = active_enrollment_period_summary(conn, student_id, subject_id, from_month)
+
+    if summary["count"] <= 0:
+        return "<span class='mini muted'>No active current/future months</span>"
+
+    months_text = ", ".join(pretty_month_label(m) for m in summary["months"][:6])
+    if summary["count"] > 6:
+        months_text += f" + {summary['count'] - 6} more"
+
+    return f"""
+    <div>
+        <span class="chip active">{summary['count']} active month(s)</span>
+        <div class="mini muted" style="margin-top:4px;line-height:1.45">
+            Until: <strong>{pretty_month_label(summary['end_month'])}</strong><br>
+            {escape(months_text)}
+        </div>
+    </div>
+    """
+
+
+def active_enrollment_period_badge_for_student_subject(student_id, subject_id=None, from_month=None):
+    conn = get_db()
+    try:
+        return active_enrollment_period_badge(conn, student_id, subject_id, from_month)
+    finally:
+        conn.close()
+
+
+def student_active_period_card(conn, student_id, from_month=None):
+    """Card for the learner portal showing active current/future months."""
+    if not from_month:
+        from_month = get_setting('current_month', datetime.date.today().strftime('%Y-%m'))
+
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            e.month,
+            COUNT(DISTINCT e.subject_id) AS subject_count
+        FROM enrollments e
+        WHERE e.student_id=?
+          AND UPPER(e.status)='ACTIVE'
+          AND e.month>=?
+        GROUP BY e.month
+        ORDER BY e.month
+    """, (student_id, from_month))
+
+    rows = cur.fetchall()
+
+    if not rows:
+        return ""
+
+    month_chips = "".join(
+        f"<span class='chip active'>{pretty_month_label(r['month'])} • {int(r['subject_count'] or 0)} subject(s)</span>"
+        for r in rows
+    )
+
+    end_month = rows[-1]["month"]
+
+    return f"""
+    <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+        <h3 style="margin-bottom:6px">My Active Enrolment Period</h3>
+        <p class="mini muted" style="margin-bottom:10px">
+            You are currently active until <strong>{pretty_month_label(end_month)}</strong>.
+            These are your current and upcoming paid months.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+            {month_chips}
+        </div>
+    </div>
+    """
         
         
 TERMS = [
@@ -10575,6 +10768,17 @@ def home():
 
     month_raw = get_setting('current_month')
     month_label = pretty_month_label(month_raw)
+
+    enrollment_start_months = allowed_enrollment_start_months(month_raw, 12)
+    enrollment_start_options = "".join(
+        f"<option value='{m}'>{pretty_month_label(m)}</option>"
+        for m in enrollment_start_months
+    )
+    enrollment_month_count_options = "".join(
+        f"<option value='{i}'>{i} month{'s' if i != 1 else ''}</option>"
+        for i in range(1, 13)
+    )
+    enrollment_month_labels_json = json.dumps({m: pretty_month_label(m) for m in enrollment_start_months})
     
     HELP_WHATSAPP_NUMBER = "27648650013"  # Replace with EBTA helper WhatsApp number
 
@@ -11337,6 +11541,37 @@ def home():
             </div>
         </div>
 
+        <div class="card soft" style="border-left:5px solid #1b5e20">
+            <h3 style="margin-bottom:6px">Enrollment Period</h3>
+            <p class="mini muted" style="margin-bottom:10px">
+                Choose how many months you are paying for. The total amount will automatically multiply by the number of months selected.
+            </p>
+
+            <div class="grid two-col" style="gap:12px">
+                <div>
+                    <label>Start Month</label>
+                    <select name="enrollment_start_month" id="enrollment_start_month" required>
+                        {enrollment_start_options}
+                    </select>
+                    <div class="mini muted">Default is the current EBTA enrollment month.</div>
+                </div>
+
+                <div>
+                    <label>Number of Months</label>
+                    <select name="enrollment_month_count" id="enrollment_month_count" required>
+                        {enrollment_month_count_options}
+                    </select>
+                    <div class="mini muted">You can enroll for up to 12 months upfront.</div>
+                </div>
+            </div>
+
+            <div id="enrollment_months_preview"
+                 class="mini muted"
+                 style="margin-top:10px;padding:10px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0">
+                Select a start month and number of months to see your active period.
+            </div>
+        </div>
+
         <div class="card soft" id="payment-anchor">
 
             <label>Payment details</label>
@@ -12068,7 +12303,7 @@ function showPopup(message, type='info', timeout=4000){
 
         if (!amountInput || amountInput.value.trim() === "") {
             e.preventDefault();
-            showPopup("Please enter the amount you paid for this month.", "error");
+            showPopup("Please enter the amount you paid for the selected enrollment period.", "error");
             amountInput.focus();
             return;
         }
@@ -12078,8 +12313,8 @@ function showPopup(message, type='info', timeout=4000){
 
         if (paid !== due) {
             e.preventDefault();
-            amountHint.textContent = `You need to pay R${due} to enroll for this month.`;
-            showPopup(`Payment mismatch. Required amount is R${due}.`, "error");
+            amountHint.textContent = `You need to pay R${due} to enroll for the selected enrollment period.`;
+            showPopup(`Payment mismatch. Required amount for the selected enrollment period is R${due}.`, "error");
             amountInput.focus();
             return;
         } else {
@@ -12115,6 +12350,61 @@ function showPopup(message, type='info', timeout=4000){
     (function(){
 
         let feeUpdateTimer = null;
+        const EBTA_ENROLLMENT_MONTH_LABELS = {enrollment_month_labels_json};
+
+        function selectedMonthCount(){
+            const raw = document.getElementById('enrollment_month_count')?.value || '1';
+            let n = parseInt(raw, 10);
+            if(!Number.isFinite(n) || n < 1) n = 1;
+            if(n > 12) n = 12;
+            return n;
+        }
+
+        function selectedStartMonth(){
+            return document.getElementById('enrollment_start_month')?.value || '{month_raw}';
+        }
+
+        function addMonthsYM(ym, offset){
+            const parts = String(ym || '{month_raw}').split('-');
+            let y = parseInt(parts[0], 10);
+            let m = parseInt(parts[1], 10);
+            if(!Number.isFinite(y) || !Number.isFinite(m)){
+                y = parseInt('{month_raw}'.split('-')[0], 10);
+                m = parseInt('{month_raw}'.split('-')[1], 10);
+            }
+            const absolute = (y * 12 + (m - 1)) + Number(offset || 0);
+            const ny = Math.floor(absolute / 12);
+            const nm = (absolute % 12) + 1;
+            return `${ny}-${String(nm).padStart(2, '0')}`;
+        }
+
+        function monthLabel(ym){
+            if(EBTA_ENROLLMENT_MONTH_LABELS[ym]) return EBTA_ENROLLMENT_MONTH_LABELS[ym];
+            try{
+                const [y, m] = ym.split('-').map(Number);
+                return new Date(y, m - 1, 1).toLocaleString('en-ZA', {month:'long', year:'numeric'});
+            }catch(err){
+                return ym;
+            }
+        }
+
+        function selectedEnrollmentMonths(){
+            const start = selectedStartMonth();
+            const count = selectedMonthCount();
+            return Array.from({length: count}, (_, i) => addMonthsYM(start, i));
+        }
+
+        function updateEnrollmentPeriodPreview(){
+            const box = document.getElementById('enrollment_months_preview');
+            if(!box) return;
+            const months = selectedEnrollmentMonths();
+            const first = months[0];
+            const last = months[months.length - 1];
+            box.innerHTML = `
+                <strong>Active period:</strong> ${monthLabel(first)} to ${monthLabel(last)}<br>
+                <span>${months.map(monthLabel).join(' • ')}</span>
+            `;
+        }
 
         function feeForGrade(g){
             if(!g) return 0;
@@ -12140,13 +12430,17 @@ function showPopup(message, type='info', timeout=4000){
         }
 
         function renderFeeBox(data, selectedCount, perFee, loading=false){
+            const monthCount = Number(data.month_count || selectedMonthCount() || 1);
             const subtotal = Number(data.subtotal || 0);
             const bulkDiscount = Number(data.bulk_discount || 0);
             const couponDiscount = Number(data.coupon_discount || 0);
             const totalDiscount = Number(data.total_discount || 0);
             const totalDue = Number(data.total_due || 0);
+            const monthlyDue = Number(data.monthly_total_due || (monthCount ? Math.round(totalDue / monthCount) : totalDue) || 0);
+            const monthlySubtotal = Number(data.monthly_subtotal || (monthCount ? Math.round(subtotal / monthCount) : subtotal) || 0);
 
             window.ebtaTotalDue = totalDue;
+            updateEnrollmentPeriodPreview();
 
             let feeBox = document.getElementById('fee_summary');
 
@@ -12168,7 +12462,7 @@ function showPopup(message, type='info', timeout=4000){
             if (bulkDiscount > 0) {
                 bulkLine = `
                     <div style="color:#065f46; margin-top:4px;">
-                        Multi-subject discount: <strong>-R${bulkDiscount}</strong>
+                        Multi-subject discount for selected period: <strong>-R${bulkDiscount}</strong>
                     </div>
                 `;
             }
@@ -12178,7 +12472,7 @@ function showPopup(message, type='info', timeout=4000){
             if (couponDiscount > 0) {
                 couponLine = `
                     <div style="color:#1b5e20; margin-top:4px;">
-                        Discount code applied to 1 subject:
+                        Discount code applied for selected period:
                         <strong>-R${couponDiscount}</strong>
                     </div>
                 `;
@@ -12212,14 +12506,16 @@ function showPopup(message, type='info', timeout=4000){
                     border-radius:12px;
                     background:#f0fdf4;
                 ">
-                    Per-subject fee: <strong>R${perFee}</strong><br>
+                    Per-subject monthly fee: <strong>R${perFee}</strong><br>
                     Subjects selected: <strong>${selectedCount}</strong><br>
-                    Subtotal: <strong>R${subtotal}</strong>
+                    Months selected: <strong>${monthCount}</strong><br>
+                    Monthly subtotal: <strong>R${monthlySubtotal}</strong><br>
+                    Monthly amount after discounts: <strong>R${monthlyDue}</strong>
                     ${bulkLine}
                     ${couponLine}
 
                     <div style="margin-top:6px;">
-                        Total due for this month:
+                        Total due for selected enrollment period:
                         <span style="font-size:18px; font-weight:800; color:#1b5e20;">
                             R${totalDue}
                         </span>
@@ -12232,7 +12528,7 @@ function showPopup(message, type='info', timeout=4000){
             const amountHint = document.getElementById("amount_paid_hint");
 
             if (amountHint) {
-                amountHint.textContent = `Please enter R${totalDue} if this is the amount you paid.`;
+                amountHint.textContent = `Please enter R${totalDue} if this is the amount you paid for the selected enrollment period.`;
             }
         }
 
@@ -12242,6 +12538,7 @@ function showPopup(message, type='info', timeout=4000){
             const count = ids.length;
             const per = feeForGrade(grade);
             const couponCode = document.getElementById('coupon_code')?.value || '';
+            const monthCount = selectedMonthCount();
 
             if (count === 0) {
                 renderFeeBox({
@@ -12256,11 +12553,17 @@ function showPopup(message, type='info', timeout=4000){
             }
 
             renderFeeBox({
-                subtotal: per * count,
+                month_count: monthCount,
+                monthly_subtotal: per * count,
+                monthly_bulk_discount: 0,
+                monthly_coupon_discount: 0,
+                monthly_total_discount: 0,
+                monthly_total_due: per * count,
+                subtotal: per * count * monthCount,
                 bulk_discount: 0,
                 coupon_discount: 0,
                 total_discount: 0,
-                total_due: per * count,
+                total_due: per * count * monthCount,
                 message: ""
             }, count, per, true);
             
@@ -12278,12 +12581,20 @@ function showPopup(message, type='info', timeout=4000){
                     }
                 }
 
+                const monthlyDue = subtotal - bulkDiscount;
+
                 renderFeeBox({
-                    subtotal: subtotal,
-                    bulk_discount: bulkDiscount,
+                    month_count: monthCount,
+                    monthly_subtotal: subtotal,
+                    monthly_bulk_discount: bulkDiscount,
+                    monthly_coupon_discount: 0,
+                    monthly_total_discount: bulkDiscount,
+                    monthly_total_due: monthlyDue,
+                    subtotal: subtotal * monthCount,
+                    bulk_discount: bulkDiscount * monthCount,
                     coupon_discount: 0,
-                    total_discount: bulkDiscount,
-                    total_due: subtotal - bulkDiscount,
+                    total_discount: bulkDiscount * monthCount,
+                    total_due: monthlyDue * monthCount,
                     message: ""
                 }, count, per);
 
@@ -12299,7 +12610,8 @@ function showPopup(message, type='info', timeout=4000){
                     },
                     body: JSON.stringify({
                         subject_ids: ids,
-                        coupon_code: couponCode
+                        coupon_code: couponCode,
+                        month_count: monthCount
                     })
                 });
 
@@ -12317,11 +12629,17 @@ function showPopup(message, type='info', timeout=4000){
                 const subtotal = per * count;
 
                 renderFeeBox({
-                    subtotal: subtotal,
+                    month_count: monthCount,
+                    monthly_subtotal: subtotal,
+                    monthly_bulk_discount: 0,
+                    monthly_coupon_discount: 0,
+                    monthly_total_discount: 0,
+                    monthly_total_due: subtotal,
+                    subtotal: subtotal * monthCount,
                     bulk_discount: 0,
                     coupon_discount: 0,
                     total_discount: 0,
-                    total_due: subtotal,
+                    total_due: subtotal * monthCount,
                     message: "Could not check discount code. Please try again."
                 }, count, per);
             }
@@ -12333,7 +12651,8 @@ function showPopup(message, type='info', timeout=4000){
         }
 
         document.addEventListener('change', function(e){
-            if(e.target && (e.target.name === 'subject_ids' || e.target.id === 'grade_select')){
+            if(e.target && (e.target.name === 'subject_ids' || e.target.id === 'grade_select' || e.target.id === 'enrollment_month_count' || e.target.id === 'enrollment_start_month')){
+                updateEnrollmentPeriodPreview();
                 scheduleFeeUpdate();
             }
         });
@@ -12344,7 +12663,10 @@ function showPopup(message, type='info', timeout=4000){
             }
         });
 
-        document.addEventListener('DOMContentLoaded', updateFees);
+        document.addEventListener('DOMContentLoaded', function(){
+            updateEnrollmentPeriodPreview();
+            updateFees();
+        });
     })();
     
     
@@ -12430,7 +12752,8 @@ function showPopup(message, type='info', timeout=4000){
     
     </script>'''
 
-    
+    extra_js = extra_js.replace("{enrollment_month_labels_json}", enrollment_month_labels_json)
+    extra_js = extra_js.replace("{month_raw}", month_raw)
 
     # small helper to show a modal message instead of alert()
     extra_js += '''
@@ -12714,6 +13037,7 @@ def register_discount_preview():
 
     subject_ids = data.get("subject_ids", [])
     coupon_code = data.get("coupon_code", "")
+    month_count = normalize_enrollment_month_count(data.get("month_count", data.get("enrollment_month_count", 1)))
 
     if not isinstance(subject_ids, list):
         subject_ids = []
@@ -12724,7 +13048,8 @@ def register_discount_preview():
         conn,
         subject_ids,
         coupon_code=coupon_code,
-        student_id=None
+        student_id=None,
+        month_count=month_count
     )
 
     conn.close()
@@ -12732,6 +13057,12 @@ def register_discount_preview():
     return {
         "valid": breakdown["valid"],
         "message": breakdown["message"] or breakdown["coupon_result"].get("message", ""),
+        "month_count": breakdown["month_count"],
+        "monthly_subtotal": breakdown["monthly_subtotal"],
+        "monthly_bulk_discount": breakdown["monthly_bulk_discount"],
+        "monthly_coupon_discount": breakdown["monthly_coupon_discount"],
+        "monthly_total_discount": breakdown["monthly_total_discount"],
+        "monthly_total_due": breakdown["monthly_total_due"],
         "subtotal": breakdown["subtotal"],
         "bulk_discount": breakdown["bulk_discount"],
         "coupon_discount": breakdown["coupon_discount"],
@@ -12774,6 +13105,8 @@ def register():
     school = request.form.get('school')
     
     coupon_code = request.form.get("coupon_code", "").strip().upper()
+    enrollment_start_month = request.form.get("enrollment_start_month", "").strip()
+    enrollment_month_count = normalize_enrollment_month_count(request.form.get("enrollment_month_count", "1"))
 
     amount_paid = request.form.get('amount_paid', '').strip()
 
@@ -12901,10 +13234,36 @@ def register():
     except Exception:
         pass
 
-    month = get_setting('current_month', datetime.date.today().strftime('%Y-%m'))
+    system_month = get_setting('current_month', datetime.date.today().strftime('%Y-%m'))
+    allowed_start_months = set(allowed_enrollment_start_months(system_month, 12))
 
-    cur.execute("SELECT subject_id FROM enrollments WHERE student_id=? AND month=?", (sid, month))
-    existing = {str(x['subject_id']) for x in cur.fetchall()}
+    if enrollment_start_month not in allowed_start_months:
+        enrollment_start_month = system_month
+
+    month = enrollment_start_month
+    months_to_enroll = enrollment_month_sequence(enrollment_start_month, enrollment_month_count)
+
+    placeholders_months = ",".join("?" * len(months_to_enroll))
+    cur.execute(f"""
+        SELECT subject_id, month
+        FROM enrollments
+        WHERE student_id=?
+          AND month IN ({placeholders_months})
+    """, [sid] + months_to_enroll)
+
+    existing = {(str(x['subject_id']), x['month']) for x in cur.fetchall()}
+    selected_pairs = {(str(subid), m) for subid in subject_ids for m in months_to_enroll}
+    duplicate_pairs = selected_pairs.intersection(existing)
+
+    if duplicate_pairs:
+        conn.close()
+        return page(
+            "Already Enrolled",
+            card_msg(
+                "One or more selected subjects are already enrolled for the selected month range. "
+                "Please choose a later start month or select only the new subjects/months you still need."
+            )
+        )
     
     
     # ================= SERVER-SIDE FEE CALCULATION =================
@@ -12913,7 +13272,8 @@ def register():
         conn,
         subject_ids,
         coupon_code=coupon_code,
-        student_id=sid
+        student_id=sid,
+        month_count=enrollment_month_count
     )
 
     if not fee_breakdown["valid"]:
@@ -12934,7 +13294,7 @@ def register():
         return page(
             "Payment error",
             card_msg(
-                f"You need to pay R{total_due}. "
+                f"You need to pay R{total_due} for {enrollment_month_count} month(s). "
                 f"Subtotal: R{subtotal}, Discount: R{total_discount}."
             )
         )
@@ -12980,107 +13340,128 @@ def register():
     existing_enrollment_count = cur.fetchone()["c"] or 0
     is_new_student_for_referral = existing_enrollment_count == 0
 
-    for subid in subject_ids:
-        if subid in existing:
-            continue
+    period_ref = f"PERIOD-{sid}-{int(datetime.datetime.now().timestamp())}-{secrets.token_hex(4)}"
+    period_start_month = months_to_enroll[0]
+    period_end_month = months_to_enroll[-1]
 
-        token = secrets.token_urlsafe(16)
-        
-        first_pop = saved_paths[0] if saved_paths else None
+    # Multi-month enrolments must still be checked by Admissions once.
+    # The learner pays for the full selected period, but access only becomes ACTIVE
+    # after the first approval. The approval action activates every month and subject
+    # linked to this same period_ref, so Admissions does not need to approve month by month.
+    period_auto_active = 0
+    enrollment_status = "PENDING"
 
-        # 1️⃣ Insert enrollment FIRST
-        coupon_code_for_row = None
-        coupon_discount_for_row = 0
-        coupon_type_for_row = None
-        referral_code_for_row = None
+    for enrol_month in months_to_enroll:
+        for subid in subject_ids:
+            token = secrets.token_urlsafe(16)
+            
+            first_pop = saved_paths[0] if saved_paths else None
 
-        # Save coupon details on only ONE enrollment row.
-        # This prevents the admin side from showing the same discount multiple times.
-        if coupon_code and not coupon_saved_on_enrollment:
-            coupon_code_for_row = coupon_code
-            coupon_discount_for_row = coupon_discount
-            coupon_type_for_row = coupon_result["code_type"]
+            # 1️⃣ Insert enrollment FIRST
+            coupon_code_for_row = None
+            coupon_discount_for_row = 0
+            coupon_type_for_row = None
+            referral_code_for_row = None
 
-            if coupon_result["code_type"] in ["REFERRAL_ONLY", "TUTOR_REFERRAL"]:
-                referral_code_for_row = coupon_code
+            # Save coupon details on only ONE enrollment row.
+            # This prevents the admin side from showing the same discount multiple times.
+            if coupon_code and not coupon_saved_on_enrollment:
+                coupon_code_for_row = coupon_code
+                coupon_discount_for_row = coupon_discount
+                coupon_type_for_row = coupon_result["code_type"]
 
-        cur.execute("""
-        INSERT INTO enrollments(
-            student_id,
-            subject_id,
-            month,
-            status,
-            payment_method,
-            payment_ref,
-            pop_url,
-            amount_paid,
-            coupon_code,
-            coupon_discount_amount,
-            coupon_type,
-            referral_code_used,
-            status_token,
-            created_at
-        )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (
-            sid,
-            subid,
-            month,
-            "PENDING",
-            "EFT",
-            None,
-            first_pop,
-            amount_paid,
-            coupon_code_for_row,
-            coupon_discount_for_row,
-            coupon_type_for_row,
-            referral_code_for_row,
-            token,
-            now_utc_iso()
-        ))
+                if coupon_result["code_type"] in ["REFERRAL_ONLY", "TUTOR_REFERRAL"]:
+                    referral_code_for_row = coupon_code
 
-        if coupon_code and not coupon_saved_on_enrollment:
-            coupon_saved_on_enrollment = True
+            cur.execute("""
+            INSERT INTO enrollments(
+                student_id,
+                subject_id,
+                month,
+                status,
+                payment_method,
+                payment_ref,
+                pop_url,
+                amount_paid,
+                coupon_code,
+                coupon_discount_amount,
+                coupon_type,
+                referral_code_used,
+                enrollment_period_ref,
+                period_month_count,
+                period_start_month,
+                period_end_month,
+                period_total_amount,
+                period_auto_active,
+                status_token,
+                created_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                sid,
+                subid,
+                enrol_month,
+                enrollment_status,
+                "EFT",
+                None,
+                first_pop,
+                amount_paid,
+                coupon_code_for_row,
+                coupon_discount_for_row,
+                coupon_type_for_row,
+                referral_code_for_row,
+                period_ref,
+                enrollment_month_count,
+                period_start_month,
+                period_end_month,
+                total_due,
+                period_auto_active,
+                token,
+                now_utc_iso()
+            ))
 
-        # 2️⃣ Now eid is valid
-        eid = cur.lastrowid
+            if coupon_code and not coupon_saved_on_enrollment:
+                coupon_saved_on_enrollment = True
 
-        # 3️⃣ Generate reference AFTER eid exists
-        payment_ref = f"EFT-{eid}-{int(datetime.datetime.now().timestamp())}"
+            # 2️⃣ Now eid is valid
+            eid = cur.lastrowid
 
-        # 4️⃣ Update enrollment with reference
-        cur.execute(
-            "UPDATE enrollments SET payment_ref=? WHERE id=?",
-            (payment_ref, eid)
-        )
+            # 3️⃣ Generate reference AFTER eid exists
+            payment_ref = f"EFT-{eid}-{int(datetime.datetime.now().timestamp())}"
 
-        # 5️⃣ Insert payment record
-        cur.execute("""
-        INSERT INTO payments(
-            enrollment_id,
-            amount,
-            gateway,
-            reference,
-            result,
-            timestamp
-        ) VALUES (?,?,?,?,?,?)
-        """, (
-            eid,
-            amount_paid,
-            'EFT',
-            payment_ref,
-            'PENDING',
-            now_utc_iso()
-        ))
-
-        # 6️⃣ Save PoP files
-        for pth in saved_paths:
+            # 4️⃣ Update enrollment with reference
             cur.execute(
-                "INSERT INTO enrollment_files(enrollment_id,file_path) VALUES(?,?)",
-                (eid, pth)
+                "UPDATE enrollments SET payment_ref=? WHERE id=?",
+                (payment_ref, eid)
             )
 
-        created.append((eid, token))
+            # 5️⃣ Insert payment record
+            cur.execute("""
+            INSERT INTO payments(
+                enrollment_id,
+                amount,
+                gateway,
+                reference,
+                result,
+                timestamp
+            ) VALUES (?,?,?,?,?,?)
+            """, (
+                eid,
+                amount_paid,
+                'EFT',
+                payment_ref,
+                'ACTIVE' if enrollment_status == 'ACTIVE' else 'PENDING',
+                now_utc_iso()
+            ))
+
+            # 6️⃣ Save PoP files
+            for pth in saved_paths:
+                cur.execute(
+                    "INSERT INTO enrollment_files(enrollment_id,file_path) VALUES(?,?)",
+                    (eid, pth)
+                )
+
+            created.append((eid, token))
         
     if created:
         mark_coupon_used(conn, coupon_result.get("coupon_id"))
@@ -13116,7 +13497,7 @@ def register():
     conn.close()
 
     if not created:
-        return page("No change", card_msg("Already enrolled for selected subjects this month."))
+        return page("No change", card_msg("Already enrolled for the selected subjects and month range."))
 
     if len(created) == 1:
         eid, tok = created[0]
@@ -13131,6 +13512,10 @@ def register():
     <section class='wrap small'>
         <div class='card'>
             <h1>Enrollment submitted</h1>
+            <p class='muted'>
+                Period: <strong>{pretty_month_label(period_start_month)}</strong> to <strong>{pretty_month_label(period_end_month)}</strong>.
+                {'Your enrolment period is pending one Admissions approval. Once approved, all selected subjects and months in this period will become active.' if enrollment_month_count > 1 or period_start_month != system_month else 'Your current-month enrolment is pending approval.'}
+            </p>
             <ul>{links}</ul>
         </div>
     </section>
@@ -14737,6 +15122,8 @@ def student_home():
         </div>
         """
     
+    active_period_card = student_active_period_card(conn, sid, system_month)
+
     conn.close()
 
     # Enrollment list UI
@@ -14847,6 +15234,7 @@ def student_home():
                 Currently viewing: <b>{pretty_month_label(month)}</b>
             </p>
             {month_selector}
+            {active_period_card}
             {referral_section}
 
         <h2>Your Enrollments</h2>
@@ -25531,6 +25919,23 @@ def admin_home():
     counts = {}
     for st in ["PENDING","ACTIVE","LAPSED"]:
         cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status=?", (month,st)); counts[st]=cur.fetchone()['c']
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id || '-' || month) AS c
+        FROM enrollments
+        WHERE UPPER(status)='ACTIVE'
+          AND month>=?
+    """, (month,))
+    active_student_months = cur.fetchone()['c'] or 0
+
+    cur.execute("""
+        SELECT MAX(month) AS m
+        FROM enrollments
+        WHERE UPPER(status)='ACTIVE'
+          AND month>=?
+    """, (month,))
+    latest_active_until = cur.fetchone()['m'] or month
+
     cur.execute("SELECT COUNT(*) AS c FROM messages WHERE resolved=0"); msg_count=cur.fetchone()['c']
     # direct messages count to admin (unread)
     cur.execute("SELECT COUNT(*) AS c FROM direct_messages WHERE to_role='admin' AND is_read=0"); dm_unread = cur.fetchone()['c']
@@ -25542,6 +25947,8 @@ def admin_home():
     {stat('Total enrollments', str(total))}
     {stat('Pending', str(counts.get('PENDING',0)))}
     {stat('Active', str(counts.get('ACTIVE',0)))}
+    {stat('Active student-months', str(active_student_months))}
+    {stat('Latest active until', pretty_month_label(latest_active_until))}
     {stat('Admin inbox', str(msg_count))}{stat('Direct msgs (unread)', str(dm_unread))}
     </div>
     {admin_nav()}
@@ -25638,6 +26045,7 @@ def admin_enrollments():
         SELECT 
             e.id,
             e.student_id,
+            e.subject_id,
             e.status,
             e.amount_paid,
             e.pop_url,
@@ -25690,6 +26098,7 @@ def admin_enrollments():
     for r in rows:
 
         history = "Returning student" if r['student_id'] in returning_ids else "First month"
+        period_html = active_enrollment_period_badge_for_student_subject(r['student_id'], r['subject_id'], month)
 
         files = pop_map.get(r['id'], []) or ([r['pop_url']] if r['pop_url'] else [])
 
@@ -25792,6 +26201,7 @@ def admin_enrollments():
             <td>{grade_label(r['grade'])}</td>
             <td>{r['subject_name']}</td>
             <td><span class='chip {r['status'].lower()}'>{r['status']}</span></td>
+            <td>{period_html}</td>
             <td><span class='mini muted'>{history}</span></td>
             <td><span class='mini'>{r['created_at']}</span></td>
             <td>{coupon_html}</td>
@@ -25947,6 +26357,7 @@ def admin_enrollments():
                         <th>Grade</th>
                         <th>Subject</th>
                         <th>Status</th>
+                        <th>Active Period</th>
                         <th>History</th>
                         <th>Timestamp</th>
                         <th>Coupon / Referral</th>
@@ -25960,7 +26371,7 @@ def admin_enrollments():
 
                 <tbody>
 
-                    {''.join(trs) or "<tr><td colspan='11'>No enrollments.</td></tr>"}
+                    {''.join(trs) or "<tr><td colspan='12'>No enrollments.</td></tr>"}
 
                 </tbody>
 
@@ -26016,19 +26427,53 @@ def enrollment_action(id: int, action: str):
     # Actions that should activate the enrollment
     should_approve = action in ["approve", "approve_sms"]
 
+    # Load the selected enrollment first. New multi-month enrolments share one
+    # enrollment_period_ref across every selected subject and month. This lets
+    # Admissions approve the paid period once, then the portal activates all rows
+    # in that period without requiring month-by-month approval. Existing old rows
+    # that do not have a period ref still update only the selected enrollment.
+    cur.execute("""
+        SELECT id, enrollment_period_ref
+        FROM enrollments
+        WHERE id = ?
+        LIMIT 1
+    """, (id,))
+
+    selected_enrollment = cur.fetchone()
+
+    if not selected_enrollment:
+        conn.close()
+        return page("Enrollment Not Found", card_msg("This enrollment could not be found."))
+
+    period_ref_to_update = (selected_enrollment["enrollment_period_ref"] or "").strip()
+
     if should_approve:
-        cur.execute("""
-            UPDATE enrollments
-            SET status = 'ACTIVE'
-            WHERE id = ?
-        """, (id,))
+        if period_ref_to_update:
+            cur.execute("""
+                UPDATE enrollments
+                SET status = 'ACTIVE'
+                WHERE enrollment_period_ref = ?
+            """, (period_ref_to_update,))
+        else:
+            cur.execute("""
+                UPDATE enrollments
+                SET status = 'ACTIVE'
+                WHERE id = ?
+            """, (id,))
 
     elif action == "lapse":
-        cur.execute("""
-            UPDATE enrollments
-            SET status = 'LAPSED'
-            WHERE id = ?
-        """, (id,))
+        if period_ref_to_update:
+            cur.execute("""
+                UPDATE enrollments
+                SET status = 'LAPSED'
+                WHERE enrollment_period_ref = ?
+            """, (period_ref_to_update,))
+        else:
+            cur.execute("""
+                UPDATE enrollments
+                SET status = 'LAPSED'
+                WHERE id = ?
+            """, (id,))
 
     elif action == "pending":
 
@@ -26036,11 +26481,18 @@ def enrollment_action(id: int, action: str):
             conn.close()
             return page("Access Denied", card_msg("Only super admin can set status to Pending."))
 
-        cur.execute("""
-            UPDATE enrollments
-            SET status = 'PENDING'
-            WHERE id = ?
-        """, (id,))
+        if period_ref_to_update:
+            cur.execute("""
+                UPDATE enrollments
+                SET status = 'PENDING'
+                WHERE enrollment_period_ref = ?
+            """, (period_ref_to_update,))
+        else:
+            cur.execute("""
+                UPDATE enrollments
+                SET status = 'PENDING'
+                WHERE id = ?
+            """, (id,))
 
     # Load student details if SMS is requested
     if needs_sms_details:
@@ -54693,6 +55145,8 @@ def duty_admin_enrollments():
     cur.execute(f"""
         SELECT
             e.id,
+            e.student_id,
+            e.subject_id,
             e.month,
             e.status,
             e.payment_method,
@@ -54731,6 +55185,7 @@ def duty_admin_enrollments():
             pop_link = f"<a target='_blank' href='{escape(r0['pop_url'])}'>PoP</a>"
 
         amount = r0["amount_paid"] if r0["amount_paid"] not in [None, ""] else "—"
+        period_html = active_enrollment_period_badge_for_student_subject(r0['student_id'], r0['subject_id'], month)
 
         status_class = "pending"
         if r0["status"] == "ACTIVE":
@@ -54753,6 +55208,8 @@ def duty_admin_enrollments():
             </td>
 
             <td><span class="chip {status_class}">{escape(r0['status'])}</span></td>
+
+            <td>{period_html}</td>
 
             <td>{pop_link}</td>
 
@@ -54824,6 +55281,7 @@ def duty_admin_enrollments():
                         <th>Grade</th>
                         <th>Subject</th>
                         <th>Status</th>
+                        <th>Active Period</th>
                         <th>PoP</th>
                         <th>Amount</th>
                         <th>Contact Details</th>
@@ -54832,7 +55290,7 @@ def duty_admin_enrollments():
                 </thead>
 
                 <tbody>
-                    {trs or "<tr><td colspan='8'>No enrollments found.</td></tr>"}
+                    {trs or "<tr><td colspan='9'>No enrollments found.</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -58037,6 +58495,8 @@ def admission_enrollments():
     cur.execute(f"""
         SELECT
             e.id,
+            e.student_id,
+            e.subject_id,
             e.month,
             e.status,
             e.payment_method,
@@ -58088,6 +58548,7 @@ def admission_enrollments():
 
     for row in rows:
         pop_link = "—"
+        period_html = active_enrollment_period_badge_for_student_subject(row['student_id'], row['subject_id'], month)
         
         history_label = "First month"
 
@@ -58202,6 +58663,8 @@ def admission_enrollments():
                 </span>
             </td>
 
+            <td>{period_html}</td>
+
             <td>{history_html}</td>
 
             <td>{coupon_html}</td>
@@ -58277,6 +58740,7 @@ def admission_enrollments():
                         <th>Grade</th>
                         <th>Subject</th>
                         <th>Status</th>
+                        <th>Active Period</th>
                         <th>History</th>
                         <th>Coupon / Referral</th>
                         <th>PoP</th>
@@ -58288,7 +58752,7 @@ def admission_enrollments():
                 </thead>
 
                 <tbody>
-                    {trs or "<tr><td colspan='11'>No enrollments found.</td></tr>"}
+                    {trs or "<tr><td colspan='12'>No enrollments found.</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -64682,6 +65146,7 @@ def coo_enrollments():
             pop = f"<a target='_blank' href='{escape(e['pop_url'])}'>PoP</a>"
 
         coupon = e["coupon_code"] or e["referral_code_used"] or "No code used"
+        period_html = active_enrollment_period_badge_for_student_subject(e['student_id'], e['subject_id'], month)
 
         trs += f"""
         <tr>
@@ -64694,6 +65159,7 @@ def coo_enrollments():
             <td>{grade_label(e['grade'])}</td>
             <td>{escape(e['subject_name'])}</td>
             <td>{coo_status_chip(e['status'])}</td>
+            <td>{period_html}</td>
             <td>{escape(coupon)}</td>
             <td>R{float(e['amount_paid'] or 0):,.2f}</td>
             <td>{pop}</td>
@@ -64752,6 +65218,7 @@ def coo_enrollments():
                         <th>Grade</th>
                         <th>Subject</th>
                         <th>Status</th>
+                        <th>Active Period</th>
                         <th>Coupon / Referral</th>
                         <th>Amount Paid</th>
                         <th>PoP</th>
@@ -64760,7 +65227,7 @@ def coo_enrollments():
                 </thead>
 
                 <tbody>
-                    {trs or "<tr><td colspan='8'>No enrollments found.</td></tr>"}
+                    {trs or "<tr><td colspan='9'>No enrollments found.</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -67793,6 +68260,22 @@ def cao_dashboard():
     """, (month,))
     active_learners = cur.fetchone()["c"] or 0
 
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id || '-' || month) AS c
+        FROM enrollments
+        WHERE UPPER(status)='ACTIVE'
+          AND month>=?
+    """, (month,))
+    active_student_months = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT MAX(month) AS m
+        FROM enrollments
+        WHERE UPPER(status)='ACTIVE'
+          AND month>=?
+    """, (month,))
+    active_until_month = cur.fetchone()["m"] or month
+
     prev_month_dt = datetime.datetime.strptime(month + "-01", "%Y-%m-%d") - datetime.timedelta(days=1)
     prev_month = prev_month_dt.strftime("%Y-%m")
 
@@ -68004,6 +68487,8 @@ def cao_dashboard():
             {stat("Submissions", assignment_submissions)}
             {stat("Student Reports", student_reports)}
             {stat("Active Learners", active_learners)}
+            {stat("Active Student-Months", active_student_months)}
+            {stat("Active Until", pretty_month_label(active_until_month))}
             {stat("Learners Lost", learners_lost)}
         </div>
 
