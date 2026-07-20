@@ -26100,6 +26100,14 @@ def admin_enrollments():
         history = "Returning student" if r['student_id'] in returning_ids else "First month"
         period_html = active_enrollment_period_badge_for_student_subject(r['student_id'], r['subject_id'], month)
 
+        # Preserve the current Super Admin filters after sensitive actions like Delete.
+        state_hidden = f"""
+                <input type="hidden" name="page" value="{page_num}">
+                <input type="hidden" name="q" value="{escape(q, quote=True)}">
+                <input type="hidden" name="grade" value="{escape(f_grade, quote=True)}">
+                <input type="hidden" name="subject" value="{escape(f_subject, quote=True)}">
+            """
+
         files = pop_map.get(r['id'], []) or ([r['pop_url']] if r['pop_url'] else [])
 
         pop_html = " ".join(
@@ -26191,7 +26199,15 @@ def admin_enrollments():
             actions += f"""
             <form method='post' action='{url_for('enrollment_action', id=r['id'], action='pending')}' style='display:inline'>
                 <input type="hidden" name="page" value="{page_num}">
-                <button class='btn warn'>Pending</button>
+                <button class='btn warn mini'>Pending</button>
+            </form>
+
+            <form method='post'
+                  action='{url_for('enrollment_action', id=r['id'], action='delete')}'
+                  style='display:inline'
+                  onsubmit="return confirm('Super Admin action: delete this enrollment? If this enrollment is linked to a multi-month paid period, all enrollments in that same period will be deleted. This cannot be undone.');">
+                {state_hidden}
+                <button class='btn danger mini'>Delete</button>
             </form>
             """
         
@@ -26395,10 +26411,13 @@ def enrollment_action(id: int, action: str):
 
     page_num = int(request.form.get("page", 1))
 
-    allowed_actions = ["approve", "approve_sms", "sms", "lapse", "pending"]
+    allowed_actions = ["approve", "approve_sms", "sms", "lapse", "pending", "delete"]
 
     if action not in allowed_actions:
         return page("Invalid Action", card_msg("Invalid enrollment action."))
+
+    if action == "delete" and not is_high_admin():
+        return page("Access Denied", card_msg("Only Super Admin can delete enrollments."))
         
     status_changing_actions = ["approve", "approve_sms", "lapse"]
 
@@ -26446,6 +26465,48 @@ def enrollment_action(id: int, action: str):
         return page("Enrollment Not Found", card_msg("This enrollment could not be found."))
 
     period_ref_to_update = (selected_enrollment["enrollment_period_ref"] or "").strip()
+
+    # Super Admin delete: remove the selected enrollment safely.
+    # If it belongs to a multi-month paid period, delete the whole linked period
+    # to avoid leaving future-month rows active/pending without the original record.
+    if action == "delete":
+        if period_ref_to_update:
+            cur.execute("""
+                SELECT id
+                FROM enrollments
+                WHERE enrollment_period_ref = ?
+            """, (period_ref_to_update,))
+            enrollment_ids_to_delete = [row["id"] for row in cur.fetchall()]
+        else:
+            enrollment_ids_to_delete = [id]
+
+        if enrollment_ids_to_delete:
+            placeholders = ",".join(["?"] * len(enrollment_ids_to_delete))
+
+            # Remove dependent records first because payments do not cascade by default.
+            cur.execute(
+                f"DELETE FROM enrollment_files WHERE enrollment_id IN ({placeholders})",
+                enrollment_ids_to_delete
+            )
+            cur.execute(
+                f"DELETE FROM payments WHERE enrollment_id IN ({placeholders})",
+                enrollment_ids_to_delete
+            )
+            cur.execute(
+                f"DELETE FROM enrollments WHERE id IN ({placeholders})",
+                enrollment_ids_to_delete
+            )
+
+        conn.commit()
+        conn.close()
+
+        redirect_params = {"page": page_num}
+        for key in ("q", "grade", "subject"):
+            value = request.form.get(key, "").strip()
+            if value:
+                redirect_params[key] = value
+
+        return redirect(url_for("admin_enrollments", **redirect_params))
 
     if should_approve:
         if period_ref_to_update:
