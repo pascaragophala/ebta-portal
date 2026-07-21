@@ -8913,6 +8913,244 @@ body:`manager_id=${manager}&tutor_id=${tutor}&state=${state?1:0}`
 </script>
 """
 
+# ===================== EBTA MATH / FORMULA RENDERING SUPPORT =====================
+# Learners and tutors can write formulas using LaTeX-style inline math, for example:
+# \(\theta\), \(\alpha\), \(\sqrt{x}\), \(x^2\), \(\frac{a}{b}\), \(\sin\theta\).
+# The text is still stored as normal text, but rendered nicely on assessment and learning game screens.
+
+EBTA_MATH_SUPPORT_HEAD = r"""
+<style>
+    .ebta-math-text {
+        max-width:100%;
+        overflow-wrap:anywhere;
+        word-break:break-word;
+    }
+
+    .ebta-math-text mjx-container {
+        max-width:100%;
+        overflow-x:auto;
+        overflow-y:hidden;
+        padding:2px 0;
+    }
+
+    .ebta-math-text .ebta-fallback-symbol {
+        font-family:"Times New Roman", Cambria, serif;
+        font-weight:700;
+    }
+
+    .ebta-math-helper {
+        border-left:5px solid #2563eb;
+        background:#f8fafc;
+        margin:10px 0 12px 0;
+    }
+
+    .ebta-math-helper .ebta-math-toolbar {
+        display:flex;
+        gap:6px;
+        flex-wrap:wrap;
+        margin:8px 0;
+    }
+
+    .ebta-math-helper .ebta-math-toolbar button {
+        white-space:nowrap;
+    }
+
+    .ebta-math-helper code {
+        background:#ffffff;
+        border:1px solid #e2e8f0;
+        border-radius:8px;
+        padding:2px 5px;
+        color:#0f172a;
+        font-weight:800;
+    }
+
+    @media(max-width:700px) {
+        .ebta-math-helper .ebta-math-toolbar {
+            display:grid;
+            grid-template-columns:repeat(2,minmax(0,1fr));
+        }
+
+        .ebta-math-helper .ebta-math-toolbar button {
+            width:100%;
+            justify-content:center;
+        }
+    }
+</style>
+
+<script>
+window.MathJax = window.MathJax || {
+    tex: {
+        inlineMath: [['\\(', '\\)'], ['$', '$']],
+        displayMath: [['\\[', '\\]'], ['$$', '$$']],
+        processEscapes: true,
+        packages: {'[+]': ['ams']}
+    },
+    options: {
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+    },
+    startup: {
+        typeset: false
+    }
+};
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<script>
+(function(){
+    function escapeHtml(value) {
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    const bareSymbolMap = {
+        '\\theta': 'θ', '\\Theta': 'Θ',
+        '\\alpha': 'α', '\\Alpha': 'Α',
+        '\\beta': 'β', '\\Beta': 'Β',
+        '\\gamma': 'γ', '\\Gamma': 'Γ',
+        '\\delta': 'δ', '\\Delta': 'Δ',
+        '\\pi': 'π', '\\Pi': 'Π',
+        '\\lambda': 'λ', '\\mu': 'μ', '\\sigma': 'σ', '\\Sigma': 'Σ',
+        '\\omega': 'ω', '\\Omega': 'Ω',
+        '\\times': '×', '\\div': '÷', '\\pm': '±',
+        '\\leq': '≤', '\\geq': '≥', '\\neq': '≠',
+        '\\approx': '≈', '\\infty': '∞', '\\degree': '°'
+    };
+
+    function hasMathDelimiters(text) {
+        return /\\\(|\\\)|\\\[|\\\]|\$\$|\$[^\s]/.test(text || '');
+    }
+
+    function fallbackMathHtml(text) {
+        let html = escapeHtml(text || '');
+
+        Object.keys(bareSymbolMap).forEach(function(key){
+            const symbol = bareSymbolMap[key];
+            const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            html = html.replace(new RegExp(escapedKey, 'g'), '<span class="ebta-fallback-symbol">' + symbol + '</span>');
+        });
+
+        html = html.replace(/\\sqrt\{([^{}]+)\}/g, '<span class="ebta-fallback-symbol">√($1)</span>');
+        html = html.replace(/sqrt\(([^()]+)\)/gi, '<span class="ebta-fallback-symbol">√($1)</span>');
+        html = html.replace(/\^\{([^{}]+)\}/g, '<sup>$1</sup>');
+        html = html.replace(/\^([A-Za-z0-9+\-]+)/g, '<sup>$1</sup>');
+        html = html.replace(/_\{([^{}]+)\}/g, '<sub>$1</sub>');
+        html = html.replace(/_([A-Za-z0-9+\-]+)/g, '<sub>$1</sub>');
+        html = html.replace(/&lt;=/g, '≤').replace(/&gt;=/g, '≥').replace(/!=/g, '≠');
+        html = html.replace(/\n/g, '<br>');
+
+        return html;
+    }
+
+    window.ebtaRenderMath = function(scope) {
+        const root = scope || document;
+        const elements = Array.from(root.querySelectorAll('.ebta-math-text'));
+
+        elements.forEach(function(el){
+            if (el.dataset.ebtaMathPrepared === '1') return;
+
+            const raw = el.textContent || '';
+            el.dataset.ebtaMathPrepared = '1';
+
+            if (!hasMathDelimiters(raw)) {
+                el.innerHTML = fallbackMathHtml(raw);
+            }
+        });
+
+        function runTypeset(){
+            if (window.MathJax && window.MathJax.typesetPromise) {
+                window.MathJax.typesetPromise(elements).catch(function(err){
+                    console.warn('EBTA Math render warning:', err);
+                });
+            }
+        }
+
+        if (window.MathJax && window.MathJax.startup && window.MathJax.startup.promise) {
+            window.MathJax.startup.promise.then(runTypeset);
+        } else {
+            setTimeout(runTypeset, 400);
+        }
+    };
+
+    window.ebtaInsertMathSnippet = function(button) {
+        const snippet = button.getAttribute('data-snippet') || '';
+        const container = button.closest('form, .card, section') || document;
+        let target = document.activeElement;
+
+        if (!target || !container.contains(target) || !/^(TEXTAREA|INPUT)$/.test(target.tagName)) {
+            target = container.querySelector('textarea[name="question_text"], textarea[name="options_text"], textarea[name="memo"], textarea[name="explanation"], textarea, input[type="text"], input:not([type])');
+        }
+
+        if (!target) return;
+
+        const start = target.selectionStart || target.value.length || 0;
+        const end = target.selectionEnd || target.value.length || 0;
+        const before = target.value.slice(0, start);
+        const after = target.value.slice(end);
+        const spacerBefore = before && !before.endsWith(' ') && !before.endsWith('\n') ? ' ' : '';
+        const spacerAfter = after && !after.startsWith(' ') && !after.startsWith('\n') ? ' ' : '';
+
+        target.value = before + spacerBefore + snippet + spacerAfter + after;
+        const nextPos = (before + spacerBefore + snippet).length;
+        target.focus();
+        target.setSelectionRange(nextPos, nextPos);
+        target.dispatchEvent(new Event('input', {bubbles:true}));
+    };
+
+    document.addEventListener('DOMContentLoaded', function(){
+        window.ebtaRenderMath(document);
+    });
+})();
+</script>
+"""
+
+
+def math_render_html(value, tag="span", extra_class="", style=""):
+    """
+    Safely render tutor/student text while allowing MathJax or the fallback renderer
+    to display common maths notation inside assessment and learning game screens.
+    """
+    allowed_tags = {"span", "div", "p", "h3", "strong"}
+    tag = tag if tag in allowed_tags else "span"
+    classes = "ebta-math-text"
+    if extra_class:
+        classes += " " + str(extra_class).strip()
+    style_attr = f" style=\"{escape(style)}\"" if style else ""
+    return f"<{tag} class=\"{classes}\"{style_attr}>{escape(str(value or ''))}</{tag}>"
+
+
+def math_helper_box():
+    return r"""
+    <div class="card soft ebta-math-helper">
+        <strong>Maths / Symbols helper</strong>
+        <div class="mini muted" style="margin-top:4px">
+            Click a symbol to insert it into the field you are editing. For best display, keep formulas inside <code>\( ... \)</code>.
+        </div>
+        <div class="ebta-math-toolbar">
+            <button type="button" class="btn mini secondary" data-snippet="\(\theta\)" onclick="ebtaInsertMathSnippet(this)">θ theta</button>
+            <button type="button" class="btn mini secondary" data-snippet="\(\alpha\)" onclick="ebtaInsertMathSnippet(this)">α alpha</button>
+            <button type="button" class="btn mini secondary" data-snippet="\(\beta\)" onclick="ebtaInsertMathSnippet(this)">β beta</button>
+            <button type="button" class="btn mini secondary" data-snippet="\(\pi\)" onclick="ebtaInsertMathSnippet(this)">π pi</button>
+            <button type="button" class="btn mini secondary" data-snippet="\(\sqrt{x}\)" onclick="ebtaInsertMathSnippet(this)">√ square root</button>
+            <button type="button" class="btn mini secondary" data-snippet="\(x^2\)" onclick="ebtaInsertMathSnippet(this)">x²</button>
+            <button type="button" class="btn mini secondary" data-snippet="\(x_1\)" onclick="ebtaInsertMathSnippet(this)">x₁</button>
+            <button type="button" class="btn mini secondary" data-snippet="\(\frac{a}{b}\)" onclick="ebtaInsertMathSnippet(this)">a/b fraction</button>
+            <button type="button" class="btn mini secondary" data-snippet="\(\sin\theta\)" onclick="ebtaInsertMathSnippet(this)">sin θ</button>
+            <button type="button" class="btn mini secondary" data-snippet="\(\cos\theta\)" onclick="ebtaInsertMathSnippet(this)">cos θ</button>
+            <button type="button" class="btn mini secondary" data-snippet="\(\tan\theta\)" onclick="ebtaInsertMathSnippet(this)">tan θ</button>
+            <button type="button" class="btn mini secondary" data-snippet="\(\leq\)" onclick="ebtaInsertMathSnippet(this)">≤</button>
+            <button type="button" class="btn mini secondary" data-snippet="\(\geq\)" onclick="ebtaInsertMathSnippet(this)">≥</button>
+            <button type="button" class="btn mini secondary" data-snippet="\(\pm\)" onclick="ebtaInsertMathSnippet(this)">±</button>
+        </div>
+        <div class="mini muted">
+            Examples: <code>\(3x^2 + 2x - 5\)</code>, <code>\(\sqrt{49}\)</code>, <code>\(\frac{5}{8}\)</code>, <code>\(\theta = 30^\circ\)</code>
+        </div>
+    </div>
+    """
+
+
 
 def page(title, body_html, extra_head="", extra_js=""):
     auth = []
@@ -10355,7 +10593,7 @@ def page(title, body_html, extra_head="", extra_js=""):
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
-    {GOOGLE_FONTS}{BASE_CSS}{BASE_JS}{extra_head}
+    {GOOGLE_FONTS}{BASE_CSS}{BASE_JS}{EBTA_MATH_SUPPORT_HEAD}{extra_head}
     </head><body class="{body_class}">
     <header class='header'>
         <div class='nav'>
@@ -18771,7 +19009,7 @@ def tutor_student_view_assessment_questions(assessment_id):
                 options_html += f"""
                 <label class="assessment-option-label read-only-option">
                     <input type="radio" disabled name="q_{q['id']}" value="{index}">
-                    <span>{escape(str(opt or ''))}</span>
+                    {math_render_html(str(opt or ''))}
                 </label>
                 """
             answer_html = options_html or "<div class='mini muted'>No MCQ options added yet.</div>"
@@ -18805,7 +19043,7 @@ def tutor_student_view_assessment_questions(assessment_id):
             </summary>
 
             <div class="assessment-question-content">
-                <p class="assessment-text-mobile" style="white-space:pre-wrap">{escape(q['question_text'] or '')}</p>
+                {math_render_html(q['question_text'] or '', tag='p', extra_class='assessment-text-mobile', style='white-space:pre-wrap')}
                 {question_file_html}
                 {answer_html}
                 {upload_html}
@@ -19057,7 +19295,7 @@ def tutor_student_view_assessment_questions(assessment_id):
         <div class="card soft assessment-rules-box">
             <h2>Assessment Rules</h2>
             <p style="white-space:pre-wrap">
-                {escape(a['instructions'] or 'Answer all questions. Do not leave the assessment tab while writing.')}
+                {math_render_html(a['instructions'] or 'Answer all questions. Do not leave the assessment tab while writing.', tag='span')}
             </p>
             <p class="mini muted">
                 Learners see the questions below when they open this assessment. Answer submission is disabled for tutors.
@@ -80624,7 +80862,7 @@ def tutor_assessment_builder(assessment_id):
 
             for i, opt in enumerate(options):
                 correct = "✅" if q["correct_index"] == i else ""
-                option_lines.append(f"{chr(65+i)}. {escape(opt)} {correct}")
+                option_lines.append(f"{chr(65+i)}. {math_render_html(opt)} {correct}")
 
             options_html = "<br>".join(option_lines)
         else:
@@ -80649,7 +80887,7 @@ def tutor_assessment_builder(assessment_id):
             <td>{q['question_order']}</td>
             <td>{escape(q['question_type'])}</td>
             <td style="min-width:260px">
-                {escape(q['question_text'])}
+                {math_render_html(q['question_text'], tag='div', style='white-space:pre-wrap')}
                 {question_file_html}
             </td>
             <td>{options_html}</td>
@@ -80751,6 +80989,10 @@ def tutor_assessment_builder(assessment_id):
                 <div style="grid-column:1/-1">
                     <label>Question</label>
                     <textarea name="question_text" rows="4" required></textarea>
+                </div>
+
+                <div style="grid-column:1/-1">
+                    {math_helper_box()}
                 </div>
 
                 <div style="grid-column:1/-1">
@@ -81038,6 +81280,10 @@ def tutor_edit_assessment_question(assessment_id, question_id):
             <div style="grid-column:1/-1">
                 <label>Question Text</label>
                 <textarea name="question_text" rows="5" required>{escape(q["question_text"] or "")}</textarea>
+            </div>
+
+            <div style="grid-column:1/-1">
+                {math_helper_box()}
             </div>
 
             <div style="grid-column:1/-1">
@@ -81859,7 +82105,7 @@ def student_take_assessment(assessment_id):
                     <input type="radio"
                            name="q_{q['id']}"
                            value="{index}">
-                    <span>{escape(opt)}</span>
+                    {math_render_html(opt)}
                 </label>
                 """
 
@@ -81892,7 +82138,7 @@ def student_take_assessment(assessment_id):
             </summary>
 
             <div class="assessment-question-content">
-                <p class="assessment-text-mobile" style="white-space:pre-wrap">{escape(q['question_text'])}</p>
+                {math_render_html(q['question_text'], tag='p', extra_class='assessment-text-mobile', style='white-space:pre-wrap')}
 
                 {question_file_html}
                 {answer_html}
@@ -82235,7 +82481,7 @@ def student_take_assessment(assessment_id):
             <h2>Assessment Rules</h2>
 
             <p style="white-space:pre-wrap">
-                {escape(a['instructions'] or 'Answer all questions. Do not leave the assessment tab while writing.')}
+                {math_render_html(a['instructions'] or 'Answer all questions. Do not leave the assessment tab while writing.', tag='span')}
             </p>
 
             <p class="mini muted">
@@ -82818,14 +83064,14 @@ def student_review_assessment_attempt(assessment_id):
             selected_answer_html = f"""
             <p>
                 <strong>Your answer:</strong>
-                {escape(selected_text)}
+                {math_render_html(selected_text)}
             </p>
             """
 
             correct_answer_html = f"""
             <p>
                 <strong>Correct answer:</strong>
-                {escape(correct_text)}
+                {math_render_html(correct_text)}
             </p>
             """
 
@@ -82847,7 +83093,7 @@ def student_review_assessment_attempt(assessment_id):
             </p>
 
             <div class="card soft" style="white-space:pre-wrap">
-                {escape(q["answer_text"] or "No typed answer submitted.")}
+                {math_render_html(q["answer_text"] or "No typed answer submitted.", tag="span")}
             </div>
             """
 
@@ -82873,7 +83119,7 @@ def student_review_assessment_attempt(assessment_id):
                 <div class="card soft" style="border-left:5px solid #16a34a;margin-top:10px">
                     <strong>Tutor feedback:</strong>
                     <p style="white-space:pre-wrap;margin-bottom:0">
-                        {escape(q["feedback"])}
+                        {math_render_html(q["feedback"], tag="span")}
                     </p>
                 </div>
                 """
@@ -82886,7 +83132,7 @@ def student_review_assessment_attempt(assessment_id):
                 </summary>
 
                 <div class="card soft" style="margin-top:8px;white-space:pre-wrap">
-                    {escape(q["memo"])}
+                    {math_render_html(q["memo"], tag="span")}
                 </div>
             </details>
             """
@@ -82910,7 +83156,7 @@ def student_review_assessment_attempt(assessment_id):
 
             <div class="assessment-review-content">
                 <p class="assessment-text-mobile" style="white-space:pre-wrap">
-                    {escape(q["question_text"] or "")}
+                    {math_render_html(q["question_text"] or "", tag="span")}
                 </p>
 
                 {question_file_html}
@@ -83608,8 +83854,8 @@ def tutor_mark_assessment_attempt(attempt_id):
                 correct_text = options[ans["correct_index"]]
 
             answer_display = f"""
-            <p><strong>Selected:</strong> {escape(selected_text)}</p>
-            <p><strong>Correct:</strong> {escape(correct_text)}</p>
+            <p><strong>Selected:</strong> {math_render_html(selected_text)}</p>
+            <p><strong>Correct:</strong> {math_render_html(correct_text)}</p>
             <p><strong>Auto Mark:</strong> {ans['auto_mark']} / {ans['points']}</p>
             """
 
@@ -83618,7 +83864,7 @@ def tutor_mark_assessment_attempt(attempt_id):
 
             answer_display = f"""
             <p style="white-space:pre-wrap;border:1px solid #e5e7eb;padding:10px;border-radius:10px">
-                {escape(ans['answer_text'] or 'No answer')}
+                {math_render_html(ans['answer_text'] or 'No answer', tag='span')}
             </p>
 
             <label>Manual Mark out of {ans['points']}</label>
@@ -83637,14 +83883,14 @@ def tutor_mark_assessment_attempt(attempt_id):
         <div class="card soft">
             <h3>{escape(ans['question_type'])} Question ({ans['points']} mark(s))</h3>
 
-            <p style="white-space:pre-wrap">{escape(ans['question_text'])}</p>
+            {math_render_html(ans['question_text'], tag='p', style='white-space:pre-wrap')}
 
             {answer_display}
             {question_file_html}
             {learner_files_html}
 
             <p class="mini muted" style="white-space:pre-wrap">
-                Memo: {escape(ans['memo'] or 'No memo added.')}
+                Memo: {math_render_html(ans['memo'] or 'No memo added.')}
             </p>
         </div>
         """
@@ -84282,7 +84528,7 @@ def student_learning_game_play():
             option_html += f"""
             <label class="game-option">
                 <input type="radio" name="q_{qrow['id']}" value="{opt_index}">
-                <span>{escape(opt)}</span>
+                {math_render_html(opt)}
             </label>
             """
 
@@ -84293,7 +84539,7 @@ def student_learning_game_play():
         question_html += f"""
         <div class="game-question-card">
             <div class="mini muted">Question {index} · {escape(qrow['topic'])} {boss_badge}</div>
-            <h3>{escape(qrow['question_text'])}</h3>
+            {math_render_html(qrow['question_text'], tag='h3')}
             {option_html}
         </div>
         """
@@ -84771,8 +85017,8 @@ def tutor_learning_game_questions():
         rows += f"""
         <tr>
             <td>
-                <strong>{escape((qrow['question_text'] or '')[:90])}</strong>
-                <div class="mini muted">{escape(qrow['explanation'] or '')[:90]}</div>
+                {math_render_html((qrow['question_text'] or '')[:90], tag='strong')}
+                <div class="mini muted">{math_render_html((qrow['explanation'] or '')[:90])}</div>
             </td>
             <td>{grade_label(qrow['grade'])} {escape(qrow['subject_name'])}</td>
             <td>{escape(qrow['topic'])}</td>
@@ -84818,6 +85064,8 @@ def tutor_learning_game_questions():
 
                     <label>Question</label>
                     <textarea name="question_text" required></textarea>
+
+                    {math_helper_box()}
 
                     <label>Option A</label>
                     <input name="option_a" required>
