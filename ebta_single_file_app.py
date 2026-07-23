@@ -2286,6 +2286,110 @@ def init_db():
     );
     """)
 
+    # Stores the maximum points for each game attempt. This prevents hard/boss-battle
+    # games from showing percentages above 100% when questions carry more than 1 point.
+    ensure_column(conn, "learning_game_results", "total_points", "INTEGER NOT NULL DEFAULT 0")
+
+    # Repair older learning-game results that were calculated as score / question count.
+    # The old calculation could show 120%, 240%, 300%, etc. when a learner earned
+    # multiple points per question. We recalculate using the stored answer details
+    # and each question's point value. If older details are missing, we safely cap.
+    try:
+        cur.execute("""
+            SELECT id, score, total_questions, percentage, answer_details_json
+            FROM learning_game_results
+            WHERE COALESCE(total_points, 0) = 0
+               OR COALESCE(percentage, 0) > 100
+               OR COALESCE(percentage, 0) < 0
+        """)
+        game_result_rows = cur.fetchall()
+
+        for game_row in game_result_rows:
+            try:
+                raw_details = json.loads(game_row["answer_details_json"] or "[]")
+            except Exception:
+                raw_details = []
+
+            question_ids_for_result = []
+            for detail in raw_details:
+                try:
+                    qid = int(detail.get("question_id"))
+                    if qid not in question_ids_for_result:
+                        question_ids_for_result.append(qid)
+                except Exception:
+                    pass
+
+            points_by_question = {}
+            if question_ids_for_result:
+                qmarks = ",".join("?" for _ in question_ids_for_result)
+                cur.execute(f"""
+                    SELECT id, points
+                    FROM learning_game_questions
+                    WHERE id IN ({qmarks})
+                """, question_ids_for_result)
+                points_by_question = {
+                    int(point_row["id"]): max(int(point_row["points"] or 1), 1)
+                    for point_row in cur.fetchall()
+                }
+
+            total_points_for_result = 0
+            if raw_details:
+                for detail in raw_details:
+                    try:
+                        qid = int(detail.get("question_id"))
+                    except Exception:
+                        qid = 0
+                    total_points_for_result += points_by_question.get(qid, 1)
+
+            if total_points_for_result <= 0:
+                try:
+                    total_points_for_result = int(game_row["total_questions"] or 0)
+                except Exception:
+                    total_points_for_result = 0
+
+            try:
+                earned_points = float(game_row["score"] or 0)
+            except Exception:
+                earned_points = 0
+
+            if total_points_for_result > 0:
+                fixed_percentage = round((earned_points / float(total_points_for_result)) * 100, 1)
+            else:
+                fixed_percentage = 0
+
+            if fixed_percentage < 0:
+                fixed_percentage = 0
+            if fixed_percentage > 100:
+                fixed_percentage = 100
+
+            if fixed_percentage >= 95:
+                fixed_badge = "EBTA Legend"
+            elif fixed_percentage >= 85:
+                fixed_badge = "Top Achiever"
+            elif fixed_percentage >= 75:
+                fixed_badge = "Brain Champion"
+            elif fixed_percentage >= 65:
+                fixed_badge = "Rising Star"
+            elif fixed_percentage >= 50:
+                fixed_badge = "Keep Going"
+            else:
+                fixed_badge = "Revision Warrior"
+
+            cur.execute("""
+                UPDATE learning_game_results
+                SET total_points=?,
+                    percentage=?,
+                    badge=?
+                WHERE id=?
+            """, (
+                total_points_for_result,
+                fixed_percentage,
+                fixed_badge,
+                game_row["id"]
+            ))
+    except Exception:
+        pass
+
     cur.execute("CREATE INDEX IF NOT EXISTS idx_learning_game_questions_subject ON learning_game_questions(subject_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_learning_game_questions_grade ON learning_game_questions(grade)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_learning_game_questions_game_type ON learning_game_questions(game_type)")
@@ -3481,14 +3585,60 @@ GAME_DIFFICULTIES = [
 ]
 
 
+def learning_game_safe_percentage(value):
+    """
+    Keeps all learning-game percentage displays between 0% and 100%.
+    """
+    try:
+        value = float(value or 0)
+    except Exception:
+        value = 0
+
+    if value < 0:
+        value = 0
+    if value > 100:
+        value = 100
+
+    return round(value, 1)
+
+
+def learning_game_score_display(row):
+    """
+    Shows earned points out of possible points. Older rows fall back safely.
+    """
+    try:
+        earned = float(row["score"] or 0)
+    except Exception:
+        earned = 0
+
+    possible = 0
+    try:
+        possible = int(row["total_points"] or 0)
+    except Exception:
+        possible = 0
+
+    if possible <= 0:
+        try:
+            possible = int(row["total_questions"] or 0)
+        except Exception:
+            possible = 0
+
+    def clean_number(number):
+        try:
+            if float(number).is_integer():
+                return str(int(number))
+        except Exception:
+            pass
+        return str(round(float(number or 0), 1))
+
+    return f"{clean_number(earned)} / {clean_number(possible)}"
+
+
 def learning_game_badge(percentage, game_type="Speed Quiz"):
     """
     Gives learners a fun badge after playing a game.
     """
-    try:
-        percentage = float(percentage or 0)
-    except Exception:
-        percentage = 0
+    percentage = learning_game_safe_percentage(percentage)
 
     if percentage >= 95:
         return "EBTA Legend"
@@ -3504,10 +3654,7 @@ def learning_game_badge(percentage, game_type="Speed Quiz"):
 
 
 def learning_game_status_chip(percentage):
-    try:
-        percentage = float(percentage or 0)
-    except Exception:
-        percentage = 0
+    percentage = learning_game_safe_percentage(percentage)
 
     if percentage >= 75:
         return "<span class='chip active'>Strong</span>"
@@ -50989,7 +51136,7 @@ def treasurer_monthly_report_save():
             created_at,
             updated_at
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(month)
         DO UPDATE SET
             total_income=excluded.total_income,
@@ -58198,7 +58345,7 @@ def duty_admin_followup_create():
             updated_at,
             created_at
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         full_name,
         phone,
@@ -84366,8 +84513,8 @@ def student_learning_games():
     cur.execute("""
         SELECT
             COUNT(*) AS games_played,
-            ROUND(AVG(percentage),1) AS avg_percentage,
-            MAX(percentage) AS best_percentage
+            ROUND(AVG(CASE WHEN percentage < 0 THEN 0 WHEN percentage > 100 THEN 100 ELSE percentage END),1) AS avg_percentage,
+            MAX(CASE WHEN percentage < 0 THEN 0 WHEN percentage > 100 THEN 100 ELSE percentage END) AS best_percentage
         FROM learning_game_results
         WHERE student_id=?
     """, (student_id,))
@@ -84378,13 +84525,14 @@ def student_learning_games():
     recent_html = ""
 
     for rrow in recent_results:
-        badge = rrow['badge'] or learning_game_badge(rrow['percentage'], rrow['game_type'])
+        safe_percentage = learning_game_safe_percentage(rrow['percentage'])
+        badge = learning_game_badge(safe_percentage, rrow['game_type'])
         recent_html += f"""
         <tr>
             <td>{escape(rrow['subject_name'])}</td>
             <td>{escape(rrow['game_type'])}</td>
-            <td>{rrow['score']} / {rrow['total_questions']}</td>
-            <td>{round(float(rrow['percentage'] or 0), 1)}%</td>
+            <td>{learning_game_score_display(rrow)}</td>
+            <td>{safe_percentage}%</td>
             <td>{learning_game_badge_emoji(badge)} {escape(badge)}</td>
         </tr>
         """
@@ -84393,8 +84541,8 @@ def student_learning_games():
     difficulty_options = "".join([f"<option>{escape(x)}</option>" for x in GAME_DIFFICULTIES])
 
     games_played = my_summary['games_played'] or 0
-    avg_percentage = my_summary['avg_percentage'] or 0
-    best_percentage = round(float(my_summary['best_percentage'] or 0), 1)
+    avg_percentage = learning_game_safe_percentage(my_summary['avg_percentage'])
+    best_percentage = learning_game_safe_percentage(my_summary['best_percentage'])
 
     body = f"""
     <style>
@@ -84797,10 +84945,13 @@ def student_learning_game_submit():
 
     score = 0
     total_questions = len(questions)
+    total_points = 0
     answer_details = []
     topic_summary = {}
 
     for qrow in questions:
+        question_points = max(int(qrow["points"] or 1), 1)
+        total_points += question_points
         selected_raw = request.form.get(f"q_{qrow['id']}", "")
 
         try:
@@ -84812,7 +84963,7 @@ def student_learning_game_submit():
         is_correct = selected_index == correct_index
 
         if is_correct:
-            score += int(qrow["points"] or 1)
+            score += question_points
 
         topic = qrow["topic"] or "General"
 
@@ -84829,10 +84980,13 @@ def student_learning_game_submit():
             "topic": topic,
             "selected_index": selected_index,
             "correct_index": correct_index,
-            "is_correct": is_correct
+            "is_correct": is_correct,
+            "points": question_points,
+            "earned_points": question_points if is_correct else 0
         })
 
-    percentage = round((score / total_questions) * 100, 1) if total_questions else 0
+    percentage = round((score / total_points) * 100, 1) if total_points else 0
+    percentage = learning_game_safe_percentage(percentage)
     badge = learning_game_badge(percentage, game_type)
 
     cur.execute("""
@@ -84844,6 +84998,7 @@ def student_learning_game_submit():
             difficulty,
             score,
             total_questions,
+            total_points,
             percentage,
             badge,
             time_taken_seconds,
@@ -84851,7 +85006,7 @@ def student_learning_game_submit():
             answer_details_json,
             played_at
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         student_id,
         subject_id,
@@ -84860,6 +85015,7 @@ def student_learning_game_submit():
         difficulty,
         score,
         total_questions,
+        total_points,
         percentage,
         badge,
         time_taken_seconds,
@@ -84905,9 +85061,10 @@ def student_learning_game_result(result_id):
     if not result:
         return page("Result Not Found", card_msg("This game result could not be found."))
 
-    badge = result["badge"] or "Revision Warrior"
-    percentage = round(float(result["percentage"] or 0), 1)
+    percentage = learning_game_safe_percentage(result["percentage"])
+    badge = learning_game_badge(percentage, result["game_type"])
     emoji = learning_game_badge_emoji(badge)
+    score_display = learning_game_score_display(result)
 
     body = f"""
     <section class="card">
@@ -84919,7 +85076,7 @@ def student_learning_game_result(result_id):
                 {grade_label(result['grade'])} {escape(result['subject_name'])} · {escape(result['game_type'])} · {escape(result['difficulty'])}
             </p>
 
-            <h2>{result['score']} / {result['total_questions']}</h2>
+            <h2>{score_display}</h2>
             <h1>{percentage}%</h1>
 
             {learning_game_status_chip(percentage)}
@@ -84971,9 +85128,9 @@ def student_learning_game_leaderboard():
             st.full_name,
             sub.name AS subject_name,
             lgr.grade,
-            MAX(lgr.percentage) AS best_percentage,
+            MAX(CASE WHEN lgr.percentage < 0 THEN 0 WHEN lgr.percentage > 100 THEN 100 ELSE lgr.percentage END) AS best_percentage,
             COUNT(lgr.id) AS games_played,
-            AVG(lgr.percentage) AS avg_percentage
+            AVG(CASE WHEN lgr.percentage < 0 THEN 0 WHEN lgr.percentage > 100 THEN 100 ELSE lgr.percentage END) AS avg_percentage
         FROM learning_game_results lgr
         JOIN students st ON st.id=lgr.student_id
         JOIN subjects sub ON sub.id=lgr.subject_id
@@ -85010,9 +85167,9 @@ def student_learning_game_leaderboard():
             <td>{medal}</td>
             <td>{escape(item['full_name'])}</td>
             <td>{grade_label(item['grade'])} {escape(item['subject_name'])}</td>
-            <td>{round(float(item['best_percentage'] or 0), 1)}%</td>
+            <td>{learning_game_safe_percentage(item['best_percentage'])}%</td>
             <td>{item['games_played']}</td>
-            <td>{round(float(item['avg_percentage'] or 0), 1)}%</td>
+            <td>{learning_game_safe_percentage(item['avg_percentage'])}%</td>
         </tr>
         """
 
@@ -85380,8 +85537,8 @@ def learning_games_analytics_body(role_label):
         SELECT
             COUNT(*) AS games_played,
             COUNT(DISTINCT student_id) AS active_learners,
-            ROUND(AVG(percentage),1) AS avg_percentage,
-            MAX(percentage) AS best_percentage
+            ROUND(AVG(CASE WHEN percentage < 0 THEN 0 WHEN percentage > 100 THEN 100 ELSE percentage END),1) AS avg_percentage,
+            MAX(CASE WHEN percentage < 0 THEN 0 WHEN percentage > 100 THEN 100 ELSE percentage END) AS best_percentage
         FROM learning_game_results lgr
         {where_sql}
     """, params)
@@ -85393,7 +85550,7 @@ def learning_games_analytics_body(role_label):
             sub.name AS subject_name,
             lgr.grade,
             COUNT(*) AS games_played,
-            ROUND(AVG(lgr.percentage),1) AS avg_percentage
+            ROUND(AVG(CASE WHEN lgr.percentage < 0 THEN 0 WHEN lgr.percentage > 100 THEN 100 ELSE lgr.percentage END),1) AS avg_percentage
         FROM learning_game_results lgr
         JOIN subjects sub ON sub.id=lgr.subject_id
         {where_sql}
@@ -85407,8 +85564,8 @@ def learning_games_analytics_body(role_label):
         SELECT
             st.full_name,
             COUNT(*) AS games_played,
-            ROUND(AVG(lgr.percentage),1) AS avg_percentage,
-            MAX(lgr.percentage) AS best_percentage
+            ROUND(AVG(CASE WHEN lgr.percentage < 0 THEN 0 WHEN lgr.percentage > 100 THEN 100 ELSE lgr.percentage END),1) AS avg_percentage,
+            MAX(CASE WHEN lgr.percentage < 0 THEN 0 WHEN lgr.percentage > 100 THEN 100 ELSE lgr.percentage END) AS best_percentage
         FROM learning_game_results lgr
         JOIN students st ON st.id=lgr.student_id
         {where_sql}
@@ -85449,7 +85606,7 @@ def learning_games_analytics_body(role_label):
         <tr>
             <td>{grade_label(row['grade'])} {escape(row['subject_name'])}</td>
             <td>{row['games_played']}</td>
-            <td>{row['avg_percentage'] or 0}%</td>
+            <td>{learning_game_safe_percentage(row['avg_percentage'])}%</td>
         </tr>
         """
 
@@ -85460,8 +85617,8 @@ def learning_games_analytics_body(role_label):
         <tr>
             <td>{escape(row['full_name'])}</td>
             <td>{row['games_played']}</td>
-            <td>{row['avg_percentage'] or 0}%</td>
-            <td>{round(float(row['best_percentage'] or 0),1)}%</td>
+            <td>{learning_game_safe_percentage(row['avg_percentage'])}%</td>
+            <td>{learning_game_safe_percentage(row['best_percentage'])}%</td>
         </tr>
         """
 
@@ -85510,8 +85667,8 @@ def learning_games_analytics_body(role_label):
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-top:14px">
             <div class="card soft"><div class="mini muted">Games Played</div><h2>{summary['games_played'] or 0}</h2></div>
             <div class="card soft"><div class="mini muted">Active Learners</div><h2>{summary['active_learners'] or 0}</h2></div>
-            <div class="card soft"><div class="mini muted">Average Score</div><h2>{summary['avg_percentage'] or 0}%</h2></div>
-            <div class="card soft"><div class="mini muted">Best Score</div><h2>{round(float(summary['best_percentage'] or 0),1)}%</h2></div>
+            <div class="card soft"><div class="mini muted">Average Score</div><h2>{learning_game_safe_percentage(summary['avg_percentage'])}%</h2></div>
+            <div class="card soft"><div class="mini muted">Best Score</div><h2>{learning_game_safe_percentage(summary['best_percentage'])}%</h2></div>
         </div>
 
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px">
