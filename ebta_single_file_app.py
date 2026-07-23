@@ -9074,33 +9074,122 @@ window.MathJax = window.MathJax || {
         }
     };
 
-    window.ebtaInsertMathSnippet = function(button) {
-        const snippet = button.getAttribute('data-snippet') || '';
-        const container = button.closest('form, .card, section') || document;
-        let target = document.activeElement;
+    window.ebtaLastMathTarget = window.ebtaLastMathTarget || null;
 
-        if (!target || !container.contains(target) || !/^(TEXTAREA|INPUT)$/.test(target.tagName)) {
-            target = container.querySelector('textarea[name="question_text"], textarea[name="options_text"], textarea[name="memo"], textarea[name="explanation"], textarea, input[type="text"], input:not([type])');
+    function isEditableMathTarget(el) {
+        if (!el) return false;
+        const tag = (el.tagName || '').toUpperCase();
+
+        if (tag === 'TEXTAREA') {
+            return !el.disabled && !el.readOnly;
         }
 
-        if (!target) return;
+        if (tag === 'INPUT') {
+            const type = String(el.getAttribute('type') || 'text').toLowerCase();
+            return ['text', 'search', 'number', 'email', 'url', 'tel', 'password'].includes(type)
+                && !el.disabled
+                && !el.readOnly;
+        }
 
-        const start = target.selectionStart || target.value.length || 0;
-        const end = target.selectionEnd || target.value.length || 0;
-        const before = target.value.slice(0, start);
-        const after = target.value.slice(end);
+        return false;
+    }
+
+    function rememberMathTarget(el) {
+        if (isEditableMathTarget(el)) {
+            window.ebtaLastMathTarget = el;
+        }
+    }
+
+    document.addEventListener('focusin', function(event) {
+        rememberMathTarget(event.target);
+    }, true);
+
+    document.addEventListener('keyup', function(event) {
+        rememberMathTarget(event.target);
+    }, true);
+
+    document.addEventListener('mouseup', function(event) {
+        rememberMathTarget(event.target);
+    }, true);
+
+    // Prevent the symbol button from stealing focus from the textarea/input.
+    // This keeps highlighted text and the cursor position active when the tutor clicks a symbol.
+    document.addEventListener('mousedown', function(event) {
+        const button = event.target.closest && event.target.closest('.ebta-math-toolbar button[data-snippet]');
+        if (button) {
+            event.preventDefault();
+        }
+    }, true);
+
+    window.ebtaInsertMathSnippet = function(button) {
+        const snippet = button.getAttribute('data-snippet') || '';
+        const container = button.closest('form') || button.closest('section') || document;
+
+        let target = window.ebtaLastMathTarget;
+
+        if (!target || !document.contains(target) || !container.contains(target) || !isEditableMathTarget(target)) {
+            target = document.activeElement;
+        }
+
+        if (!target || !container.contains(target) || !isEditableMathTarget(target)) {
+            target = container.querySelector(
+                'textarea[name="question_text"], textarea[name="options_text"], textarea[name="memo"], textarea[name="explanation"], textarea[name="instructions"], textarea[name="description"], textarea, input[type="text"], input:not([type])'
+            );
+        }
+
+        if (!target || !isEditableMathTarget(target)) {
+            alert('Click inside the question, option, memo or explanation field first, then click the maths symbol again.');
+            return;
+        }
+
+        const currentValue = String(target.value || '');
+        const start = typeof target.selectionStart === 'number' ? target.selectionStart : currentValue.length;
+        const end = typeof target.selectionEnd === 'number' ? target.selectionEnd : currentValue.length;
+
+        const before = currentValue.slice(0, start);
+        const selected = currentValue.slice(start, end);
+        const after = currentValue.slice(end);
+
+        let insertText = snippet;
+
+        // If the tutor highlighted text, make x², x₁ and square root wrap that selected text.
+        if (selected) {
+            if (snippet === '\\(x^2\\)') {
+                insertText = '\\(' + selected + '^2\\)';
+            } else if (snippet === '\\(x_1\\)') {
+                insertText = '\\(' + selected + '_1\\)';
+            } else if (snippet === '\\(\\sqrt{x}\\)') {
+                insertText = '\\(\\sqrt{' + selected + '}\\)';
+            } else if (snippet === '\\(\\frac{a}{b}\\)') {
+                insertText = '\\(\\frac{' + selected + '}{b}\\)';
+            }
+        }
+
         const spacerBefore = before && !before.endsWith(' ') && !before.endsWith('\n') ? ' ' : '';
         const spacerAfter = after && !after.startsWith(' ') && !after.startsWith('\n') ? ' ' : '';
 
-        target.value = before + spacerBefore + snippet + spacerAfter + after;
-        const nextPos = (before + spacerBefore + snippet).length;
+        target.value = before + spacerBefore + insertText + spacerAfter + after;
+
+        const nextPos = (before + spacerBefore + insertText).length;
         target.focus();
-        target.setSelectionRange(nextPos, nextPos);
+
+        try {
+            target.setSelectionRange(nextPos, nextPos);
+        } catch (err) {}
+
+        rememberMathTarget(target);
         target.dispatchEvent(new Event('input', {bubbles:true}));
+        target.dispatchEvent(new Event('change', {bubbles:true}));
     };
 
     document.addEventListener('DOMContentLoaded', function(){
         window.ebtaRenderMath(document);
+
+        document.querySelectorAll('textarea, input').forEach(function(el) {
+            el.addEventListener('focus', function(){ rememberMathTarget(el); });
+            el.addEventListener('click', function(){ rememberMathTarget(el); });
+            el.addEventListener('keyup', function(){ rememberMathTarget(el); });
+        });
     });
 })();
 </script>
@@ -9126,7 +9215,7 @@ def math_helper_box():
     <div class="card soft ebta-math-helper">
         <strong>Maths / Symbols helper</strong>
         <div class="mini muted" style="margin-top:4px">
-            Click a symbol to insert it into the field you are editing. For best display, keep formulas inside <code>\( ... \)</code>.
+            Click inside the question, option, memo or explanation field first, then click a symbol. Highlight text first if you want the helper to wrap it, for example x² or √x. For best display, keep formulas inside <code>\( ... \)</code>.
         </div>
         <div class="ebta-math-toolbar">
             <button type="button" class="btn mini secondary" data-snippet="\(\theta\)" onclick="ebtaInsertMathSnippet(this)">θ theta</button>
