@@ -10673,6 +10673,43 @@ def page(title, body_html, extra_head="", extra_js=""):
             word-break: break-word;
         }
 
+        .ebta-selected-file-box .file-row {
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:10px;
+        }
+
+        .ebta-selected-file-box .file-info {
+            min-width:0;
+            flex:1;
+        }
+
+        .ebta-remove-file-btn {
+            width:32px;
+            height:32px;
+            min-width:32px;
+            border-radius:999px;
+            border:1px solid rgba(185, 28, 28, 0.25);
+            background:#fff1f2;
+            color:#b91c1c;
+            font-size:20px;
+            line-height:1;
+            font-weight:900;
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            cursor:pointer;
+            box-shadow:0 4px 12px rgba(185, 28, 28, 0.12);
+        }
+
+        .ebta-remove-file-btn:hover,
+        .ebta-remove-file-btn:focus {
+            background:#b91c1c;
+            color:#ffffff;
+            outline:none;
+        }
+
         .ebta-file-has-selection {
             border-color: rgba(27, 94, 32, 0.45) !important;
             background: linear-gradient(180deg, #ffffff, #f3fbf4) !important;
@@ -10727,6 +10764,37 @@ def page(title, body_html, extra_head="", extra_js=""):
             return label;
         }
 
+        function ebtaClearFileInput(input) {
+            if (!input) return;
+
+            try {
+                input.value = "";
+            } catch (err) {
+                const clone = input.cloneNode(true);
+                input.parentNode.replaceChild(clone, input);
+                input = clone;
+            }
+
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+            ebtaUpdateFileInput(input);
+        }
+
+        function ebtaAttachRemoveButton(label, input) {
+            const removeButton = label.querySelector(".ebta-remove-file-btn");
+
+            if (!removeButton) return;
+
+            removeButton.addEventListener("click", function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+
+                const confirmed = confirm("Remove the attached file from this form?");
+                if (!confirmed) return;
+
+                ebtaClearFileInput(input);
+            });
+        }
+
         function ebtaUpdateFileInput(input) {
             const label = ebtaGetLabelForInput(input);
             const container = input.closest(".card, .soft, .upload-card, .question-card, .file-card");
@@ -10748,13 +10816,25 @@ def page(title, body_html, extra_head="", extra_js=""):
 
                 if (files.length === 1) {
                     label.innerHTML =
-                        '<span class="file-main">✅ File selected successfully</span>' +
-                        '<span class="file-sub">' + files[0].name + ' · ' + ebtaFormatFileSize(files[0].size) + '</span>';
+                        '<div class="file-row">' +
+                            '<div class="file-info">' +
+                                '<span class="file-main">✅ File attached successfully</span>' +
+                                '<span class="file-sub">' + files[0].name + ' · ' + ebtaFormatFileSize(files[0].size) + '</span>' +
+                            '</div>' +
+                            '<button type="button" class="ebta-remove-file-btn" title="Remove attached file" aria-label="Remove attached file">×</button>' +
+                        '</div>';
                 } else {
                     label.innerHTML =
-                        '<span class="file-main">✅ ' + files.length + ' files selected successfully</span>' +
-                        '<span class="file-sub">' + fileNames + ' · Total: ' + ebtaFormatFileSize(totalSize) + '</span>';
+                        '<div class="file-row">' +
+                            '<div class="file-info">' +
+                                '<span class="file-main">✅ ' + files.length + ' files attached successfully</span>' +
+                                '<span class="file-sub">' + fileNames + ' · Total: ' + ebtaFormatFileSize(totalSize) + '</span>' +
+                            '</div>' +
+                            '<button type="button" class="ebta-remove-file-btn" title="Remove attached files" aria-label="Remove attached files">×</button>' +
+                        '</div>';
                 }
+
+                ebtaAttachRemoveButton(label, input);
 
             } else {
                 label.classList.remove("selected");
@@ -10783,7 +10863,10 @@ def page(title, body_html, extra_head="", extra_js=""):
             }
         }
 
-        document.querySelectorAll('input[type="file"]').forEach(function (input) {
+        function ebtaPrepareFileInput(input) {
+            if (!input || input.dataset.ebtaFileRemoveReady === "1") return;
+            input.dataset.ebtaFileRemoveReady = "1";
+
             ebtaUpdateFileInput(input);
 
             input.addEventListener("change", function () {
@@ -10793,7 +10876,14 @@ def page(title, body_html, extra_head="", extra_js=""):
                     ebtaUpdateFileInput(fileInput);
                 });
             });
-        });
+        }
+
+        document.querySelectorAll('input[type="file"]').forEach(ebtaPrepareFileInput);
+
+        window.ebtaPrepareFileInputs = function(scope) {
+            const root = scope || document;
+            root.querySelectorAll('input[type="file"]').forEach(ebtaPrepareFileInput);
+        };
 
     });
     </script>
