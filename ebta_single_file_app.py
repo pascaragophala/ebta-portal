@@ -10658,6 +10658,10 @@ def page(title, body_html, extra_head="", extra_js=""):
             box-shadow: 0 6px 16px rgba(27, 94, 32, 0.08);
         }
 
+        .ebta-selected-file-box.empty {
+            display:none !important;
+        }
+
         .ebta-selected-file-box .file-main {
             display: block;
             font-weight: 900;
@@ -10730,6 +10734,16 @@ def page(title, body_html, extra_head="", extra_js=""):
 
     <script>
     document.addEventListener("DOMContentLoaded", function () {
+        let ebtaFileInputCounter = 0;
+
+        function ebtaEscapeHtml(value) {
+            return String(value || "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
 
         function ebtaFormatFileSize(bytes) {
             if (!bytes && bytes !== 0) return "";
@@ -10738,45 +10752,70 @@ def page(title, body_html, extra_head="", extra_js=""):
             return (bytes / (1024 * 1024)).toFixed(1) + " MB";
         }
 
-        function ebtaGetLabelForInput(input) {
-            let label = null;
+        function ebtaEnsureInputUid(input) {
+            if (!input.dataset.ebtaFileUid) {
+                ebtaFileInputCounter += 1;
+                input.dataset.ebtaFileUid = "ebta-file-input-" + ebtaFileInputCounter + "-" + Date.now();
+            }
+            return input.dataset.ebtaFileUid;
+        }
 
-            if (input.id === "report_file_upload") {
+        function ebtaGetLabelForInput(input) {
+            const uid = ebtaEnsureInputUid(input);
+            let label = document.querySelector('[data-ebta-file-label-for="' + uid + '"]');
+
+            if (!label && input.id === "report_file_upload") {
                 label = document.getElementById("upload_file_name");
             }
 
-            if (input.id === "report_camera_input") {
+            if (!label && input.id === "report_camera_input") {
                 label = document.getElementById("report_camera_name");
-            }
-
-            if (!label && input.id) {
-                label = document.querySelector('[data-ebta-file-label-for="' + input.id + '"]');
             }
 
             if (!label) {
                 label = document.createElement("div");
-                label.setAttribute("data-ebta-file-label-for", input.id || input.name || "file");
                 input.insertAdjacentElement("afterend", label);
             }
 
+            label.setAttribute("data-ebta-file-label-for", uid);
             label.classList.add("ebta-selected-file-box");
 
             return label;
         }
 
+        function ebtaContainerHasSelectedFile(container) {
+            if (!container) return false;
+
+            return Array.from(container.querySelectorAll('input[type="file"]')).some(function (fileInput) {
+                return fileInput.files && fileInput.files.length > 0;
+            });
+        }
+
         function ebtaClearFileInput(input) {
             if (!input) return;
+
+            const container = input.closest(".card, .soft, .upload-card, .question-card, .file-card");
+            const oldUid = input.dataset.ebtaFileUid;
 
             try {
                 input.value = "";
             } catch (err) {
                 const clone = input.cloneNode(true);
+                clone.value = "";
+                clone.dataset.ebtaFileUid = oldUid || "";
+                clone.dataset.ebtaFileRemoveReady = "";
                 input.parentNode.replaceChild(clone, input);
                 input = clone;
+                ebtaPrepareFileInput(input);
+            }
+
+            ebtaUpdateFileInput(input);
+
+            if (container && !ebtaContainerHasSelectedFile(container)) {
+                container.classList.remove("ebta-file-has-selection");
             }
 
             input.dispatchEvent(new Event("change", { bubbles: true }));
-            ebtaUpdateFileInput(input);
         }
 
         function ebtaAttachRemoveButton(label, input) {
@@ -10784,7 +10823,7 @@ def page(title, body_html, extra_head="", extra_js=""):
 
             if (!removeButton) return;
 
-            removeButton.addEventListener("click", function (event) {
+            removeButton.onclick = function (event) {
                 event.preventDefault();
                 event.stopPropagation();
 
@@ -10792,10 +10831,12 @@ def page(title, body_html, extra_head="", extra_js=""):
                 if (!confirmed) return;
 
                 ebtaClearFileInput(input);
-            });
+            };
         }
 
         function ebtaUpdateFileInput(input) {
+            if (!input) return;
+
             const label = ebtaGetLabelForInput(input);
             const container = input.closest(".card, .soft, .upload-card, .question-card, .file-card");
 
@@ -10803,10 +10844,11 @@ def page(title, body_html, extra_head="", extra_js=""):
 
             if (input.files && input.files.length > 0) {
                 const files = Array.from(input.files);
-                const fileNames = files.map(file => file.name).join(", ");
+                const fileNames = files.map(file => ebtaEscapeHtml(file.name)).join(", ");
                 const totalSize = files.reduce((sum, file) => sum + file.size, 0);
 
                 label.style.display = "";
+                label.classList.remove("empty");
                 label.classList.add("selected");
                 input.classList.add("has-file");
 
@@ -10819,7 +10861,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                         '<div class="file-row">' +
                             '<div class="file-info">' +
                                 '<span class="file-main">✅ File attached successfully</span>' +
-                                '<span class="file-sub">' + files[0].name + ' · ' + ebtaFormatFileSize(files[0].size) + '</span>' +
+                                '<span class="file-sub">' + ebtaEscapeHtml(files[0].name) + ' · ' + ebtaFormatFileSize(files[0].size) + '</span>' +
                             '</div>' +
                             '<button type="button" class="ebta-remove-file-btn" title="Remove attached file" aria-label="Remove attached file">×</button>' +
                         '</div>';
@@ -10838,33 +10880,21 @@ def page(title, body_html, extra_head="", extra_js=""):
 
             } else {
                 label.classList.remove("selected");
+                label.classList.add("empty");
+                label.style.display = "none";
+                label.innerHTML = "";
                 input.classList.remove("has-file");
 
-                const scope = input.closest("form, .card, .soft, .upload-card, .question-card, .file-card") || document;
-
-                const anotherFileSelected = Array.from(scope.querySelectorAll('input[type="file"]')).some(function (otherInput) {
-                    return otherInput !== input && otherInput.files && otherInput.files.length > 0;
-                });
-
-                if (anotherFileSelected) {
-                    label.style.display = "none";
-                    return;
-                }
-
-                label.style.display = "";
-
-                if (container) {
+                if (container && !ebtaContainerHasSelectedFile(container)) {
                     container.classList.remove("ebta-file-has-selection");
                 }
-
-                label.innerHTML =
-                    '<span class="file-main" style="color:#64748b;">No file selected yet</span>' +
-                    '<span class="file-sub">Please choose a document, image, or photo before submitting.</span>';
             }
         }
 
         function ebtaPrepareFileInput(input) {
             if (!input || input.dataset.ebtaFileRemoveReady === "1") return;
+
+            ebtaEnsureInputUid(input);
             input.dataset.ebtaFileRemoveReady = "1";
 
             ebtaUpdateFileInput(input);
@@ -10873,6 +10903,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 const scope = input.closest("form, .card, .soft, .upload-card, .question-card, .file-card") || document;
 
                 scope.querySelectorAll('input[type="file"]').forEach(function (fileInput) {
+                    ebtaPrepareFileInput(fileInput);
                     ebtaUpdateFileInput(fileInput);
                 });
             });
@@ -10888,7 +10919,6 @@ def page(title, body_html, extra_head="", extra_js=""):
     });
     </script>
     """
-
     return f"""
     <html><head>
     <meta name='viewport' content='width=device-width, initial-scale=1'/>
