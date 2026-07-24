@@ -86500,18 +86500,13 @@ def one_on_one_request_form():
     student_phone_readonly = "readonly" if sid else ""
 
     one_on_one_login_section = ""
+    one_on_one_clean_form_js = ""
+    public_one_on_one_form = "1" if not sid else "0"
+
     if not sid:
         one_on_one_login_section = """
-            <div style="grid-column:1/-1" class="card soft">
-                <b>Student Portal login for One-on-One learners</b>
-                <div class="mini muted" style="margin-top:6px">
-                    Create a 5-digit PIN for the learner. After submitting, the learner can log in with their
-                    Student WhatsApp Number and PIN to view One-on-One requests, payment status and sessions.
-                    Existing EBTA learners must use their current Student Portal PIN.
-                </div>
-            </div>
             <div>
-                <label>Create / Enter 5-digit Student PIN</label>
+                <label>Create 5-digit Student PIN</label>
                 <input name="one_on_one_pin"
                        type="password"
                        inputmode="numeric"
@@ -86519,7 +86514,11 @@ def one_on_one_request_form():
                        maxlength="5"
                        minlength="5"
                        required
-                       placeholder="5-digit PIN">
+                       placeholder="5-digit PIN"
+                       autocomplete="new-password"
+                       data-lpignore="true"
+                       data-1p-ignore
+                       data-one-on-one-clear="1">
             </div>
             <div>
                 <label>Confirm 5-digit Student PIN</label>
@@ -86530,18 +86529,35 @@ def one_on_one_request_form():
                        maxlength="5"
                        minlength="5"
                        required
-                       placeholder="Confirm PIN">
+                       placeholder="Confirm PIN"
+                       autocomplete="new-password"
+                       data-lpignore="true"
+                       data-1p-ignore
+                       data-one-on-one-clear="1">
             </div>
+        """
+
+        one_on_one_clean_form_js = """
+        <script>
+        document.addEventListener("DOMContentLoaded", function () {
+            const form = document.getElementById("one_on_one_request_form");
+            if (!form) return;
+
+            function clearPublicOneOnOneAutofill() {
+                form.querySelectorAll("[data-one-on-one-clear='1']").forEach(function (field) {
+                    field.value = "";
+                    field.removeAttribute("value");
+                });
+            }
+
+            clearPublicOneOnOneAutofill();
+            setTimeout(clearPublicOneOnOneAutofill, 250);
+            setTimeout(clearPublicOneOnOneAutofill, 900);
+        });
+        </script>
         """
     else:
-        one_on_one_login_section = """
-            <div style="grid-column:1/-1" class="card soft">
-                <b>You are logged in as a learner</b>
-                <div class="mini muted" style="margin-top:6px">
-                    This request will be linked to your existing Student Portal account, so you can view it under My 1-on-1 Requests.
-                </div>
-            </div>
-        """
+        one_on_one_login_section = ""
 
     body = f"""
     <section class="card">
@@ -86559,10 +86575,24 @@ def one_on_one_request_form():
             <div class="card soft"><b>Intensive</b><br><span class="muted">8 sessions - R640</span></div>
         </div>
 
-        <form method="post" enctype="multipart/form-data" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px">
+        <form id="one_on_one_request_form"
+              method="post"
+              enctype="multipart/form-data"
+              class="grid"
+              autocomplete="off"
+              data-public-one-on-one="{public_one_on_one_form}"
+              style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px">
+            <input type="text" name="ebta_autofill_blocker_username" autocomplete="username" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;">
+            <input type="password" name="ebta_autofill_blocker_password" autocomplete="new-password" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;">
             <div>
                 <label>Learner Full Name</label>
-                <input name="learner_name" value="{escape(learner_name)}" required>
+                <input name="learner_name"
+                       value="{escape(learner_name)}"
+                       required
+                       autocomplete="off"
+                       data-lpignore="true"
+                       data-1p-ignore
+                       {"data-one-on-one-clear='1'" if not sid else ""}>
             </div>
             <div>
                 <label>Grade</label>
@@ -86570,21 +86600,27 @@ def one_on_one_request_form():
             </div>
             <div>
                 <label>Student WhatsApp Number</label>
-                <input name="student_phone" value="{escape(student_phone or '')}" required placeholder="Learner WhatsApp number" {student_phone_readonly}>
-                <div class="mini muted">This number is also used for the learner's Student Portal login.</div>
+                <input name="student_phone"
+                       value="{escape(student_phone or '')}"
+                       required
+                       placeholder="Learner WhatsApp number"
+                       autocomplete="off"
+                       data-lpignore="true"
+                       data-1p-ignore
+                       {student_phone_readonly}>
             </div>
             {one_on_one_login_section}
             <div>
                 <label>Parent/Guardian Name</label>
-                <input name="parent_name" value="{escape(parent_name or '')}">
+                <input name="parent_name" value="{escape(parent_name or '')}" autocomplete="off" data-lpignore="true" data-1p-ignore>
             </div>
             <div>
                 <label>Parent WhatsApp Number</label>
-                <input name="parent_phone" value="{escape(parent_phone or '')}" required>
+                <input name="parent_phone" value="{escape(parent_phone or '')}" required autocomplete="off" data-lpignore="true" data-1p-ignore>
             </div>
             <div>
                 <label>Parent Email Optional</label>
-                <input name="parent_email" value="{escape(parent_email or '')}">
+                <input name="parent_email" value="{escape(parent_email or '')}" autocomplete="off" data-lpignore="true" data-1p-ignore>
             </div>
             <div>
                 <label>Subject</label>
@@ -86636,6 +86672,7 @@ def one_on_one_request_form():
                 <a class="btn secondary" href="/one-on-one/my-requests">My Requests</a>
             </div>
         </form>
+        {one_on_one_clean_form_js}
     </section>
     """
 
