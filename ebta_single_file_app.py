@@ -3286,6 +3286,19 @@ def init_db():
     );
     """)
 
+    ensure_column(conn, "one_on_one_requests", "student_phone", "TEXT")
+
+    cur.execute("""
+        UPDATE one_on_one_requests
+        SET student_phone = (
+            SELECT s.phone_whatsapp
+            FROM students s
+            WHERE s.id = one_on_one_requests.student_id
+        )
+        WHERE (student_phone IS NULL OR TRIM(student_phone) = '')
+          AND student_id IS NOT NULL
+    """)
+
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_requests_student ON one_on_one_requests(student_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_requests_status ON one_on_one_requests(request_status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_requests_payment ON one_on_one_requests(payment_status)")
@@ -86232,7 +86245,7 @@ def one_on_one_filter_form(base_path, q="", status="", payment_status="", grade=
     <form method="get" action="{base_path}" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:12px 0;align-items:end">
         <div>
             <label>Search</label>
-            <input name="q" value="{escape(q)}" placeholder="Learner, parent, phone or topic">
+            <input name="q" value="{escape(q)}" placeholder="Learner, student number, parent, phone or topic">
         </div>
         <div>
             <label>Status</label>
@@ -86286,6 +86299,7 @@ def one_on_one_request_form():
         conn.close()
 
     learner_name = student['full_name'] if student else ""
+    student_phone = student['phone_whatsapp'] if student and 'phone_whatsapp' in student.keys() else ""
     parent_name = student['guardian_name'] if student and 'guardian_name' in student.keys() else ""
     parent_phone = student['guardian_phone'] if student else ""
     parent_email = student['email'] if student else ""
@@ -86315,6 +86329,11 @@ def one_on_one_request_form():
             <div>
                 <label>Grade</label>
                 <select name="grade" required>{one_on_one_options(['G8','G9','G10','G11','G12','G13'], grade, 'Select grade')}</select>
+            </div>
+            <div>
+                <label>Student WhatsApp Number</label>
+                <input name="student_phone" value="{escape(student_phone or '')}" required placeholder="Learner WhatsApp number">
+                <div class="mini muted">This helps EBTA contact the learner directly about session reminders and support.</div>
             </div>
             <div>
                 <label>Parent/Guardian Name</label>
@@ -86388,6 +86407,7 @@ def one_on_one_request_form():
 def one_on_one_request_submit():
     sid = is_student()
     learner_name = request.form.get("learner_name", "").strip()
+    student_phone = request.form.get("student_phone", "").strip()
     parent_name = request.form.get("parent_name", "").strip()
     parent_phone = request.form.get("parent_phone", "").strip()
     parent_email = request.form.get("parent_email", "").strip()
@@ -86402,8 +86422,8 @@ def one_on_one_request_submit():
     urgency = request.form.get("urgency_level", "Normal").strip()
     notes = request.form.get("notes_from_parent", "").strip()
 
-    if not learner_name or not parent_phone or not grade or not subject_id or not topic or not session_type or not package_type:
-        return page("Missing Details", card_msg("Please complete all required one-on-one request fields."))
+    if not learner_name or not student_phone or not parent_phone or not grade or not subject_id or not topic or not session_type or not package_type:
+        return page("Missing Details", card_msg("Please complete all required one-on-one request fields, including both Student WhatsApp Number and Parent WhatsApp Number."))
 
     conn = get_db()
     cur = conn.cursor()
@@ -86430,15 +86450,15 @@ def one_on_one_request_submit():
 
     cur.execute("""
         INSERT INTO one_on_one_requests(
-            student_id, learner_name, parent_name, parent_phone, parent_email,
+            student_id, learner_name, student_phone, parent_name, parent_phone, parent_email,
             grade, subject_id, subject, topic_or_problem_area, school_current_topic,
             session_type, package_type, parent_fee, tutor_payment, ebta_allocation,
             total_sessions, preferred_days, preferred_time, urgency_level, notes_from_parent,
             proof_of_payment_path, proof_of_payment_name, payment_status, request_status,
             created_at, updated_at
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
-        sid, learner_name, parent_name, parent_phone, parent_email,
+        sid, learner_name, student_phone, parent_name, parent_phone, parent_email,
         grade, subject["id"], subject["name"], topic, school_topic,
         session_type, package_type, package["parent_fee"], package["tutor_payment"], package["ebta_allocation"],
         package["total_sessions"], preferred_days, preferred_time, urgency, notes,
@@ -86488,7 +86508,7 @@ def one_on_one_my_requests():
         remaining = int(row["total_sessions"] or 0)
         table += f"""
         <tr>
-            <td>{escape(row['learner_name'])}</td>
+            <td>{escape(row['learner_name'])}<div class='mini muted'>Student WA: {escape(row['student_phone'] or '—')}</div></td>
             <td>{escape(grade_label(row['grade']))} - {escape(row['subject'] or '')}</td>
             <td>{escape(row['package_type'] or '')}<div class='mini muted'>{remaining} session(s)</div></td>
             <td>{one_on_one_badge(row['payment_status'])}</td>
@@ -86666,8 +86686,8 @@ def one_on_one_admin_rows(q="", status="", payment_status="", grade="", subject_
 
     if q:
         like = f"%{q}%"
-        where.append("(r.learner_name LIKE ? OR r.parent_name LIKE ? OR r.parent_phone LIKE ? OR r.topic_or_problem_area LIKE ?)")
-        params.extend([like, like, like, like])
+        where.append("(r.learner_name LIKE ? OR r.student_phone LIKE ? OR r.parent_name LIKE ? OR r.parent_phone LIKE ? OR r.topic_or_problem_area LIKE ?)")
+        params.extend([like, like, like, like, like])
     if status:
         where.append("r.request_status=?")
         params.append(status)
@@ -86796,7 +86816,7 @@ def admin_one_on_one():
 
         table += f"""
         <tr>
-            <td><strong>{escape(row['learner_name'])}</strong><div class='mini muted'>{escape(row['parent_name'] or '')} - {escape(row['parent_phone'] or '')}</div></td>
+            <td><strong>{escape(row['learner_name'])}</strong><div class='mini muted'>Student WA: {escape(row['student_phone'] or '—')}</div><div class='mini muted'>Parent: {escape(row['parent_name'] or '')} - {escape(row['parent_phone'] or '')}</div></td>
             <td>{escape(grade_label(row['grade']))}<div class='mini muted'>{escape(row['subject'] or '')}</div></td>
             <td>{escape(row['session_type'] or '')}<div class='mini muted'>{escape(row['topic_or_problem_area'] or '')[:90]}</div></td>
             <td>{escape(row['package_type'] or '')}<div class='mini muted'>{package_line}</div></td>
@@ -87004,8 +87024,8 @@ def admin_one_on_one_request_detail(request_id):
         <div class="toolbar"><a class="btn mini secondary" href="{base_path}">← Back</a>{wa_buttons}</div>
         <h1>One-on-One Request #{row['id']}</h1>
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
-            <div class="card soft"><b>Learner</b><br>{escape(row['learner_name'])}<br><span class='mini muted'>{escape(grade_label(row['grade']))} - {escape(row['subject'] or '')}</span></div>
-            <div class="card soft"><b>Parent</b><br>{escape(row['parent_name'] or '—')}<br><span class='mini muted'>{escape(row['parent_phone'] or '—')}</span></div>
+            <div class="card soft"><b>Learner</b><br>{escape(row['learner_name'])}<br><span class='mini muted'>{escape(grade_label(row['grade']))} - {escape(row['subject'] or '')}</span><br><span class='mini muted'>Student WA: {escape(row['student_phone'] or '—')}</span></div>
+            <div class="card soft"><b>Parent</b><br>{escape(row['parent_name'] or '—')}<br><span class='mini muted'>Parent WA: {escape(row['parent_phone'] or '—')}</span></div>
             <div class="card soft"><b>Package</b><br>{escape(row['package_type'] or '')}<br><span class='mini muted'>{package_note}</span></div>
             <div class="card soft"><b>Status</b><br>{one_on_one_badge(row['request_status'])} {one_on_one_badge(row['payment_status'])}</div>
         </div>
@@ -87016,6 +87036,8 @@ def admin_one_on_one_request_detail(request_id):
         <h2>Manage Request</h2>
         <form method="post" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
             <input type="hidden" name="action" value="update_request">
+            <div><label>Student WhatsApp Number</label><input name="student_phone" value="{escape(row['student_phone'] or '')}" placeholder="Learner WhatsApp number"></div>
+            <div><label>Parent WhatsApp Number</label><input name="parent_phone" value="{escape(row['parent_phone'] or '')}" placeholder="Parent/guardian WhatsApp number"></div>
             <div><label>Payment Status</label><select name="payment_status">{one_on_one_options(ONE_ON_ONE_PAYMENT_STATUSES, row['payment_status'])}</select></div>
             <div><label>Request Status</label><select name="request_status">{one_on_one_options(ONE_ON_ONE_REQUEST_STATUSES, row['request_status'])}</select></div>
             {assignment_fields}
@@ -87087,6 +87109,8 @@ def admin_one_on_one_request_update(request_id):
 
     payment_status = request.form.get("payment_status", old["payment_status"]).strip()
     request_status = request.form.get("request_status", old["request_status"]).strip()
+    student_phone = request.form.get("student_phone", old["student_phone"] or "").strip()
+    parent_phone = request.form.get("parent_phone", old["parent_phone"] or "").strip()
     internal_notes = request.form.get("internal_notes", "").strip()
 
     if one_on_one_can_assign_tutors():
@@ -87121,10 +87145,12 @@ def admin_one_on_one_request_update(request_id):
 
     cur.execute("""
         UPDATE one_on_one_requests
-        SET payment_status=?, request_status=?, assigned_tutor_id=?, assigned_tutor_manager_id=?, assigned_by=?,
+        SET student_phone=?, parent_phone=?,
+            payment_status=?, request_status=?, assigned_tutor_id=?, assigned_tutor_manager_id=?, assigned_by=?,
             package_type=?, parent_fee=?, tutor_payment=?, ebta_allocation=?, total_sessions=?, internal_notes=?, updated_at=?
         WHERE id=?
     """, (
+        student_phone, parent_phone,
         payment_status, request_status, assigned_tutor_id, assigned_manager_id, actor_label,
         package_type, vals["parent_fee"], vals["tutor_payment"], vals["ebta_allocation"], vals["total_sessions"], internal_notes, now_utc_iso(), request_id
     ))
@@ -87205,7 +87231,7 @@ def admin_one_on_one_payments():
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
-        SELECT p.*, r.learner_name, r.parent_name, r.parent_phone, r.package_type
+        SELECT p.*, r.learner_name, r.student_phone, r.parent_name, r.parent_phone, r.package_type
         FROM one_on_one_payment_logs p
         JOIN one_on_one_requests r ON r.id=p.request_id
         ORDER BY p.created_at DESC
@@ -87215,7 +87241,7 @@ def admin_one_on_one_payments():
     conn.close()
 
     table = "".join([
-        f"<tr><td>{escape(p['created_at'][:16].replace('T',' '))}</td><td>{escape(p['learner_name'])}</td><td>{escape(p['parent_name'] or '')}<div class='mini muted'>{escape(p['parent_phone'] or '')}</div></td><td>{one_on_one_money(p['amount_paid'])}</td><td>{one_on_one_badge(p['payment_status'])}</td><td><a class='btn mini secondary' href='{base_path}/request/{p['request_id']}'>Open</a></td></tr>"
+        f"<tr><td>{escape(p['created_at'][:16].replace('T',' '))}</td><td>{escape(p['learner_name'])}<div class='mini muted'>Student WA: {escape(p['student_phone'] or '—')}</div></td><td>{escape(p['parent_name'] or '')}<div class='mini muted'>Parent WA: {escape(p['parent_phone'] or '')}</div></td><td>{one_on_one_money(p['amount_paid'])}</td><td>{one_on_one_badge(p['payment_status'])}</td><td><a class='btn mini secondary' href='{base_path}/request/{p['request_id']}'>Open</a></td></tr>"
         for p in rows
     ])
 
@@ -87294,7 +87320,7 @@ def tutor_one_on_one():
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
-        SELECT b.*, r.learner_name, r.parent_name, r.parent_phone, r.topic_or_problem_area,
+        SELECT b.*, r.learner_name, r.student_phone, r.parent_name, r.parent_phone, r.topic_or_problem_area,
                r.school_current_topic, r.session_type, n.id AS note_id, n.quality_status
         FROM one_on_one_bookings b
         JOIN one_on_one_requests r ON r.id=b.request_id
@@ -87310,7 +87336,7 @@ def tutor_one_on_one():
         note_btn = f"<a class='btn mini success' href='/tutor/one-on-one/session-note/{row['id']}'>Session Note</a>"
         table += f"""
         <tr>
-            <td><strong>{escape(row['learner_name'])}</strong><div class='mini muted'>{escape(row['parent_name'] or '')} - {escape(row['parent_phone'] or '')}</div></td>
+            <td><strong>{escape(row['learner_name'])}</strong><div class='mini muted'>Student WA: {escape(row['student_phone'] or '—')}</div><div class='mini muted'>Parent: {escape(row['parent_name'] or '')} - {escape(row['parent_phone'] or '')}</div></td>
             <td>{escape(grade_label(row['grade']))}<div class='mini muted'>{escape(row['subject'] or '')}</div></td>
             <td>Session {row['session_number']} / {row['total_sessions']}<div class='mini muted'>{escape(row['scheduled_date'] or 'TBC')} {escape(row['start_time'] or '')}</div></td>
             <td>{escape(row['topic_or_problem_area'] or '')}</td>
@@ -87339,7 +87365,7 @@ def tutor_one_on_one_booking(booking_id):
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
-        SELECT b.*, r.learner_name, r.parent_name, r.topic_or_problem_area, r.school_current_topic, r.notes_from_parent
+        SELECT b.*, r.learner_name, r.student_phone, r.parent_name, r.parent_phone, r.topic_or_problem_area, r.school_current_topic, r.notes_from_parent
         FROM one_on_one_bookings b
         JOIN one_on_one_requests r ON r.id=b.request_id
         WHERE b.id=? AND b.tutor_id=?
@@ -87355,7 +87381,8 @@ def tutor_one_on_one_booking(booking_id):
         <div class="toolbar"><a class="btn mini secondary" href="/tutor/one-on-one">← Back</a><a class="btn mini success" href="/tutor/one-on-one/session-note/{row['id']}">Submit Session Note</a></div>
         <h1>One-on-One Booking</h1>
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
-            <div class="card soft"><b>Learner</b><br>{escape(row['learner_name'])}</div>
+            <div class="card soft"><b>Learner</b><br>{escape(row['learner_name'])}<br><span class='mini muted'>Student WA: {escape(row['student_phone'] or '—')}</span></div>
+            <div class="card soft"><b>Parent</b><br>{escape(row['parent_name'] or '—')}<br><span class='mini muted'>Parent WA: {escape(row['parent_phone'] or '—')}</span></div>
             <div class="card soft"><b>Subject</b><br>{escape(grade_label(row['grade']))} - {escape(row['subject'] or '')}</div>
             <div class="card soft"><b>Date/Time</b><br>{escape(row['scheduled_date'] or 'TBC')} {escape(row['start_time'] or '')} - {escape(row['end_time'] or '')}</div>
             <div class="card soft"><b>Status</b><br>{one_on_one_badge(row['booking_status'])}</div>
@@ -87622,7 +87649,7 @@ def manager_one_on_one():
     conn.close()
 
     table = "".join([
-        f"<tr><td>{escape(rw['learner_name'])}</td><td>{escape(grade_label(rw['grade']))} - {escape(rw['subject'] or '')}</td><td>{escape(rw['topic_or_problem_area'] or '')}</td><td>{one_on_one_badge(rw['request_status'])}</td><td>{escape(rw['tutor_name'] or 'Not assigned')}</td><td><a class='btn mini secondary' href='/manager/one-on-one/recommend-tutor/{rw['id']}'>Recommend Tutor</a></td></tr>"
+        f"<tr><td>{escape(rw['learner_name'])}<div class='mini muted'>Student WA: {escape(rw['student_phone'] or '—')}</div><div class='mini muted'>Parent WA: {escape(rw['parent_phone'] or '—')}</div></td><td>{escape(grade_label(rw['grade']))} - {escape(rw['subject'] or '')}</td><td>{escape(rw['topic_or_problem_area'] or '')}</td><td>{one_on_one_badge(rw['request_status'])}</td><td>{escape(rw['tutor_name'] or 'Not assigned')}</td><td><a class='btn mini secondary' href='/manager/one-on-one/recommend-tutor/{rw['id']}'>Recommend Tutor</a></td></tr>"
         for rw in rows
     ])
     avail_html = "".join([
@@ -87673,7 +87700,7 @@ def manager_one_on_one_recommend(request_id):
     {manager_nav()}
     <section class="card">
         <h1>Recommend Tutor</h1>
-        <p class="muted">{escape(row['learner_name'])} | {escape(grade_label(row['grade']))} {escape(row['subject'] or '')} | {escape(row['topic_or_problem_area'] or '')}</p>
+        <p class="muted">{escape(row['learner_name'])} | Student WA: {escape(row['student_phone'] or '—')} | Parent WA: {escape(row['parent_phone'] or '—')} | {escape(grade_label(row['grade']))} {escape(row['subject'] or '')} | {escape(row['topic_or_problem_area'] or '')}</p>
         <form method="post">
             <label>Select managed tutor</label>
             <select name="tutor_id" required>{opts}</select>
@@ -87743,7 +87770,8 @@ def aqm_one_on_one_tutor_assignment():
         <tr>
             <td>
                 <strong>{escape(row['learner_name'])}</strong>
-                <div class="mini muted">{escape(row['parent_name'] or '')}</div>
+                <div class="mini muted">Student WA: {escape(row['student_phone'] or '—')}</div>
+                <div class="mini muted">Parent: {escape(row['parent_name'] or '')} - {escape(row['parent_phone'] or '—')}</div>
             </td>
             <td>{escape(grade_label(row['grade']))}<div class="mini muted">{escape(row['subject'] or '')}</div></td>
             <td>{escape(row['topic_or_problem_area'] or '')[:120]}</td>
@@ -87773,7 +87801,7 @@ def aqm_one_on_one_tutor_assignment():
         </p>
 
         <form method="get" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end">
-            <div><label>Search</label><input name="q" value="{escape(q)}" placeholder="Learner, parent or topic"></div>
+            <div><label>Search</label><input name="q" value="{escape(q)}" placeholder="Learner, student number, parent or topic"></div>
             <div><label>Status</label><select name="status">{one_on_one_options(ONE_ON_ONE_REQUEST_STATUSES, status, 'All statuses')}</select></div>
             <div><label>Grade</label><select name="grade">{one_on_one_options(['G8','G9','G10','G11','G12','G13'], grade, 'All grades')}</select></div>
             <div><label>Subject</label><select name="subject_id">{one_on_one_subject_options(subject_id)}</select></div>
