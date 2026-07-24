@@ -3299,6 +3299,25 @@ def init_db():
           AND student_id IS NOT NULL
     """)
 
+    cur.execute("""
+        UPDATE one_on_one_requests
+        SET student_id = (
+            SELECT s.id
+            FROM students s
+            WHERE s.phone_whatsapp = one_on_one_requests.student_phone
+            ORDER BY s.id DESC
+            LIMIT 1
+        )
+        WHERE student_id IS NULL
+          AND student_phone IS NOT NULL
+          AND TRIM(student_phone) != ''
+          AND EXISTS (
+              SELECT 1
+              FROM students s
+              WHERE s.phone_whatsapp = one_on_one_requests.student_phone
+          )
+    """)
+
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_requests_student ON one_on_one_requests(student_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_requests_status ON one_on_one_requests(request_status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_requests_payment ON one_on_one_requests(payment_status)")
@@ -9791,8 +9810,8 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("💬 Messages", "#messages"),
                 ("📤 Upload Report", url_for('student_upload_report')),
                 ("📄 My Reports", url_for('student_my_reports')),
-                #("🤝 My 1-on-1 Requests", url_for('one_on_one_my_requests')),
-                #("🎓 My 1-on-1 Sessions", url_for('one_on_one_my_sessions')),
+                ("🤝 My 1-on-1 Requests", url_for('one_on_one_my_requests')),
+                ("🎓 My 1-on-1 Sessions", url_for('one_on_one_my_sessions')),
                 ("🚪 Logout", url_for('student_logout'))
             ]
             stats_grid = f"""
@@ -86286,6 +86305,179 @@ def one_on_one_proof_file(filename):
     return send_from_directory(ONE_ON_ONE_DIR, filename)
 
 
+
+def one_on_one_normalize_student_phone(raw_phone):
+    """
+    Normalise the learner WhatsApp number so one-on-one-only learners can
+    use the normal Student Login page later.
+    """
+
+    raw_phone = (raw_phone or "").strip()
+
+    if not raw_phone:
+        return ""
+
+    try:
+        if raw_phone.startswith("+"):
+            return normalize_phone(raw_phone, "INT")
+        return normalize_phone(raw_phone, "SA", strict=True)
+    except Exception:
+        # Fall back to an international-style clean value if the number is not a SA number.
+        digits = "".join(ch for ch in raw_phone if ch.isdigit())
+        if not digits:
+            return ""
+        if raw_phone.startswith("+"):
+            return "+" + digits
+        return raw_phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+
+
+def one_on_one_link_or_create_student_account(
+    conn,
+    sid,
+    learner_name,
+    student_phone,
+    parent_name,
+    parent_phone,
+    parent_email,
+    grade,
+    login_pin,
+    login_pin_confirm
+):
+    """
+    Ensures every One-on-One request is linked to a Student Portal account.
+
+    Existing enrolled learners:
+    - Stay linked to their current student account.
+
+    New one-on-one-only learners:
+    - Create a normal student login using Student WhatsApp Number + 5-digit PIN.
+    - They do not need a normal monthly enrolment record just to view One-on-One requests.
+    """
+
+    cur = conn.cursor()
+    normalized_student_phone = one_on_one_normalize_student_phone(student_phone)
+
+    if not normalized_student_phone:
+        raise ValueError("Please enter a valid Student WhatsApp Number.")
+
+    if sid:
+        cur.execute("SELECT id, phone_whatsapp FROM students WHERE id=?", (sid,))
+        existing_session_student = cur.fetchone()
+
+        if not existing_session_student:
+            raise ValueError("Your student session could not be verified. Please log in again.")
+
+        # Keep the request linked to the logged-in learner account.
+        return sid, existing_session_student["phone_whatsapp"] or normalized_student_phone, False
+
+    if not login_pin or not login_pin_confirm:
+        raise ValueError("Please create and confirm a 5-digit Student Portal PIN so the learner can log in and view this One-on-One request later.")
+
+    if login_pin != login_pin_confirm:
+        raise ValueError("The Student Portal PIN and Confirm PIN fields do not match.")
+
+    if not is_valid_pin(login_pin):
+        raise ValueError("Student Portal PIN must be exactly 5 digits.")
+
+    variants = phone_variants(normalized_student_phone)
+
+    if not variants:
+        raise ValueError("Please enter a valid Student WhatsApp Number.")
+
+    placeholders = ",".join("?" * len(variants))
+    cur.execute(f"""
+        SELECT id, full_name, phone_whatsapp, pin
+        FROM students
+        WHERE phone_whatsapp IN ({placeholders})
+        ORDER BY id DESC
+        LIMIT 1
+    """, variants)
+
+    existing_student = cur.fetchone()
+    now = now_utc_iso()
+
+    if existing_student:
+        stored_pin = existing_student["pin"] or ""
+
+        if stored_pin and stored_pin != login_pin:
+            raise ValueError(
+                "This Student WhatsApp Number is already registered on the EBTA Student Portal. "
+                "Please enter the existing 5-digit PIN, or use Student Login → Forgot PIN."
+            )
+
+        # Some older accounts may not have a PIN. Set it once and update editable details.
+        if not stored_pin:
+            cur.execute("""
+                UPDATE students
+                SET pin=?
+                WHERE id=?
+            """, (login_pin, existing_student["id"]))
+
+        cur.execute("""
+            UPDATE students
+            SET full_name=?,
+                guardian_name=?,
+                guardian_phone=?,
+                email=?,
+                grade=?
+            WHERE id=?
+        """, (
+            learner_name,
+            parent_name,
+            parent_phone,
+            parent_email,
+            grade,
+            existing_student["id"]
+        ))
+
+        try:
+            ensure_student_referral_code(conn, existing_student["id"])
+        except Exception:
+            pass
+
+        return existing_student["id"], existing_student["phone_whatsapp"] or normalized_student_phone, False
+
+    phone_type = "SA" if normalized_student_phone.startswith("+27") else "INT"
+    guardian_phone_type = "SA" if str(parent_phone or "").startswith("0") or str(parent_phone or "").startswith("+27") else "INT"
+
+    cur.execute("""
+        INSERT INTO students(
+            full_name,
+            phone_whatsapp,
+            guardian_phone,
+            guardian_name,
+            email,
+            grade,
+            pin,
+            created_at,
+            phone_type,
+            guardian_phone_type
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+    """, (
+        learner_name,
+        normalized_student_phone,
+        parent_phone,
+        parent_name,
+        parent_email,
+        grade,
+        login_pin,
+        now,
+        phone_type,
+        guardian_phone_type
+    ))
+
+    new_sid = cur.lastrowid
+
+    try:
+        ensure_student_referral_code(conn, new_sid)
+    except Exception:
+        pass
+
+    return new_sid, normalized_student_phone, True
+
+
+
 @app.get('/one-on-one/request')
 def one_on_one_request_form():
     sid = is_student()
@@ -86304,6 +86496,52 @@ def one_on_one_request_form():
     parent_phone = student['guardian_phone'] if student else ""
     parent_email = student['email'] if student else ""
     grade = student['grade'] if student else ""
+
+    student_phone_readonly = "readonly" if sid else ""
+
+    one_on_one_login_section = ""
+    if not sid:
+        one_on_one_login_section = """
+            <div style="grid-column:1/-1" class="card soft">
+                <b>Student Portal login for One-on-One learners</b>
+                <div class="mini muted" style="margin-top:6px">
+                    Create a 5-digit PIN for the learner. After submitting, the learner can log in with their
+                    Student WhatsApp Number and PIN to view One-on-One requests, payment status and sessions.
+                    Existing EBTA learners must use their current Student Portal PIN.
+                </div>
+            </div>
+            <div>
+                <label>Create / Enter 5-digit Student PIN</label>
+                <input name="one_on_one_pin"
+                       type="password"
+                       inputmode="numeric"
+                       pattern="[0-9]{5}"
+                       maxlength="5"
+                       minlength="5"
+                       required
+                       placeholder="5-digit PIN">
+            </div>
+            <div>
+                <label>Confirm 5-digit Student PIN</label>
+                <input name="one_on_one_pin_confirm"
+                       type="password"
+                       inputmode="numeric"
+                       pattern="[0-9]{5}"
+                       maxlength="5"
+                       minlength="5"
+                       required
+                       placeholder="Confirm PIN">
+            </div>
+        """
+    else:
+        one_on_one_login_section = """
+            <div style="grid-column:1/-1" class="card soft">
+                <b>You are logged in as a learner</b>
+                <div class="mini muted" style="margin-top:6px">
+                    This request will be linked to your existing Student Portal account, so you can view it under My 1-on-1 Requests.
+                </div>
+            </div>
+        """
 
     body = f"""
     <section class="card">
@@ -86332,9 +86570,10 @@ def one_on_one_request_form():
             </div>
             <div>
                 <label>Student WhatsApp Number</label>
-                <input name="student_phone" value="{escape(student_phone or '')}" required placeholder="Learner WhatsApp number">
-                <div class="mini muted">This helps EBTA contact the learner directly about session reminders and support.</div>
+                <input name="student_phone" value="{escape(student_phone or '')}" required placeholder="Learner WhatsApp number" {student_phone_readonly}>
+                <div class="mini muted">This number is also used for the learner's Student Portal login.</div>
             </div>
+            {one_on_one_login_section}
             <div>
                 <label>Parent/Guardian Name</label>
                 <input name="parent_name" value="{escape(parent_name or '')}">
@@ -86421,6 +86660,8 @@ def one_on_one_request_submit():
     preferred_time = request.form.get("preferred_time", "").strip()
     urgency = request.form.get("urgency_level", "Normal").strip()
     notes = request.form.get("notes_from_parent", "").strip()
+    one_on_one_pin = request.form.get("one_on_one_pin", "").strip()
+    one_on_one_pin_confirm = request.form.get("one_on_one_pin_confirm", "").strip()
 
     if not learner_name or not student_phone or not parent_phone or not grade or not subject_id or not topic or not session_type or not package_type:
         return page("Missing Details", card_msg("Please complete all required one-on-one request fields, including both Student WhatsApp Number and Parent WhatsApp Number."))
@@ -86448,6 +86689,28 @@ def one_on_one_request_submit():
     payment_status = "Pending"
     request_status = "Payment Pending" if not proof_path else "Pending"
 
+    try:
+        linked_student_id, normalized_student_phone, created_one_on_one_student = one_on_one_link_or_create_student_account(
+            conn,
+            sid,
+            learner_name,
+            student_phone,
+            parent_name,
+            parent_phone,
+            parent_email,
+            grade,
+            one_on_one_pin,
+            one_on_one_pin_confirm
+        )
+    except ValueError as exc:
+        conn.close()
+        return page(
+            "Student Login Details Needed",
+            card_msg(str(exc)) +
+            "<div class='card'><a class='btn secondary' href='/student/login'>Go to Student Login</a> "
+            "<a class='btn success' href='/one-on-one/request'>Back to One-on-One Request</a></div>"
+        )
+
     cur.execute("""
         INSERT INTO one_on_one_requests(
             student_id, learner_name, student_phone, parent_name, parent_phone, parent_email,
@@ -86458,7 +86721,7 @@ def one_on_one_request_submit():
             created_at, updated_at
         ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
-        sid, learner_name, student_phone, parent_name, parent_phone, parent_email,
+        linked_student_id, learner_name, normalized_student_phone, parent_name, parent_phone, parent_email,
         grade, subject["id"], subject["name"], topic, school_topic,
         session_type, package_type, package["parent_fee"], package["tutor_payment"], package["ebta_allocation"],
         package["total_sessions"], preferred_days, preferred_time, urgency, notes,
@@ -86478,10 +86741,23 @@ def one_on_one_request_submit():
     conn.commit()
     conn.close()
 
+    # Log one-on-one-only learners in immediately so they can view their request.
+    if not sid:
+        session["student_id"] = linked_student_id
+        session["student_name"] = learner_name
+        session["last_activity_ts"] = time.time()
+
+    login_note = (
+        " A Student Portal account was created for this learner. They can log in using the Student WhatsApp Number and the 5-digit PIN created on this form."
+        if not sid and created_one_on_one_student
+        else " This request has been linked to the learner's Student Portal account."
+    )
+
     return page(
         "One-on-One Request Submitted",
-        card_msg("Your one-on-one request was submitted successfully. EBTA Admin will review it and confirm the next step.") +
-        "<div class='card'><a class='btn success' href='/one-on-one/my-requests'>View My Requests</a></div>"
+        card_msg("Your one-on-one request was submitted successfully. EBTA Admin will review it and confirm the next step." + login_note) +
+        "<div class='card'><a class='btn success' href='/one-on-one/my-requests'>View My Requests</a> "
+        "<a class='btn secondary' href='/student'>Go to Student Portal</a></div>"
     )
 
 
@@ -86814,6 +87090,15 @@ def admin_one_on_one():
         if show_finances:
             package_line = f"{one_on_one_money(row['parent_fee'])} | {row['total_sessions']} session(s)"
 
+        delete_button = ""
+        if is_high_admin():
+            delete_button = f'''
+            <form method="post" action="/admin/one-on-one/request/{row['id']}/delete" style="display:inline"
+                  onsubmit="return confirm('Delete this One-on-One request permanently? This will remove related bookings, payment logs and session notes.');">
+                <button class="btn danger mini" type="submit">Delete</button>
+            </form>
+            '''
+
         table += f"""
         <tr>
             <td><strong>{escape(row['learner_name'])}</strong><div class='mini muted'>Student WA: {escape(row['student_phone'] or '—')}</div><div class='mini muted'>Parent: {escape(row['parent_name'] or '')} - {escape(row['parent_phone'] or '')}</div></td>
@@ -86823,7 +87108,7 @@ def admin_one_on_one():
             <td>{one_on_one_badge(row['payment_status'])}</td>
             <td>{one_on_one_badge(row['request_status'])}<div class='mini muted'>{row['completed_count'] or 0}/{row['booking_count'] or 0} completed</div></td>
             <td>{escape(row['tutor_name'] or 'Not assigned')}</td>
-            <td><a class='btn mini success' href='{detail_base_path}/{row['id']}'>Open</a>{wa_links}</td>
+            <td><a class='btn mini success' href='{detail_base_path}/{row['id']}'>Open</a>{wa_links}{delete_button}</td>
         </tr>
         """
 
@@ -87018,11 +87303,25 @@ def admin_one_on_one_request_detail(request_id):
             </div>
         """
 
+    delete_request_box = ""
+    if is_high_admin():
+        delete_request_box = f"""
+        <div class="card soft" style="border-color:#fecaca;background:#fff7f7;margin:10px 0">
+            <strong style="color:#991b1b">High Admin Delete</strong>
+            <p class="mini muted" style="margin:6px 0 10px">Delete this One-on-One request only when it was captured incorrectly or is a duplicate. Related bookings, payment logs and session notes will also be removed.</p>
+            <form method="post" action="/admin/one-on-one/request/{row['id']}/delete"
+                  onsubmit="return confirm('Are you sure you want to permanently delete this One-on-One request and all linked bookings, payment logs and session notes?');">
+                <button class="btn danger mini" type="submit">Delete Request</button>
+            </form>
+        </div>
+        """
+
     body = f"""
     {nav_html}
     <section class="card">
         <div class="toolbar"><a class="btn mini secondary" href="{base_path}">← Back</a>{wa_buttons}</div>
         <h1>One-on-One Request #{row['id']}</h1>
+        {delete_request_box}
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
             <div class="card soft"><b>Learner</b><br>{escape(row['learner_name'])}<br><span class='mini muted'>{escape(grade_label(row['grade']))} - {escape(row['subject'] or '')}</span><br><span class='mini muted'>Student WA: {escape(row['student_phone'] or '—')}</span></div>
             <div class="card soft"><b>Parent</b><br>{escape(row['parent_name'] or '—')}<br><span class='mini muted'>Parent WA: {escape(row['parent_phone'] or '—')}</span></div>
@@ -87177,6 +87476,76 @@ def admin_one_on_one_request_update(request_id):
     conn.commit()
     conn.close()
     return redirect(f"{base_path}/request/{request_id}")
+
+
+
+@app.post('/admin/one-on-one/request/<int:request_id>/delete')
+def admin_one_on_one_request_delete(request_id):
+    # Permanently delete a One-on-One request.
+    # Restricted to High Admin / Super Admin only.
+    # The learner's student account is not deleted because the learner may still have other portal history.
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page(
+            "Access Denied",
+            card_msg("Only Super Admin / High Admin can delete One-on-One requests.")
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM one_on_one_requests WHERE id=?", (request_id,))
+    req = cur.fetchone()
+
+    if not req:
+        conn.close()
+        return page("Not Found", card_msg("This One-on-One request was not found or has already been deleted."))
+
+    proof_files = set()
+
+    try:
+        if req["proof_of_payment_path"]:
+            proof_files.add(req["proof_of_payment_path"])
+    except Exception:
+        pass
+
+    cur.execute("SELECT proof_of_payment FROM one_on_one_payment_logs WHERE request_id=?", (request_id,))
+    for proof_row in cur.fetchall():
+        try:
+            if proof_row["proof_of_payment"]:
+                proof_files.add(proof_row["proof_of_payment"])
+        except Exception:
+            pass
+
+    # Delete linked records explicitly so this works even if a database has foreign keys disabled.
+    cur.execute("""
+        DELETE FROM one_on_one_session_notes
+        WHERE booking_id IN (
+            SELECT id FROM one_on_one_bookings WHERE request_id=?
+        )
+    """, (request_id,))
+    cur.execute("DELETE FROM one_on_one_bookings WHERE request_id=?", (request_id,))
+    cur.execute("DELETE FROM one_on_one_payment_logs WHERE request_id=?", (request_id,))
+    cur.execute("DELETE FROM one_on_one_requests WHERE id=?", (request_id,))
+
+    conn.commit()
+    conn.close()
+
+    # Best-effort cleanup of uploaded proof files. This never blocks the database deletion.
+    for proof_file in proof_files:
+        try:
+            clean_name = secure_name(proof_file)
+            if clean_name and clean_name == proof_file:
+                proof_path = ONE_ON_ONE_DIR / clean_name
+                if proof_path.exists() and proof_path.is_file():
+                    proof_path.unlink()
+        except Exception:
+            pass
+
+    return redirect("/admin/one-on-one")
 
 
 @app.post('/admission/one-on-one/booking/<int:booking_id>/update')
