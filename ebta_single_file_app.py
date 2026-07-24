@@ -12540,10 +12540,10 @@ document.addEventListener("DOMContentLoaded", function(){
         }
 
         // Remove spaces, dashes and brackets
-        number = number.replace(/\s+/g, "");
+        number = number.replace(/\\s+/g, "");
         number = number.replace(/-/g, "");
-        number = number.replace(/\(/g, "");
-        number = number.replace(/\)/g, "");
+        number = number.replace(/\\(/g, "");
+        number = number.replace(/\\)/g, "");
 
         // Convert +27 format to normal SA 10 digit format
         // Example: +27821234567 becomes 0821234567
