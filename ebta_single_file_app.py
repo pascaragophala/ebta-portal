@@ -86209,9 +86209,7 @@ def one_on_one_stats():
 
 def one_on_one_can_view_finances():
     """
-    One-on-one financial figures must only be visible to High Admin and CEO.
-    Other roles may still manage operational steps, but they must not see
-    revenue, tutor payment totals or EBTA allocation figures.
+    Returns True for roles that work with One-on-One finance fields.
     """
     return bool(is_high_admin() or is_ceo())
 
@@ -86653,7 +86651,6 @@ def one_on_one_request_form():
             <div>
                 <label>Proof of Payment Optional</label>
                 <input type="file" name="proof_of_payment" accept=".pdf,.png,.jpg,.jpeg">
-                <div class="mini muted">Parents pay manually and upload proof of payment. No payment gateway is used.</div>
             </div>
             <div style="grid-column:1/-1">
                 <label>Topic or Problem Area</label>
@@ -86669,7 +86666,7 @@ def one_on_one_request_form():
             </div>
             <div style="grid-column:1/-1">
                 <button class="btn success">Submit One-on-One Request</button>
-                <a class="btn secondary" href="/one-on-one/my-requests">My Requests</a>
+                <a class="btn secondary" href="/student/login">Check Request Status</a>
             </div>
         </form>
         {one_on_one_clean_form_js}
@@ -86778,24 +86775,43 @@ def one_on_one_request_submit():
     conn.commit()
     conn.close()
 
-    # Log one-on-one-only learners in immediately so they can view their request.
-    if not sid:
-        session["student_id"] = linked_student_id
-        session["student_name"] = learner_name
-        session["last_activity_ts"] = time.time()
+    status_button = "<a class='btn success' href='/student/login'>Log in to check status</a>"
+    secondary_button = "<a class='btn secondary' href='/one-on-one/request'>Submit another request</a>"
+    status_note = "Use the Student WhatsApp Number and the 5-digit PIN entered on this form to log in and follow the request."
 
-    login_note = (
-        " A Student Portal account was created for this learner. They can log in using the Student WhatsApp Number and the 5-digit PIN created on this form."
-        if not sid and created_one_on_one_student
-        else " This request has been linked to the learner's Student Portal account."
-    )
+    if sid:
+        status_button = "<a class='btn success' href='/one-on-one/my-requests'>View My Requests</a>"
+        secondary_button = "<a class='btn secondary' href='/student'>Back to Student Portal</a>"
+        status_note = "This request has been linked to your Student Portal account."
 
-    return page(
-        "One-on-One Request Submitted",
-        card_msg("Your one-on-one request was submitted successfully. EBTA Admin will review it and confirm the next step." + login_note) +
-        "<div class='card'><a class='btn success' href='/one-on-one/my-requests'>View My Requests</a> "
-        "<a class='btn secondary' href='/student'>Go to Student Portal</a></div>"
-    )
+    success_body = f"""
+    <section class="card" style="max-width:760px;margin:30px auto;text-align:center">
+        <div style="font-size:46px;line-height:1;margin-bottom:10px">✅</div>
+        <h1>One-on-One Request Submitted</h1>
+        <p class="muted" style="font-size:16px">
+            Your request has been received successfully. EBTA will confirm the next step.
+        </p>
+
+        <div class="card soft" style="text-align:left;margin:18px auto;max-width:560px">
+            <strong>Request summary</strong>
+            <div class="mini muted" style="margin-top:8px">
+                Learner: {escape(learner_name)}<br>
+                Student WhatsApp: {escape(normalized_student_phone or student_phone)}<br>
+                Subject: {escape(subject["name"] or "")}<br>
+                Package: {escape(package_type or "")}
+            </div>
+        </div>
+
+        <p class="muted">{status_note}</p>
+
+        <div class="toolbar" style="justify-content:center;margin-top:16px">
+            {status_button}
+            {secondary_button}
+        </div>
+    </section>
+    """
+
+    return page("One-on-One Request Submitted", success_body)
 
 
 @app.get('/one-on-one/my-requests')
@@ -87335,9 +87351,6 @@ def admin_one_on_one_request_detail(request_id):
         package_fields = f"""
             <div><label>Package</label><div class="card soft">{escape(row['package_type'] or 'Not selected')}</div></div>
             <div><label>Sessions</label><div class="card soft">{row['total_sessions'] or 1} session(s)</div></div>
-            <div style="grid-column:1/-1" class="mini muted">
-                Financial values are restricted to High Admin and CEO.
-            </div>
         """
 
     delete_request_box = ""
@@ -87629,7 +87642,7 @@ def admin_one_on_one_payments():
         return r
 
     if not one_on_one_can_view_finances():
-        return page("Access Denied", card_msg("One-on-One payment logs are restricted to High Admin and CEO only."))
+        return page("Access Denied", card_msg("This page is not available for your profile."))
 
     base_path = one_on_one_operations_base_path()
     nav_html = one_on_one_operations_nav()
@@ -87670,7 +87683,7 @@ def admin_one_on_one_export():
         return r
 
     if not one_on_one_can_view_finances():
-        return page("Access Denied", card_msg("One-on-One exports include sensitive information and are restricted to High Admin and CEO only."))
+        return page("Access Denied", card_msg("This page is not available for your profile."))
 
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
