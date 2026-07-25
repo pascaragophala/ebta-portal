@@ -86331,24 +86331,38 @@ def one_on_one_subject_options(selected_id="", selected_grade=""):
 
 
 def one_on_one_tutor_options(selected_id="", subject_id=None):
+    """Build tutor options with each tutor's active one-on-one availability visible."""
     conn = get_db()
     cur = conn.cursor()
 
     if subject_id:
         cur.execute("""
-            SELECT DISTINCT t.id, t.full_name
+            SELECT t.id, t.full_name,
+                   GROUP_CONCAT(DISTINCT COALESCE(a.available_day,'Day TBC') || ' ' ||
+                       COALESCE(a.available_start_time,'') ||
+                       CASE WHEN COALESCE(a.available_end_time,'')<>'' THEN '-'||a.available_end_time ELSE '' END
+                   ) AS availability_summary
             FROM tutors t
             JOIN tutor_subjects ts ON ts.tutor_id=t.id
-            WHERE ts.subject_id=?
-              AND COALESCE(t.is_active,1)=1
+            LEFT JOIN one_on_one_tutor_availability a
+                   ON a.tutor_id=t.id AND COALESCE(a.is_active,1)=1
+            WHERE ts.subject_id=? AND COALESCE(t.is_active,1)=1
+            GROUP BY t.id, t.full_name
             ORDER BY t.full_name
         """, (subject_id,))
     else:
         cur.execute("""
-            SELECT id, full_name
-            FROM tutors
-            WHERE COALESCE(is_active,1)=1
-            ORDER BY full_name
+            SELECT t.id, t.full_name,
+                   GROUP_CONCAT(DISTINCT COALESCE(a.available_day,'Day TBC') || ' ' ||
+                       COALESCE(a.available_start_time,'') ||
+                       CASE WHEN COALESCE(a.available_end_time,'')<>'' THEN '-'||a.available_end_time ELSE '' END
+                   ) AS availability_summary
+            FROM tutors t
+            LEFT JOIN one_on_one_tutor_availability a
+                   ON a.tutor_id=t.id AND COALESCE(a.is_active,1)=1
+            WHERE COALESCE(t.is_active,1)=1
+            GROUP BY t.id, t.full_name
+            ORDER BY t.full_name
         """)
 
     rows = cur.fetchall()
@@ -86357,9 +86371,56 @@ def one_on_one_tutor_options(selected_id="", subject_id=None):
     html = "<option value=''>Not assigned yet</option>"
     for row in rows:
         sel = "selected" if str(row["id"]) == str(selected_id or "") else ""
-        html += f"<option value='{row['id']}' {sel}>{escape(row['full_name'])}</option>"
+        availability = (row["availability_summary"] or "No availability captured").replace(",", "; ")
+        label = f"{row['full_name']} | Availability: {availability}"
+        html += f"<option value='{row['id']}' {sel}>{escape(label)}</option>"
 
     return html
+
+
+def one_on_one_tutor_availability_html(tutor_id=None, subject=None, empty_message="No tutor availability captured yet."):
+    """Return a compact availability table for one tutor or all active tutors."""
+    conn = get_db()
+    cur = conn.cursor()
+    where = ["COALESCE(a.is_active,1)=1", "COALESCE(t.is_active,1)=1"]
+    params = []
+    if tutor_id:
+        where.append("a.tutor_id=?")
+        params.append(tutor_id)
+    if subject:
+        where.append("(a.subject IS NULL OR TRIM(a.subject)='' OR LOWER(a.subject)=LOWER(?))")
+        params.append(subject)
+
+    cur.execute(f"""
+        SELECT a.*, t.full_name AS tutor_name
+        FROM one_on_one_tutor_availability a
+        JOIN tutors t ON t.id=a.tutor_id
+        WHERE {' AND '.join(where)}
+        ORDER BY t.full_name, a.available_day, a.available_start_time
+    """, params)
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        return f"<div class='card soft mini muted'>{escape(empty_message)}</div>"
+
+    body = "".join(
+        f"<tr><td>{escape(r['tutor_name'])}</td>"
+        f"<td><strong>{escape(r['available_day'] or 'Day TBC')}</strong></td>"
+        f"<td>{escape(r['available_start_time'] or 'Time TBC')} - {escape(r['available_end_time'] or 'Time TBC')}</td>"
+        f"<td>{escape(r['grade_level'] or 'Any')}</td>"
+        f"<td>{escape(r['subject'] or 'General')}</td>"
+        f"<td>{escape(r['notes'] or '—')}</td></tr>"
+        for r in rows
+    )
+    return f"""
+        <div class='scroll-x'>
+            <table>
+                <thead><tr><th>Tutor</th><th>Available Day</th><th>Available Time</th><th>Grade</th><th>Subject</th><th>Notes</th></tr></thead>
+                <tbody>{body}</tbody>
+            </table>
+        </div>
+    """
 
 
 def one_on_one_manager_options(selected_id=""):
@@ -86564,7 +86625,7 @@ def one_on_one_can_assign_tutors():
     """
     Tutor allocation is available to One-on-One leadership/academic roles.
     """
-    return bool(is_high_admin() or is_tutor_manager() or is_academic_quality_manager() or is_one_on_one_manager())
+    return bool(is_high_admin() or is_academic_quality_manager() or is_one_on_one_manager())
 
 
 def one_on_one_can_manage_bookings():
@@ -87684,6 +87745,21 @@ def admin_one_on_one_request_detail(request_id):
     can_assign_tutor = one_on_one_can_assign_tutors()
     can_manage_bookings = one_on_one_can_manage_bookings()
 
+    student_availability_html = f"""
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+            <div class="card soft"><b>Student Suggested Day(s)</b><br><span style="font-size:1.05rem">{escape(row['preferred_days'] or 'Not provided')}</span></div>
+            <div class="card soft"><b>Student Suggested Time</b><br><span style="font-size:1.05rem">{escape(row['preferred_time'] or 'Not provided')}</span></div>
+        </div>
+    """
+    selected_tutor_availability_html = one_on_one_tutor_availability_html(
+        row['assigned_tutor_id'], row['subject'],
+        "The assigned tutor has not captured one-on-one availability yet."
+    ) if row['assigned_tutor_id'] else "<div class='card soft mini muted'>Assign a tutor to view their availability here.</div>"
+    eligible_tutor_availability_html = one_on_one_tutor_availability_html(
+        subject=row['subject'],
+        empty_message="No eligible tutor availability has been captured for this subject yet."
+    )
+
     proof_html = "<span class='muted'>No proof uploaded</span>"
     if row["proof_of_payment_path"]:
         proof_html = f"<a class='btn mini secondary' target='_blank' href='/one-on-one/proof/{escape(row['proof_of_payment_path'], quote=True)}'>Open Proof</a>"
@@ -87755,12 +87831,10 @@ def admin_one_on_one_request_detail(request_id):
     if can_assign_tutor:
         assignment_fields = f"""
             <div><label>Assigned Tutor</label><select name="assigned_tutor_id">{one_on_one_tutor_options(row['assigned_tutor_id'], row['subject_id'])}</select></div>
-            <div><label>Assigned Tutor Manager</label><select name="assigned_tutor_manager_id">{one_on_one_manager_options(row['assigned_tutor_manager_id'])}</select></div>
         """
     else:
         assignment_fields = f"""
             <div><label>Assigned Tutor</label><div class="card soft">{escape(row['tutor_name'] or 'Not assigned yet')}</div></div>
-            <div><label>Tutor Manager</label><div class="card soft">{escape(row['manager_name'] or 'Not assigned yet')}</div></div>
         """
 
     if show_finances:
@@ -87823,6 +87897,12 @@ def admin_one_on_one_request_detail(request_id):
         <div class="card soft" style="margin-top:12px"><b>Topic/Problem Area</b><br>{escape(row['topic_or_problem_area'] or '')}<br><span class='mini muted'>School topic: {escape(row['school_current_topic'] or '—')}</span></div>
     </section>
 
+    <section class="card" style="border:2px solid #bfdbfe;background:#f8fbff">
+        <h2>Student Suggested Availability</h2>
+        <p class="mini muted">Use the learner's proposed day and time when matching and assigning a tutor.</p>
+        {student_availability_html}
+    </section>
+
     <section class="card">
         <h2>Manage Request</h2>
         <form method="post" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
@@ -87833,7 +87913,17 @@ def admin_one_on_one_request_detail(request_id):
             <div><label>Parent WhatsApp Number</label><input name="parent_phone" value="{escape(row['parent_phone'] or '')}" placeholder="Parent/guardian WhatsApp number"></div>
             <div><label>Payment Status</label><select name="payment_status">{one_on_one_options(ONE_ON_ONE_PAYMENT_STATUSES, row['payment_status'])}</select></div>
             <div><label>Request Status</label><select name="request_status">{one_on_one_options(ONE_ON_ONE_REQUEST_STATUSES, row['request_status'])}</select></div>
+            <div><label>Student Suggested Day(s)</label><input name="preferred_days" value="{escape(row['preferred_days'] or '')}" placeholder="e.g. Monday, Wednesday"></div>
+            <div><label>Student Suggested Time</label><input name="preferred_time" value="{escape(row['preferred_time'] or '')}" placeholder="e.g. 18:00-19:00"></div>
             {assignment_fields}
+            <div style="grid-column:1/-1">
+                <label>Assigned Tutor Availability</label>
+                {selected_tutor_availability_html}
+            </div>
+            <div style="grid-column:1/-1">
+                <label>Availability of Tutors for This Subject</label>
+                {eligible_tutor_availability_html}
+            </div>
             {package_fields}
             <div style="grid-column:1/-1"><label>Internal Notes</label><textarea name="internal_notes">{escape(row['internal_notes'] or '')}</textarea></div>
             <div style="grid-column:1/-1">{proof_html}</div>
@@ -87904,11 +87994,13 @@ def admin_one_on_one_request_update(request_id):
     province = request.form.get("province", old["province"] or "").strip()
     school = request.form.get("school", old["school"] or "").strip()
     parent_phone = request.form.get("parent_phone", old["parent_phone"] or "").strip()
+    preferred_days = request.form.get("preferred_days", old["preferred_days"] or "").strip()
+    preferred_time = request.form.get("preferred_time", old["preferred_time"] or "").strip()
     internal_notes = request.form.get("internal_notes", "").strip()
 
     if one_on_one_can_assign_tutors():
         assigned_tutor_id = request.form.get("assigned_tutor_id") or None
-        assigned_manager_id = request.form.get("assigned_tutor_manager_id") or None
+        assigned_manager_id = old["assigned_tutor_manager_id"]
     else:
         assigned_tutor_id = old["assigned_tutor_id"]
         assigned_manager_id = old["assigned_tutor_manager_id"]
@@ -87938,12 +88030,12 @@ def admin_one_on_one_request_update(request_id):
 
     cur.execute("""
         UPDATE one_on_one_requests
-        SET student_phone=?, province=?, school=?, parent_phone=?,
+        SET student_phone=?, province=?, school=?, parent_phone=?, preferred_days=?, preferred_time=?,
             payment_status=?, request_status=?, assigned_tutor_id=?, assigned_tutor_manager_id=?, assigned_by=?,
             package_type=?, parent_fee=?, tutor_payment=?, ebta_allocation=?, total_sessions=?, internal_notes=?, updated_at=?
         WHERE id=?
     """, (
-        student_phone, province, school, parent_phone,
+        student_phone, province, school, parent_phone, preferred_days, preferred_time,
         payment_status, request_status, assigned_tutor_id, assigned_manager_id, actor_label,
         package_type, vals["parent_fee"], vals["tutor_payment"], vals["ebta_allocation"], vals["total_sessions"], internal_notes, now_utc_iso(), request_id
     ))
@@ -88530,7 +88622,7 @@ def manager_one_on_one():
     conn.close()
 
     table = "".join([
-        f"<tr><td>{escape(rw['learner_name'])}<div class='mini muted'>Student WA: {escape(rw['student_phone'] or '—')}</div><div class='mini muted'>Parent WA: {escape(rw['parent_phone'] or '—')}</div></td><td>{escape(grade_label(rw['grade']))} - {escape(rw['subject'] or '')}</td><td>{escape(rw['topic_or_problem_area'] or '')}</td><td>{one_on_one_badge(rw['request_status'])}</td><td>{escape(rw['tutor_name'] or 'Not assigned')}</td><td><a class='btn mini secondary' href='/manager/one-on-one/recommend-tutor/{rw['id']}'>Recommend Tutor</a></td></tr>"
+        f"<tr><td>{escape(rw['learner_name'])}<div class='mini muted'>Student WA: {escape(rw['student_phone'] or '—')}</div><div class='mini muted'>Parent WA: {escape(rw['parent_phone'] or '—')}</div></td><td>{escape(grade_label(rw['grade']))} - {escape(rw['subject'] or '')}</td><td>{escape(rw['topic_or_problem_area'] or '')}</td><td><strong>{escape(rw['preferred_days'] or 'Not provided')}</strong><div class='mini muted'>{escape(rw['preferred_time'] or 'Time not provided')}</div></td><td>{one_on_one_badge(rw['request_status'])}</td><td>{escape(rw['tutor_name'] or 'Not assigned')}</td></tr>"
         for rw in rows
     ])
     avail_html = "".join([
@@ -88540,8 +88632,8 @@ def manager_one_on_one():
 
     body = f"""
     {manager_nav()}
-    <section class="card"><h1>Tutor Manager One-on-One Support</h1><p class="muted">Monitor requests and bookings linked to your managed tutors, recommend suitable tutors and track readiness.</p></section>
-    <section class="card"><h2>Managed One-on-One Requests</h2><div class="scroll-x"><table><thead><tr><th>Learner</th><th>Subject</th><th>Topic</th><th>Status</th><th>Tutor</th><th>Action</th></tr></thead><tbody>{table or "<tr><td colspan='6'>No linked one-on-one requests yet.</td></tr>"}</tbody></table></div></section>
+    <section class="card"><h1>Tutor Manager One-on-One Monitoring</h1><p class="muted">View requests linked to managed tutors and monitor availability. Tutor allocation is handled by High Admin, AQM and the One-on-One Support Manager.</p></section>
+    <section class="card"><h2>Managed One-on-One Requests</h2><div class="scroll-x"><table><thead><tr><th>Learner</th><th>Subject</th><th>Topic</th><th>Student Suggested Availability</th><th>Status</th><th>Tutor</th></tr></thead><tbody>{table or "<tr><td colspan='6'>No linked one-on-one requests yet.</td></tr>"}</tbody></table></div></section>
     <section class="card"><h2>Managed Tutor Availability</h2><div class="scroll-x"><table><thead><tr><th>Tutor</th><th>Day</th><th>Time</th><th>Grade</th><th>Subject</th></tr></thead><tbody>{avail_html or "<tr><td colspan='5'>No tutor availability added yet.</td></tr>"}</tbody></table></div></section>
     """
     return page("Tutor Manager One-on-One", body)
@@ -88564,10 +88656,13 @@ def manager_one_on_one_recommend(request_id):
     cur.execute("SELECT * FROM one_on_one_requests WHERE id=?", (request_id,))
     row = cur.fetchone()
     cur.execute("""
-        SELECT t.id, t.full_name
+        SELECT t.id, t.full_name,
+               GROUP_CONCAT(DISTINCT COALESCE(a.available_day,'Day TBC') || ' ' || COALESCE(a.available_start_time,'') || CASE WHEN COALESCE(a.available_end_time,'')<>'' THEN '-'||a.available_end_time ELSE '' END) AS availability_summary
         FROM tutors t
         JOIN manager_tutors mt ON mt.tutor_id=t.id
+        LEFT JOIN one_on_one_tutor_availability a ON a.tutor_id=t.id AND COALESCE(a.is_active,1)=1
         WHERE mt.manager_id=? AND COALESCE(t.is_active,1)=1
+        GROUP BY t.id, t.full_name
         ORDER BY t.full_name
     """, (mid,))
     tutors = cur.fetchall()
@@ -88576,13 +88671,23 @@ def manager_one_on_one_recommend(request_id):
     if not row:
         return page("Not Found", card_msg("Request not found."))
 
-    opts = "".join([f"<option value='{t['id']}'>{escape(t['full_name'])}</option>" for t in tutors])
+    opts = "".join([
+        f"<option value='{t['id']}'>{escape(t['full_name'])} | Availability: {escape((t['availability_summary'] or 'Not captured').replace(',', '; '))}</option>"
+        for t in tutors
+    ])
+    manager_availability_html = one_on_one_tutor_availability_html(subject=row['subject'])
     body = f"""
     {manager_nav()}
     <section class="card">
         <h1>Recommend Tutor</h1>
         <p class="muted">{escape(row['learner_name'])} | Student WA: {escape(row['student_phone'] or '—')} | Parent WA: {escape(row['parent_phone'] or '—')} | {escape(grade_label(row['grade']))} {escape(row['subject'] or '')} | {escape(row['topic_or_problem_area'] or '')}</p>
-        <form method="post">
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:12px">
+            <div class="card soft"><b>Student Suggested Day(s)</b><br>{escape(row['preferred_days'] or 'Not provided')}</div>
+            <div class="card soft"><b>Student Suggested Time</b><br>{escape(row['preferred_time'] or 'Not provided')}</div>
+        </div>
+        <h3>Managed Tutor Availability</h3>
+        {manager_availability_html}
+        <form method="post" style="margin-top:12px">
             <label>Select managed tutor</label>
             <select name="tutor_id" required>{opts}</select>
             <label>Manager note optional</label>
@@ -88656,18 +88761,19 @@ def aqm_one_on_one_tutor_assignment():
             </td>
             <td>{escape(grade_label(row['grade']))}<div class="mini muted">{escape(row['subject'] or '')}</div></td>
             <td>{escape(row['topic_or_problem_area'] or '')[:120]}</td>
+            <td><strong>{escape(row['preferred_days'] or 'Not provided')}</strong><div class="mini muted">{escape(row['preferred_time'] or 'Time not provided')}</div></td>
             <td>{one_on_one_badge(row['request_status'])}<div class="mini muted">Payment: {escape(row['payment_status'] or '')}</div></td>
             <td>{escape(row['tutor_name'] or 'Not assigned')}</td>
             <td>
-                <form method="post" action="/aqm/one-on-one/assign-tutor/{row['id']}" class="grid" style="grid-template-columns:1fr 1fr auto;gap:6px;align-items:end">
+                <form method="post" action="/aqm/one-on-one/assign-tutor/{row['id']}" class="grid" style="grid-template-columns:1fr auto;gap:6px;align-items:end">
                     <select name="assigned_tutor_id" required>
                         {one_on_one_tutor_options(row['assigned_tutor_id'], row['subject_id'])}
                     </select>
-                    <select name="assigned_tutor_manager_id">
-                        {one_on_one_manager_options(row['assigned_tutor_manager_id'])}
-                    </select>
                     <button class="btn success mini">Assign</button>
                 </form>
+                <div style="margin-top:8px">
+                    {one_on_one_tutor_availability_html(subject=row['subject'], empty_message="No tutor availability captured for this subject yet.")}
+                </div>
             </td>
         </tr>
         """
@@ -88678,7 +88784,7 @@ def aqm_one_on_one_tutor_assignment():
         <h1>One-on-One Tutor Assignment</h1>
         <p class="muted">
             AQM can support academic tutor allocation without seeing sensitive finance totals.
-            Tutor assignment is also available to High Admin and Tutor Managers.
+            Tutor assignment is handled by AQM, High Admin and the One-on-One Support Manager.
         </p>
 
         <form method="get" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end">
@@ -88695,8 +88801,8 @@ def aqm_one_on_one_tutor_assignment():
         <h2>Assign Tutors</h2>
         <div class="scroll-x">
             <table>
-                <thead><tr><th>Learner</th><th>Subject</th><th>Topic</th><th>Status</th><th>Current Tutor</th><th>Assign Tutor</th></tr></thead>
-                <tbody>{table or "<tr><td colspan='6'>No one-on-one requests found.</td></tr>"}</tbody>
+                <thead><tr><th>Learner</th><th>Subject</th><th>Topic</th><th>Student Suggested Availability</th><th>Status</th><th>Current Tutor</th><th>Assign Tutor</th></tr></thead>
+                <tbody>{table or "<tr><td colspan='7'>No one-on-one requests found.</td></tr>"}</tbody>
             </table>
         </div>
     </section>
@@ -88711,7 +88817,7 @@ def aqm_one_on_one_assign_tutor_post(request_id):
         return r
 
     tutor_id = request.form.get("assigned_tutor_id") or None
-    manager_id = request.form.get("assigned_tutor_manager_id") or None
+    manager_id = None
 
     conn = get_db()
     cur = conn.cursor()
@@ -88730,7 +88836,7 @@ def aqm_one_on_one_assign_tutor_post(request_id):
     cur.execute("""
         UPDATE one_on_one_requests
         SET assigned_tutor_id=?,
-            assigned_tutor_manager_id=?,
+            assigned_tutor_manager_id=COALESCE(assigned_tutor_manager_id, ?),
             assigned_by=?,
             request_status=CASE
                 WHEN request_status IN ('Pending','Payment Pending','Payment Verified','Approved') THEN 'Assigned'
