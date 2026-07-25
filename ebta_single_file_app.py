@@ -21,7 +21,163 @@ from functools import wraps
 from flask import Flask, request, redirect, url_for, render_template_string, send_from_directory, send_file, session, flash, make_response
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('EBTA_SECRET_KEY', 'ebta-dev-secret')
+
+# =============================================================
+# SECURITY CONFIGURATION
+# =============================================================
+def _load_or_create_secret_key():
+    """
+    Use EBTA_SECRET_KEY when configured. Otherwise create one persistent,
+    high-entropy key in the Render data directory so multiple workers share
+    the same key and sessions survive restarts.
+    """
+    configured = os.environ.get("EBTA_SECRET_KEY", "").strip()
+    if configured:
+        if len(configured) < 32:
+            raise RuntimeError(
+                "EBTA_SECRET_KEY must be at least 32 characters long."
+            )
+        return configured
+
+    data_dir = Path(os.environ.get("RENDER_DATA_DIR", "/var/data"))
+    data_dir.mkdir(parents=True, exist_ok=True)
+    secret_file = data_dir / ".ebta_secret_key"
+
+    try:
+        if secret_file.exists():
+            existing = secret_file.read_text(encoding="utf-8").strip()
+            if len(existing) >= 32:
+                return existing
+
+        generated = secrets.token_urlsafe(64)
+        secret_file.write_text(generated, encoding="utf-8")
+        try:
+            os.chmod(secret_file, 0o600)
+        except OSError:
+            pass
+        return generated
+    except OSError:
+        # Development-only fallback when persistent storage is unavailable.
+        # Production should always set EBTA_SECRET_KEY explicitly.
+        if os.environ.get("RENDER"):
+            raise RuntimeError(
+                "Set EBTA_SECRET_KEY in Render because the persistent "
+                "secret file could not be created."
+            )
+        return secrets.token_urlsafe(64)
+
+
+app.secret_key = _load_or_create_secret_key()
+
+_is_production = bool(os.environ.get("RENDER")) or (
+    os.environ.get("EBTA_ENV", "").lower() == "production"
+)
+
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=_is_production,
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=datetime.timedelta(hours=8),
+    MAX_CONTENT_LENGTH=int(
+        os.environ.get("EBTA_MAX_UPLOAD_BYTES", 25 * 1024 * 1024)
+    ),
+)
+
+# In-memory throttling is an additional protection layer. For a multi-instance
+# deployment, use Redis or another shared rate-limit store.
+_login_attempts = {}
+_login_attempts_lock = threading.Lock()
+LOGIN_WINDOW_SECONDS = 15 * 60
+LOGIN_MAX_ATTEMPTS = 10
+
+
+def _client_ip():
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip()
+    return request.remote_addr or "unknown"
+
+
+def _is_login_post():
+    return request.method == "POST" and request.path.rstrip("/").endswith("/login")
+
+
+def _same_origin_request():
+    """
+    Reject cross-site unsafe requests when the browser supplies Origin or
+    Referer. This protects existing forms without requiring every legacy form
+    in this single-file application to be rewritten at once.
+    """
+    if request.method in ("GET", "HEAD", "OPTIONS", "TRACE"):
+        return True
+
+    source = request.headers.get("Origin") or request.headers.get("Referer")
+    if not source:
+        # Non-browser clients may omit both headers. Existing portal endpoints
+        # still require authenticated sessions and SameSite cookies.
+        return True
+
+    expected = request.host_url.rstrip("/")
+    return source.rstrip("/").startswith(expected)
+
+
+@app.before_request
+def portal_security_guard():
+    if not _same_origin_request():
+        return "Invalid request origin.", 403
+
+    if not _is_login_post():
+        return None
+
+    now = time.time()
+    key = (_client_ip(), request.path)
+
+    with _login_attempts_lock:
+        recent = [
+            stamp for stamp in _login_attempts.get(key, [])
+            if now - stamp < LOGIN_WINDOW_SECONDS
+        ]
+
+        if len(recent) >= LOGIN_MAX_ATTEMPTS:
+            _login_attempts[key] = recent
+            return (
+                "Too many login attempts. Please wait 15 minutes and try again.",
+                429,
+            )
+
+        recent.append(now)
+        _login_attempts[key] = recent
+
+    return None
+
+
+@app.after_request
+def apply_security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=(), payment=()",
+    )
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; "
+        "form-action 'self'",
+    )
+
+    if _is_production:
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+
+    # Prevent sensitive portal and login pages from being cached.
+    if get_logged_in_portal_role() or "/login" in request.path:
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+
+    return response
 
 # =============================================================
 # RENDER PERSISTENT STORAGE
@@ -252,6 +408,9 @@ def auto_logout_after_inactivity():
         return None
 
     role = get_logged_in_portal_role()
+
+    if role:
+        session.permanent = True
 
     # No one is logged in.
     if not role:
