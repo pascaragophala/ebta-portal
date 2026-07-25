@@ -115,6 +115,9 @@ def get_logged_in_portal_role():
     if session.get("admission_coordinator_id"):
         return "admission"
 
+    if session.get("one_on_one_manager_id"):
+        return "one_on_one_manager"
+
     if session.get("coo_id"):
         return "coo"
 
@@ -146,6 +149,7 @@ def logout_path_for_role(role):
         "social_media": "/social-media/logout",
         "duty_admin": "/duty-admin/logout",
         "admission": "/admission/logout",
+        "one_on_one_manager": "/one-on-one-manager/logout",
         "coo": "/coo/logout",
         "cao": "/cao/logout",
         "ceo": "/ceo/logout",
@@ -171,6 +175,7 @@ def login_path_for_role(role):
         "social_media": "/social-media/login",
         "duty_admin": "/duty-admin/login",
         "admission": "/admission/login",
+        "one_on_one_manager": "/one-on-one-manager/login",
         "coo": "/coo/login",
         "cao": "/cao/login",
         "ceo": "/ceo/login",
@@ -197,6 +202,7 @@ def home_path_for_logged_in_role(role):
         "social_media": "/social-media",
         "duty_admin": "/duty-admin",
         "admission": "/admission",
+        "one_on_one_manager": "/one-on-one-manager",
         "coo": "/coo",
         "cao": "/cao",
         "ceo": "/ceo",
@@ -1296,6 +1302,19 @@ def init_db():
     """)
     
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS one_on_one_managers(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL UNIQUE,
+        email TEXT,
+        pin TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS coos(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         full_name TEXT NOT NULL,
@@ -1591,6 +1610,8 @@ def init_db():
     ensure_column(conn, "students", "guardian_phone_type", "TEXT DEFAULT 'SA'")
     ensure_column(conn, "sessions", "meeting_id", "TEXT")
     ensure_column(conn, "sessions", "meeting_passcode", "TEXT")
+    ensure_column(conn, "one_on_one_bookings", "meeting_id", "TEXT")
+    ensure_column(conn, "one_on_one_bookings", "meeting_passcode", "TEXT")
     ensure_column(conn, "followups", "issue_type", "TEXT")
     ensure_column(conn, "followups", "captured_by", "TEXT")
     ensure_column(conn, "followups", "updated_by", "TEXT")
@@ -1695,6 +1716,8 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_admission_coordinators_phone ON admission_coordinators(phone)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_admission_coordinators_active ON admission_coordinators(is_active)")
     
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_one_on_one_managers_phone ON one_on_one_managers(phone)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_one_on_one_managers_active ON one_on_one_managers(is_active)")
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_students_referral_code ON students(referral_code)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_discount_coupons_code ON discount_coupons(code)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_discount_coupons_target ON discount_coupons(target_student_id)")
@@ -4977,6 +5000,15 @@ def is_admission_coordinator():
 def require_admission_coordinator():
     if not is_admission_coordinator():
         return redirect(url_for("admission_login"))
+
+
+def is_one_on_one_manager():
+    return session.get("one_on_one_manager_id")
+
+
+def require_one_on_one_manager():
+    if not is_one_on_one_manager():
+        return redirect(url_for("one_on_one_manager_login"))
 
 
 def is_school_manager():
@@ -25286,6 +25318,7 @@ def admin_nav():
                     ("Management Applications", "admin_management_applications", "/admin/management-applications"),
                     ("Duty Admins", "admin_duty_admins", "/admin/duty-admins"),
                     ("Admission Coordinators", "admin_admission_coordinators", "/admin/admission-coordinators"),
+                    ("One-on-One Managers", "admin_one_on_one_managers", "/admin/one-on-one-managers"),
                     ("School Management Logins", "admin_school_managements", "/admin/school-managements"),
                     ("Discount Control", "admin_discounts_control", "/admin/discounts-control"),
                     ("Enrollment Approval Control", "admin_enrollment_approval_control", "/admin/enrollment-approval-control"),
@@ -38345,7 +38378,8 @@ def aqm_nav():
         <a class="btn mini" href="/aqm/tutors">Tutor Work Progress</a>
         <a class="btn mini" href="/aqm/assessment-analysis">Assessment Analysis</a>
         <a class="btn mini" href="/aqm/learning-games-analytics">Game Analytics</a>
-        <a class="btn mini" href="/aqm/one-on-one">One-on-One Reviews</a>
+        <a class="btn mini" href="/aqm/one-on-one">One-on-One Sessions</a>
+        <a class="btn mini" href="/aqm/one-on-one/session-notes">Session Notes</a>
         <a class="btn mini" href="/aqm/one-on-one/tutor-assignment">Tutor Assignment</a>
         <a class="btn mini" href="/aqm/tasks">Tasks from CEO</a>
         <a class="btn mini" href="/aqm/ratings">Student Ratings</a>
@@ -58944,6 +58978,244 @@ def admin_admission_coordinator_toggle(aid):
     conn.close()
 
     return redirect(url_for("admin_admission_coordinators"))
+
+
+# ================= ONE-ON-ONE SUPPORT MANAGERS =================
+
+def one_on_one_manager_nav():
+    return """
+    <nav class="card side-nav">
+        <a class="btn secondary" href="/one-on-one-manager">One-on-One Dashboard</a>
+        <a class="btn secondary" href="/one-on-one-manager?status=Pending">Pending Requests</a>
+        <a class="btn secondary" href="/one-on-one-manager?status=Assigned">Assigned Requests</a>
+        <a class="btn secondary" href="/one-on-one-manager?status=Confirmed">Confirmed Requests</a>
+        <a class="btn danger" href="/one-on-one-manager/logout">Logout</a>
+    </nav>
+    """
+
+
+@app.get('/one-on-one-manager/login')
+def one_on_one_manager_login():
+    body = """
+    <div class="card auth-card">
+        <h1>One-on-One Support Manager Login</h1>
+        <form method="post" action="/one-on-one-manager/login" class="grid">
+            <div>
+                <label>Phone Number</label>
+                <input name="phone" required>
+            </div>
+            <div>
+                <label>PIN</label>
+                <input name="pin" type="password" maxlength="5" required>
+            </div>
+            <button class="btn success">Login</button>
+        </form>
+    </div>
+    """
+    return page("One-on-One Support Manager Login", body)
+
+
+@app.post('/one-on-one-manager/login')
+def one_on_one_manager_login_post():
+    phone = request.form.get("phone", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    variants = phone_variants(phone)
+    qmarks = ",".join("?" * len(variants)) if variants else "?"
+    params = variants if variants else [phone]
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT *
+        FROM one_on_one_managers
+        WHERE phone IN ({qmarks})
+          AND pin=?
+          AND is_active=1
+        LIMIT 1
+    """, params + [pin])
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return page("Login Failed", card_msg("Invalid login details or account is inactive."))
+
+    session.clear()
+    session["one_on_one_manager_id"] = row["id"]
+    session["one_on_one_manager_name"] = row["full_name"]
+    session["last_activity_ts"] = time.time()
+    return redirect("/one-on-one-manager")
+
+
+@app.get('/one-on-one-manager/logout')
+def one_on_one_manager_logout():
+    session.clear()
+    return redirect(url_for("one_on_one_manager_login"))
+
+
+@app.get('/admin/one-on-one-managers')
+def admin_one_on_one_managers():
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can manage One-on-One Support Managers."))
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM one_on_one_managers ORDER BY is_active DESC, created_at DESC")
+    rows = cur.fetchall()
+    conn.close()
+
+    table_rows = ""
+    for row in rows:
+        status = "<span class='chip active'>Active</span>" if row["is_active"] == 1 else "<span class='chip lapsed'>Inactive</span>"
+        table_rows += f"""
+        <tr>
+            <td><strong>{escape(row['full_name'])}</strong><div class="mini muted">{escape(row['phone'])}</div></td>
+            <td>{escape(row['email'] or '—')}</td>
+            <td><span class="chip" style="font-weight:800;letter-spacing:1px">{escape(row['pin'] or '—')}</span></td>
+            <td>{status}</td>
+            <td>
+                <form method="post" action="/admin/one-on-one-manager/{row['id']}/reset-pin" style="display:inline" onsubmit="return confirm('Reset One-on-One Support Manager PIN?');">
+                    <button class="btn mini warn">Reset PIN</button>
+                </form>
+                <form method="post" action="/admin/one-on-one-manager/{row['id']}/toggle" style="display:inline">
+                    <button class="btn mini secondary">{'Deactivate' if row['is_active'] == 1 else 'Activate'}</button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+    <section class="card">
+        <h1>One-on-One Support Managers</h1>
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>Add One-on-One Support Manager</h2>
+            <form method="post" action="/admin/one-on-one-managers/add" class="grid" style="grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end">
+                <div><label>Full Name</label><input name="full_name" required></div>
+                <div><label>Phone</label><input name="phone" required></div>
+                <div><label>Email</label><input name="email" type="email"></div>
+                <button class="btn success">Add Manager</button>
+            </form>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead><tr><th>Manager</th><th>Email</th><th>PIN</th><th>Status</th><th>Actions</th></tr></thead>
+                <tbody>{table_rows or "<tr><td colspan='5'>No One-on-One Support Managers added yet.</td></tr>"}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+    return page("One-on-One Support Managers", body)
+
+
+@app.post('/admin/one-on-one-managers/add')
+def admin_add_one_on_one_manager():
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can add One-on-One Support Managers."))
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    email = request.form.get("email", "").strip()
+
+    if not full_name or not phone:
+        return page("Error", card_msg("Full name and phone are required."))
+
+    pin = f"{random.randint(0, 99999):05d}"
+    now = now_utc_iso()
+
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO one_on_one_managers(full_name, phone, email, pin, is_active, created_at, updated_at)
+            VALUES(?,?,?,?,1,?,?)
+        """, (full_name, phone, email, pin, now, now))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return page("Error", card_msg("A One-on-One Support Manager with this phone number already exists."))
+    conn.close()
+
+    return page(
+        "One-on-One Support Manager Created",
+        f"""
+        {admin_nav()}
+        <section class="card">
+            <h1>One-on-One Support Manager Created</h1>
+            <div class="card soft" style="border-left:5px solid #f59e0b">
+                <h2>Login Details</h2>
+                <p><b>Name:</b> {escape(full_name)}</p>
+                <p><b>Phone:</b> {escape(phone)}</p>
+                <p><b>Email:</b> {escape(email or '—')}</p>
+                <p><b>PIN:</b> <span class="chip" style="font-size:22px;padding:12px 18px;letter-spacing:2px">{pin}</span></p>
+            </div>
+            <div class="toolbar" style="margin-top:14px">
+                <a class="btn" href="/admin/one-on-one-managers">Back to Managers</a>
+                <a class="btn secondary" href="/one-on-one-manager/login">Open Manager Login</a>
+            </div>
+        </section>
+        """
+    )
+
+
+@app.post('/admin/one-on-one-manager/<int:manager_id>/reset-pin')
+def admin_one_on_one_manager_reset_pin(manager_id):
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can reset One-on-One Support Manager PINs."))
+
+    new_pin = f"{random.randint(0, 99999):05d}"
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE one_on_one_managers SET pin=?, updated_at=? WHERE id=?", (new_pin, now_utc_iso(), manager_id))
+    conn.commit()
+    conn.close()
+
+    return page(
+        "PIN Reset",
+        f"""
+        {admin_nav()}
+        <section class="card">
+            <h1>One-on-One Support Manager PIN Reset</h1>
+            <p><b>New PIN:</b> <span class="chip" style="font-size:22px;padding:12px 18px;letter-spacing:2px">{new_pin}</span></p>
+            <a class="btn" href="/admin/one-on-one-managers">Back to Managers</a>
+        </section>
+        """
+    )
+
+
+@app.post('/admin/one-on-one-manager/<int:manager_id>/toggle')
+def admin_one_on_one_manager_toggle(manager_id):
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only High Admin can update One-on-One Support Manager accounts."))
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT is_active FROM one_on_one_managers WHERE id=?", (manager_id,))
+    row = cur.fetchone()
+    if row:
+        new_status = 0 if row["is_active"] == 1 else 1
+        cur.execute("UPDATE one_on_one_managers SET is_active=?, updated_at=? WHERE id=?", (new_status, now_utc_iso(), manager_id))
+        conn.commit()
+    conn.close()
+    return redirect(url_for("admin_one_on_one_managers"))
+
 
 
 
@@ -86140,25 +86412,57 @@ def one_on_one_payment_reminder_message(row):
     return f"Good day {row['parent_name'] or 'Parent/Guardian'}, your EBTA one-on-one request for {row['learner_name']} has been received. Please kindly upload your proof of payment on the portal so that we can confirm the booking."
 
 
+def one_on_one_booking_meeting_text(booking=None):
+    if not booking:
+        return ""
+
+    parts = []
+    try:
+        if booking["meeting_link"]:
+            parts.append(f"Meeting link: {booking['meeting_link']}")
+    except Exception:
+        pass
+
+    try:
+        if booking["meeting_id"]:
+            parts.append(f"Meeting ID: {booking['meeting_id']}")
+    except Exception:
+        pass
+
+    try:
+        if booking["meeting_passcode"]:
+            parts.append(f"Passcode: {booking['meeting_passcode']}")
+    except Exception:
+        pass
+
+    return " | ".join(parts)
+
+
 def one_on_one_booking_confirmation_message(row, booking=None, tutor_name=""):
     date_time = "to be confirmed"
     if booking:
         date_time = f"{booking['scheduled_date'] or 'Date TBC'} {booking['start_time'] or ''}".strip()
-    return f"Good day {row['parent_name'] or 'Parent/Guardian'}, your EBTA one-on-one session has been confirmed. Learner: {row['learner_name']}. Subject: {row['subject'] or 'Subject TBC'}. Date/Time: {date_time}. Tutor: {tutor_name or 'Tutor TBC'}. Please ensure the learner joins on time and has their school notes/questions ready."
+    meeting_text = one_on_one_booking_meeting_text(booking)
+    meeting_sentence = f" {meeting_text}." if meeting_text else ""
+    return f"Good day {row['parent_name'] or 'Parent/Guardian'}, your EBTA one-on-one session has been confirmed. Learner: {row['learner_name']}. Subject: {row['subject'] or 'Subject TBC'}. Date/Time: {date_time}. Tutor: {tutor_name or 'Tutor TBC'}.{meeting_sentence} Please ensure the learner joins on time and has their school notes/questions ready."
 
 
 def one_on_one_session_reminder_message(row, booking=None):
     date_time = "to be confirmed"
     if booking:
         date_time = f"{booking['scheduled_date'] or 'Date TBC'} {booking['start_time'] or ''}".strip()
-    return f"Good day, this is a reminder for the EBTA one-on-one session scheduled for {date_time}. Please ensure the learner is ready, joins on time and has the relevant notes or questions available."
+    meeting_text = one_on_one_booking_meeting_text(booking)
+    meeting_sentence = f" {meeting_text}." if meeting_text else ""
+    return f"Good day, this is a reminder for the EBTA one-on-one session scheduled for {date_time}.{meeting_sentence} Please ensure the learner is ready, joins on time and has the relevant notes or questions available."
 
 
 def one_on_one_tutor_allocation_message(row, booking=None, tutor_name="Tutor"):
     date_time = "to be confirmed"
     if booking:
         date_time = f"{booking['scheduled_date'] or 'Date TBC'} {booking['start_time'] or ''}".strip()
-    return f"Good day {tutor_name}, you have been allocated a one-on-one session for {row['learner_name']}, {grade_label(row['grade'])}, {row['subject'] or 'Subject TBC'}. Topic: {row['topic_or_problem_area'] or 'Not specified'}. Date/Time: {date_time}. Please prepare accordingly and submit a short session note after the session."
+    meeting_text = one_on_one_booking_meeting_text(booking)
+    meeting_sentence = f" {meeting_text}." if meeting_text else ""
+    return f"Good day {tutor_name}, you have been allocated a one-on-one session for {row['learner_name']}, {grade_label(row['grade'])}, {row['subject'] or 'Subject TBC'}. Topic: {row['topic_or_problem_area'] or 'Not specified'}. Date/Time: {date_time}.{meeting_sentence} Please prepare accordingly and submit a short session note after the session."
 
 
 def one_on_one_followup_after_session_message(row, note=None):
@@ -86258,11 +86562,17 @@ def one_on_one_can_view_finances():
 
 def one_on_one_can_assign_tutors():
     """
-    Tutor assignment is restricted to High Admin, Tutor Managers and AQM.
-    Low Admin and Admission Coordinator can still manage requests/payment status,
-    but tutor allocation is controlled by academic/leadership roles.
+    Tutor allocation is available to One-on-One leadership/academic roles.
     """
-    return bool(is_high_admin() or is_tutor_manager() or is_academic_quality_manager())
+    return bool(is_high_admin() or is_tutor_manager() or is_academic_quality_manager() or is_one_on_one_manager())
+
+
+def one_on_one_can_manage_bookings():
+    """
+    Session booking details can be managed by Admin, AQM and One-on-One Support Managers.
+    Admission Coordinator can view requests but does not create or update session bookings.
+    """
+    return bool(is_admin() or is_academic_quality_manager() or is_one_on_one_manager())
 
 
 def one_on_one_package_summary(row, show_finances=False):
@@ -87057,8 +87367,13 @@ def one_on_one_my_sessions():
     table = ""
     for row in rows:
         link_html = ""
+        meeting_details = ""
         if row["meeting_link"] and row["booking_status"] in ["Scheduled", "Rescheduled"]:
             link_html = f"<a class='btn mini success' target='_blank' href='{escape(row['meeting_link'], quote=True)}'>Join</a>"
+
+        if row["meeting_id"] or row["meeting_passcode"]:
+            meeting_details = f"<div class='mini muted'>ID: {escape(row['meeting_id'] or '—')}<br>Passcode: {escape(row['meeting_passcode'] or '—')}</div>"
+
         summary = ""
         if row["topic_covered"]:
             summary = f"<div class='mini muted'>Covered: {escape(row['topic_covered'])}<br>Practice: {escape(row['practice_given'] or '—')}</div>"
@@ -87069,7 +87384,7 @@ def one_on_one_my_sessions():
             <td>{escape(row['subject'] or '')}</td>
             <td>{escape(row['tutor_name'] or 'Tutor TBC')}</td>
             <td>{one_on_one_badge(row['booking_status'])}{summary}</td>
-            <td>{link_html}</td>
+            <td>{link_html}{meeting_details}</td>
         </tr>
         """
 
@@ -87138,17 +87453,18 @@ def one_on_one_admin_rows(q="", status="", payment_status="", grade="", subject_
 
 def require_one_on_one_operations():
     """
-    Allows one-on-one operational access to:
-    - Admin accounts (LOWER and HIGH)
-    - Admission Coordinators
-
-    This is because Admission Coordinators handle student/enrolment approval,
-    while both low and high admins must still be able to assist.
+    Allows one-on-one operational access to Admin, Admission, AQM and One-on-One Support Manager roles.
     """
-    if is_admin() or is_admission_coordinator():
+    if is_admin() or is_admission_coordinator() or is_academic_quality_manager() or is_one_on_one_manager():
         return None
 
-    if is_admission_coordinator():
+    if request.path.startswith("/one-on-one-manager"):
+        return redirect(url_for("one_on_one_manager_login"))
+
+    if request.path.startswith("/aqm/one-on-one"):
+        return redirect(url_for("aqm_login"))
+
+    if request.path.startswith("/admission/one-on-one"):
         return redirect(url_for("admission_login"))
 
     return redirect(url_for("admin_login"))
@@ -87158,18 +87474,32 @@ def one_on_one_operations_nav():
     """
     Shows the correct navigation for the person currently managing one-on-one requests.
     """
+    if is_one_on_one_manager():
+        return one_on_one_manager_nav()
+    if is_academic_quality_manager() and not is_admin():
+        return aqm_nav()
     if is_admission_coordinator() and not is_admin():
         return admission_nav()
     return admin_nav()
 
 
 def one_on_one_operations_base_path():
+    if is_one_on_one_manager():
+        return "/one-on-one-manager"
+    if is_academic_quality_manager() and not is_admin():
+        return "/aqm/one-on-one"
     if is_admission_coordinator() and not is_admin():
         return "/admission/one-on-one"
     return "/admin/one-on-one"
 
 
 def one_on_one_operations_actor_label():
+    if is_one_on_one_manager():
+        return "One-on-One Support Manager: " + str(session.get("one_on_one_manager_name", "One-on-One Support Manager"))
+
+    if is_academic_quality_manager() and not is_admin():
+        return "AQM: " + str(session.get("aqm_name", "Academic Quality Manager"))
+
     if is_admission_coordinator() and not is_admin():
         return "Admission Coordinator: " + str(session.get("admission_coordinator_name", "Admission Coordinator"))
 
@@ -87181,6 +87511,7 @@ def one_on_one_operations_actor_label():
     return "EBTA Operations"
 
 
+@app.get('/one-on-one-manager')
 @app.get('/admission/one-on-one')
 @app.get('/admin/one-on-one')
 def admin_one_on_one():
@@ -87276,7 +87607,7 @@ def admin_one_on_one():
     return page("Admin One-on-One Sessions", body)
 
 
-def one_on_one_create_missing_bookings(conn, request_id, scheduled_date="", start_time="", end_time="", meeting_link=""):
+def one_on_one_create_missing_bookings(conn, request_id, scheduled_date="", start_time="", end_time="", meeting_link="", meeting_id="", meeting_passcode=""):
     cur = conn.cursor()
     cur.execute("SELECT * FROM one_on_one_requests WHERE id=?", (request_id,))
     row = cur.fetchone()
@@ -87296,18 +87627,20 @@ def one_on_one_create_missing_bookings(conn, request_id, scheduled_date="", star
             INSERT INTO one_on_one_bookings(
                 request_id, tutor_id, student_id, subject_id, subject, grade,
                 session_number, total_sessions, scheduled_date, start_time, end_time,
-                meeting_link, booking_status, attendance_status, created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                meeting_link, meeting_id, meeting_passcode, booking_status, attendance_status, created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             row["id"], row["assigned_tutor_id"], row["student_id"], row["subject_id"], row["subject"], row["grade"],
             n, total_sessions, scheduled_date, start_time, end_time,
-            meeting_link, "Scheduled", "Pending", now_utc_iso(), now_utc_iso()
+            meeting_link, meeting_id, meeting_passcode, "Scheduled", "Pending", now_utc_iso(), now_utc_iso()
         ))
         created += 1
 
     return created
 
 
+@app.get('/one-on-one-manager/request/<int:request_id>')
+@app.get('/aqm/one-on-one/request/<int:request_id>')
 @app.get('/admission/one-on-one/request/<int:request_id>')
 @app.get('/admin/one-on-one/request/<int:request_id>')
 def admin_one_on_one_request_detail(request_id):
@@ -87349,6 +87682,7 @@ def admin_one_on_one_request_detail(request_id):
 
     show_finances = one_on_one_can_view_finances()
     can_assign_tutor = one_on_one_can_assign_tutors()
+    can_manage_bookings = one_on_one_can_manage_bookings()
 
     proof_html = "<span class='muted'>No proof uploaded</span>"
     if row["proof_of_payment_path"]:
@@ -87358,19 +87692,30 @@ def admin_one_on_one_request_detail(request_id):
 
     booking_rows = ""
     for b in bookings:
-        booking_rows += f"""
-        <tr>
-            <td>{b['session_number']} / {b['total_sessions']}</td>
-            <td>
+        if can_manage_bookings:
+            schedule_cell = f"""
                 <form method='post' action='{booking_update_base}/{b['id']}/update' class='grid' style='grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px'>
                     <input type='date' name='scheduled_date' value='{escape(b['scheduled_date'] or '')}'>
                     <input type='time' name='start_time' value='{escape(b['start_time'] or '')}'>
                     <input type='time' name='end_time' value='{escape(b['end_time'] or '')}'>
                     <input name='meeting_link' value='{escape(b['meeting_link'] or '')}' placeholder='Meeting link'>
+                    <input name='meeting_id' value='{escape(b['meeting_id'] or '')}' placeholder='Meeting ID'>
+                    <input name='meeting_passcode' value='{escape(b['meeting_passcode'] or '')}' placeholder='Passcode'>
                     <select name='booking_status'>{one_on_one_options(ONE_ON_ONE_BOOKING_STATUSES, b['booking_status'])}</select>
                     <button class='btn mini success'>Save</button>
                 </form>
-            </td>
+            """
+        else:
+            schedule_cell = f"""
+                <div>{escape(b['scheduled_date'] or 'TBC')} {escape(b['start_time'] or '')} - {escape(b['end_time'] or '')}</div>
+                <div class='mini muted'>Meeting: {escape(b['meeting_link'] or 'Not captured')}</div>
+                <div class='mini muted'>ID: {escape(b['meeting_id'] or '—')} | Passcode: {escape(b['meeting_passcode'] or '—')}</div>
+            """
+
+        booking_rows += f"""
+        <tr>
+            <td>{b['session_number']} / {b['total_sessions']}</td>
+            <td>{schedule_cell}</td>
             <td>{one_on_one_badge(b['booking_status'])}</td>
             <td>{one_on_one_badge(b['quality_status'] or 'No Note')}</td>
         </tr>
@@ -87416,9 +87761,6 @@ def admin_one_on_one_request_detail(request_id):
         assignment_fields = f"""
             <div><label>Assigned Tutor</label><div class="card soft">{escape(row['tutor_name'] or 'Not assigned yet')}</div></div>
             <div><label>Tutor Manager</label><div class="card soft">{escape(row['manager_name'] or 'Not assigned yet')}</div></div>
-            <div style="grid-column:1/-1" class="mini muted">
-                Tutor assignment is handled by High Admin, Tutor Managers or AQM.
-            </div>
         """
 
     if show_finances:
@@ -87446,6 +87788,24 @@ def admin_one_on_one_request_detail(request_id):
                 <button class="btn danger mini" type="submit">Delete Request</button>
             </form>
         </div>
+        """
+
+    booking_create_section = ""
+    if can_manage_bookings:
+        booking_create_section = f"""
+        <section class="card">
+            <h2>Create Missing Bookings</h2>
+            <form method="post" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+                <input type="hidden" name="action" value="create_bookings">
+                <div><label>Start Date</label><input type="date" name="scheduled_date"></div>
+                <div><label>Start Time</label><input type="time" name="start_time"></div>
+                <div><label>End Time</label><input type="time" name="end_time"></div>
+                <div><label>Meeting Link</label><input name="meeting_link" placeholder="Teams/Meet link"></div>
+                <div><label>Meeting ID</label><input name="meeting_id" placeholder="Meeting ID"></div>
+                <div><label>Meeting Passcode</label><input name="meeting_passcode" placeholder="Meeting passcode"></div>
+                <div style="align-self:end"><button class="btn success mini">Create Missing Sessions</button></div>
+            </form>
+        </section>
         """
 
     body = f"""
@@ -87481,17 +87841,7 @@ def admin_one_on_one_request_detail(request_id):
         </form>
     </section>
 
-    <section class="card">
-        <h2>Create Missing Bookings</h2>
-        <form method="post" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
-            <input type="hidden" name="action" value="create_bookings">
-            <div><label>Start Date</label><input type="date" name="scheduled_date"></div>
-            <div><label>Start Time</label><input type="time" name="start_time"></div>
-            <div><label>End Time</label><input type="time" name="end_time"></div>
-            <div><label>Meeting Link</label><input name="meeting_link" placeholder="Teams/Meet link"></div>
-            <div style="align-self:end"><button class="btn success mini">Create Missing Sessions</button></div>
-        </form>
-    </section>
+    {booking_create_section}
 
     <section class="card">
         <h2>Bookings</h2>
@@ -87506,6 +87856,8 @@ def admin_one_on_one_request_detail(request_id):
     return page("One-on-One Request Detail", body)
 
 
+@app.post('/one-on-one-manager/request/<int:request_id>')
+@app.post('/aqm/one-on-one/request/<int:request_id>')
 @app.post('/admission/one-on-one/request/<int:request_id>')
 @app.post('/admin/one-on-one/request/<int:request_id>')
 def admin_one_on_one_request_update(request_id):
@@ -87527,13 +87879,19 @@ def admin_one_on_one_request_update(request_id):
         return page("Not Found", card_msg("One-on-one request not found."))
 
     if action == "create_bookings":
+        if not one_on_one_can_manage_bookings():
+            conn.close()
+            return page("Access Denied", card_msg("This booking action is not available for your profile."))
+
         created = one_on_one_create_missing_bookings(
             conn,
             request_id,
             request.form.get("scheduled_date", "").strip(),
             request.form.get("start_time", "").strip(),
             request.form.get("end_time", "").strip(),
-            request.form.get("meeting_link", "").strip()
+            request.form.get("meeting_link", "").strip(),
+            request.form.get("meeting_id", "").strip(),
+            request.form.get("meeting_passcode", "").strip()
         )
         cur.execute("UPDATE one_on_one_requests SET request_status=?, updated_at=? WHERE id=?", ("Confirmed" if created else old["request_status"], now_utc_iso(), request_id))
         conn.commit()
@@ -87694,6 +88052,8 @@ def admin_one_on_one_request_delete(request_id):
     return redirect("/admin/one-on-one")
 
 
+@app.post('/one-on-one-manager/booking/<int:booking_id>/update')
+@app.post('/aqm/one-on-one/booking/<int:booking_id>/update')
 @app.post('/admission/one-on-one/booking/<int:booking_id>/update')
 @app.post('/admin/one-on-one/booking/<int:booking_id>/update')
 def admin_one_on_one_booking_update(booking_id):
@@ -87702,6 +88062,9 @@ def admin_one_on_one_booking_update(booking_id):
         return r
 
     base_path = one_on_one_operations_base_path()
+
+    if not one_on_one_can_manage_bookings():
+        return page("Access Denied", card_msg("This booking update is not available for your profile."))
 
     conn = get_db()
     cur = conn.cursor()
@@ -87714,13 +88077,15 @@ def admin_one_on_one_booking_update(booking_id):
 
     cur.execute("""
         UPDATE one_on_one_bookings
-        SET scheduled_date=?, start_time=?, end_time=?, meeting_link=?, booking_status=?, updated_at=?
+        SET scheduled_date=?, start_time=?, end_time=?, meeting_link=?, meeting_id=?, meeting_passcode=?, booking_status=?, updated_at=?
         WHERE id=?
     """, (
         request.form.get("scheduled_date", "").strip(),
         request.form.get("start_time", "").strip(),
         request.form.get("end_time", "").strip(),
         request.form.get("meeting_link", "").strip(),
+        request.form.get("meeting_id", "").strip(),
+        request.form.get("meeting_passcode", "").strip(),
         request.form.get("booking_status", "Scheduled").strip(),
         now_utc_iso(),
         booking_id
@@ -87853,7 +88218,7 @@ def tutor_one_on_one():
         <tr>
             <td><strong>{escape(row['learner_name'])}</strong><div class='mini muted'>Student WA: {escape(row['student_phone'] or '—')}</div><div class='mini muted'>Parent: {escape(row['parent_name'] or '')} - {escape(row['parent_phone'] or '')}</div></td>
             <td>{escape(grade_label(row['grade']))}<div class='mini muted'>{escape(row['subject'] or '')}</div></td>
-            <td>Session {row['session_number']} / {row['total_sessions']}<div class='mini muted'>{escape(row['scheduled_date'] or 'TBC')} {escape(row['start_time'] or '')}</div></td>
+            <td>Session {row['session_number']} / {row['total_sessions']}<div class='mini muted'>{escape(row['scheduled_date'] or 'TBC')} {escape(row['start_time'] or '')}</div><div class='mini muted'>ID: {escape(row['meeting_id'] or '—')} | Passcode: {escape(row['meeting_passcode'] or '—')}</div></td>
             <td>{escape(row['topic_or_problem_area'] or '')}</td>
             <td>{one_on_one_badge(row['booking_status'])}<div class='mini muted'>{one_on_one_badge(row['quality_status'] or 'No Note')}</div></td>
             <td><a class='btn mini secondary' href='/tutor/one-on-one/booking/{row['id']}'>Open</a>{note_btn}</td>
@@ -87900,6 +88265,7 @@ def tutor_one_on_one_booking(booking_id):
             <div class="card soft"><b>Parent</b><br>{escape(row['parent_name'] or '—')}<br><span class='mini muted'>Parent WA: {escape(row['parent_phone'] or '—')}</span></div>
             <div class="card soft"><b>Subject</b><br>{escape(grade_label(row['grade']))} - {escape(row['subject'] or '')}</div>
             <div class="card soft"><b>Date/Time</b><br>{escape(row['scheduled_date'] or 'TBC')} {escape(row['start_time'] or '')} - {escape(row['end_time'] or '')}</div>
+            <div class="card soft"><b>Meeting Details</b><br>{('<a class="btn mini success" target="_blank" href="' + escape(row['meeting_link'], quote=True) + '">Join Session</a>') if row['meeting_link'] else 'Link not captured'}<br><span class='mini muted'>ID: {escape(row['meeting_id'] or '—')} | Passcode: {escape(row['meeting_passcode'] or '—')}</span></div>
             <div class="card soft"><b>Status</b><br>{one_on_one_badge(row['booking_status'])}</div>
         </div>
         <div class="card soft" style="margin-top:12px"><b>Topic</b><br>{escape(row['topic_or_problem_area'] or '')}<br><span class='mini muted'>School topic: {escape(row['school_current_topic'] or '—')}</span></div>
@@ -88394,7 +88760,7 @@ def aqm_one_on_one():
     r = require_aqm()
     if r:
         return r
-    return redirect(url_for("aqm_one_on_one_session_notes"))
+    return admin_one_on_one()
 
 
 @app.get('/aqm/one-on-one/session-notes')
