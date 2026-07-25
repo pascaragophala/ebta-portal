@@ -30853,11 +30853,6 @@ def admin_tutors():
 
     conn.close()
 
-    options = "".join([
-        f"<option value='{s['id']}'>{escape(s['name'])} — {escape(s['grade'])}</option>"
-        for s in subjects
-    ])
-
     grade_options = "<option value=''>All Grades</option>"
     for g in grades:
         selected = "selected" if grade_filter == g["grade"] else ""
@@ -30873,6 +30868,28 @@ def admin_tutors():
     for t in rows:
         pin = escape(t["pin"]) if t["pin"] else "<span class='muted'>not set</span>"
         assigned_subjects = maps.get(t["id"], [])
+
+        assigned_mode_by_subject = {
+            str(sub["subject_id"]): (sub["delivery_mode"] or "GROUP")
+            for sub in assigned_subjects
+        }
+
+        tutor_subject_options = ""
+        first_subject_mode = "GROUP"
+
+        for subject_index, subject_row in enumerate(subjects):
+            subject_key = str(subject_row["id"])
+            saved_mode = assigned_mode_by_subject.get(subject_key, "GROUP")
+
+            if subject_index == 0:
+                first_subject_mode = saved_mode
+
+            tutor_subject_options += (
+                f"<option value='{subject_row['id']}' "
+                f"data-saved-mode='{escape(saved_mode)}'>"
+                f"{escape(subject_row['name'])} — {escape(subject_row['grade'])}"
+                f"</option>"
+            )
 
         if assigned_subjects:
             mapped = "<div style='display:flex;gap:6px;flex-wrap:wrap'>"
@@ -30972,17 +30989,22 @@ def admin_tutors():
 
                     <form method='post'
                           action='{url_for('admin_tutor_add_subject', tid=t['id'])}'
-                          class='inlineform tutor-subject-form'>
-                        <select name='subject_id' required>
-                            {options}
+                          class='inlineform tutor-subject-form'
+                          data-tutor-assignment-form>
+                        <select name='subject_id'
+                                class='tutor-subject-select'
+                                required>
+                            {tutor_subject_options}
                         </select>
-                        <select name='delivery_mode' required>
-                            <option value='GROUP'>Group sessions</option>
-                            <option value='ONE_ON_ONE'>One-on-One</option>
-                            <option value='BOTH'>Both</option>
+                        <select name='delivery_mode'
+                                class='tutor-delivery-mode-select'
+                                required>
+                            <option value='GROUP' {'selected' if first_subject_mode == 'GROUP' else ''}>Group sessions</option>
+                            <option value='ONE_ON_ONE' {'selected' if first_subject_mode == 'ONE_ON_ONE' else ''}>One-on-One</option>
+                            <option value='BOTH' {'selected' if first_subject_mode == 'BOTH' else ''}>Both</option>
                         </select>
-                        <button class='btn mini'>
-                            Save subject
+                        <button type='submit' class='btn mini'>
+                            Save assignment
                         </button>
                     </form>
 
@@ -30999,11 +31021,20 @@ def admin_tutors():
         </div>
         """
 
+    assignment_saved_notice = ""
+    if request.args.get("assignment_saved") == "1":
+        assignment_saved_notice = """
+        <div class="alert success" style="margin-bottom:12px">
+            Tutor subject assignment saved successfully.
+        </div>
+        """
+
     body = f"""
     {admin_nav()}
 
     <section class='card'>
         <h1>Tutors</h1>
+        {assignment_saved_notice}
 
         <div class="stats" style="margin-bottom:14px">
             <div class="stat">
@@ -31162,6 +31193,28 @@ def admin_tutors():
             </table>
         </div>
     </section>
+    """
+
+    body += """
+    <script>
+    document.addEventListener("DOMContentLoaded", function () {
+        document.querySelectorAll("[data-tutor-assignment-form]").forEach(function (form) {
+            const subjectSelect = form.querySelector(".tutor-subject-select");
+            const modeSelect = form.querySelector(".tutor-delivery-mode-select");
+
+            function loadSavedMode() {
+                const selectedOption = subjectSelect.options[subjectSelect.selectedIndex];
+                const savedMode = selectedOption
+                    ? (selectedOption.dataset.savedMode || "GROUP")
+                    : "GROUP";
+                modeSelect.value = savedMode;
+            }
+
+            subjectSelect.addEventListener("change", loadSavedMode);
+            loadSavedMode();
+        });
+    });
+    </script>
     """
 
     return page("Tutors", body)
@@ -31449,7 +31502,7 @@ def admin_tutor_add_subject(tid:int):
         conn.commit()
     finally:
         conn.close()
-    return redirect(url_for('admin_tutors'))
+    return redirect(url_for('admin_tutors', assignment_saved='1'))
    
 
 @app.post('/admin/tutors/<int:tid>/subjects/<int:subject_id>/remove')
