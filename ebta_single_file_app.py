@@ -1606,6 +1606,8 @@ def init_db():
     ensure_column(conn, "sessions", "is_visible", "INTEGER NOT NULL DEFAULT 1")
     ensure_column(conn, "subjects", "uploads_locked", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "materials", "admin_unlocked", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "materials", "delivery_mode", "TEXT NOT NULL DEFAULT 'GROUP")
+    ensure_column(conn, "tutor_subjects", "delivery_mode", "TEXT NOT NULL DEFAULT 'GROUP")
     ensure_column(conn, "students", "phone_type", "TEXT DEFAULT 'SA'")
     ensure_column(conn, "students", "guardian_phone_type", "TEXT DEFAULT 'SA'")
     ensure_column(conn, "sessions", "meeting_id", "TEXT")
@@ -3377,6 +3379,21 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_bookings_date ON one_on_one_bookings(scheduled_date)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_notes_booking ON one_on_one_session_notes(booking_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_availability_tutor ON one_on_one_tutor_availability(tutor_id)")
+    # Remove duplicate availability rows, keeping the newest submission for the same tutor/day/time.
+    cur.execute("""
+        DELETE FROM one_on_one_tutor_availability
+        WHERE id NOT IN (
+            SELECT MAX(id)
+            FROM one_on_one_tutor_availability
+            GROUP BY tutor_id, available_day, available_start_time, available_end_time
+        )
+    """)
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_ooo_availability_unique_slot
+        ON one_on_one_tutor_availability(
+            tutor_id, available_day, available_start_time, available_end_time
+        )
+    """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_payments_request ON one_on_one_payment_logs(request_id)")
 
 
@@ -16159,33 +16176,43 @@ def student_materials():
     conn = get_db()
     cur = conn.cursor()
 
-    # Get active subjects
-    cur.execute("""
-        SELECT e.subject_id, e.status
-        FROM enrollments e
-        WHERE e.student_id=? AND e.month LIKE ?
-    """, (sid, month + "%"))
-
-    enrolls = cur.fetchall()
-    active_sub_ids = [str(x['subject_id']) for x in enrolls if x['status'].upper()=='ACTIVE']
-
     materials_html = "<div class='empty'>No materials yet.</div>"
 
-    if active_sub_ids:
-
-        cur.execute(f"""
-        SELECT m.*, sub.name AS subject_name, sub.grade, t.full_name AS tutor_name
+    cur.execute("""
+        SELECT DISTINCT m.*, sub.name AS subject_name, sub.grade, t.full_name AS tutor_name
         FROM materials m
         JOIN subjects sub ON sub.id=m.subject_id
         JOIN tutors t ON t.id=m.tutor_id
-        WHERE m.subject_id IN ({','.join('?'*len(active_sub_ids))})
-          AND substr(m.month,1,7) = ?
+        WHERE substr(m.month,1,7) = ?
+          AND (
+                (
+                    COALESCE(m.delivery_mode, 'GROUP') IN ('GROUP','BOTH')
+                    AND EXISTS (
+                        SELECT 1 FROM enrollments e
+                        WHERE e.student_id=?
+                          AND e.subject_id=m.subject_id
+                          AND UPPER(e.status)='ACTIVE'
+                          AND substr(e.month,1,7)=?
+                    )
+                )
+                OR
+                (
+                    COALESCE(m.delivery_mode, 'GROUP') IN ('ONE_ON_ONE','BOTH')
+                    AND EXISTS (
+                        SELECT 1 FROM one_on_one_requests r
+                        WHERE r.student_id=?
+                          AND r.subject_id=m.subject_id
+                          AND r.assigned_tutor_id=m.tutor_id
+                          AND r.request_status NOT IN ('Rejected','Cancelled')
+                    )
+                )
+          )
         ORDER BY sub.grade, sub.name, m.created_at DESC
-        """, (*active_sub_ids, month))
+    """, (month, sid, month, sid))
 
-        mats = cur.fetchall()
+    mats = cur.fetchall()
 
-        if mats:
+    if mats:
 
             grouped = {}
 
@@ -16234,6 +16261,7 @@ def student_materials():
 
                             <div class="mini muted" style="margin-top:4px">
                                 👨‍🏫 {m['tutor_name']}
+                                · {'One-on-One' if (m['delivery_mode'] or 'GROUP') == 'ONE_ON_ONE' else ('Group & One-on-One' if (m['delivery_mode'] or 'GROUP') == 'BOTH' else 'Group')}
                             </div>
                         </div>
 
@@ -20383,6 +20411,17 @@ def tutor_home():
             </div>
 
 
+            <!-- DELIVERY MODE -->
+            <div style="margin-bottom:14px">
+                <label><b>Who should see this resource?</b></label>
+                <select name="delivery_mode" required style="width:100%">
+                    <option value="GROUP">Group-session learners</option>
+                    <option value="ONE_ON_ONE">My One-on-One learners</option>
+                    <option value="BOTH">Both group and One-on-One learners</option>
+                </select>
+            </div>
+
+
             <!-- TITLE -->
             <div style="margin-bottom:18px">
                 <label><b>Title</b></label>
@@ -22579,6 +22618,9 @@ def tutor_upload():
     subject_id = request.form.get('subject_id', '').strip()
     title = request.form.get('title', '').strip()
     youtube = request.form.get('youtube', '').strip()
+    delivery_mode = request.form.get('delivery_mode', 'GROUP').strip().upper()
+    if delivery_mode not in ('GROUP', 'ONE_ON_ONE', 'BOTH'):
+        delivery_mode = 'GROUP'
 
     files = request.files.getlist('file')
 
@@ -22605,7 +22647,7 @@ def tutor_upload():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT s.uploads_locked
+        SELECT s.uploads_locked, COALESCE(ts.delivery_mode, 'GROUP') AS assignment_mode
         FROM tutor_subjects ts
         JOIN subjects s ON s.id = ts.subject_id
         WHERE ts.tutor_id=? AND ts.subject_id=?
@@ -22616,6 +22658,14 @@ def tutor_upload():
     if not row:
         conn.close()
         return page("Error", card_msg("This subject is not assigned to you."))
+
+    assignment_mode = (row["assignment_mode"] or "GROUP").upper()
+    if delivery_mode == "GROUP" and assignment_mode not in ("GROUP", "BOTH"):
+        conn.close()
+        return page("Access Denied", card_msg("This subject is assigned to you for One-on-One sessions only."))
+    if delivery_mode == "ONE_ON_ONE" and assignment_mode not in ("ONE_ON_ONE", "BOTH"):
+        conn.close()
+        return page("Access Denied", card_msg("This subject is assigned to you for group sessions only."))
 
     if row["uploads_locked"] == 1:
         conn.close()
@@ -22662,9 +22712,10 @@ def tutor_upload():
             created_at,
             is_assignment,
             due_date,
-            max_points
+            max_points,
+            delivery_mode
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         subject_id,
         tid,
@@ -22676,7 +22727,8 @@ def tutor_upload():
         now,
         is_assignment,
         due,
-        max_points
+        max_points,
+        delivery_mode
     ))
 
     conn.commit()
@@ -30781,6 +30833,7 @@ def admin_tutors():
             ts.subject_id,
             s.name,
             s.grade,
+            COALESCE(ts.delivery_mode, 'GROUP') AS delivery_mode,
             s.name || ' (' || s.grade || ')' AS label
         FROM tutor_subjects ts
         JOIN subjects s ON s.id = ts.subject_id
@@ -30794,7 +30847,8 @@ def admin_tutors():
             "subject_id": rmap["subject_id"],
             "label": rmap["label"],
             "name": rmap["name"],
-            "grade": rmap["grade"]
+            "grade": rmap["grade"],
+            "delivery_mode": rmap["delivery_mode"] or "GROUP"
         })
 
     conn.close()
@@ -30835,7 +30889,7 @@ def admin_tutors():
                     border:1px solid #bbf7d0;
                     color:#14532d;
                 ">
-                    <span>{escape(sub['label'])}</span>
+                    <span>{escape(sub['label'])} · {escape({'GROUP':'Group','ONE_ON_ONE':'One-on-One','BOTH':'Both'}.get(sub['delivery_mode'], 'Group'))}</span>
 
                     <form method="post"
                           action="{url_for('admin_tutor_remove_subject', tid=t['id'], subject_id=sub['subject_id'])}"
@@ -30919,12 +30973,17 @@ def admin_tutors():
                     <form method='post'
                           action='{url_for('admin_tutor_add_subject', tid=t['id'])}'
                           class='inlineform'
-                          style='display:inline-grid;grid-template-columns:180px auto;gap:6px'>
-                        <select name='subject_id'>
+                          style='display:inline-grid;grid-template-columns:minmax(170px,1fr) 150px auto;gap:6px'>
+                        <select name='subject_id' required>
                             {options}
                         </select>
+                        <select name='delivery_mode' required>
+                            <option value='GROUP'>Group sessions</option>
+                            <option value='ONE_ON_ONE'>One-on-One</option>
+                            <option value='BOTH'>Both</option>
+                        </select>
                         <button class='btn mini'>
-                            Add subject
+                            Save subject
                         </button>
                     </form>
 
@@ -31316,7 +31375,15 @@ def admin_tutor_add_subject(tid:int):
         return page("Error", card_msg("Select a subject."))
     conn=get_db(); cur=conn.cursor()
     try:
-        cur.execute("INSERT OR IGNORE INTO tutor_subjects(tutor_id,subject_id) VALUES(?,?)",(tid,subject_id))
+        delivery_mode = request.form.get("delivery_mode", "GROUP").strip().upper()
+        if delivery_mode not in ("GROUP", "ONE_ON_ONE", "BOTH"):
+            delivery_mode = "GROUP"
+        cur.execute("""
+            INSERT INTO tutor_subjects(tutor_id, subject_id, delivery_mode)
+            VALUES(?,?,?)
+            ON CONFLICT(tutor_id, subject_id)
+            DO UPDATE SET delivery_mode=excluded.delivery_mode
+        """, (tid, subject_id, delivery_mode))
         conn.commit()
     finally:
         conn.close()
@@ -33046,7 +33113,15 @@ def admin_sessions_post():
         meeting_passcode
     ))
     # Ensure tutor-subject mapping exists for uploads and messaging
-    cur.execute("INSERT OR IGNORE INTO tutor_subjects(tutor_id,subject_id) VALUES(?,?)",(tutor_id,subject_id))
+    delivery_mode = request.form.get("delivery_mode", "GROUP").strip().upper()
+    if delivery_mode not in ("GROUP", "ONE_ON_ONE", "BOTH"):
+        delivery_mode = "GROUP"
+    cur.execute("""
+        INSERT INTO tutor_subjects(tutor_id, subject_id, delivery_mode)
+        VALUES(?,?,?)
+        ON CONFLICT(tutor_id, subject_id)
+        DO UPDATE SET delivery_mode=excluded.delivery_mode
+    """, (tutor_id, subject_id, delivery_mode))
     conn.commit()
     conn.close()
     return redirect(url_for('admin_sessions'))
@@ -87449,19 +87524,56 @@ def one_on_one_my_sessions():
         </tr>
         """
 
+    cards = ""
+    for row in rows:
+        join_button = ""
+        if row["meeting_link"] and row["booking_status"] in ["Scheduled", "Rescheduled"]:
+            join_button = f"<a class='btn mini success' target='_blank' href='{escape(row['meeting_link'], quote=True)}'>Join Session</a>"
+        meeting_details = ""
+        if row["meeting_id"] or row["meeting_passcode"]:
+            meeting_details = f"<div class='ooo-meeting'><div><b>Meeting ID</b><span>{escape(row['meeting_id'] or '—')}</span></div><div><b>Passcode</b><span>{escape(row['meeting_passcode'] or '—')}</span></div></div>"
+        summary = ""
+        if row["topic_covered"]:
+            summary = f"<div class='mini muted' style='margin-top:8px'><b>Covered:</b> {escape(row['topic_covered'])}<br><b>Practice:</b> {escape(row['practice_given'] or '—')}</div>"
+        cards += f"""
+        <article class="ooo-session-card">
+            <div class="ooo-session-head"><strong>Session {row['session_number']} / {row['total_sessions']}</strong>{one_on_one_badge(row['booking_status'])}</div>
+            <div class="ooo-session-grid">
+                <div><span>Date</span><b>{escape(row['scheduled_date'] or 'TBC')}</b></div>
+                <div><span>Time</span><b>{escape(row['start_time'] or 'TBC')} - {escape(row['end_time'] or 'TBC')}</b></div>
+                <div><span>Subject</span><b>{escape(row['subject'] or '')}</b></div>
+                <div><span>Tutor</span><b>{escape(row['tutor_name'] or 'Tutor TBC')}</b></div>
+            </div>
+            {summary}
+            {meeting_details}
+            <div class="ooo-actions">{join_button}</div>
+        </article>
+        """
+
     body = f"""
+    <style>
+      .ooo-session-list{{display:grid;gap:12px}}
+      .ooo-session-card{{border:1px solid #dbe4df;border-left:5px solid #1b5e20;border-radius:14px;padding:14px;background:#fff;min-width:0}}
+      .ooo-session-head{{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:10px;border-bottom:1px solid #eef2f0}}
+      .ooo-session-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}}
+      .ooo-session-grid div{{background:#f8faf9;border-radius:10px;padding:10px;min-width:0}}
+      .ooo-session-grid span{{display:block;font-size:11px;color:#64748b;margin-bottom:3px}}
+      .ooo-session-grid b{{display:block;overflow-wrap:anywhere}}
+      .ooo-meeting{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}}
+      .ooo-meeting div{{border:1px dashed #bbd4c2;border-radius:9px;padding:9px;min-width:0}}
+      .ooo-meeting b,.ooo-meeting span{{display:block;overflow-wrap:anywhere}}
+      .ooo-meeting b{{font-size:11px;color:#64748b;margin-bottom:3px}}
+      .ooo-actions{{margin-top:12px}}
+      .ooo-actions .btn{{width:100%;text-align:center;box-sizing:border-box}}
+      @media(max-width:520px){{.ooo-session-grid,.ooo-meeting{{grid-template-columns:1fr}} .ooo-session-card{{padding:12px}}}}
+    </style>
     <section class="card">
         <h1>My One-on-One Sessions</h1>
         <div class="toolbar">
             <a class="btn secondary" href="/one-on-one/my-requests">My Requests</a>
             <a class="btn secondary" href="/student">Back to Student Portal</a>
         </div>
-        <div class="scroll-x">
-            <table>
-                <thead><tr><th>Session</th><th>Date/Time</th><th>Subject</th><th>Tutor</th><th>Status/Summary</th><th>Link</th></tr></thead>
-                <tbody>{table or "<tr><td colspan='6'>No confirmed one-on-one sessions yet.</td></tr>"}</tbody>
-            </table>
-        </div>
+        <div class="ooo-session-list">{cards or "<div class='empty'>No confirmed one-on-one sessions yet.</div>"}</div>
     </section>
     """
     return page("My One-on-One Sessions", body)
@@ -88530,12 +88642,13 @@ def tutor_one_on_one_availability():
         FROM tutor_subjects ts
         JOIN subjects s ON s.id=ts.subject_id
         WHERE ts.tutor_id=?
+          AND COALESCE(ts.delivery_mode, 'GROUP') IN ('ONE_ON_ONE','BOTH')
         ORDER BY s.grade, s.name
     """, (tid,))
     subjects = cur.fetchall()
     conn.close()
 
-    subject_opts = "<option value=''>General / Any assigned subject</option>" + "".join([f"<option value='{escape(s['name'], quote=True)}'>{escape(grade_label(s['grade']))} - {escape(s['name'])}</option>" for s in subjects])
+    subject_opts = "<option value=''>General / Any One-on-One subject</option>" + "".join([f"<option value='{escape(s['name'], quote=True)}'>{escape(grade_label(s['grade']))} - {escape(s['name'])}</option>" for s in subjects])
     rows_html = "".join([
         f"<tr><td>{escape(rw['available_day'] or '')}</td><td>{escape(rw['available_start_time'] or '')} - {escape(rw['available_end_time'] or '')}</td><td>{escape(rw['grade_level'] or '')}</td><td>{escape(rw['subject'] or 'General')}</td><td>{one_on_one_badge('Active' if rw['is_active'] else 'Inactive')}</td></tr>"
         for rw in rows
@@ -88569,20 +88682,26 @@ def tutor_one_on_one_availability_post():
     tid = is_tutor()
     conn = get_db()
     cur = conn.cursor()
+    subject = request.form.get("subject", "").strip()
+    grade_level = request.form.get("grade_level", "").strip()
+    available_day = request.form.get("available_day", "").strip()
+    available_start_time = request.form.get("available_start_time", "").strip()
+    available_end_time = request.form.get("available_end_time", "").strip()
+    notes = request.form.get("notes", "").strip()
+
     cur.execute("""
         INSERT INTO one_on_one_tutor_availability(
             tutor_id, subject, grade_level, available_day, available_start_time, available_end_time, notes, is_active, created_at
         ) VALUES(?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(tutor_id, available_day, available_start_time, available_end_time)
+        DO UPDATE SET
+            subject=excluded.subject,
+            grade_level=excluded.grade_level,
+            notes=excluded.notes,
+            is_active=1,
+            created_at=excluded.created_at
     """, (
-        tid,
-        request.form.get("subject", "").strip(),
-        request.form.get("grade_level", "").strip(),
-        request.form.get("available_day", "").strip(),
-        request.form.get("available_start_time", "").strip(),
-        request.form.get("available_end_time", "").strip(),
-        request.form.get("notes", "").strip(),
-        1,
-        now_utc_iso()
+        tid, subject, grade_level, available_day, available_start_time, available_end_time, notes, 1, now_utc_iso()
     ))
     conn.commit()
     conn.close()
