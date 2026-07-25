@@ -30945,7 +30945,7 @@ def admin_tutors():
 
             <td data-label="Subjects">{mapped}</td>
 
-            <td data-label="Actions">
+            <td data-label="Actions" class="tutor-actions-cell">
                 <div class="tutor-action-panel">
 
                     <a href='{url_for('admin_tutor_edit', tid=t['id'])}'
@@ -31020,17 +31020,44 @@ def admin_tutors():
         <style>
             .tutor-add-form{{display:grid;grid-template-columns:minmax(220px,1fr) minmax(170px,.55fr) auto;gap:10px;align-items:end}}
             .tutor-filter-form{{display:grid;grid-template-columns:minmax(220px,1.5fr) minmax(140px,1fr) minmax(160px,1fr) auto auto;gap:10px;align-items:end}}
-            .tutor-action-panel{{display:flex;gap:8px;flex-wrap:wrap;align-items:center;min-width:0}}
-            .tutor-action-panel > a,.tutor-action-panel > form:not(.tutor-subject-form){{flex:0 0 auto;margin:0}}
-            .tutor-subject-form{{display:grid;grid-template-columns:minmax(175px,1fr) minmax(155px,.85fr) auto;gap:8px;align-items:center;flex:1 1 470px;min-width:0;margin:0}}
-            .tutor-subject-form select,.tutor-subject-form button{{width:100%;min-width:0}}
+            .tutor-action-panel{{
+                display:grid;
+                grid-template-columns:max-content max-content max-content;
+                gap:8px;
+                align-items:center;
+                justify-content:start;
+                min-width:0;
+            }}
+            .tutor-action-panel > a,
+            .tutor-action-panel > form:not(.tutor-subject-form){{margin:0;min-width:0}}
+            .tutor-action-panel > form:not(.tutor-subject-form) button{{white-space:nowrap}}
+            .tutor-subject-form{{
+                grid-column:1/-1;
+                display:grid;
+                grid-template-columns:minmax(150px,1fr) minmax(145px,.9fr) minmax(108px,auto);
+                gap:8px;
+                align-items:center;
+                width:100%;
+                min-width:0;
+                margin:2px 0 0;
+            }}
+            .tutor-subject-form select,
+            .tutor-subject-form button{{width:100%;min-width:0}}
+            .tutor-subject-form button{{white-space:nowrap;padding-left:12px;padding-right:12px}}
             .tutor-admin-table{{width:100%;table-layout:auto}}
             .tutor-admin-table td{{vertical-align:top}}
+            .tutor-admin-table th:nth-child(1),.tutor-admin-table td:nth-child(1){{width:29%}}
+            .tutor-admin-table th:nth-child(2),.tutor-admin-table td:nth-child(2){{width:8%;white-space:nowrap}}
+            .tutor-admin-table th:nth-child(3),.tutor-admin-table td:nth-child(3){{width:25%}}
+            .tutor-admin-table th:nth-child(4),.tutor-admin-table td:nth-child(4){{width:38%}}
+            .tutor-actions-cell{{min-width:430px}}
             @media(max-width:900px){{
                 .tutor-add-form,.tutor-filter-form{{grid-template-columns:1fr 1fr}}
                 .tutor-add-form button,.tutor-filter-form .btn{{width:100%}}
-                .tutor-subject-form{{grid-template-columns:1fr 1fr;flex-basis:100%}}
+                .tutor-action-panel{{grid-template-columns:max-content max-content max-content}}
+                .tutor-subject-form{{grid-template-columns:1fr 1fr}}
                 .tutor-subject-form button{{grid-column:1/-1}}
+                .tutor-actions-cell{{min-width:390px}}
             }}
             @media(max-width:700px){{
                 .tutor-add-form,.tutor-filter-form{{grid-template-columns:1fr}}
@@ -31039,6 +31066,7 @@ def admin_tutors():
                 .tutor-admin-table thead{{display:none}}
                 .tutor-admin-table tr{{background:#fff;border:1px solid #dbe4ea;border-radius:14px;padding:12px;margin-bottom:14px;box-shadow:0 4px 12px rgba(15,23,42,.05)}}
                 .tutor-admin-table td{{border:0!important;padding:9px 0!important;min-width:0!important;max-width:none!important;white-space:normal!important}}
+                .tutor-actions-cell{{min-width:0!important}}
                 .tutor-admin-table td+td{{border-top:1px solid #edf2f7!important}}
                 .tutor-admin-table td::before{{content:attr(data-label);display:block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#64748b;margin-bottom:6px}}
                 .tutor-action-panel{{display:grid;grid-template-columns:1fr 1fr;width:100%}}
