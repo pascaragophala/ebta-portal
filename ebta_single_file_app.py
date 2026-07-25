@@ -88632,7 +88632,7 @@ def manager_one_on_one():
 
     body = f"""
     {manager_nav()}
-    <section class="card"><h1>Tutor Manager One-on-One Monitoring</h1><p class="muted">View requests linked to managed tutors and monitor availability. Tutor allocation is handled by High Admin, AQM and the One-on-One Support Manager.</p></section>
+    <section class="card"><h1>Tutor Manager One-on-One Monitoring</h1></section>
     <section class="card"><h2>Managed One-on-One Requests</h2><div class="scroll-x"><table><thead><tr><th>Learner</th><th>Subject</th><th>Topic</th><th>Student Suggested Availability</th><th>Status</th><th>Tutor</th></tr></thead><tbody>{table or "<tr><td colspan='6'>No linked one-on-one requests yet.</td></tr>"}</tbody></table></div></section>
     <section class="card"><h2>Managed Tutor Availability</h2><div class="scroll-x"><table><thead><tr><th>Tutor</th><th>Day</th><th>Time</th><th>Grade</th><th>Subject</th></tr></thead><tbody>{avail_html or "<tr><td colspan='5'>No tutor availability added yet.</td></tr>"}</tbody></table></div></section>
     """
@@ -88782,10 +88782,6 @@ def aqm_one_on_one_tutor_assignment():
     {aqm_nav()}
     <section class="card">
         <h1>One-on-One Tutor Assignment</h1>
-        <p class="muted">
-            AQM can support academic tutor allocation without seeing sensitive finance totals.
-            Tutor assignment is handled by AQM, High Admin and the One-on-One Support Manager.
-        </p>
 
         <form method="get" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end">
             <div><label>Search</label><input name="q" value="{escape(q)}" placeholder="Learner, student number, parent or topic"></div>
