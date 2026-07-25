@@ -22964,7 +22964,7 @@ def tutor_assignment_manage(mid: int):
                     </div>
                 </td>
 
-                <td style="min-width:260px">
+                <td data-label="Tutor" style="min-width:260px">
                     <div style="display:flex;flex-direction:column;gap:8px">
                         {view_section}
                         {marked_script_btn}
@@ -30941,12 +30941,12 @@ def admin_tutors():
                 </div>
             </td>
 
-            <td>{pin}</td>
+            <td data-label="PIN">{pin}</td>
 
-            <td>{mapped}</td>
+            <td data-label="Subjects">{mapped}</td>
 
-            <td>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            <td data-label="Actions">
+                <div class="tutor-action-panel">
 
                     <a href='{url_for('admin_tutor_edit', tid=t['id'])}'
                        class='btn secondary mini'>
@@ -30972,8 +30972,7 @@ def admin_tutors():
 
                     <form method='post'
                           action='{url_for('admin_tutor_add_subject', tid=t['id'])}'
-                          class='inlineform'
-                          style='display:inline-grid;grid-template-columns:minmax(170px,1fr) 150px auto;gap:6px'>
+                          class='inlineform tutor-subject-form'>
                         <select name='subject_id' required>
                             {options}
                         </select>
@@ -31018,13 +31017,49 @@ def admin_tutors():
             </div>
         </div>
 
+        <style>
+            .tutor-add-form{{display:grid;grid-template-columns:minmax(220px,1fr) minmax(170px,.55fr) auto;gap:10px;align-items:end}}
+            .tutor-filter-form{{display:grid;grid-template-columns:minmax(220px,1.5fr) minmax(140px,1fr) minmax(160px,1fr) auto auto;gap:10px;align-items:end}}
+            .tutor-action-panel{{display:flex;gap:8px;flex-wrap:wrap;align-items:center;min-width:0}}
+            .tutor-action-panel > a,.tutor-action-panel > form:not(.tutor-subject-form){{flex:0 0 auto;margin:0}}
+            .tutor-subject-form{{display:grid;grid-template-columns:minmax(175px,1fr) minmax(155px,.85fr) auto;gap:8px;align-items:center;flex:1 1 470px;min-width:0;margin:0}}
+            .tutor-subject-form select,.tutor-subject-form button{{width:100%;min-width:0}}
+            .tutor-admin-table{{width:100%;table-layout:auto}}
+            .tutor-admin-table td{{vertical-align:top}}
+            @media(max-width:900px){{
+                .tutor-add-form,.tutor-filter-form{{grid-template-columns:1fr 1fr}}
+                .tutor-add-form button,.tutor-filter-form .btn{{width:100%}}
+                .tutor-subject-form{{grid-template-columns:1fr 1fr;flex-basis:100%}}
+                .tutor-subject-form button{{grid-column:1/-1}}
+            }}
+            @media(max-width:700px){{
+                .tutor-add-form,.tutor-filter-form{{grid-template-columns:1fr}}
+                .tutor-admin-scroll{{overflow:visible}}
+                .tutor-admin-table,.tutor-admin-table tbody,.tutor-admin-table tr,.tutor-admin-table td{{display:block;width:100%}}
+                .tutor-admin-table thead{{display:none}}
+                .tutor-admin-table tr{{background:#fff;border:1px solid #dbe4ea;border-radius:14px;padding:12px;margin-bottom:14px;box-shadow:0 4px 12px rgba(15,23,42,.05)}}
+                .tutor-admin-table td{{border:0!important;padding:9px 0!important;min-width:0!important;max-width:none!important;white-space:normal!important}}
+                .tutor-admin-table td+td{{border-top:1px solid #edf2f7!important}}
+                .tutor-admin-table td::before{{content:attr(data-label);display:block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#64748b;margin-bottom:6px}}
+                .tutor-action-panel{{display:grid;grid-template-columns:1fr 1fr;width:100%}}
+                .tutor-action-panel > a,.tutor-action-panel > form:not(.tutor-subject-form),.tutor-action-panel > form:not(.tutor-subject-form) button{{width:100%;display:block}}
+                .tutor-subject-form{{grid-column:1/-1;display:grid;grid-template-columns:1fr;width:100%}}
+                .tutor-subject-form button{{grid-column:auto}}
+                .tutor-admin-table .chip{{max-width:100%;border-radius:12px!important;align-items:flex-start!important;flex-wrap:wrap}}
+                .tutor-admin-table .chip span{{overflow-wrap:anywhere;flex:1 1 180px}}
+            }}
+            @media(max-width:430px){{
+                .tutor-action-panel{{grid-template-columns:1fr}}
+                .tutor-subject-form{{grid-column:auto}}
+            }}
+        </style>
+
         <div class='card soft' style="border-left:5px solid #1b5e20;margin-bottom:14px">
             <h2>Add Tutor</h2>
 
             <form method='post'
                   action='{url_for('admin_tutor_add')}'
-                  class='grid'
-                  style='grid-template-columns:1fr 180px auto;gap:10px;align-items:end'>
+                  class='tutor-add-form'>
 
                 <div>
                     <label>Full Name</label>
@@ -31047,8 +31082,7 @@ def admin_tutors():
 
             <form method="get"
                   action="{url_for('admin_tutors')}"
-                  class="grid"
-                  style="grid-template-columns:1.5fr 1fr 1fr auto auto;gap:10px;align-items:end">
+                  class="tutor-filter-form">
 
                 <div>
                     <label>Search Tutor</label>
@@ -31083,8 +31117,8 @@ def admin_tutors():
             {filter_note}
         </div>
 
-        <div class="scroll-x">
-            <table id='tut_tbl'>
+        <div class="scroll-x tutor-admin-scroll">
+            <table id='tut_tbl' class="tutor-admin-table">
                 <thead>
                     <tr>
                         <th>Tutor</th>
