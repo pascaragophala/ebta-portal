@@ -86761,6 +86761,8 @@ def one_on_one_request_submit():
     parent_phone = request.form.get("parent_phone", "").strip()
     parent_email = request.form.get("parent_email", "").strip()
     grade = request.form.get("grade", "").strip()
+    province = request.form.get("province", "").strip()
+    school = request.form.get("school", "").strip()
     subject_id = request.form.get("subject_id", "").strip()
     topic = request.form.get("topic_or_problem_area", "").strip()
     school_topic = request.form.get("school_current_topic", "").strip()
