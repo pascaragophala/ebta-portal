@@ -9899,7 +9899,8 @@ EBTA_UNIFIED_UI_CSS = """
         max-width:1480px;
         margin:22px auto;
         padding:0 22px;
-        animation:ebtaPageIn .45s var(--ebta-ease) both;
+        opacity:1;
+        transform:none;
     }
 
     body.ebta-unified-ui .layout {
@@ -10324,8 +10325,9 @@ EBTA_UNIFIED_UI_CSS = """
     }
 
     .ebta-reveal {
-        animation:ebtaReveal .48s var(--ebta-ease) both;
-        animation-delay:var(--ebta-delay,0ms);
+        opacity:1;
+        transform:none;
+        animation:none;
     }
 
     .ebta-ripple {
@@ -10694,7 +10696,7 @@ EBTA_UNIFIED_UI_JS = """
         document.body.classList.add("ebta-ui-ready");
         upgradeRoleToolbars();
         markCurrentNavigation();
-        addRevealAnimation();
+        // Page content is rendered immediately; only interaction animations remain.
         addRippleEffects();
         addSubmitFeedback();
         addBackToTop();
@@ -12693,6 +12695,8 @@ def home():
             right:18px;
             bottom:18px;
             z-index:9998;
+            max-width:calc(100vw - 36px);
+            box-sizing:border-box;
             display:flex;
             align-items:center;
             gap:10px;
@@ -12746,10 +12750,26 @@ def home():
 
         @media(max-width:640px) {{
             .enrollment-whatsapp-help {{
-                right:12px;
-                bottom:12px;
-                padding:10px 12px;
+                position:relative;
+                inset:auto;
+                width:100%;
+                max-width:100%;
+                min-height:48px;
+                box-sizing:border-box;
+                justify-content:center;
+                margin:0 0 14px;
+                padding:9px 12px;
+                border-radius:14px;
                 font-size:13px;
+                box-shadow:0 5px 14px rgba(15,23,42,0.12);
+                animation:none;
+                transform:none;
+            }}
+
+            .enrollment-whatsapp-help:hover,
+            .enrollment-whatsapp-help:focus,
+            .enrollment-whatsapp-help:active {{
+                transform:none;
             }}
 
             .enrollment-whatsapp-icon {{
@@ -12781,6 +12801,9 @@ def home():
             position:fixed;
             inset:0;
             z-index:999999;
+            opacity:1;
+            visibility:visible;
+            transform:none;
             background:
                 radial-gradient(circle at top left, rgba(255,255,255,0.20), transparent 32%),
                 linear-gradient(135deg, #0f3d16 0%, #1b5e20 45%, #2e7d32 100%);
@@ -12798,6 +12821,8 @@ def home():
 
         .ebta-loader-card {
             width:min(340px, 88vw);
+            opacity:1;
+            visibility:visible;
             background:rgba(255,255,255,0.96);
             border-radius:28px;
             padding:28px 22px;
