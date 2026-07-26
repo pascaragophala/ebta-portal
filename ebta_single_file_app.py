@@ -12723,6 +12723,10 @@ def home():
             font-weight:700;
         }}
 
+        .enrollment-whatsapp-copy-mobile {{
+            display:none !important;
+        }}
+
         .enrollment-whatsapp-icon {{
             width:34px;
             height:34px;
@@ -12749,19 +12753,30 @@ def home():
         }}
 
         @media(max-width:640px) {{
+            body {{
+                padding-bottom:calc(122px + env(safe-area-inset-bottom));
+            }}
+
             .enrollment-whatsapp-help {{
-                position:relative;
-                inset:auto;
-                width:100%;
-                max-width:100%;
-                min-height:48px;
+                position:fixed;
+                left:auto;
+                top:auto;
+                right:10px;
+                bottom:calc(66px + env(safe-area-inset-bottom));
+                width:auto;
+                max-width:118px;
+                min-height:42px;
                 box-sizing:border-box;
-                justify-content:center;
-                margin:0 0 14px;
-                padding:9px 12px;
-                border-radius:14px;
-                font-size:13px;
-                box-shadow:0 5px 14px rgba(15,23,42,0.12);
+                justify-content:flex-start;
+                gap:7px;
+                margin:0;
+                padding:6px 9px 6px 7px;
+                border-width:1.5px;
+                border-radius:999px;
+                font-size:11px;
+                line-height:1.05;
+                white-space:nowrap;
+                box-shadow:0 7px 18px rgba(15,23,42,0.20);
                 animation:none;
                 transform:none;
             }}
@@ -12772,10 +12787,44 @@ def home():
                 transform:none;
             }}
 
+            .enrollment-whatsapp-copy-desktop {{
+                display:none !important;
+            }}
+
+            .enrollment-whatsapp-copy-mobile {{
+                display:flex !important;
+                font-size:10px;
+                font-weight:850;
+                letter-spacing:.01em;
+            }}
+
+            .enrollment-whatsapp-copy-mobile small {{
+                margin-top:1px;
+                font-size:8.5px;
+                font-weight:750;
+            }}
+
             .enrollment-whatsapp-icon {{
-                width:30px;
-                height:30px;
-                font-size:18px;
+                width:28px;
+                height:28px;
+                font-size:16px;
+                flex:0 0 28px;
+            }}
+        }}
+
+        @media(max-width:360px) {{
+            .enrollment-whatsapp-help {{
+                right:8px;
+                max-width:103px;
+                padding-right:8px;
+            }}
+
+            .enrollment-whatsapp-copy-mobile {{
+                font-size:9.5px;
+            }}
+
+            .enrollment-whatsapp-copy-mobile small {{
+                font-size:8px;
             }}
         }}
     </style>
@@ -12785,9 +12834,13 @@ def home():
        target="_blank"
        rel="noopener">
         <div class="enrollment-whatsapp-icon">☎</div>
-        <span>
+        <span class="enrollment-whatsapp-copy-desktop">
             Need help?
             <small>WhatsApp us</small>
+        </span>
+        <span class="enrollment-whatsapp-copy-mobile">
+            Help
+            <small>WhatsApp</small>
         </span>
     </a>
     """
