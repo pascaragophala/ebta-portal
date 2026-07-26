@@ -88458,7 +88458,7 @@ def one_on_one_manager_tutors():
 
     cur.execute("""
         SELECT COUNT(DISTINCT ta.tutor_id) AS c
-        FROM tutor_availability ta
+        FROM one_on_one_tutor_availability ta
         JOIN tutors t ON t.id=ta.tutor_id
         JOIN tutor_subjects ts ON ts.tutor_id=t.id
         WHERE COALESCE(t.is_active,1)=1
@@ -88469,7 +88469,7 @@ def one_on_one_manager_tutors():
 
     cur.execute("""
         SELECT COUNT(*) AS c
-        FROM tutor_availability ta
+        FROM one_on_one_tutor_availability ta
         JOIN tutors t ON t.id=ta.tutor_id
         WHERE COALESCE(t.is_active,1)=1
           AND COALESCE(ta.is_active,1)=1
