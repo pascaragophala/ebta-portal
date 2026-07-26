@@ -59386,34 +59386,362 @@ def admin_admission_coordinator_toggle(aid):
 # ================= ONE-ON-ONE SUPPORT MANAGERS =================
 
 def one_on_one_manager_nav():
-    return """
-    <nav class="card side-nav">
-        <a class="btn secondary" href="/one-on-one-manager">One-on-One Dashboard</a>
-        <a class="btn secondary" href="/one-on-one-manager?status=Pending">Pending Requests</a>
-        <a class="btn secondary" href="/one-on-one-manager?status=Assigned">Assigned Requests</a>
-        <a class="btn secondary" href="/one-on-one-manager?status=Confirmed">Confirmed Requests</a>
-        <a class="btn secondary" href="/one-on-one-manager#one-on-one-tutors">Tutors & Availability</a>
-        <a class="btn danger" href="/one-on-one-manager/logout">Logout</a>
-    </nav>
+    current_path = request.path
+    current_status = request.args.get("status", "").strip()
+
+    def nav_link(label, href, icon, active=False):
+        active_class = " active" if active else ""
+        return (
+            f'<a class="ooo-nav-link{active_class}" href="{href}">'
+            f'<span class="ooo-nav-icon">{icon}</span>'
+            f'<span>{escape(label)}</span>'
+            f'</a>'
+        )
+
+    is_dashboard = current_path == "/one-on-one-manager" and not current_status
+    links = "".join([
+        nav_link("Dashboard", "/one-on-one-manager", "⌂", is_dashboard),
+        nav_link("Pending Requests", "/one-on-one-manager?status=Pending", "◷", current_status == "Pending"),
+        nav_link("Assigned Requests", "/one-on-one-manager?status=Assigned", "✓", current_status == "Assigned"),
+        nav_link("Confirmed Sessions", "/one-on-one-manager?status=Confirmed", "▣", current_status == "Confirmed"),
+        nav_link("Tutors & Availability", "/one-on-one-manager/tutors", "♟", current_path == "/one-on-one-manager/tutors"),
+    ])
+
+    manager_name = escape(session.get("one_on_one_manager_name", "One-on-One Support Manager"))
+
+    return f"""
+    <style>
+        :root {{
+            --ooo-ink:#102319;
+            --ooo-green:#176b3a;
+            --ooo-green-2:#279459;
+            --ooo-mint:#eaf8ef;
+            --ooo-gold:#e6a817;
+            --ooo-soft:#f6fbf7;
+            --ooo-line:#d9e8dd;
+            --ooo-shadow:0 12px 32px rgba(20,69,39,.10);
+        }}
+        body {{
+            background:
+                radial-gradient(circle at 95% 5%, rgba(230,168,23,.10), transparent 24rem),
+                linear-gradient(180deg,#f8fcf9 0%,#eef7f1 100%) !important;
+        }}
+        .ooo-portal-shell {{
+            margin:-4px 0 18px;
+            border-radius:22px;
+            overflow:hidden;
+            box-shadow:var(--ooo-shadow);
+            border:1px solid rgba(23,107,58,.14);
+            background:#fff;
+        }}
+        .ooo-portal-hero {{
+            position:relative;
+            padding:24px 26px;
+            color:#fff;
+            background:
+                linear-gradient(120deg,rgba(8,48,27,.96),rgba(23,107,58,.94)),
+                radial-gradient(circle at 85% 20%,rgba(255,255,255,.18),transparent 18rem);
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:18px;
+        }}
+        .ooo-portal-hero:after {{
+            content:"";
+            position:absolute;
+            right:-45px;
+            bottom:-80px;
+            width:220px;
+            height:220px;
+            border:38px solid rgba(230,168,23,.18);
+            border-radius:50%;
+        }}
+        .ooo-title-wrap {{position:relative;z-index:1}}
+        .ooo-eyebrow {{
+            font-size:.76rem;
+            text-transform:uppercase;
+            letter-spacing:.16em;
+            opacity:.78;
+            font-weight:800;
+            margin-bottom:5px;
+        }}
+        .ooo-portal-title {{
+            margin:0;
+            font-size:clamp(1.45rem,2.4vw,2.15rem);
+            line-height:1.15;
+            color:#fff;
+        }}
+        .ooo-portal-subtitle {{
+            margin:7px 0 0;
+            color:rgba(255,255,255,.82);
+            max-width:680px;
+        }}
+        .ooo-manager-chip {{
+            position:relative;
+            z-index:1;
+            display:flex;
+            align-items:center;
+            gap:10px;
+            padding:10px 14px;
+            border:1px solid rgba(255,255,255,.28);
+            background:rgba(255,255,255,.12);
+            border-radius:999px;
+            backdrop-filter:blur(7px);
+            white-space:nowrap;
+            font-weight:750;
+        }}
+        .ooo-manager-avatar {{
+            width:34px;height:34px;border-radius:50%;
+            display:grid;place-items:center;
+            color:var(--ooo-ink);background:#fff3c8;
+            font-weight:900;
+        }}
+        .ooo-nav {{
+            display:flex;
+            gap:7px;
+            padding:11px 14px;
+            overflow-x:auto;
+            background:#fff;
+            border-top:1px solid rgba(255,255,255,.12);
+        }}
+        .ooo-nav-link {{
+            flex:0 0 auto;
+            display:flex;
+            align-items:center;
+            gap:8px;
+            padding:10px 13px;
+            border-radius:11px;
+            text-decoration:none;
+            color:#31513d;
+            font-size:.9rem;
+            font-weight:750;
+            border:1px solid transparent;
+            transition:.18s ease;
+        }}
+        .ooo-nav-link:hover {{
+            background:var(--ooo-mint);
+            border-color:#cce6d4;
+            transform:translateY(-1px);
+        }}
+        .ooo-nav-link.active {{
+            color:#fff;
+            background:linear-gradient(135deg,var(--ooo-green),var(--ooo-green-2));
+            box-shadow:0 7px 18px rgba(23,107,58,.22);
+        }}
+        .ooo-nav-icon {{
+            width:23px;height:23px;border-radius:7px;
+            display:grid;place-items:center;
+            background:rgba(23,107,58,.10);
+            font-size:.85rem;
+        }}
+        .ooo-nav-link.active .ooo-nav-icon {{background:rgba(255,255,255,.18)}}
+        .ooo-logout {{
+            margin-left:auto;
+            color:#9b2c2c;
+        }}
+
+        /* Upgrade every operational content card following the manager header. */
+        .ooo-portal-shell ~ .card {{
+            border:1px solid var(--ooo-line) !important;
+            border-radius:18px !important;
+            box-shadow:0 9px 25px rgba(34,85,50,.07) !important;
+            background:rgba(255,255,255,.96) !important;
+            margin-bottom:16px !important;
+        }}
+        .ooo-portal-shell ~ .card > h1,
+        .ooo-portal-shell ~ .card > h2 {{
+            color:var(--ooo-ink);
+            letter-spacing:-.02em;
+        }}
+        .ooo-portal-shell ~ .card > h1:after,
+        .ooo-portal-shell ~ .card > h2:after {{
+            content:"";
+            display:block;
+            width:48px;
+            height:4px;
+            margin-top:8px;
+            border-radius:99px;
+            background:linear-gradient(90deg,var(--ooo-green-2),var(--ooo-gold));
+        }}
+        .ooo-portal-shell ~ .card .card.soft {{
+            border-radius:14px !important;
+            border:1px solid #dcebe0 !important;
+            background:linear-gradient(145deg,#fff,#f6fbf7) !important;
+        }}
+        .ooo-portal-shell ~ .card .stats,
+        .ooo-portal-shell ~ .card .grid {{
+            align-items:stretch;
+        }}
+        .ooo-portal-shell ~ .card table {{
+            border-collapse:separate;
+            border-spacing:0;
+            overflow:hidden;
+            border:1px solid #dce8df;
+            border-radius:14px;
+            background:#fff;
+        }}
+        .ooo-portal-shell ~ .card thead th {{
+            background:#edf7f0 !important;
+            color:#234d31 !important;
+            border-bottom:1px solid #d5e6da !important;
+            font-size:.78rem;
+            text-transform:uppercase;
+            letter-spacing:.045em;
+        }}
+        .ooo-portal-shell ~ .card tbody tr:hover td {{
+            background:#f7fcf8;
+        }}
+        .ooo-portal-shell ~ .card .btn.success {{
+            background:linear-gradient(135deg,var(--ooo-green),var(--ooo-green-2)) !important;
+            box-shadow:0 6px 14px rgba(23,107,58,.18);
+        }}
+        .ooo-portal-shell ~ .card input,
+        .ooo-portal-shell ~ .card select,
+        .ooo-portal-shell ~ .card textarea {{
+            border-radius:10px !important;
+            border-color:#ccded1 !important;
+            background:#fff !important;
+        }}
+        .ooo-portal-shell ~ .card input:focus,
+        .ooo-portal-shell ~ .card select:focus,
+        .ooo-portal-shell ~ .card textarea:focus {{
+            outline:none;
+            border-color:var(--ooo-green-2) !important;
+            box-shadow:0 0 0 3px rgba(39,148,89,.12);
+        }}
+        .ooo-page-intro {{
+            display:flex;
+            justify-content:space-between;
+            gap:16px;
+            align-items:flex-start;
+            margin-bottom:14px;
+        }}
+        .ooo-page-kicker {{
+            color:var(--ooo-green);
+            text-transform:uppercase;
+            font-size:.75rem;
+            font-weight:900;
+            letter-spacing:.12em;
+        }}
+        .ooo-quick-grid {{
+            display:grid;
+            grid-template-columns:repeat(4,minmax(0,1fr));
+            gap:10px;
+            margin-top:14px;
+        }}
+        .ooo-quick-card {{
+            padding:15px;
+            border-radius:15px;
+            color:inherit;
+            text-decoration:none;
+            background:linear-gradient(145deg,#fff,#f3faf5);
+            border:1px solid #d8e8dd;
+            transition:.18s ease;
+        }}
+        .ooo-quick-card:hover {{
+            transform:translateY(-2px);
+            box-shadow:0 10px 20px rgba(31,91,49,.10);
+        }}
+        .ooo-quick-card b {{display:block;color:var(--ooo-ink);margin-bottom:4px}}
+        .ooo-quick-card span {{font-size:.82rem;color:#617566}}
+        .ooo-section-header {{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            margin-bottom:12px;
+        }}
+        .ooo-section-header h2 {{margin:0}}
+        .ooo-empty {{
+            padding:30px 18px;
+            text-align:center;
+            color:#64766a;
+            border:1px dashed #bfd6c5;
+            border-radius:14px;
+            background:#f8fcf9;
+        }}
+        @media(max-width:900px) {{
+            .ooo-quick-grid {{grid-template-columns:repeat(2,minmax(0,1fr))}}
+            .ooo-portal-hero {{align-items:flex-start;flex-direction:column}}
+            .ooo-manager-chip {{white-space:normal}}
+        }}
+        @media(max-width:600px) {{
+            .ooo-portal-shell {{border-radius:15px}}
+            .ooo-portal-hero {{padding:20px 17px}}
+            .ooo-nav {{padding:9px}}
+            .ooo-nav-link {{padding:9px 11px;font-size:.84rem}}
+            .ooo-quick-grid {{grid-template-columns:1fr}}
+            .ooo-page-intro {{display:block}}
+            .ooo-portal-shell ~ .card {{border-radius:14px !important}}
+        }}
+    </style>
+
+    <div class="ooo-portal-shell">
+        <div class="ooo-portal-hero">
+            <div class="ooo-title-wrap">
+                <div class="ooo-eyebrow">EBTA Individual Learning Operations</div>
+                <h1 class="ooo-portal-title">One-on-One Support Centre</h1>
+                <p class="ooo-portal-subtitle">
+                    Coordinate learner requests, tutor allocation, availability, bookings and session quality from one focused workspace.
+                </p>
+            </div>
+            <div class="ooo-manager-chip">
+                <span class="ooo-manager-avatar">1:1</span>
+                <span>{manager_name}</span>
+            </div>
+        </div>
+        <nav class="ooo-nav" aria-label="One-on-One Manager navigation">
+            {links}
+            <a class="ooo-nav-link ooo-logout" href="/one-on-one-manager/logout">
+                <span class="ooo-nav-icon">↪</span><span>Logout</span>
+            </a>
+        </nav>
+    </div>
     """
 
 
 @app.get('/one-on-one-manager/login')
 def one_on_one_manager_login():
     body = """
-    <div class="card auth-card">
-        <h1>One-on-One Support Manager Login</h1>
-        <form method="post" action="/one-on-one-manager/login" class="grid">
-            <div>
-                <label>Phone Number</label>
-                <input name="phone" required>
-            </div>
-            <div>
-                <label>PIN</label>
-                <input name="pin" type="password" maxlength="5" required>
-            </div>
-            <button class="btn success">Login</button>
-        </form>
+    <style>
+        body{background:linear-gradient(135deg,#eef8f1,#fff8e7)!important}
+        .ooo-login-wrap{min-height:72vh;display:grid;place-items:center;padding:24px}
+        .ooo-login-card{width:min(920px,100%);display:grid;grid-template-columns:1.05fr .95fr;border-radius:24px;overflow:hidden;background:#fff;box-shadow:0 24px 60px rgba(24,76,40,.16);border:1px solid #d8e8dd}
+        .ooo-login-brand{padding:42px;background:linear-gradient(145deg,#0d4226,#1d7c45);color:#fff;position:relative;overflow:hidden}
+        .ooo-login-brand:after{content:"";position:absolute;width:260px;height:260px;border:45px solid rgba(230,168,23,.20);border-radius:50%;right:-125px;bottom:-125px}
+        .ooo-login-brand h1{color:#fff;font-size:2rem;margin:12px 0}
+        .ooo-login-brand p{color:rgba(255,255,255,.82);line-height:1.7}
+        .ooo-login-mark{width:58px;height:58px;border-radius:18px;background:#fff3c9;color:#174e2e;display:grid;place-items:center;font-size:1.1rem;font-weight:900}
+        .ooo-login-form{padding:42px;display:flex;flex-direction:column;justify-content:center}
+        .ooo-login-form h2{margin:0 0 5px;color:#102319}
+        .ooo-login-form .muted{margin-bottom:22px}
+        .ooo-login-form input{border-radius:12px;padding:13px;border:1px solid #cbded1}
+        .ooo-login-form button{margin-top:8px;border-radius:12px;padding:13px;background:linear-gradient(135deg,#176b3a,#279459)}
+        @media(max-width:720px){.ooo-login-card{grid-template-columns:1fr}.ooo-login-brand,.ooo-login-form{padding:28px}}
+    </style>
+    <div class="ooo-login-wrap">
+        <div class="ooo-login-card">
+            <section class="ooo-login-brand">
+                <div class="ooo-login-mark">1:1</div>
+                <h1>One-on-One Support Centre</h1>
+                <p>Manage individual learner support, coordinate tutors, review availability and keep every session on track.</p>
+            </section>
+            <section class="ooo-login-form">
+                <h2>Manager sign in</h2>
+                <p class="muted">Use the phone number and PIN provided by High Admin.</p>
+                <form method="post" action="/one-on-one-manager/login" class="grid">
+                    <div>
+                        <label>Phone Number</label>
+                        <input name="phone" inputmode="tel" autocomplete="username" required>
+                    </div>
+                    <div>
+                        <label>PIN</label>
+                        <input name="pin" type="password" inputmode="numeric" autocomplete="current-password" maxlength="5" required>
+                    </div>
+                    <button class="btn success">Sign in to Support Centre</button>
+                </form>
+            </section>
+        </div>
     </div>
     """
     return page("One-on-One Support Manager Login", body)
@@ -88109,6 +88437,102 @@ def one_on_one_operations_actor_label():
     return "EBTA Operations"
 
 
+
+@app.get('/one-on-one-manager/tutors')
+def one_on_one_manager_tutors():
+    r = require_one_on_one_manager()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT t.id) AS c
+        FROM tutors t
+        JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        WHERE COALESCE(t.is_active,1)=1
+          AND COALESCE(ts.delivery_mode,'GROUP') IN ('ONE_ON_ONE','BOTH')
+    """)
+    total_tutors = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT ta.tutor_id) AS c
+        FROM tutor_availability ta
+        JOIN tutors t ON t.id=ta.tutor_id
+        JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        WHERE COALESCE(t.is_active,1)=1
+          AND COALESCE(ta.is_active,1)=1
+          AND COALESCE(ts.delivery_mode,'GROUP') IN ('ONE_ON_ONE','BOTH')
+    """)
+    tutors_with_availability = cur.fetchone()["c"] or 0
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM tutor_availability ta
+        JOIN tutors t ON t.id=ta.tutor_id
+        WHERE COALESCE(t.is_active,1)=1
+          AND COALESCE(ta.is_active,1)=1
+    """)
+    active_slots = cur.fetchone()["c"] or 0
+    conn.close()
+
+    missing_availability = max(total_tutors - tutors_with_availability, 0)
+
+    body = f"""
+    {one_on_one_manager_nav()}
+    <section class="card">
+        <div class="ooo-page-intro">
+            <div>
+                <div class="ooo-page-kicker">Tutor capacity</div>
+                <h1>One-on-One Tutors & Availability</h1>
+                <p class="muted">
+                    Review every tutor assigned to individual sessions, their subjects and the times they have made available.
+                </p>
+            </div>
+            <a class="btn secondary" href="/one-on-one-manager">← Dashboard</a>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">
+            {stat("Eligible Tutors", str(total_tutors))}
+            {stat("Availability Captured", str(tutors_with_availability))}
+            {stat("Missing Availability", str(missing_availability))}
+            {stat("Active Time Slots", str(active_slots))}
+        </div>
+
+        <div class="ooo-quick-grid">
+            <a class="ooo-quick-card" href="/one-on-one-manager?status=Pending">
+                <b>Match pending learners</b>
+                <span>Use tutor subjects and available times to allocate new requests.</span>
+            </a>
+            <a class="ooo-quick-card" href="/one-on-one-manager?status=Assigned">
+                <b>Review assigned requests</b>
+                <span>Confirm that allocated tutors and learner times align.</span>
+            </a>
+            <a class="ooo-quick-card" href="/one-on-one-manager?status=Confirmed">
+                <b>Check confirmed sessions</b>
+                <span>Monitor scheduled individual sessions and completion progress.</span>
+            </a>
+            <a class="ooo-quick-card" href="/one-on-one-manager">
+                <b>Return to operations</b>
+                <span>View the complete one-on-one workflow and all requests.</span>
+            </a>
+        </div>
+    </section>
+
+    <section class="card">
+        <div class="ooo-section-header">
+            <div>
+                <h2>Tutor Directory</h2>
+                <p class="muted" style="margin:5px 0 0">Tutors appear here before any learner request is submitted.</p>
+            </div>
+        </div>
+        {one_on_one_all_tutors_availability_html()}
+    </section>
+    """
+    return page("One-on-One Tutors & Availability", body)
+
+
 @app.get('/one-on-one-manager')
 @app.get('/admission/one-on-one')
 @app.get('/admin/one-on-one')
@@ -88138,8 +88562,14 @@ def admin_one_on_one():
     if is_one_on_one_manager():
         tutors_availability_section = f"""
         <section class="card" id="one-on-one-tutors">
-            <h2>One-on-One Tutors & Availability</h2>
-            <p class="muted">All active tutors assigned to One-on-One or Both are shown here, even when there are no learner requests yet.</p>
+            <div class="ooo-section-header">
+                <div>
+                    <div class="ooo-page-kicker">Tutor capacity</div>
+                    <h2>One-on-One Tutors & Availability</h2>
+                    <p class="muted" style="margin:5px 0 0">Tutor availability is visible before a learner request is created.</p>
+                </div>
+                <a class="btn success mini" href="/one-on-one-manager/tutors">Open Tutor Directory</a>
+            </div>
             {one_on_one_all_tutors_availability_html()}
         </section>
         """
@@ -88188,8 +88618,13 @@ def admin_one_on_one():
     body = f"""
     {nav_html}
     <section class="card">
-        <h1>One-on-One Sessions</h1>
-        <p class="muted">Manage EBTA individual academic support requests, proof of payment uploads, approvals, tutor allocation, bookings and quality tracking.</p>
+        <div class="ooo-page-intro">
+            <div>
+                <div class="ooo-page-kicker">Operations overview</div>
+                <h1>One-on-One Sessions</h1>
+                <p class="muted">Manage learner requests, tutor allocation, bookings and quality tracking from one operational view.</p>
+            </div>
+        </div>
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
             {one_on_one_stats_cards(stats, show_finances=show_finances)}
         </div>
@@ -88198,13 +88633,28 @@ def admin_one_on_one():
             {finance_toolbar_links}
             {("<a class=\"btn secondary mini\" href=\"/admin/one-on-one-dashboard\">High Admin Dashboard</a>" if is_high_admin() else "")}
         </div>
+
+        {("""
+        <div class="ooo-quick-grid">
+            <a class="ooo-quick-card" href="/one-on-one-manager?status=Pending"><b>Pending requests</b><span>Review new learner requests that still need action.</span></a>
+            <a class="ooo-quick-card" href="/one-on-one-manager?status=Assigned"><b>Assigned learners</b><span>Check tutor allocations and prepare their bookings.</span></a>
+            <a class="ooo-quick-card" href="/one-on-one-manager?status=Confirmed"><b>Confirmed sessions</b><span>Track scheduled sessions and completion progress.</span></a>
+            <a class="ooo-quick-card" href="/one-on-one-manager/tutors"><b>Tutor availability</b><span>View eligible tutors, subjects and active time slots.</span></a>
+        </div>
+        """ if is_one_on_one_manager() else "")}
+
         {one_on_one_filter_form(base_path, q, status, payment_status, grade, subject_id, package_type, session_type)}
     </section>
 
     {tutors_availability_section}
 
     <section class="card">
-        <h2>Requests</h2>
+        <div class="ooo-section-header">
+            <div>
+                <div class="ooo-page-kicker">Request pipeline</div>
+                <h2>Requests</h2>
+            </div>
+        </div>
         <div class="scroll-x">
             <table>
                 <thead><tr><th>Learner/Parent</th><th>Grade/Subject</th><th>Type/Topic</th><th>Package</th><th>Payment</th><th>Status</th><th>Tutor</th><th>Action</th></tr></thead>
