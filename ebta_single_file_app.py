@@ -12839,8 +12839,8 @@ def home():
             <small>WhatsApp us</small>
         </span>
         <span class="enrollment-whatsapp-copy-mobile">
-            Help
-            <small>WhatsApp</small>
+            Need help?
+            <small>WhatsApp us</small>
         </span>
     </a>
     """
