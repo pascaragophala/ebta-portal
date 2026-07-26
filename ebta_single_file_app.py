@@ -82763,7 +82763,7 @@ def tutor_assessments():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT 
+        SELECT
             a.*,
             s.name AS subject_name,
             s.grade,
@@ -82787,20 +82787,22 @@ def tutor_assessments():
     for a in rows:
         publish_label = "Published" if a["is_published"] else "Draft"
         publish_class = "active" if a["is_published"] else "pending"
-        
-        lock_reason = assessment_delete_lock_reason(tid, a["subject_id"])
 
-        delete_button = ""
+        lock_reason = assessment_delete_lock_reason(tid, a["subject_id"])
 
         if lock_reason:
             delete_button = f"""
-            <button class="btn mini danger" disabled title="{escape(lock_reason)}">
+            <button class="btn mini danger"
+                    disabled
+                    title="{escape(lock_reason)}">
                 Delete Locked
             </button>
             """
         elif int(a["attempt_count"] or 0) > 0:
             delete_button = """
-            <button class="btn mini danger" disabled title="This assessment already has learner attempts.">
+            <button class="btn mini danger"
+                    disabled
+                    title="This assessment already has learner attempts.">
                 Cannot Delete
             </button>
             """
@@ -82808,69 +82810,445 @@ def tutor_assessments():
             delete_button = f"""
             <form method="post"
                   action="/tutor/assessments/{a['id']}/delete"
-                  style="display:inline"
                   onsubmit="return confirm('Delete this assessment permanently?')">
-                <button class="btn mini danger">
-                    Delete
-                </button>
+                <button class="btn mini danger">Delete</button>
             </form>
             """
 
+        description_html = (
+            f"<div class='mini muted assessment-description'>"
+            f"{escape(a['description'] or '')}"
+            f"</div>"
+            if a["description"]
+            else "<div class='mini muted assessment-description'>No description added.</div>"
+        )
+
         trs += f"""
         <tr>
-            <td>
-                <strong>{escape(a['title'])}</strong>
-                <div class="mini muted">{escape(a['description'] or '')}</div>
+            <td data-label="Assessment" class="assessment-main-cell">
+                <strong class="assessment-title">{escape(a['title'])}</strong>
+                {description_html}
             </td>
 
-            <td>{grade_label(a['grade'])} - {escape(a['subject_name'])}</td>
-
-            <td>{a['duration_minutes']} min</td>
-
-            <td>
-                <span class="chip {publish_class}">
-                    {publish_label}
-                </span>
+            <td data-label="Subject">
+                <strong>{escape(grade_label(a['grade']))}</strong>
+                <div class="mini muted">{escape(a['subject_name'])}</div>
             </td>
 
-            <td>{a['question_count']}</td>
-            <td>{a['attempt_count']}</td>
+            <td data-label="Duration">
+                <span class="assessment-number">{a['duration_minutes']}</span>
+                <span class="mini muted">minutes</span>
+            </td>
 
-            <td>
-                <a class="btn mini secondary" href="/tutor/assessments/{a['id']}/builder">
-                    Build
-                </a>
-                
-                <a class="btn mini success" href="/tutor/assessments/{a['id']}/edit">
-                    Edit
-                </a>
+            <td data-label="Status">
+                <span class="chip {publish_class}">{publish_label}</span>
+            </td>
 
-                <a class="btn mini" href="/tutor/assessments/{a['id']}/submissions">
-                    Submissions
-                </a>
+            <td data-label="Questions">
+                <span class="assessment-number">{a['question_count']}</span>
+            </td>
 
-                {delete_button}
+            <td data-label="Attempts">
+                <span class="assessment-number">{a['attempt_count']}</span>
+            </td>
+
+            <td data-label="Actions" class="assessment-actions-cell">
+                <div class="assessment-actions">
+                    <a class="btn mini secondary"
+                       href="/tutor/assessments/{a['id']}/builder">
+                        Build
+                    </a>
+
+                    <a class="btn mini success"
+                       href="/tutor/assessments/{a['id']}/edit">
+                        Edit
+                    </a>
+
+                    <a class="btn mini"
+                       href="/tutor/assessments/{a['id']}/submissions">
+                        Submissions
+                    </a>
+
+                    {delete_button}
+                </div>
             </td>
         </tr>
         """
 
+    empty_assessments_row = """
+        <tr class="assessment-empty-row">
+            <td colspan="7">
+                <div class="empty">
+                    No assessments created for this month yet.
+                </div>
+            </td>
+        </tr>
+    """
+
     body = f"""
-    <section class="card">
-        <div class="toolbar">
-            <a class="btn mini success" href="/tutor/assessments/new">
-                Create Assessment
-            </a>
+    <style>
+        .tutor-assessments-page {{
+            overflow:hidden;
+        }}
+
+        .assessment-page-header {{
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:16px;
+            flex-wrap:wrap;
+            margin-bottom:18px;
+        }}
+
+        .assessment-page-heading {{
+            min-width:0;
+            flex:1 1 520px;
+        }}
+
+        .assessment-page-heading p {{
+            max-width:850px;
+            margin-bottom:0;
+        }}
+
+        .assessment-create-action {{
+            flex:0 0 auto;
+        }}
+
+        .assessment-create-action .btn {{
+            min-height:42px;
+            padding:10px 16px;
+        }}
+
+        .assessment-summary-strip {{
+            display:grid;
+            grid-template-columns:repeat(3,minmax(0,1fr));
+            gap:10px;
+            margin-bottom:16px;
+        }}
+
+        .assessment-summary-item {{
+            padding:12px 14px;
+            border:1px solid #d8e8dd;
+            border-radius:14px;
+            background:linear-gradient(145deg,#fff,#f4faf6);
+        }}
+
+        .assessment-summary-item strong {{
+            display:block;
+            color:#176b3a;
+            font-size:21px;
+            line-height:1.1;
+        }}
+
+        .assessment-summary-item span {{
+            display:block;
+            margin-top:4px;
+            color:#66776d;
+            font-size:11px;
+            font-weight:750;
+            text-transform:uppercase;
+            letter-spacing:.04em;
+        }}
+
+        .assessments-table-shell {{
+            width:100%;
+            max-width:100%;
+            overflow-x:auto;
+            border:1px solid #d8e8dd;
+            border-radius:16px;
+            background:#fff;
+            -webkit-overflow-scrolling:touch;
+        }}
+
+        .assessments-overview-table {{
+            width:100%;
+            min-width:1040px;
+            table-layout:fixed;
+            border:0 !important;
+            border-radius:0 !important;
+            box-shadow:none !important;
+        }}
+
+        .assessments-overview-table th {{
+            white-space:nowrap;
+            word-break:normal;
+            overflow-wrap:normal;
+            vertical-align:middle;
+        }}
+
+        .assessments-overview-table th,
+        .assessments-overview-table td {{
+            padding:12px 11px;
+            vertical-align:top;
+        }}
+
+        .assessments-overview-table th:nth-child(1),
+        .assessments-overview-table td:nth-child(1) {{
+            width:29%;
+        }}
+
+        .assessments-overview-table th:nth-child(2),
+        .assessments-overview-table td:nth-child(2) {{
+            width:16%;
+        }}
+
+        .assessments-overview-table th:nth-child(3),
+        .assessments-overview-table td:nth-child(3) {{
+            width:9%;
+        }}
+
+        .assessments-overview-table th:nth-child(4),
+        .assessments-overview-table td:nth-child(4) {{
+            width:10%;
+        }}
+
+        .assessments-overview-table th:nth-child(5),
+        .assessments-overview-table td:nth-child(5) {{
+            width:8%;
+        }}
+
+        .assessments-overview-table th:nth-child(6),
+        .assessments-overview-table td:nth-child(6) {{
+            width:8%;
+        }}
+
+        .assessments-overview-table th:nth-child(7),
+        .assessments-overview-table td:nth-child(7) {{
+            width:20%;
+        }}
+
+        .assessments-overview-table td {{
+            white-space:normal;
+            word-break:normal;
+            overflow-wrap:anywhere;
+        }}
+
+        .assessment-title {{
+            display:block;
+            color:#173421;
+            font-size:15px;
+            line-height:1.3;
+        }}
+
+        .assessment-description {{
+            display:-webkit-box;
+            margin-top:5px;
+            overflow:hidden;
+            line-height:1.35;
+            -webkit-line-clamp:3;
+            -webkit-box-orient:vertical;
+        }}
+
+        .assessment-number {{
+            display:block;
+            color:#173421;
+            font-weight:850;
+            line-height:1.2;
+        }}
+
+        .assessments-overview-table .chip {{
+            display:inline-flex;
+            white-space:nowrap;
+        }}
+
+        .assessment-actions {{
+            display:flex;
+            flex-wrap:wrap;
+            align-items:flex-start;
+            gap:6px;
+        }}
+
+        .assessment-actions > a,
+        .assessment-actions > button,
+        .assessment-actions > form {{
+            flex:0 0 auto;
+            margin:0;
+        }}
+
+        .assessment-actions form {{
+            display:inline-flex;
+        }}
+
+        .assessment-actions .btn {{
+            min-height:32px;
+            padding:6px 9px;
+            justify-content:center;
+            white-space:nowrap;
+        }}
+
+        .assessment-empty-row td {{
+            padding:18px;
+        }}
+
+        @media(max-width:760px) {{
+            .tutor-assessments-page {{
+                overflow:visible;
+            }}
+
+            .assessment-page-header {{
+                margin-bottom:14px;
+            }}
+
+            .assessment-create-action,
+            .assessment-create-action .btn {{
+                width:100%;
+            }}
+
+            .assessment-summary-strip {{
+                grid-template-columns:1fr;
+            }}
+
+            .assessments-table-shell {{
+                overflow:visible;
+                border:0;
+                background:transparent;
+            }}
+
+            .assessments-overview-table {{
+                display:block;
+                width:100%;
+                min-width:0;
+                background:transparent;
+            }}
+
+            .assessments-overview-table thead {{
+                display:none;
+            }}
+
+            .assessments-overview-table tbody {{
+                display:block;
+                width:100%;
+            }}
+
+            .assessments-overview-table tr {{
+                display:block;
+                width:100%;
+                margin:0 0 14px;
+                padding:13px;
+                border:1px solid #d8e8dd;
+                border-radius:16px;
+                background:#fff;
+                box-shadow:0 5px 14px rgba(12,72,37,.07);
+            }}
+
+            .assessments-overview-table td {{
+                display:grid;
+                grid-template-columns:100px minmax(0,1fr);
+                gap:10px;
+                width:100% !important;
+                padding:8px 0;
+                border:0;
+                border-bottom:1px solid #edf3ef;
+                text-align:left;
+            }}
+
+            .assessments-overview-table td::before {{
+                content:attr(data-label);
+                color:#52665a;
+                font-size:10px;
+                font-weight:900;
+                letter-spacing:.04em;
+                text-transform:uppercase;
+            }}
+
+            .assessment-main-cell {{
+                grid-template-columns:1fr !important;
+            }}
+
+            .assessment-main-cell::before {{
+                margin-bottom:2px;
+            }}
+
+            .assessment-actions-cell {{
+                display:block !important;
+                padding-top:12px !important;
+                border-bottom:0 !important;
+            }}
+
+            .assessment-actions-cell::before {{
+                display:block;
+                margin-bottom:8px;
+            }}
+
+            .assessment-actions {{
+                display:grid;
+                grid-template-columns:repeat(2,minmax(0,1fr));
+                gap:8px;
+            }}
+
+            .assessment-actions > a,
+            .assessment-actions > button,
+            .assessment-actions > form,
+            .assessment-actions form .btn {{
+                width:100%;
+            }}
+
+            .assessment-actions .btn {{
+                min-height:38px;
+            }}
+
+            .assessment-empty-row {{
+                padding:0 !important;
+                border:0 !important;
+                box-shadow:none !important;
+                background:transparent !important;
+            }}
+
+            .assessment-empty-row td {{
+                display:block;
+                padding:0;
+                border:0;
+            }}
+
+            .assessment-empty-row td::before {{
+                display:none;
+            }}
+        }}
+
+        @media(max-width:430px) {{
+            .assessment-actions {{
+                grid-template-columns:1fr;
+            }}
+        }}
+    </style>
+
+    <section class="card tutor-assessments-page">
+        <div class="assessment-page-header">
+            <div class="assessment-page-heading">
+                <h1>Assessments</h1>
+
+                <p class="muted">
+                    Create online assessments with multiple-choice questions and long questions.
+                    Multiple-choice questions are auto-marked, while long questions are marked manually.
+                </p>
+            </div>
+
+            <div class="assessment-create-action">
+                <a class="btn success" href="/tutor/assessments/new">
+                    ＋ Create Assessment
+                </a>
+            </div>
         </div>
 
-        <h1>Assessments</h1>
+        <div class="assessment-summary-strip">
+            <div class="assessment-summary-item">
+                <strong>{len(rows)}</strong>
+                <span>Total Assessments</span>
+            </div>
 
-        <p class="muted">
-            Create online assessments with multiple-choice questions and long questions.
-            Multiple-choice questions are auto-marked, while long questions are marked manually.
-        </p>
+            <div class="assessment-summary-item">
+                <strong>{sum(1 for item in rows if item['is_published'])}</strong>
+                <span>Published</span>
+            </div>
 
-        <div class="scroll-x">
-            <table>
+            <div class="assessment-summary-item">
+                <strong>{sum(int(item['attempt_count'] or 0) for item in rows)}</strong>
+                <span>Learner Attempts</span>
+            </div>
+        </div>
+
+        <div class="assessments-table-shell">
+            <table class="assessments-overview-table">
                 <thead>
                     <tr>
                         <th>Assessment</th>
@@ -82879,12 +83257,12 @@ def tutor_assessments():
                         <th>Status</th>
                         <th>Questions</th>
                         <th>Attempts</th>
-                        <th>Action</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
 
                 <tbody>
-                    {trs or "<tr><td colspan='7'>No assessments created yet.</td></tr>"}
+                    {trs or empty_assessments_row}
                 </tbody>
             </table>
         </div>
@@ -87584,102 +87962,516 @@ def tutor_learning_game_questions():
     subject_options = ""
 
     for srow in subjects:
-        subject_options += f"<option value='{srow['id']}'>{grade_label(srow['grade'])} {escape(srow['name'])}</option>"
+        subject_options += (
+            f"<option value='{srow['id']}'>"
+            f"{grade_label(srow['grade'])} {escape(srow['name'])}"
+            f"</option>"
+        )
 
-    game_type_options = "".join([f"<option>{escape(x)}</option>" for x in GAME_TYPES])
-    difficulty_options = "".join([f"<option>{escape(x)}</option>" for x in GAME_DIFFICULTIES])
+    game_type_options = "".join(
+        [f"<option>{escape(x)}</option>" for x in GAME_TYPES]
+    )
+    difficulty_options = "".join(
+        [f"<option>{escape(x)}</option>" for x in GAME_DIFFICULTIES]
+    )
 
     rows = ""
 
     for qrow in questions:
-        toggle_label = "Deactivate" if qrow['status'] == "ACTIVE" else "Activate"
+        toggle_label = "Deactivate" if qrow["status"] == "ACTIVE" else "Activate"
         rows += f"""
         <tr>
-            <td>
-                {math_render_html((qrow['question_text'] or '')[:90], tag='strong')}
-                <div class="mini muted">{math_render_html((qrow['explanation'] or '')[:90])}</div>
+            <td data-label="Question" class="game-question-main-cell">
+                <div class="game-question-text">
+                    {math_render_html((qrow['question_text'] or '')[:180], tag='strong')}
+                </div>
+                {
+                    f"<div class='mini muted game-question-explanation'>{math_render_html((qrow['explanation'] or '')[:160])}</div>"
+                    if qrow["explanation"]
+                    else ""
+                }
             </td>
-            <td>{grade_label(qrow['grade'])} {escape(qrow['subject_name'])}</td>
-            <td>{escape(qrow['topic'])}</td>
-            <td>{escape(qrow['game_type'])}</td>
-            <td>{escape(qrow['difficulty'])}</td>
-            <td><span class="chip {'active' if qrow['status']=='ACTIVE' else 'lapsed'}">{escape(qrow['status'])}</span></td>
-            <td>
-                <form method="post" action="{url_for('tutor_learning_game_question_toggle', question_id=qrow['id'])}" style="display:inline">
+
+            <td data-label="Subject">
+                <strong>{escape(grade_label(qrow['grade']))}</strong>
+                <div class="mini muted">{escape(qrow['subject_name'])}</div>
+            </td>
+
+            <td data-label="Topic">{escape(qrow['topic'])}</td>
+            <td data-label="Game">{escape(qrow['game_type'])}</td>
+            <td data-label="Difficulty">{escape(qrow['difficulty'])}</td>
+
+            <td data-label="Status">
+                <span class="chip {'active' if qrow['status']=='ACTIVE' else 'lapsed'}">
+                    {escape(qrow['status'])}
+                </span>
+            </td>
+
+            <td data-label="Action" class="game-question-action-cell">
+                <form method="post"
+                      action="{url_for('tutor_learning_game_question_toggle', question_id=qrow['id'])}">
                     <button class="btn mini secondary">{toggle_label}</button>
                 </form>
             </td>
         </tr>
         """
 
+    empty_questions_row = """
+        <tr class="game-question-empty-row">
+            <td colspan="7">
+                <div class="empty">
+                    No game questions added yet. Add your first CAPS-aligned question above.
+                </div>
+            </td>
+        </tr>
+    """
+
     body = f"""
-    <section class="card">
-        <h1>Learning Game Questions</h1>
-        <p class="muted">Add CAPS-aligned questions that learners can play in the EBTA Study Arcade.</p>
+    <style>
+        .tutor-game-questions-page {{
+            overflow:hidden;
+        }}
 
-        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px">
+        .game-question-page-intro {{
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:16px;
+            flex-wrap:wrap;
+            margin-bottom:18px;
+        }}
 
-            <div class="card soft">
-                <h2>Add CAPS Question</h2>
+        .game-question-page-intro p {{
+            max-width:760px;
+            margin-bottom:0;
+        }}
 
-                <form method="post" action="{url_for('tutor_learning_game_question_add')}">
-                    <label>Subject</label>
-                    <select name="subject_id" required>
-                        {subject_options or "<option value=''>No assigned subjects found</option>"}
-                    </select>
+        .game-question-layout {{
+            display:grid;
+            grid-template-columns:minmax(0,1fr);
+            gap:18px;
+        }}
 
-                    <label>CAPS Topic</label>
-                    <input name="topic" placeholder="Example: Algebra, Newton's Laws, Photosynthesis" required>
+        .game-question-form-card,
+        .game-question-list-card {{
+            min-width:0;
+            margin:0;
+        }}
 
-                    <label>Game Type</label>
-                    <select name="game_type" required>
-                        {game_type_options}
-                    </select>
+        .game-question-section-heading {{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            flex-wrap:wrap;
+            margin-bottom:14px;
+        }}
 
-                    <label>Difficulty</label>
-                    <select name="difficulty" required>
-                        {difficulty_options}
-                    </select>
+        .game-question-section-heading h2 {{
+            margin:0;
+        }}
 
-                    <label>Question</label>
-                    <textarea name="question_text" required></textarea>
+        .game-question-form-grid {{
+            display:grid;
+            grid-template-columns:repeat(2,minmax(0,1fr));
+            gap:13px 16px;
+            align-items:start;
+        }}
 
-                    {math_helper_box()}
+        .game-question-field {{
+            min-width:0;
+        }}
 
-                    <label>Option A</label>
-                    <input name="option_a" required>
+        .game-question-field label {{
+            display:block;
+            margin-bottom:6px;
+        }}
 
-                    <label>Option B</label>
-                    <input name="option_b" required>
+        .game-question-field input,
+        .game-question-field select,
+        .game-question-field textarea {{
+            width:100%;
+            margin:0;
+        }}
 
-                    <label>Option C</label>
-                    <input name="option_c" required>
+        .game-question-field textarea {{
+            min-height:118px;
+            resize:vertical;
+        }}
 
-                    <label>Option D</label>
-                    <input name="option_d" required>
+        .game-question-span-all {{
+            grid-column:1 / -1;
+            min-width:0;
+        }}
 
-                    <label>Correct Answer</label>
-                    <select name="correct_index" required>
-                        <option value="0">A</option>
-                        <option value="1">B</option>
-                        <option value="2">C</option>
-                        <option value="3">D</option>
-                    </select>
+        .game-question-options {{
+            grid-column:1 / -1;
+            display:grid;
+            grid-template-columns:repeat(2,minmax(0,1fr));
+            gap:13px 16px;
+        }}
 
-                    <label>Explanation</label>
-                    <textarea name="explanation" placeholder="Explain why the answer is correct"></textarea>
+        .game-question-submit-row {{
+            grid-column:1 / -1;
+            display:flex;
+            justify-content:flex-end;
+            padding-top:2px;
+        }}
 
-                    <button class="btn success" style="margin-top:12px">
-                        Add Question
-                    </button>
+        .game-question-submit-row .btn {{
+            min-width:170px;
+        }}
+
+        .game-questions-table-shell {{
+            width:100%;
+            max-width:100%;
+            overflow-x:auto;
+            border:1px solid #d8e8dd;
+            border-radius:16px;
+            background:#fff;
+            -webkit-overflow-scrolling:touch;
+        }}
+
+        .game-questions-table {{
+            width:100%;
+            min-width:1040px;
+            table-layout:fixed;
+            border:0 !important;
+            border-radius:0 !important;
+            box-shadow:none !important;
+        }}
+
+        .game-questions-table th {{
+            white-space:nowrap;
+            word-break:normal;
+            overflow-wrap:normal;
+            vertical-align:middle;
+        }}
+
+        .game-questions-table th,
+        .game-questions-table td {{
+            padding:12px 11px;
+            vertical-align:top;
+        }}
+
+        .game-questions-table th:nth-child(1),
+        .game-questions-table td:nth-child(1) {{
+            width:30%;
+        }}
+
+        .game-questions-table th:nth-child(2),
+        .game-questions-table td:nth-child(2) {{
+            width:17%;
+        }}
+
+        .game-questions-table th:nth-child(3),
+        .game-questions-table td:nth-child(3) {{
+            width:14%;
+        }}
+
+        .game-questions-table th:nth-child(4),
+        .game-questions-table td:nth-child(4) {{
+            width:11%;
+        }}
+
+        .game-questions-table th:nth-child(5),
+        .game-questions-table td:nth-child(5) {{
+            width:10%;
+        }}
+
+        .game-questions-table th:nth-child(6),
+        .game-questions-table td:nth-child(6) {{
+            width:9%;
+        }}
+
+        .game-questions-table th:nth-child(7),
+        .game-questions-table td:nth-child(7) {{
+            width:9%;
+        }}
+
+        .game-questions-table td {{
+            white-space:normal;
+            word-break:normal;
+            overflow-wrap:anywhere;
+        }}
+
+        .game-question-text {{
+            color:#183323;
+            line-height:1.45;
+        }}
+
+        .game-question-explanation {{
+            margin-top:7px;
+            padding-top:7px;
+            border-top:1px dashed #d8e8dd;
+            line-height:1.4;
+        }}
+
+        .game-question-action-cell form {{
+            margin:0;
+        }}
+
+        .game-question-action-cell .btn {{
+            width:100%;
+            min-width:92px;
+            justify-content:center;
+        }}
+
+        .game-questions-table .chip {{
+            display:inline-flex;
+            white-space:nowrap;
+        }}
+
+        .game-question-empty-row td {{
+            padding:18px;
+        }}
+
+        @media(max-width:900px) {{
+            .game-question-form-grid,
+            .game-question-options {{
+                grid-template-columns:1fr;
+            }}
+
+            .game-question-span-all,
+            .game-question-options,
+            .game-question-submit-row {{
+                grid-column:1;
+            }}
+
+            .game-question-submit-row {{
+                justify-content:stretch;
+            }}
+
+            .game-question-submit-row .btn {{
+                width:100%;
+            }}
+        }}
+
+        @media(max-width:700px) {{
+            .tutor-game-questions-page {{
+                overflow:visible;
+            }}
+
+            .game-question-page-intro {{
+                margin-bottom:14px;
+            }}
+
+            .game-question-form-card,
+            .game-question-list-card {{
+                padding:14px;
+            }}
+
+            .game-questions-table-shell {{
+                overflow:visible;
+                border:0;
+                background:transparent;
+            }}
+
+            .game-questions-table {{
+                display:block;
+                min-width:0;
+                width:100%;
+                background:transparent;
+            }}
+
+            .game-questions-table thead {{
+                display:none;
+            }}
+
+            .game-questions-table tbody {{
+                display:block;
+                width:100%;
+            }}
+
+            .game-questions-table tr {{
+                display:block;
+                width:100%;
+                margin:0 0 13px;
+                padding:12px;
+                border:1px solid #d8e8dd;
+                border-radius:15px;
+                background:#fff;
+                box-shadow:0 5px 14px rgba(12,72,37,.06);
+            }}
+
+            .game-questions-table td {{
+                display:grid;
+                grid-template-columns:92px minmax(0,1fr);
+                gap:10px;
+                width:100% !important;
+                padding:8px 0;
+                border:0;
+                border-bottom:1px solid #edf3ef;
+                text-align:left;
+            }}
+
+            .game-questions-table td:last-child {{
+                border-bottom:0;
+                padding-bottom:0;
+            }}
+
+            .game-questions-table td::before {{
+                content:attr(data-label);
+                color:#52665a;
+                font-size:10px;
+                font-weight:900;
+                letter-spacing:.04em;
+                text-transform:uppercase;
+            }}
+
+            .game-question-main-cell {{
+                grid-template-columns:1fr !important;
+            }}
+
+            .game-question-main-cell::before {{
+                margin-bottom:2px;
+            }}
+
+            .game-question-action-cell {{
+                grid-template-columns:1fr !important;
+                padding-top:11px !important;
+            }}
+
+            .game-question-action-cell::before {{
+                display:none;
+            }}
+
+            .game-question-action-cell form,
+            .game-question-action-cell .btn {{
+                width:100%;
+            }}
+
+            .game-question-empty-row {{
+                padding:0 !important;
+                border:0 !important;
+                box-shadow:none !important;
+                background:transparent !important;
+            }}
+
+            .game-question-empty-row td {{
+                display:block;
+                padding:0;
+                border:0;
+            }}
+
+            .game-question-empty-row td::before {{
+                display:none;
+            }}
+        }}
+    </style>
+
+    <section class="card tutor-game-questions-page">
+        <div class="game-question-page-intro">
+            <div>
+                <h1>Learning Game Questions</h1>
+                <p class="muted">
+                    Add CAPS-aligned questions that learners can play in the EBTA Study Arcade.
+                </p>
+            </div>
+        </div>
+
+        <div class="game-question-layout">
+            <div class="card soft game-question-form-card">
+                <div class="game-question-section-heading">
+                    <h2>Add CAPS Question</h2>
+                    <span class="chip">Question Builder</span>
+                </div>
+
+                <form method="post"
+                      action="{url_for('tutor_learning_game_question_add')}"
+                      class="game-question-form-grid">
+
+                    <div class="game-question-field">
+                        <label>Subject</label>
+                        <select name="subject_id" required>
+                            {subject_options or "<option value=''>No assigned subjects found</option>"}
+                        </select>
+                    </div>
+
+                    <div class="game-question-field">
+                        <label>CAPS Topic</label>
+                        <input name="topic"
+                               placeholder="Example: Algebra, Newton's Laws, Photosynthesis"
+                               required>
+                    </div>
+
+                    <div class="game-question-field">
+                        <label>Game Type</label>
+                        <select name="game_type" required>
+                            {game_type_options}
+                        </select>
+                    </div>
+
+                    <div class="game-question-field">
+                        <label>Difficulty</label>
+                        <select name="difficulty" required>
+                            {difficulty_options}
+                        </select>
+                    </div>
+
+                    <div class="game-question-field game-question-span-all">
+                        <label>Question</label>
+                        <textarea name="question_text"
+                                  placeholder="Enter the full question learners must answer."
+                                  required></textarea>
+                    </div>
+
+                    <div class="game-question-span-all">
+                        {math_helper_box()}
+                    </div>
+
+                    <div class="game-question-options">
+                        <div class="game-question-field">
+                            <label>Option A</label>
+                            <input name="option_a" required>
+                        </div>
+
+                        <div class="game-question-field">
+                            <label>Option B</label>
+                            <input name="option_b" required>
+                        </div>
+
+                        <div class="game-question-field">
+                            <label>Option C</label>
+                            <input name="option_c" required>
+                        </div>
+
+                        <div class="game-question-field">
+                            <label>Option D</label>
+                            <input name="option_d" required>
+                        </div>
+                    </div>
+
+                    <div class="game-question-field">
+                        <label>Correct Answer</label>
+                        <select name="correct_index" required>
+                            <option value="0">Option A</option>
+                            <option value="1">Option B</option>
+                            <option value="2">Option C</option>
+                            <option value="3">Option D</option>
+                        </select>
+                    </div>
+
+                    <div class="game-question-field game-question-span-all">
+                        <label>Explanation</label>
+                        <textarea name="explanation"
+                                  placeholder="Explain why the selected answer is correct."></textarea>
+                    </div>
+
+                    <div class="game-question-submit-row">
+                        <button class="btn success">Add Question</button>
+                    </div>
                 </form>
             </div>
 
-            <div class="card soft">
-                <h2>My Game Questions</h2>
+            <div class="card soft game-question-list-card">
+                <div class="game-question-section-heading">
+                    <h2>My Game Questions</h2>
+                    <span class="chip active">{len(questions)} Question{"s" if len(questions) != 1 else ""}</span>
+                </div>
 
-                <div class="scroll-x">
-                    <table>
+                <div class="game-questions-table-shell">
+                    <table class="game-questions-table">
                         <thead>
                             <tr>
                                 <th>Question</th>
@@ -87691,13 +88483,13 @@ def tutor_learning_game_questions():
                                 <th>Action</th>
                             </tr>
                         </thead>
+
                         <tbody>
-                            {rows or "<tr><td colspan='7'>No questions added yet.</td></tr>"}
+                            {rows or empty_questions_row}
                         </tbody>
                     </table>
                 </div>
             </div>
-
         </div>
     </section>
     """
