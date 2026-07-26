@@ -158,7 +158,7 @@ def apply_security_headers(response):
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault(
         "Permissions-Policy",
-        "camera=(), microphone=(), geolocation=(), payment=()",
+        "geolocation=(), payment=(), usb=(), serial=(), hid=()",
     )
     response.headers.setdefault(
         "Content-Security-Policy",
@@ -59392,6 +59392,7 @@ def one_on_one_manager_nav():
         <a class="btn secondary" href="/one-on-one-manager?status=Pending">Pending Requests</a>
         <a class="btn secondary" href="/one-on-one-manager?status=Assigned">Assigned Requests</a>
         <a class="btn secondary" href="/one-on-one-manager?status=Confirmed">Confirmed Requests</a>
+        <a class="btn secondary" href="/one-on-one-manager#one-on-one-tutors">Tutors & Availability</a>
         <a class="btn danger" href="/one-on-one-manager/logout">Logout</a>
     </nav>
     """
@@ -86826,6 +86827,102 @@ def one_on_one_tutor_availability_html(tutor_id=None, subject=None, empty_messag
     """
 
 
+
+def one_on_one_all_tutors_availability_html():
+    """List every active tutor eligible for one-on-one tutoring, including tutors without availability."""
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            t.id,
+            t.full_name,
+            t.phone,
+            GROUP_CONCAT(
+                DISTINCT CASE
+                    WHEN COALESCE(ts.delivery_mode, 'GROUP') IN ('ONE_ON_ONE', 'BOTH')
+                    THEN grade_label_placeholder
+                END
+            ) AS unused_placeholder
+        FROM tutors t
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        WHERE COALESCE(t.is_active,1)=1
+          AND EXISTS (
+              SELECT 1
+              FROM tutor_subjects eligible_ts
+              WHERE eligible_ts.tutor_id=t.id
+                AND COALESCE(eligible_ts.delivery_mode,'GROUP') IN ('ONE_ON_ONE','BOTH')
+          )
+        GROUP BY t.id, t.full_name, t.phone
+        ORDER BY t.full_name
+    """.replace("grade_label_placeholder", "''"))
+    tutors = cur.fetchall()
+
+    tutor_rows = []
+    for tutor in tutors:
+        cur.execute("""
+            SELECT s.name, s.grade, COALESCE(ts.delivery_mode,'GROUP') AS delivery_mode
+            FROM tutor_subjects ts
+            JOIN subjects s ON s.id=ts.subject_id
+            WHERE ts.tutor_id=?
+              AND COALESCE(ts.delivery_mode,'GROUP') IN ('ONE_ON_ONE','BOTH')
+            ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.name
+        """, (tutor["id"],))
+        subject_rows = cur.fetchall()
+
+        cur.execute("""
+            SELECT available_day, available_start_time, available_end_time,
+                   grade_level, subject, notes
+            FROM one_on_one_tutor_availability
+            WHERE tutor_id=? AND COALESCE(is_active,1)=1
+            ORDER BY available_day, available_start_time
+        """, (tutor["id"],))
+        availability_rows = cur.fetchall()
+
+        subjects_html = "<br>".join(
+            f"<span class='mini'><strong>{escape(grade_label(s['grade']))}</strong> — {escape(s['name'])} "
+            f"<span class='badge'>{escape('Both' if s['delivery_mode']=='BOTH' else 'One-on-One')}</span></span>"
+            for s in subject_rows
+        ) or "<span class='mini muted'>No one-on-one subjects assigned.</span>"
+
+        if availability_rows:
+            availability_html = "<br>".join(
+                f"<span class='mini'><strong>{escape(a['available_day'] or 'Day TBC')}</strong>: "
+                f"{escape(a['available_start_time'] or 'Time TBC')} - {escape(a['available_end_time'] or 'Time TBC')}"
+                f" | {escape(a['grade_level'] or 'Any grade')} | {escape(a['subject'] or 'General')}"
+                f"{(' | ' + escape(a['notes'])) if a['notes'] else ''}</span>"
+                for a in availability_rows
+            )
+            availability_status = "<span class='badge success'>Availability captured</span>"
+        else:
+            availability_html = "<span class='mini muted'>This tutor has not captured one-on-one availability yet.</span>"
+            availability_status = "<span class='badge warning'>Not captured</span>"
+
+        tutor_rows.append(f"""
+            <tr>
+                <td><strong>{escape(tutor['full_name'])}</strong><div class='mini muted'>{escape(tutor['phone'] or 'No phone captured')}</div></td>
+                <td>{subjects_html}</td>
+                <td>{availability_html}</td>
+                <td>{availability_status}</td>
+            </tr>
+        """)
+
+    conn.close()
+
+    if not tutor_rows:
+        return "<div class='card soft mini muted'>No active tutors are currently assigned for one-on-one tutoring.</div>"
+
+    return f"""
+        <div class='scroll-x'>
+            <table>
+                <thead>
+                    <tr><th>Tutor</th><th>One-on-One Subjects</th><th>Availability</th><th>Status</th></tr>
+                </thead>
+                <tbody>{''.join(tutor_rows)}</tbody>
+            </table>
+        </div>
+    """
+
 def one_on_one_manager_options(selected_id=""):
     conn = get_db()
     cur = conn.cursor()
@@ -88037,6 +88134,15 @@ def admin_one_on_one():
     rows = one_on_one_admin_rows(q, status, payment_status, grade, subject_id, package_type, session_type)
     stats = one_on_one_stats()
     show_finances = one_on_one_can_view_finances()
+    tutors_availability_section = ""
+    if is_one_on_one_manager():
+        tutors_availability_section = f"""
+        <section class="card" id="one-on-one-tutors">
+            <h2>One-on-One Tutors & Availability</h2>
+            <p class="muted">All active tutors assigned to One-on-One or Both are shown here, even when there are no learner requests yet.</p>
+            {one_on_one_all_tutors_availability_html()}
+        </section>
+        """
 
     finance_toolbar_links = ""
     if show_finances:
@@ -88094,6 +88200,8 @@ def admin_one_on_one():
         </div>
         {one_on_one_filter_form(base_path, q, status, payment_status, grade, subject_id, package_type, session_type)}
     </section>
+
+    {tutors_availability_section}
 
     <section class="card">
         <h2>Requests</h2>
