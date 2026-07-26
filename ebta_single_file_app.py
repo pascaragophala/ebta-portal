@@ -10238,6 +10238,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("🏠 Dashboard", url_for('tutor_home')),
                 ("👤 My Profile", url_for('tutor_profile_page')),
                 ("📊 Work Progress", url_for('tutor_work_progress')),
+                ("👨‍🏫 One-on-One Sessions", "/tutor/one-on-one"),
                 ("⬆️ Upload Material", url_for('tutor_home') + "#upload"),
                 ("📚 My Library", url_for('tutor_uploads_library')),
                 ("📝 Assignments", url_for('tutor_home') + "#assignments"),
