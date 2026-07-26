@@ -1784,6 +1784,7 @@ def init_db():
     ensure_column(conn, "students", "profile_picture_uploaded_at", "TEXT")
     ensure_column(conn, "tutor_applications", "reliable_internet", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "tutor_applications", "device_access", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "tutor_applications", "preferred_session_type", "TEXT NOT NULL DEFAULT 'BOTH'")
     
     ensure_column(conn, "students", "referral_code", "TEXT")
     ensure_column(conn, "students", "referral_points", "INTEGER NOT NULL DEFAULT 0")
@@ -47153,6 +47154,30 @@ def tutor_application_form():
                 </div>
 
                 <div class="card soft">
+                    <h2>Preferred Tutoring Session Type</h2>
+                    <p class="muted" style="margin-top:0">
+                        Select the type of tutoring sessions you would be willing to facilitate.
+                    </p>
+
+                    <div class="subject-grid" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+                        <label class="subject-item">
+                            <input type="radio" name="preferred_session_type" value="GROUP" required>
+                            <span>Group Sessions</span>
+                        </label>
+
+                        <label class="subject-item">
+                            <input type="radio" name="preferred_session_type" value="ONE_ON_ONE" required>
+                            <span>One-on-One Sessions</span>
+                        </label>
+
+                        <label class="subject-item">
+                            <input type="radio" name="preferred_session_type" value="BOTH" required>
+                            <span>Both</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="card soft">
                     <h2>Documents</h2>
 
                     <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px">
@@ -47295,6 +47320,7 @@ def tutor_application_submit():
 
     grades = request.form.getlist("grades")
     subjects = request.form.getlist("subjects")
+    preferred_session_type = request.form.get("preferred_session_type", "").strip().upper()
 
     reliable_internet = 1 if request.form.get("reliable_internet") == "1" else 0
     device_access = 1 if request.form.get("device_access") == "1" else 0
@@ -47305,13 +47331,14 @@ def tutor_application_submit():
         or not phone
         or not grades
         or not subjects
+        or preferred_session_type not in ("GROUP", "ONE_ON_ONE", "BOTH")
         or reliable_internet != 1
         or device_access != 1
         or consent != 1
     ):
         return page(
             "Application incomplete",
-            card_msg("Please complete your name, phone number, grades, subjects, internet/device confirmations, and consent checkbox.")
+            card_msg("Please complete your name, phone number, grades, subjects, preferred session type, internet/device confirmations, and consent checkbox.")
         )
 
     cv = request.files.get("cv")
@@ -47352,6 +47379,7 @@ def tutor_application_submit():
             availability,
             grades,
             subjects,
+            preferred_session_type,
             cv_file_path,
             cv_file_name,
             certificate_file_path,
@@ -47365,7 +47393,7 @@ def tutor_application_submit():
             created_at,
             updated_at
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         full_name,
         phone,
@@ -47378,6 +47406,7 @@ def tutor_application_submit():
         availability,
         json.dumps(grades),
         json.dumps(subjects),
+        preferred_session_type,
         cv_path,
         cv_name,
         cert_path,
@@ -47420,6 +47449,7 @@ def admin_applications():
     grade_filter = request.args.get("grade", "").strip()
     subject_filter = request.args.get("subject", "").strip()
     status_filter = request.args.get("status", "").strip()
+    session_type_filter = request.args.get("session_type", "").strip().upper()
 
     try:
         page_num = int(request.args.get("page", 1))
@@ -47460,6 +47490,10 @@ def admin_applications():
     if status_filter:
         where_parts.append("status = ?")
         params.append(status_filter)
+
+    if session_type_filter in ("GROUP", "ONE_ON_ONE", "BOTH"):
+        where_parts.append("preferred_session_type = ?")
+        params.append(session_type_filter)
 
     where_sql = ""
     if where_parts:
@@ -47549,6 +47583,13 @@ def admin_applications():
         except:
             subjects = a["subjects"] or "—"
 
+        session_type_value = (a["preferred_session_type"] or "BOTH").upper()
+        session_type_display = {
+            "GROUP": "Group Sessions",
+            "ONE_ON_ONE": "One-on-One Sessions",
+            "BOTH": "Both",
+        }.get(session_type_value, "Both")
+
         rows += f"""
         <tr>
             <td>
@@ -47557,6 +47598,7 @@ def admin_applications():
             </td>
             <td>{escape(grades)}</td>
             <td>{escape(subjects)}</td>
+            <td>{escape(session_type_display)}</td>
             <td>{escape(a['highest_qualification'] or '—')}</td>
             <td><span class="chip">{escape(a['status'])}</span></td>
             <td>{a['created_at'][:16].replace('T',' ')}</td>
@@ -47657,6 +47699,16 @@ def admin_applications():
                 </select>
             </div>
 
+            <div>
+                <label>Session Type</label>
+                <select name="session_type">
+                    <option value="">All Session Types</option>
+                    <option value="GROUP" {"selected" if session_type_filter == "GROUP" else ""}>Group Sessions</option>
+                    <option value="ONE_ON_ONE" {"selected" if session_type_filter == "ONE_ON_ONE" else ""}>One-on-One Sessions</option>
+                    <option value="BOTH" {"selected" if session_type_filter == "BOTH" else ""}>Both</option>
+                </select>
+            </div>
+
             <button class="btn mini success">Apply</button>
             <a class="btn mini secondary" href="/admin/applications">Reset</a>
         </form>
@@ -47674,6 +47726,7 @@ def admin_applications():
                         <th>Applicant</th>
                         <th>Grades</th>
                         <th>Subjects</th>
+                        <th>Session Type</th>
                         <th>Qualification</th>
                         <th>Status</th>
                         <th>Applied</th>
