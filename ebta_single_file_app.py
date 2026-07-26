@@ -9655,48 +9655,1102 @@ def math_helper_box():
 
 
 
+# =============================================================
+# UNIFIED EBTA PORTAL DESIGN SYSTEM
+# Applied to every page and every logged-in portal role.
+# =============================================================
+EBTA_UNIFIED_UI_CSS = """
+<style>
+    :root {
+        --ebta-green-950:#082d18;
+        --ebta-green-900:#0e4325;
+        --ebta-green-800:#155d32;
+        --ebta-green-700:#1b6f3b;
+        --ebta-green-600:#25894b;
+        --ebta-green-500:#36a85f;
+        --ebta-green-100:#dcf6e5;
+        --ebta-green-50:#f0fbf4;
+        --ebta-gold-600:#c89416;
+        --ebta-gold-500:#e3ad24;
+        --ebta-gold-300:#f3d277;
+        --ebta-ink:#102117;
+        --ebta-muted:#64746a;
+        --ebta-line:#dbe9df;
+        --ebta-surface:#ffffff;
+        --ebta-surface-soft:#f7fbf8;
+        --ebta-danger:#b42318;
+        --ebta-radius-sm:12px;
+        --ebta-radius:18px;
+        --ebta-radius-lg:26px;
+        --ebta-shadow-sm:0 5px 16px rgba(9,60,31,.06);
+        --ebta-shadow:0 14px 38px rgba(9,60,31,.10);
+        --ebta-shadow-lg:0 24px 70px rgba(7,44,24,.16);
+        --ebta-ease:cubic-bezier(.2,.8,.2,1);
+        --ebta-role-accent:var(--ebta-green-700);
+        --ebta-role-accent-2:var(--ebta-green-500);
+        --ebta-role-glow:rgba(37,137,75,.15);
+    }
+
+    html {
+        scroll-behavior:smooth;
+        background:#edf7f0;
+    }
+
+    body.ebta-unified-ui {
+        min-height:100%;
+        overflow-x:hidden;
+        color:var(--ebta-ink);
+        background:
+            radial-gradient(circle at 8% 2%, rgba(227,173,36,.13), transparent 24rem),
+            radial-gradient(circle at 96% 12%, var(--ebta-role-glow), transparent 28rem),
+            linear-gradient(180deg,#f9fcfa 0%,#eef7f1 48%,#f8fbf9 100%);
+        background-attachment:fixed;
+    }
+
+    body.ebta-unified-ui::before,
+    body.ebta-unified-ui::after {
+        content:"";
+        position:fixed;
+        z-index:-1;
+        border-radius:999px;
+        filter:blur(2px);
+        pointer-events:none;
+        opacity:.7;
+    }
+
+    body.ebta-unified-ui::before {
+        width:260px;
+        height:260px;
+        right:-110px;
+        top:180px;
+        background:radial-gradient(circle,rgba(227,173,36,.14),transparent 68%);
+        animation:ebtaAmbientFloat 10s ease-in-out infinite;
+    }
+
+    body.ebta-unified-ui::after {
+        width:320px;
+        height:320px;
+        left:-160px;
+        bottom:5%;
+        background:radial-gradient(circle,var(--ebta-role-glow),transparent 68%);
+        animation:ebtaAmbientFloat 13s ease-in-out infinite reverse;
+    }
+
+    body.role-student { --ebta-role-accent:#1b7a42; --ebta-role-accent-2:#3eb86a; }
+    body.role-tutor { --ebta-role-accent:#145f34; --ebta-role-accent-2:#2f9453; }
+    body.role-admin,
+    body.role-duty-admin,
+    body.role-admission { --ebta-role-accent:#185f34; --ebta-role-accent-2:#d7a51f; }
+    body.role-manager,
+    body.role-aqm { --ebta-role-accent:#17673a; --ebta-role-accent-2:#38a361; }
+    body.role-treasurer { --ebta-role-accent:#155e36; --ebta-role-accent-2:#d5a21c; }
+    body.role-secretary { --ebta-role-accent:#1d6940; --ebta-role-accent-2:#4cab70; }
+    body.role-social-media { --ebta-role-accent:#17693c; --ebta-role-accent-2:#e0aa22; }
+    body.role-coo,
+    body.role-cao { --ebta-role-accent:#124e2b; --ebta-role-accent-2:#2e8d50; }
+    body.role-ceo { --ebta-role-accent:#0d4024; --ebta-role-accent-2:#d2a01d; }
+    body.role-school-manager { --ebta-role-accent:#1a6840; --ebta-role-accent-2:#47a968; }
+    body.role-one-on-one-manager { --ebta-role-accent:#176b3a; --ebta-role-accent-2:#e0aa22; }
+
+    body.ebta-unified-ui .header {
+        position:sticky;
+        top:0;
+        z-index:1000;
+        color:#fff;
+        background:
+            linear-gradient(110deg,rgba(8,45,24,.98),rgba(21,93,50,.97) 62%,rgba(31,113,61,.96));
+        border-bottom:2px solid rgba(227,173,36,.72);
+        box-shadow:0 9px 28px rgba(7,44,24,.22);
+        backdrop-filter:blur(18px);
+    }
+
+    body.ebta-unified-ui .header::after {
+        content:"";
+        position:absolute;
+        inset:auto 0 0 0;
+        height:1px;
+        background:linear-gradient(90deg,transparent,var(--ebta-gold-300),transparent);
+        opacity:.9;
+    }
+
+    body.ebta-unified-ui .header .nav {
+        width:min(1480px,100%);
+        max-width:1480px;
+        min-height:70px;
+        padding:12px 22px;
+        gap:18px;
+    }
+
+    body.ebta-unified-ui .brand {
+        min-width:0;
+    }
+
+    body.ebta-unified-ui .brand-logo {
+        width:46px;
+        height:46px;
+        border-radius:15px;
+        border:2px solid rgba(243,210,119,.85);
+        box-shadow:0 8px 22px rgba(0,0,0,.22),0 0 0 5px rgba(255,255,255,.08);
+        animation:ebtaLogoBreathe 4.8s ease-in-out infinite;
+    }
+
+    body.ebta-unified-ui .brand .title {
+        color:#fff;
+        background:none;
+        -webkit-background-clip:initial;
+        -webkit-text-fill-color:currentColor;
+        font-family:"Plus Jakarta Sans",Inter,sans-serif;
+        font-size:19px;
+        font-weight:900;
+        letter-spacing:-.35px;
+        text-shadow:0 2px 8px rgba(0,0,0,.18);
+    }
+
+    body.ebta-unified-ui .links {
+        display:flex;
+        align-items:center;
+        justify-content:flex-end;
+        flex-wrap:wrap;
+        gap:7px;
+    }
+
+    body.ebta-unified-ui .links a,
+    body.ebta-unified-ui .links button {
+        margin:0;
+        min-height:38px;
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        gap:6px;
+        border-radius:999px;
+        border:1px solid rgba(255,255,255,.22);
+        background:rgba(255,255,255,.10);
+        color:#fff;
+        font-weight:800;
+        font-size:13px;
+        text-decoration:none;
+        box-shadow:none;
+        backdrop-filter:blur(8px);
+        transition:transform .18s var(--ebta-ease),background .18s ease,border-color .18s ease;
+    }
+
+    body.ebta-unified-ui .links a:hover,
+    body.ebta-unified-ui .links button:hover {
+        color:#fff;
+        background:rgba(255,255,255,.19);
+        border-color:rgba(243,210,119,.78);
+        transform:translateY(-1px);
+    }
+
+    body.ebta-unified-ui .links .header-logout-link {
+        background:rgba(180,35,24,.25);
+        border-color:rgba(255,204,199,.42);
+    }
+
+    body.ebta-unified-ui .links .header-logout-link:hover {
+        background:#b42318;
+        border-color:#ffc9c3;
+    }
+
+    body.ebta-unified-ui .links .header-dashboard-link {
+        background:rgba(227,173,36,.17);
+        border-color:rgba(243,210,119,.48);
+    }
+
+    body.ebta-unified-ui .links .btn.success {
+        color:#17341f;
+        background:linear-gradient(135deg,#f5d67d,#dfaa22);
+        border-color:#f6df9e;
+        text-shadow:none;
+    }
+
+    .ebta-role-badge {
+        display:inline-flex;
+        align-items:center;
+        gap:7px;
+        max-width:230px;
+        padding:7px 11px;
+        border-radius:999px;
+        color:#fff;
+        background:rgba(255,255,255,.10);
+        border:1px solid rgba(255,255,255,.20);
+        font-size:11px;
+        font-weight:900;
+        text-transform:uppercase;
+        letter-spacing:.55px;
+        white-space:nowrap;
+        overflow:hidden;
+        text-overflow:ellipsis;
+    }
+
+    .ebta-role-badge::before {
+        content:"";
+        width:8px;
+        height:8px;
+        border-radius:50%;
+        flex:0 0 8px;
+        background:var(--ebta-gold-300);
+        box-shadow:0 0 0 4px rgba(243,210,119,.16);
+        animation:ebtaStatusPulse 2.5s ease-in-out infinite;
+    }
+
+    body.ebta-unified-ui .wrap {
+        width:min(1480px,100%);
+        max-width:1480px;
+        margin:22px auto;
+        padding:0 22px;
+        animation:ebtaPageIn .45s var(--ebta-ease) both;
+    }
+
+    body.ebta-unified-ui .layout {
+        gap:20px;
+    }
+
+    body.ebta-unified-ui .dashboard-main {
+        min-width:0;
+    }
+
+    body.ebta-unified-ui .sidebar {
+        top:92px;
+        border:1px solid rgba(21,93,50,.14);
+        border-radius:24px;
+        background:
+            linear-gradient(180deg,rgba(255,255,255,.98),rgba(247,252,248,.96));
+        box-shadow:var(--ebta-shadow);
+    }
+
+    body.ebta-unified-ui .side-links {
+        gap:8px;
+    }
+
+    body.ebta-unified-ui .side-links a,
+    body.ebta-unified-ui .portal-menu-link {
+        position:relative;
+        overflow:hidden;
+        border:1px solid rgba(21,93,50,.12);
+        border-radius:13px;
+        color:#1b3423;
+        background:rgba(255,255,255,.92);
+        font-weight:760;
+        box-shadow:0 3px 10px rgba(9,60,31,.04);
+        transition:all .18s var(--ebta-ease);
+    }
+
+    body.ebta-unified-ui .side-links a:hover,
+    body.ebta-unified-ui .side-links a.ebta-active,
+    body.ebta-unified-ui .portal-menu-link.ebta-active {
+        color:#fff;
+        border-color:var(--ebta-role-accent);
+        background:linear-gradient(135deg,var(--ebta-role-accent),var(--ebta-role-accent-2));
+        box-shadow:0 9px 20px rgba(16,92,47,.18);
+        transform:translateX(3px);
+    }
+
+    body.ebta-unified-ui .card,
+    body.ebta-unified-ui .panel,
+    body.ebta-unified-ui .auth-card,
+    body.ebta-unified-ui details.aqm-section {
+        border:1px solid rgba(21,93,50,.12);
+        border-radius:var(--ebta-radius);
+        background:rgba(255,255,255,.94);
+        box-shadow:var(--ebta-shadow-sm);
+        backdrop-filter:blur(8px);
+    }
+
+    body.ebta-unified-ui .card {
+        padding:19px;
+        overflow:visible;
+        transition:transform .22s var(--ebta-ease),box-shadow .22s ease,border-color .22s ease;
+    }
+
+    body.ebta-unified-ui .card:hover {
+        border-color:rgba(27,111,59,.23);
+        box-shadow:var(--ebta-shadow);
+        transform:translateY(-2px);
+    }
+
+    body.ebta-unified-ui .card::before {
+        height:4px;
+        border-radius:var(--ebta-radius) var(--ebta-radius) 0 0;
+        background:linear-gradient(90deg,var(--ebta-role-accent),var(--ebta-role-accent-2),var(--ebta-gold-500));
+    }
+
+    body.ebta-unified-ui .card.soft {
+        background:
+            linear-gradient(145deg,rgba(255,255,255,.98),rgba(241,250,244,.90));
+    }
+
+    body.ebta-unified-ui .auth-card {
+        position:relative;
+        max-width:470px;
+        padding:28px;
+        overflow:hidden;
+        box-shadow:var(--ebta-shadow-lg);
+    }
+
+    body.ebta-unified-ui .auth-card::before {
+        content:"";
+        position:absolute;
+        width:180px;
+        height:180px;
+        right:-80px;
+        top:-90px;
+        border-radius:50%;
+        background:radial-gradient(circle,var(--ebta-role-glow),transparent 68%);
+        pointer-events:none;
+    }
+
+    body.ebta-unified-ui h1,
+    body.ebta-unified-ui h2,
+    body.ebta-unified-ui h3 {
+        color:#13291b;
+        letter-spacing:-.025em;
+    }
+
+    body.ebta-unified-ui h1 {
+        position:relative;
+        width:fit-content;
+        max-width:100%;
+        margin-bottom:13px;
+        font-size:clamp(22px,2.4vw,31px);
+        font-weight:900;
+        line-height:1.18;
+    }
+
+    body.ebta-unified-ui h1::after {
+        content:"";
+        display:block;
+        width:56px;
+        height:4px;
+        margin-top:8px;
+        border-radius:999px;
+        background:linear-gradient(90deg,var(--ebta-role-accent),var(--ebta-gold-500));
+    }
+
+    body.ebta-unified-ui .coo-hero h1::after,
+    body.ebta-unified-ui .cao-hero h1::after,
+    body.ebta-unified-ui .ceo-hero h1::after,
+    body.ebta-unified-ui .ooo-brand h1::after {
+        background:linear-gradient(90deg,#fff,var(--ebta-gold-300));
+    }
+
+    body.ebta-unified-ui .muted {
+        color:var(--ebta-muted);
+    }
+
+    body.ebta-unified-ui .stats {
+        display:grid;
+        grid-template-columns:repeat(auto-fit,minmax(165px,1fr)) !important;
+        gap:12px !important;
+    }
+
+    body.ebta-unified-ui .stat,
+    body.ebta-unified-ui .stats-mini .s {
+        position:relative;
+        isolation:isolate;
+        overflow:hidden;
+        min-height:92px;
+        padding:15px;
+        border:1px solid rgba(21,93,50,.12);
+        border-radius:16px;
+        background:
+            linear-gradient(145deg,#ffffff 0%,#f2faf4 100%);
+        box-shadow:0 7px 20px rgba(9,60,31,.06);
+        transition:all .2s var(--ebta-ease);
+    }
+
+    body.ebta-unified-ui .stat::after,
+    body.ebta-unified-ui .stats-mini .s::after {
+        content:"";
+        position:absolute;
+        z-index:-1;
+        width:70px;
+        height:70px;
+        right:-26px;
+        bottom:-30px;
+        border-radius:50%;
+        background:radial-gradient(circle,var(--ebta-role-glow),transparent 70%);
+    }
+
+    body.ebta-unified-ui .stat:hover,
+    body.ebta-unified-ui .stats-mini .s:hover {
+        transform:translateY(-3px);
+        border-color:rgba(227,173,36,.45);
+        box-shadow:0 14px 28px rgba(9,60,31,.11);
+    }
+
+    body.ebta-unified-ui .stat .k,
+    body.ebta-unified-ui .stats-mini .s .k {
+        color:var(--ebta-role-accent);
+        font-family:"Plus Jakarta Sans",Inter,sans-serif;
+        font-size:clamp(20px,2.2vw,27px);
+        font-weight:900;
+        line-height:1.15;
+    }
+
+    body.ebta-unified-ui .stat .t,
+    body.ebta-unified-ui .stats-mini .s .t {
+        margin-top:5px;
+        color:#607066;
+        font-size:11px;
+        font-weight:760;
+        letter-spacing:.03em;
+        text-transform:uppercase;
+    }
+
+    body.ebta-unified-ui label {
+        color:#52655a;
+        font-weight:780;
+    }
+
+    body.ebta-unified-ui input,
+    body.ebta-unified-ui select,
+    body.ebta-unified-ui textarea {
+        min-height:44px;
+        border:1.5px solid #d9e6dd;
+        border-radius:13px;
+        background:rgba(255,255,255,.96);
+        box-shadow:inset 0 1px 2px rgba(15,23,42,.025);
+        transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease;
+    }
+
+    body.ebta-unified-ui textarea {
+        min-height:105px;
+    }
+
+    body.ebta-unified-ui input:hover,
+    body.ebta-unified-ui select:hover,
+    body.ebta-unified-ui textarea:hover {
+        border-color:#b7d2bf;
+    }
+
+    body.ebta-unified-ui input:focus,
+    body.ebta-unified-ui select:focus,
+    body.ebta-unified-ui textarea:focus {
+        border-color:var(--ebta-role-accent);
+        box-shadow:0 0 0 4px var(--ebta-role-glow);
+        transform:translateY(-1px);
+    }
+
+    body.ebta-unified-ui .btn,
+    body.ebta-unified-ui button,
+    body.ebta-unified-ui input[type="submit"] {
+        position:relative;
+        overflow:hidden;
+        border-radius:12px;
+        font-weight:800;
+        transition:transform .18s var(--ebta-ease),box-shadow .18s ease,filter .18s ease;
+    }
+
+    body.ebta-unified-ui .btn:not(.secondary):not(.danger):not(.warn),
+    body.ebta-unified-ui button.btn:not(.secondary):not(.danger):not(.warn) {
+        background:linear-gradient(135deg,var(--ebta-role-accent),var(--ebta-role-accent-2));
+    }
+
+    body.ebta-unified-ui .btn:hover,
+    body.ebta-unified-ui button:hover,
+    body.ebta-unified-ui input[type="submit"]:hover {
+        transform:translateY(-2px);
+        filter:saturate(1.06);
+    }
+
+    body.ebta-unified-ui .btn.secondary {
+        color:var(--ebta-role-accent);
+        border:1.5px solid rgba(21,93,50,.28);
+        background:#fff;
+        box-shadow:0 4px 12px rgba(9,60,31,.05);
+    }
+
+    body.ebta-unified-ui .btn.secondary:hover,
+    body.ebta-unified-ui .admin-nav .btn.secondary.ebta-active {
+        color:#fff;
+        border-color:var(--ebta-role-accent);
+        background:linear-gradient(135deg,var(--ebta-role-accent),var(--ebta-role-accent-2));
+    }
+
+    body.ebta-unified-ui .btn.danger {
+        background:linear-gradient(135deg,#c9362b,#a91f16);
+    }
+
+    body.ebta-unified-ui .chip,
+    body.ebta-unified-ui .badge {
+        border-radius:999px;
+        font-weight:800;
+    }
+
+    body.ebta-unified-ui table {
+        border:1px solid rgba(21,93,50,.11);
+        border-radius:16px;
+        background:#fff;
+        box-shadow:0 8px 22px rgba(9,60,31,.05);
+    }
+
+    body.ebta-unified-ui thead th {
+        color:#1b4c2d;
+        background:linear-gradient(180deg,#f0f8f2,#e8f4eb);
+        border-bottom:1px solid #ccdfd2;
+        font-weight:900;
+    }
+
+    body.ebta-unified-ui tbody tr {
+        transition:background .15s ease,transform .15s ease;
+    }
+
+    body.ebta-unified-ui tbody tr:hover {
+        background:#eff9f2;
+    }
+
+    body.ebta-unified-ui .scroll-x,
+    body.ebta-unified-ui .ebta-table-shell {
+        border-radius:16px;
+        scrollbar-width:thin;
+        scrollbar-color:#83ae90 #edf6ef;
+    }
+
+    body.ebta-unified-ui .admin-nav,
+    body.ebta-unified-ui .ebta-role-nav {
+        position:sticky;
+        top:82px;
+        z-index:60;
+        display:flex;
+        flex-wrap:nowrap;
+        align-items:center;
+        gap:8px;
+        width:100%;
+        margin:0 0 18px;
+        padding:10px;
+        overflow-x:auto;
+        border:1px solid rgba(21,93,50,.14);
+        border-radius:17px;
+        background:rgba(255,255,255,.90);
+        box-shadow:0 10px 28px rgba(9,60,31,.10);
+        backdrop-filter:blur(16px);
+        scrollbar-width:thin;
+    }
+
+    body.ebta-unified-ui .admin-nav > *,
+    body.ebta-unified-ui .ebta-role-nav > * {
+        flex:0 0 auto;
+    }
+
+    body.ebta-unified-ui .admin-nav .btn,
+    body.ebta-unified-ui .ebta-role-nav .btn {
+        min-height:38px;
+        padding:8px 12px;
+        border-radius:999px;
+        white-space:nowrap;
+        box-shadow:none;
+        font-size:12px;
+    }
+
+    body.ebta-unified-ui .admin-nav .btn.danger,
+    body.ebta-unified-ui .ebta-role-nav .btn.danger {
+        margin-left:auto;
+    }
+
+    body.ebta-unified-ui .coo-hero,
+    body.ebta-unified-ui .cao-hero,
+    body.ebta-unified-ui .ceo-hero,
+    body.ebta-unified-ui .ooo-portal-shell {
+        box-shadow:var(--ebta-shadow-lg);
+        animation:ebtaHeroIn .55s var(--ebta-ease) both;
+    }
+
+    body.ebta-unified-ui .coo-quick-link,
+    body.ebta-unified-ui .cao-quick-link,
+    body.ebta-unified-ui .ceo-quick-link,
+    body.ebta-unified-ui .ooo-nav-link {
+        position:relative;
+        transition:transform .18s var(--ebta-ease),box-shadow .18s ease,background .18s ease;
+    }
+
+    body.ebta-unified-ui .coo-quick-link:hover,
+    body.ebta-unified-ui .cao-quick-link:hover,
+    body.ebta-unified-ui .ceo-quick-link:hover,
+    body.ebta-unified-ui .ooo-nav-link:hover {
+        transform:translateY(-2px);
+        box-shadow:0 8px 18px rgba(9,60,31,.13);
+    }
+
+    body.ebta-unified-ui .coo-quick-link.ebta-active,
+    body.ebta-unified-ui .cao-quick-link.ebta-active,
+    body.ebta-unified-ui .ceo-quick-link.ebta-active {
+        color:#fff;
+        border-color:var(--ebta-role-accent);
+        background:linear-gradient(135deg,var(--ebta-role-accent),var(--ebta-role-accent-2));
+    }
+
+    body.ebta-unified-ui details {
+        transition:border-color .2s ease,box-shadow .2s ease;
+    }
+
+    body.ebta-unified-ui details[open] {
+        border-color:rgba(21,93,50,.24);
+        box-shadow:0 12px 28px rgba(9,60,31,.08);
+    }
+
+    body.ebta-unified-ui summary {
+        border-radius:12px;
+        transition:background .16s ease,color .16s ease;
+    }
+
+    body.ebta-unified-ui summary:hover {
+        background:#eef8f1;
+        color:var(--ebta-role-accent);
+    }
+
+    body.ebta-unified-ui .announce,
+    body.ebta-unified-ui .msg,
+    body.ebta-unified-ui .empty {
+        border-radius:15px;
+    }
+
+    body.ebta-unified-ui .announce {
+        border-color:#ead28a;
+        background:linear-gradient(145deg,#fffdf5,#fff8df);
+        box-shadow:0 8px 20px rgba(176,125,17,.07);
+    }
+
+    body.ebta-unified-ui .empty {
+        border:1.5px dashed #bcd4c3;
+        background:rgba(247,252,248,.86);
+    }
+
+    body.ebta-unified-ui .footer {
+        margin-top:48px;
+        border-top:1px solid rgba(21,93,50,.12);
+        background:
+            linear-gradient(180deg,rgba(255,255,255,.35),rgba(232,244,235,.85));
+    }
+
+    .ebta-reveal {
+        animation:ebtaReveal .48s var(--ebta-ease) both;
+        animation-delay:var(--ebta-delay,0ms);
+    }
+
+    .ebta-ripple {
+        position:absolute;
+        border-radius:50%;
+        pointer-events:none;
+        background:rgba(255,255,255,.38);
+        transform:translate(-50%,-50%) scale(0);
+        animation:ebtaRipple .55s ease-out forwards;
+    }
+
+    .ebta-submitting {
+        cursor:progress !important;
+        filter:saturate(.8);
+    }
+
+    .ebta-submitting::after {
+        content:"";
+        width:14px;
+        height:14px;
+        margin-left:7px;
+        border:2px solid rgba(255,255,255,.45);
+        border-top-color:#fff;
+        border-radius:50%;
+        animation:ebtaSpin .7s linear infinite;
+    }
+
+    #ebtaBackToTop {
+        position:fixed;
+        z-index:9800;
+        right:18px;
+        bottom:20px;
+        width:46px;
+        height:46px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        border:1px solid rgba(243,210,119,.65);
+        border-radius:50%;
+        color:#fff;
+        background:linear-gradient(135deg,var(--ebta-role-accent),var(--ebta-role-accent-2));
+        box-shadow:0 12px 26px rgba(9,60,31,.24);
+        opacity:0;
+        visibility:hidden;
+        transform:translateY(12px);
+        transition:all .2s var(--ebta-ease);
+        cursor:pointer;
+    }
+
+    #ebtaBackToTop.show {
+        opacity:1;
+        visibility:visible;
+        transform:translateY(0);
+    }
+
+    #ebtaBackToTop:hover {
+        transform:translateY(-3px);
+    }
+
+    @keyframes ebtaPageIn {
+        from { opacity:0; transform:translateY(10px); }
+        to { opacity:1; transform:translateY(0); }
+    }
+
+    @keyframes ebtaReveal {
+        from { opacity:0; transform:translateY(16px) scale(.992); }
+        to { opacity:1; transform:translateY(0) scale(1); }
+    }
+
+    @keyframes ebtaHeroIn {
+        from { opacity:0; transform:translateY(-10px) scale(.992); }
+        to { opacity:1; transform:translateY(0) scale(1); }
+    }
+
+    @keyframes ebtaLogoBreathe {
+        0%,100% { transform:translateY(0) scale(1); }
+        50% { transform:translateY(-2px) scale(1.025); }
+    }
+
+    @keyframes ebtaStatusPulse {
+        0%,100% { box-shadow:0 0 0 4px rgba(243,210,119,.15); }
+        50% { box-shadow:0 0 0 7px rgba(243,210,119,.04); }
+    }
+
+    @keyframes ebtaAmbientFloat {
+        0%,100% { transform:translate3d(0,0,0); }
+        50% { transform:translate3d(0,-18px,0); }
+    }
+
+    @keyframes ebtaRipple {
+        to { transform:translate(-50%,-50%) scale(5); opacity:0; }
+    }
+
+    @keyframes ebtaSpin {
+        to { transform:rotate(360deg); }
+    }
+
+    @media(max-width:900px) {
+        body.ebta-unified-ui .header .nav {
+            padding:10px 13px;
+        }
+
+        body.ebta-unified-ui .wrap {
+            margin:14px auto;
+            padding:0 12px;
+        }
+
+        body.ebta-unified-ui .admin-nav,
+        body.ebta-unified-ui .ebta-role-nav {
+            top:72px;
+            border-radius:14px;
+        }
+
+        body.ebta-unified-ui .card {
+            padding:15px;
+            border-radius:17px;
+        }
+
+        body.ebta-unified-ui .stats {
+            grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+        }
+    }
+
+    @media(max-width:640px) {
+        body.ebta-unified-ui .header {
+            position:relative;
+        }
+
+        body.ebta-unified-ui .header .nav {
+            min-height:auto;
+            align-items:stretch;
+        }
+
+        body.ebta-unified-ui .brand {
+            width:100%;
+        }
+
+        body.ebta-unified-ui .links {
+            width:100%;
+            justify-content:flex-start;
+            overflow-x:auto;
+            flex-wrap:nowrap;
+            padding-bottom:3px;
+            scrollbar-width:none;
+        }
+
+        body.ebta-unified-ui .links::-webkit-scrollbar {
+            display:none;
+        }
+
+        body.ebta-unified-ui .links > * {
+            flex:0 0 auto;
+        }
+
+        .ebta-role-badge {
+            max-width:180px;
+        }
+
+        body.ebta-unified-ui .admin-nav,
+        body.ebta-unified-ui .ebta-role-nav {
+            position:relative;
+            top:auto;
+            margin-bottom:13px;
+            padding:8px;
+        }
+
+        body.ebta-unified-ui .admin-nav .btn.danger,
+        body.ebta-unified-ui .ebta-role-nav .btn.danger {
+            margin-left:0;
+        }
+
+        body.ebta-unified-ui h1 {
+            font-size:22px;
+        }
+
+        body.ebta-unified-ui .stats {
+            grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+        }
+
+        body.ebta-unified-ui .stat,
+        body.ebta-unified-ui .stats-mini .s {
+            min-height:82px;
+            padding:12px;
+        }
+
+        body.ebta-unified-ui .stat .k,
+        body.ebta-unified-ui .stats-mini .s .k {
+            font-size:19px;
+        }
+
+        body.ebta-unified-ui .toolbar:not(.ebta-role-nav) {
+            align-items:stretch;
+        }
+
+        #ebtaBackToTop {
+            width:42px;
+            height:42px;
+            right:12px;
+            bottom:14px;
+        }
+    }
+
+    @media(max-width:420px) {
+        body.ebta-unified-ui .stats {
+            grid-template-columns:1fr !important;
+        }
+    }
+
+    @media(prefers-reduced-motion:reduce) {
+        html { scroll-behavior:auto; }
+
+        body.ebta-unified-ui *,
+        body.ebta-unified-ui *::before,
+        body.ebta-unified-ui *::after {
+            animation-duration:.01ms !important;
+            animation-iteration-count:1 !important;
+            transition-duration:.01ms !important;
+        }
+    }
+</style>
+"""
+
+EBTA_UNIFIED_UI_JS = """
+<script>
+(function () {
+    function normalisePath(value) {
+        const raw = String(value || "").split("?")[0].split("#")[0];
+        if (!raw || raw === "/") return "/";
+        return raw.replace(/\\/+$/, "") || "/";
+    }
+
+    function markCurrentNavigation() {
+        const current = normalisePath(window.location.pathname);
+        const selectors = [
+            ".admin-nav a",
+            ".side-links a",
+            ".portal-menu-link",
+            ".coo-quick-link",
+            ".cao-quick-link",
+            ".ceo-quick-link",
+            ".ooo-nav-link"
+        ].join(",");
+
+        document.querySelectorAll(selectors).forEach(function (link) {
+            const href = link.getAttribute("href") || "";
+            if (!href || href === "#" || href.startsWith("javascript:")) return;
+
+            let linkPath = "";
+            try {
+                linkPath = normalisePath(new URL(href, window.location.origin).pathname);
+            } catch (error) {
+                return;
+            }
+
+            const exact = linkPath === current;
+            const nested = linkPath !== "/" &&
+                           current.startsWith(linkPath + "/") &&
+                           !document.querySelector(selectors + '[href="' + current + '"]');
+
+            if (exact || nested) {
+                link.classList.add("ebta-active");
+                link.setAttribute("aria-current", "page");
+            }
+        });
+    }
+
+    function upgradeRoleToolbars() {
+        document.querySelectorAll(".toolbar").forEach(function (toolbar) {
+            const children = Array.from(toolbar.children);
+            const directLinks = children.filter(function (child) {
+                return child.tagName === "A";
+            });
+            const hasFormFields = children.some(function (child) {
+                return ["INPUT", "SELECT", "TEXTAREA"].includes(child.tagName) ||
+                       child.querySelector("input,select,textarea");
+            });
+
+            if (directLinks.length >= 2 && !hasFormFields) {
+                toolbar.classList.add("ebta-role-nav");
+            }
+        });
+    }
+
+    function addRevealAnimation() {
+        const targets = Array.from(document.querySelectorAll(
+            ".dashboard-main > .card, main.wrap > .card, .panel, .stat, .stats-mini .s, details.aqm-section"
+        ));
+
+        targets.slice(0, 80).forEach(function (item, index) {
+            item.classList.add("ebta-reveal");
+            item.style.setProperty("--ebta-delay", Math.min(index * 28, 280) + "ms");
+        });
+    }
+
+    function addRippleEffects() {
+        document.addEventListener("pointerdown", function (event) {
+            const target = event.target.closest(
+                ".btn, .admin-nav a, .ebta-role-nav a, .side-links a, .coo-quick-link, .cao-quick-link, .ceo-quick-link, .ooo-nav-link"
+            );
+            if (!target || target.classList.contains("disabled")) return;
+
+            const rect = target.getBoundingClientRect();
+            const ripple = document.createElement("span");
+            const size = Math.max(rect.width, rect.height);
+
+            ripple.className = "ebta-ripple";
+            ripple.style.width = size + "px";
+            ripple.style.height = size + "px";
+            ripple.style.left = (event.clientX - rect.left) + "px";
+            ripple.style.top = (event.clientY - rect.top) + "px";
+
+            target.appendChild(ripple);
+            window.setTimeout(function () {
+                ripple.remove();
+            }, 650);
+        }, { passive:true });
+    }
+
+    function addSubmitFeedback() {
+        document.querySelectorAll("form").forEach(function (form) {
+            form.addEventListener("submit", function () {
+                const submitter = form.querySelector(
+                    'button[type="submit"], input[type="submit"], button:not([type])'
+                );
+                if (submitter) {
+                    submitter.classList.add("ebta-submitting");
+                    submitter.setAttribute("aria-busy", "true");
+                }
+            });
+        });
+    }
+
+    function addBackToTop() {
+        if (document.getElementById("ebtaBackToTop")) return;
+
+        const button = document.createElement("button");
+        button.id = "ebtaBackToTop";
+        button.type = "button";
+        button.setAttribute("aria-label", "Back to top");
+        button.setAttribute("title", "Back to top");
+        button.innerHTML = "↑";
+
+        button.addEventListener("click", function () {
+            window.scrollTo({ top:0, behavior:"smooth" });
+        });
+
+        document.body.appendChild(button);
+
+        function updateButton() {
+            button.classList.toggle("show", window.scrollY > 520);
+        }
+
+        window.addEventListener("scroll", updateButton, { passive:true });
+        updateButton();
+    }
+
+    function keepLogoutLinksClickable() {
+        document.querySelectorAll('a[href$="/logout"], a[href*="/logout?"]').forEach(function (link) {
+            link.style.pointerEvents = "auto";
+            link.style.cursor = "pointer";
+            link.setAttribute("data-ebta-logout-link", "1");
+        });
+    }
+
+    document.addEventListener("DOMContentLoaded", function () {
+        document.body.classList.add("ebta-ui-ready");
+        upgradeRoleToolbars();
+        markCurrentNavigation();
+        addRevealAnimation();
+        addRippleEffects();
+        addSubmitFeedback();
+        addBackToTop();
+        keepLogoutLinksClickable();
+    });
+})();
+</script>
+"""
+
+
 def page(title, body_html, extra_head="", extra_js=""):
+    current_portal_role = get_logged_in_portal_role()
+
+    role_labels = {
+        "student": "Student",
+        "tutor": "Tutor",
+        "admin": "Administrator",
+        "manager": "Tutor Manager",
+        "aqm": "Academic Quality Manager",
+        "treasurer": "Treasurer",
+        "secretary": "Secretary General",
+        "social_media": "Social Media Manager",
+        "duty_admin": "Duty Administrator",
+        "admission": "Admission Coordinator",
+        "one_on_one_manager": "One-on-One Support Manager",
+        "coo": "Chief Operating Officer",
+        "cao": "Chief Academic Officer",
+        "ceo": "Chief Executive Officer",
+        "school_manager": "School Management"
+    }
+
     auth = []
-    if not (is_student() or is_tutor() or is_admin() or is_coo() or is_cao() or is_ceo() or is_school_manager()):
-        auth += [f"<a href='{url_for('student_login')}'>Student</a>",
-                f"<a href='{url_for('tutor_login')}'>Tutor</a>"]
+
+    if current_portal_role:
+        role_label = role_labels.get(
+            current_portal_role,
+            current_portal_role.replace("_", " ").title()
+        )
+        dashboard_path = home_path_for_logged_in_role(current_portal_role)
+        logout_path = logout_path_for_role(current_portal_role)
+
+        if is_tutor_student_view_mode():
+            role_label = "Tutor · Student View"
+            dashboard_path = url_for("tutor_switch_tutor_view")
+
+        auth = [
+            f"<span class='ebta-role-badge' title='{escape(role_label)}'>{escape(role_label)}</span>",
+            f"<a class='header-dashboard-link' href='{dashboard_path}'>Portal Home</a>",
+            f"<a class='header-logout-link' href='{logout_path}'>Logout</a>"
+        ]
     else:
-        if is_student():
-            auth += [f"<a href='{url_for('student_home')}'>My Portal</a>", f"<a href='{url_for('student_logout')}'>Logout</a>"]
-        if is_tutor():
-            if is_tutor_student_view_mode():
-                auth += [
-                    f"<a href='{url_for('tutor_switch_tutor_view')}'>Tutor View</a>",
-                    f"<a href='{url_for('tutor_logout')}'>Logout</a>"
-                ]
-            else:
-                auth += [
-                    f"<a href='{url_for('tutor_home')}'>Tutor</a>",
-                    f"<a href='{url_for('tutor_logout')}'>Logout</a>"
-                ]
-        if is_admin():
-            auth += [f"<a href='{safe_url('admin_home','/admin')}'>Admin</a>", f"<a href='{url_for('admin_logout')}'>Logout</a>"]
-        if is_coo():
-            auth += [
-                f"<a href='{url_for('coo_dashboard')}'>COO</a>",
-                f"<a href='{url_for('coo_logout')}'>Logout</a>"
-            ]  
-        if is_cao():
-            auth += [
-                f"<a href='{url_for('cao_dashboard')}'>CAO</a>",
-                f"<a href='{url_for('cao_logout')}'>Logout</a>"
-            ]
-        if is_ceo():
-            auth += [
-                f"<a href='{url_for('ceo_dashboard')}'>CEO</a>",
-                f"<a href='{url_for('ceo_logout')}'>Logout</a>"
-            ]
-        if is_school_manager():
-            auth += [
-                f"<a href='{url_for('school_dashboard')}'>School Portal</a>",
-                f"<a href='{url_for('school_logout')}'>Logout</a>"
-            ]
-            
+        auth = [
+            f"<a href='{url_for('student_login')}'>Student Login</a>",
+            f"<a href='{url_for('tutor_login')}'>Tutor Login</a>"
+        ]
+
     right = " ".join(auth)
     
     portal_celebration_banner_html = ""
@@ -9704,32 +10758,16 @@ def page(title, body_html, extra_head="", extra_js=""):
     if is_student() and request.endpoint != "home":
         portal_celebration_banner_html = get_celebration_banner_html()
     
-    body_class = ""
+    if is_tutor_student_view_mode():
+        body_class = "ebta-unified-ui role-student role-tutor-student-view"
+    elif current_portal_role:
+        body_class = (
+            "ebta-unified-ui role-" +
+            current_portal_role.replace("_", "-")
+        )
+    else:
+        body_class = "ebta-unified-ui role-public"
 
-    if is_student() or is_tutor_student_view_mode():
-        body_class = "role-student"
-
-        if is_tutor_student_view_mode():
-            body_class += " role-tutor-student-view"
-
-    elif is_tutor():
-        body_class = "role-tutor"
-
-    elif is_admin():
-        body_class = "role-admin"
-
-    elif is_coo():
-        body_class = "role-coo"
-
-    elif is_cao():
-        body_class = "role-cao"
-
-    elif is_ceo():
-        body_class = "role-ceo"
-
-    elif is_school_manager():
-        body_class = "role-school-manager"
-        
     auto_logout_js = ""
 
     timeout_role = get_logged_in_portal_role()
@@ -11194,7 +12232,7 @@ def page(title, body_html, extra_head="", extra_js=""):
     <link rel="icon" type="image/jpeg" href="https://i.imgur.com/SqocnYt.png">
     <!-- PWA -->
     <link rel="manifest" href="/static/manifest.json">
-    <meta name="theme-color" content="#0f172a">
+    <meta name="theme-color" content="#0e4325">
     <script>
       if ("serviceWorker" in navigator) {{
         navigator.serviceWorker.register("/static/sw.js");
@@ -11217,7 +12255,7 @@ def page(title, body_html, extra_head="", extra_js=""):
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
-    {GOOGLE_FONTS}{BASE_CSS}{BASE_JS}{EBTA_MATH_SUPPORT_HEAD}{extra_head}
+    {GOOGLE_FONTS}{BASE_CSS}{BASE_JS}{EBTA_MATH_SUPPORT_HEAD}{extra_head}{EBTA_UNIFIED_UI_CSS}
     </head><body class="{body_class}">
     <header class='header'>
         <div class='nav'>
@@ -11325,7 +12363,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 </a>
             </div>
         </div>
-    </footer>{upload_feedback_js}{extra_js}{auto_logout_js}
+    </footer>{upload_feedback_js}{extra_js}{EBTA_UNIFIED_UI_JS}{auto_logout_js}
     </body></html>
     """
 
