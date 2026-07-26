@@ -59497,14 +59497,20 @@ def one_on_one_manager_nav():
             font-weight:900;
         }}
         .ooo-nav {{
+            position:relative;
+            z-index:50;
             display:flex;
+            align-items:center;
             gap:7px;
             padding:11px 14px;
             overflow-x:auto;
             background:#fff;
             border-top:1px solid rgba(255,255,255,.12);
+            pointer-events:auto;
         }}
         .ooo-nav-link {{
+            position:relative;
+            z-index:51;
             flex:0 0 auto;
             display:flex;
             align-items:center;
@@ -59517,6 +59523,9 @@ def one_on_one_manager_nav():
             font-weight:750;
             border:1px solid transparent;
             transition:.18s ease;
+            cursor:pointer;
+            pointer-events:auto !important;
+            touch-action:manipulation;
         }}
         .ooo-nav-link:hover {{
             background:var(--ooo-mint);
@@ -59536,8 +59545,23 @@ def one_on_one_manager_nav():
         }}
         .ooo-nav-link.active .ooo-nav-icon {{background:rgba(255,255,255,.18)}}
         .ooo-logout {{
+            position:relative;
+            z-index:100;
             margin-left:auto;
             color:#9b2c2c;
+            background:#fff4f4;
+            border-color:#f0caca;
+            cursor:pointer;
+            pointer-events:auto !important;
+            user-select:none;
+        }}
+        .ooo-logout:hover {{
+            color:#fff;
+            background:#b42318;
+            border-color:#b42318;
+        }}
+        .ooo-logout > * {{
+            pointer-events:none;
         }}
 
         /* Upgrade every operational content card following the manager header. */
@@ -59670,6 +59694,11 @@ def one_on_one_manager_nav():
             .ooo-portal-hero {{padding:20px 17px}}
             .ooo-nav {{padding:9px}}
             .ooo-nav-link {{padding:9px 11px;font-size:.84rem}}
+            .ooo-logout {{
+                position:sticky;
+                right:0;
+                box-shadow:-10px 0 14px rgba(255,255,255,.92);
+            }}
             .ooo-quick-grid {{grid-template-columns:1fr}}
             .ooo-page-intro {{display:block}}
             .ooo-portal-shell ~ .card {{border-radius:14px !important}}
@@ -59692,7 +59721,11 @@ def one_on_one_manager_nav():
         </div>
         <nav class="ooo-nav" aria-label="One-on-One Manager navigation">
             {links}
-            <a class="ooo-nav-link ooo-logout" href="/one-on-one-manager/logout">
+            <a class="ooo-nav-link ooo-logout"
+               href="/one-on-one-manager/logout"
+               role="button"
+               aria-label="Log out of the One-on-One Support Centre"
+               onclick="window.location.href='/one-on-one-manager/logout'; return false;">
                 <span class="ooo-nav-icon">↪</span><span>Logout</span>
             </a>
         </nav>
