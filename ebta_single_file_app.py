@@ -13654,138 +13654,194 @@ def home():
                 </div>
             </div>
             <div class="mini">
-                Please pay your monthly EBTA fees via EFT using the details below, then tick the box to confirm payment and upload your Proof of Payment.
+                Please pay your EBTA fees via EFT using the business account details below,
+                then upload your Proof of Payment.
             </div>
 
-            <ul class="mini" style="margin:6px 0 4px 14px;padding:0;">
-                <li>Account holder: Ms MCB MOHALE</li>
-                <li>Capitec number: 0649619653</li>
-                <li style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <span>Account number: <b id="acc_number">2062604285</b></span>
-
-                    <button type="button"
-                            onclick="copyAccountNumber()"
-                            class="btn mini secondary"
-                            style="padding:4px 8px;">
-                        📋 Copy
-                    </button>
-                </li>
-                <li>Bank name: Capitec</li>
-                <li>Reference: Learner’s Name & Surname</li>
-            </ul>
-            
-            <div style="
-                margin-top:16px;
-                padding:14px;
-                border:1px solid #e2e8f0;
-                border-radius:12px;
-                background:#f8fafc;
-            ">
-
-                <div style="
-                    font-weight:600;
-                    margin-bottom:6px;
-                    color:#0f172a;
-                ">
-                    📱 Scan to Pay (Fast Payment)
-                </div>
-
-                <div class="mini muted" style="margin-bottom:10px;">
-                    You can also pay instantly using your banking app by scanning the QR code below.
-                </div>
-
-                <div style="
-                    display:flex;
-                    flex-direction:column;
-                    align-items:center;
-                    gap:10px;
-                ">
-
-                    <img 
-                        id="qrImage"
-                        src="/static/icons/scantopayqrcode.jpeg"
-                        alt="Scan to Pay QR Code"
-                        style="
-                            width:200px;
-                            max-width:100%;
-                            border-radius:12px;
-                            border:1px solid #e2e8f0;
-                            padding:8px;
-                            background:#fff;
-                            box-shadow:0 2px 8px rgba(0,0,0,0.08);
-                            cursor:pointer;
-                            transition:transform 0.2s ease;
-                        "
-                    >
-
-                    <div style="
-                        font-weight:600;
-                        font-size:14px;
-                        color:#1b5e20;
-                        letter-spacing:1px;
-                    ">
-                       <!-- SCAN TO PAY -->
+            <div class="ebta-business-bank-card">
+                <div class="ebta-business-bank-header">
+                    <div>
+                        <div class="ebta-business-bank-eyebrow">Official EBTA Business Account</div>
+                        <h3>Capitec Business Banking Details</h3>
                     </div>
-                    
-                    <!-- 🔗 DIRECT PAYMENT LINK -->
-                    <a href="https://pay.capitecbank.co.za/payme/JS3A2F"
-                       target="_blank"
-                       class="btn success mini"
-                       style="text-align:center; margin-top:6px;">
-                        💳 Pay Instantly Online
-                    </a>
 
-                    <!-- DOWNLOAD BUTTON -->
-                    <a href="/static/icons/scantopayqrcode.jpeg"
-                       download="EBTA-Scan-To-Pay.jpeg"
-                       class="btn mini success"
-                       style="margin-top:6px;">
-                        ⬇ Download QR Code
-                    </a>
-
-                </div>
-                
-                
-                <!-- QR FULLSCREEN MODAL -->
-                <div id="qrModal" style="
-                    display:none;
-                    position:fixed;
-                    z-index:99999;
-                    top:0;
-                    left:0;
-                    width:100%;
-                    height:100%;
-                    background:rgba(0,0,0,0.85);
-                    justify-content:center;
-                    align-items:center;
-                ">
-
-                    <!-- CLOSE BUTTON -->
-                    <span id="closeQR" style="
-                        position:absolute;
-                        top:20px;
-                        right:30px;
-                        font-size:30px;
-                        color:#fff;
-                        cursor:pointer;
-                        font-weight:bold;
-                        z-index:100000;
-                    ">
-                        ✕
-                    </span>
-
-                    <!-- IMAGE -->
-                    <img id="qrModalImg" style="
-                        max-width:90%;
-                        max-height:90%;
-                        border-radius:12px;
-                        box-shadow:0 10px 30px rgba(0,0,0,0.4);
-                        background:#fff;
-                        padding:10px;
-                    ">
+                    <span class="chip active">EFT Payment</span>
                 </div>
 
+                <div class="ebta-business-bank-grid">
+                    <div class="ebta-bank-detail">
+                        <span>Business Name</span>
+                        <strong>EBTA PTY LTD</strong>
+                    </div>
+
+                    <div class="ebta-bank-detail">
+                        <span>Account Holder Name</span>
+                        <strong>MC MOHALE</strong>
+                    </div>
+
+                    <div class="ebta-bank-detail">
+                        <span>Bank Name</span>
+                        <strong>Capitec Business</strong>
+                    </div>
+
+                    <div class="ebta-bank-detail ebta-bank-detail-account">
+                        <span>Account Number</span>
+
+                        <div class="ebta-bank-copy-row">
+                            <strong id="acc_number">1055480919</strong>
+
+                            <button type="button"
+                                    onclick="copyAccountNumber()"
+                                    class="btn mini secondary">
+                                📋 Copy
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="ebta-bank-detail">
+                        <span>Branch Code</span>
+                        <strong>470010</strong>
+                    </div>
+
+                    <div class="ebta-bank-detail">
+                        <span>Account Type</span>
+                        <strong>Business</strong>
+                    </div>
+                </div>
+
+                <div class="ebta-payment-reference">
+                    <span>Preferred Payment Reference</span>
+                    <strong>Learner name + surname + month</strong>
+                    <small>Example: Thando Mokoena July</small>
+                </div>
             </div>
+
+            <style>
+                .ebta-business-bank-card {{
+                    margin-top:14px;
+                    padding:16px;
+                    border:1px solid #cfe2d4;
+                    border-radius:16px;
+                    background:
+                        linear-gradient(145deg,#ffffff 0%,#f2faf4 100%);
+                    box-shadow:0 7px 20px rgba(9,60,31,.06);
+                }}
+
+                .ebta-business-bank-header {{
+                    display:flex;
+                    align-items:flex-start;
+                    justify-content:space-between;
+                    gap:12px;
+                    flex-wrap:wrap;
+                    margin-bottom:14px;
+                }}
+
+                .ebta-business-bank-header h3 {{
+                    margin:2px 0 0;
+                    color:#173421;
+                    font-size:17px;
+                }}
+
+                .ebta-business-bank-eyebrow {{
+                    color:#1b6f3b;
+                    font-size:10px;
+                    font-weight:900;
+                    letter-spacing:.06em;
+                    text-transform:uppercase;
+                }}
+
+                .ebta-business-bank-grid {{
+                    display:grid;
+                    grid-template-columns:repeat(3,minmax(0,1fr));
+                    gap:10px;
+                }}
+
+                .ebta-bank-detail {{
+                    min-width:0;
+                    padding:11px 12px;
+                    border:1px solid #dbe9df;
+                    border-radius:13px;
+                    background:rgba(255,255,255,.92);
+                }}
+
+                .ebta-bank-detail span,
+                .ebta-payment-reference span {{
+                    display:block;
+                    margin-bottom:4px;
+                    color:#68796f;
+                    font-size:9.5px;
+                    font-weight:850;
+                    letter-spacing:.04em;
+                    text-transform:uppercase;
+                }}
+
+                .ebta-bank-detail strong {{
+                    display:block;
+                    color:#173421;
+                    font-size:13px;
+                    line-height:1.25;
+                    overflow-wrap:anywhere;
+                }}
+
+                .ebta-bank-copy-row {{
+                    display:flex;
+                    align-items:center;
+                    justify-content:space-between;
+                    gap:8px;
+                }}
+
+                .ebta-bank-copy-row strong {{
+                    font-size:15px;
+                    letter-spacing:.025em;
+                }}
+
+                .ebta-bank-copy-row .btn {{
+                    flex:0 0 auto;
+                    min-height:30px;
+                    padding:5px 8px;
+                }}
+
+                .ebta-payment-reference {{
+                    margin-top:11px;
+                    padding:12px 13px;
+                    border-left:4px solid #e3ad24;
+                    border-radius:12px;
+                    background:#fffaf0;
+                }}
+
+                .ebta-payment-reference strong {{
+                    display:block;
+                    color:#5e4308;
+                    font-size:13px;
+                }}
+
+                .ebta-payment-reference small {{
+                    display:block;
+                    margin-top:4px;
+                    color:#7b6a42;
+                    font-size:10px;
+                }}
+
+                @media(max-width:800px) {{
+                    .ebta-business-bank-grid {{
+                        grid-template-columns:repeat(2,minmax(0,1fr));
+                    }}
+                }}
+
+                @media(max-width:520px) {{
+                    .ebta-business-bank-card {{
+                        padding:13px;
+                    }}
+
+                    .ebta-business-bank-grid {{
+                        grid-template-columns:1fr;
+                    }}
+
+                    .ebta-bank-copy-row {{
+                        align-items:center;
+                    }}
+                }}
+            </style>
 
             <label class="payment-confirm">
                 <input type="checkbox" id="paid_check" name="paid_check" />
@@ -14470,38 +14526,7 @@ function copyAccountNumber(){
 
 </script>    
 
-<script>
-document.addEventListener("DOMContentLoaded", function(){
 
-    const qrImage = document.getElementById("qrImage");
-    const modal = document.getElementById("qrModal");
-    const modalImg = document.getElementById("qrModalImg");
-    const closeBtn = document.getElementById("closeQR");
-
-    if(qrImage){
-        qrImage.addEventListener("click", function(){
-            modal.style.display = "flex";
-            modalImg.src = qrImage.src;
-        });
-    }
-
-    if(closeBtn){
-        closeBtn.addEventListener("click", function(e){
-            e.stopPropagation();   // 🔥 THIS FIXES THE ISSUE COMPLETELY
-            modal.style.display = "none";
-        });
-    }
-
-    if(modal){
-        modal.addEventListener("click", function(e){
-            if(e.target === modal){
-                modal.style.display = "none";
-            }
-        });
-    }
-
-});
-</script>
     
 <script>
 let ebtaAllowExit = false;
