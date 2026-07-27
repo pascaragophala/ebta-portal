@@ -37570,6 +37570,29 @@ def manager_dashboard():
 
         {month_selector}
 
+        <div class="card soft" style="
+            margin:0 0 12px;
+            padding:13px 14px;
+            border-left:5px solid #1b6f3b;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            flex-wrap:wrap;
+        ">
+            <div>
+                <strong>Learner Attendance & Assignment Monitor</strong>
+                <div class="mini muted" style="margin-top:3px">
+                    See exactly which learners are missing sessions or not submitting assignments under each tutor and subject.
+                </div>
+            </div>
+
+            <a class="btn mini success"
+               href="/manager/learner-engagement?month={month}">
+                Open Learner Engagement
+            </a>
+        </div>
+
         <div class="tm-top-stats">
 
             <div class="tm-stat">
@@ -38362,6 +38385,10 @@ def manager_nav():
 
         <a class="btn mini" href="/manager/tutors">
             My Tutors
+        </a>
+
+        <a class="btn mini" href="/manager/learner-engagement">
+            Learner Engagement
         </a>
 
         <a class="btn mini" href="/manager/tracker">
@@ -39379,6 +39406,1482 @@ def manager_welcome_hero(month, total_tutors=0, average_progress=0, high_risk_tu
     </section>
     """
    
+
+@app.get('/manager/learner-engagement')
+def manager_learner_engagement():
+    """
+    Detailed learner attendance and assignment submission monitoring for
+    tutors assigned to the currently logged-in Tutor Manager.
+    """
+
+    r = require_manager()
+    if r:
+        return r
+
+    manager_id = session.get("manager_id")
+
+    month = (request.args.get("month") or manager_get_month()).strip()
+    try:
+        datetime.datetime.strptime(month, "%Y-%m")
+    except Exception:
+        month = manager_get_month()
+
+    def _safe_int(value):
+        try:
+            parsed = int(str(value or "").strip())
+            return parsed if parsed > 0 else None
+        except Exception:
+            return None
+
+    selected_tutor_id = _safe_int(request.args.get("tutor_id"))
+    selected_subject_id = _safe_int(request.args.get("subject_id"))
+    query = (request.args.get("q") or "").strip()
+
+    issue_filter = (request.args.get("issue") or "ATTENTION").strip().upper()
+    allowed_issue_filters = {
+        "ATTENTION",
+        "ALL",
+        "ATTENDANCE",
+        "ASSIGNMENTS",
+        "BOTH",
+        "CLEAR"
+    }
+    if issue_filter not in allowed_issue_filters:
+        issue_filter = "ATTENTION"
+
+    try:
+        page_num = max(1, int(request.args.get("page", 1)))
+    except Exception:
+        page_num = 1
+
+    per_page = 25
+    today_obj = datetime.datetime.now(
+        ZoneInfo("Africa/Johannesburg")
+    ).date()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Tutors available to this manager.
+    cur.execute("""
+        SELECT DISTINCT
+            t.id,
+            t.full_name
+        FROM manager_tutors mt
+        JOIN tutors t ON t.id=mt.tutor_id
+        WHERE mt.manager_id=?
+          AND COALESCE(t.is_active,1)=1
+          AND t.deleted_at IS NULL
+        ORDER BY t.full_name
+    """, (manager_id,))
+
+    assigned_tutors = cur.fetchall()
+    allowed_tutor_ids = {int(row["id"]) for row in assigned_tutors}
+
+    if selected_tutor_id and selected_tutor_id not in allowed_tutor_ids:
+        conn.close()
+        return page(
+            "Access Denied",
+            card_msg("You are not allowed to monitor this tutor.")
+        )
+
+    subject_scope_sql = ""
+    subject_scope_params = []
+
+    if selected_tutor_id:
+        subject_scope_sql += " AND t.id=?"
+        subject_scope_params.append(selected_tutor_id)
+
+    cur.execute(f"""
+        SELECT DISTINCT
+            sub.id,
+            sub.name,
+            sub.grade
+        FROM manager_tutors mt
+        JOIN tutors t ON t.id=mt.tutor_id
+        JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        JOIN subjects sub ON sub.id=ts.subject_id
+        WHERE mt.manager_id=?
+          AND COALESCE(t.is_active,1)=1
+          AND t.deleted_at IS NULL
+          {subject_scope_sql}
+        ORDER BY CAST(REPLACE(sub.grade,'G','') AS INTEGER), sub.name
+    """, [manager_id] + subject_scope_params)
+
+    available_subjects = cur.fetchall()
+    allowed_subject_ids = {int(row["id"]) for row in available_subjects}
+
+    if selected_subject_id and selected_subject_id not in allowed_subject_ids:
+        selected_subject_id = None
+
+    scope_sql = ""
+    scope_params = []
+
+    if selected_tutor_id:
+        scope_sql += " AND t.id=?"
+        scope_params.append(selected_tutor_id)
+
+    if selected_subject_id:
+        scope_sql += " AND sub.id=?"
+        scope_params.append(selected_subject_id)
+
+    search_sql = ""
+    search_params = []
+
+    if query:
+        like = f"%{query}%"
+        search_sql = """
+          AND (
+                st.full_name LIKE ?
+                OR st.phone_whatsapp LIKE ?
+                OR st.guardian_name LIKE ?
+                OR st.guardian_phone LIKE ?
+                OR st.email LIKE ?
+                OR t.full_name LIKE ?
+                OR sub.name LIKE ?
+          )
+        """
+        search_params = [like, like, like, like, like, like, like]
+
+    # Active learners for the tutor + subject combinations.
+    cur.execute(f"""
+        SELECT
+            t.id AS tutor_id,
+            t.full_name AS tutor_name,
+            sub.id AS subject_id,
+            sub.name AS subject_name,
+            sub.grade,
+            st.id AS student_id,
+            st.full_name AS student_name,
+            st.phone_whatsapp,
+            st.guardian_name,
+            st.guardian_phone,
+            st.email,
+            MIN(e.created_at) AS enrollment_created_at
+        FROM manager_tutors mt
+        JOIN tutors t ON t.id=mt.tutor_id
+        JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        JOIN subjects sub ON sub.id=ts.subject_id
+        JOIN enrollments e
+          ON e.subject_id=sub.id
+         AND e.month=?
+         AND e.status='ACTIVE'
+        JOIN students st ON st.id=e.student_id
+        WHERE mt.manager_id=?
+          AND COALESCE(t.is_active,1)=1
+          AND t.deleted_at IS NULL
+          {scope_sql}
+          {search_sql}
+        GROUP BY
+            t.id,
+            t.full_name,
+            sub.id,
+            sub.name,
+            sub.grade,
+            st.id,
+            st.full_name,
+            st.phone_whatsapp,
+            st.guardian_name,
+            st.guardian_phone,
+            st.email
+        ORDER BY
+            t.full_name,
+            CAST(REPLACE(sub.grade,'G','') AS INTEGER),
+            sub.name,
+            st.full_name
+    """, [month, manager_id] + scope_params + search_params)
+
+    learner_scope_rows = cur.fetchall()
+
+    # Captured classes. These are the only dates on which a learner can be
+    # treated as absent; an uncaptured tutor class is never guessed.
+    cur.execute(f"""
+        SELECT
+            ats.id AS attendance_session_id,
+            ats.tutor_id,
+            ats.subject_id,
+            ats.session_id,
+            ats.date,
+            se.day_of_week,
+            se.start_time,
+            se.end_time
+        FROM attendance_sessions ats
+        JOIN manager_tutors mt
+          ON mt.tutor_id=ats.tutor_id
+         AND mt.manager_id=?
+        JOIN tutors t ON t.id=ats.tutor_id
+        JOIN subjects sub ON sub.id=ats.subject_id
+        LEFT JOIN sessions se ON se.id=ats.session_id
+        WHERE ats.month=?
+          {scope_sql}
+        ORDER BY ats.date, se.start_time
+    """, [manager_id, month] + scope_params)
+
+    captured_sessions = cur.fetchall()
+
+    cur.execute(f"""
+        SELECT
+            ats.id AS attendance_session_id,
+            ats.tutor_id,
+            ats.subject_id,
+            a.student_id
+        FROM attendance_sessions ats
+        JOIN manager_tutors mt
+          ON mt.tutor_id=ats.tutor_id
+         AND mt.manager_id=?
+        JOIN tutors t ON t.id=ats.tutor_id
+        JOIN subjects sub ON sub.id=ats.subject_id
+        JOIN attendance a
+          ON a.session_id=ats.session_id
+         AND a.date=ats.date
+        WHERE ats.month=?
+          {scope_sql}
+    """, [manager_id, month] + scope_params)
+
+    attendance_presence_rows = cur.fetchall()
+
+    # Recurring timetable for context.
+    cur.execute(f"""
+        SELECT
+            se.tutor_id,
+            se.subject_id,
+            se.day_of_week,
+            se.start_time,
+            se.end_time
+        FROM sessions se
+        JOIN manager_tutors mt
+          ON mt.tutor_id=se.tutor_id
+         AND mt.manager_id=?
+        JOIN tutors t ON t.id=se.tutor_id
+        JOIN subjects sub ON sub.id=se.subject_id
+        WHERE se.active=1
+          {scope_sql}
+        ORDER BY se.day_of_week, se.start_time
+    """, [manager_id] + scope_params)
+
+    schedule_rows = cur.fetchall()
+
+    # Assignments uploaded by each tutor in the selected subject/month.
+    cur.execute(f"""
+        SELECT
+            m.id AS material_id,
+            m.tutor_id,
+            m.subject_id,
+            m.title,
+            m.due_date,
+            m.created_at
+        FROM materials m
+        JOIN manager_tutors mt
+          ON mt.tutor_id=m.tutor_id
+         AND mt.manager_id=?
+        JOIN tutors t ON t.id=m.tutor_id
+        JOIN subjects sub ON sub.id=m.subject_id
+        WHERE substr(m.month,1,7)=?
+          AND (m.is_assignment=1 OR m.kind='assignment')
+          {scope_sql}
+        ORDER BY
+            CASE
+                WHEN m.due_date IS NULL OR TRIM(m.due_date)='' THEN 1
+                ELSE 0
+            END,
+            m.due_date,
+            m.created_at
+    """, [manager_id, month] + scope_params)
+
+    assignment_rows = cur.fetchall()
+
+    cur.execute(f"""
+        SELECT
+            m.id AS material_id,
+            m.tutor_id,
+            m.subject_id,
+            subm.student_id,
+            subm.submitted_at
+        FROM submissions subm
+        JOIN materials m ON m.id=subm.material_id
+        JOIN manager_tutors mt
+          ON mt.tutor_id=m.tutor_id
+         AND mt.manager_id=?
+        JOIN tutors t ON t.id=m.tutor_id
+        JOIN subjects sub ON sub.id=m.subject_id
+        WHERE substr(m.month,1,7)=?
+          AND (m.is_assignment=1 OR m.kind='assignment')
+          {scope_sql}
+    """, [manager_id, month] + scope_params)
+
+    submission_rows = cur.fetchall()
+    conn.close()
+
+    sessions_by_scope = {}
+    for row in captured_sessions:
+        key = (int(row["tutor_id"]), int(row["subject_id"]))
+        sessions_by_scope.setdefault(key, []).append(row)
+
+    present_by_learner = {}
+    for row in attendance_presence_rows:
+        key = (
+            int(row["tutor_id"]),
+            int(row["subject_id"]),
+            int(row["student_id"])
+        )
+        present_by_learner.setdefault(key, set()).add(
+            int(row["attendance_session_id"])
+        )
+
+    schedule_by_scope = {}
+    for row in schedule_rows:
+        key = (int(row["tutor_id"]), int(row["subject_id"]))
+        try:
+            day_index = int(row["day_of_week"])
+            day_label = DOW[day_index] if 0 <= day_index < len(DOW) else "—"
+        except Exception:
+            day_label = "—"
+
+        time_label = escape(row["start_time"] or "—")
+        if row["end_time"]:
+            time_label += f"–{escape(row['end_time'])}"
+
+        label = f"{day_label} {time_label}"
+        schedule_by_scope.setdefault(key, [])
+        if label not in schedule_by_scope[key]:
+            schedule_by_scope[key].append(label)
+
+    assignments_by_scope = {}
+    for row in assignment_rows:
+        key = (int(row["tutor_id"]), int(row["subject_id"]))
+        assignments_by_scope.setdefault(key, []).append(row)
+
+    submitted_ids_by_learner = {}
+    for row in submission_rows:
+        key = (
+            int(row["tutor_id"]),
+            int(row["subject_id"]),
+            int(row["student_id"])
+        )
+        submitted_ids_by_learner.setdefault(key, set()).add(
+            int(row["material_id"])
+        )
+
+    def _parse_date(value):
+        if not value:
+            return None
+        raw = str(value).strip()[:10]
+        try:
+            return datetime.date.fromisoformat(raw)
+        except Exception:
+            return None
+
+    def _format_session(row):
+        date_obj = _parse_date(row["date"])
+        if date_obj:
+            label = date_obj.strftime("%a %d %b %Y")
+        else:
+            label = escape(row["date"] or "Unknown date")
+
+        if row["start_time"]:
+            label += f" · {escape(row['start_time'])}"
+
+        return label
+
+    def _format_assignment(row):
+        title = escape(row["title"] or "Untitled assignment")
+        due_obj = _parse_date(row["due_date"])
+
+        if due_obj:
+            due_label = due_obj.strftime("%d %b %Y")
+        else:
+            due_label = "No due date"
+
+        return f"{title} · Due {due_label}"
+
+    analytics_rows = []
+
+    for learner in learner_scope_rows:
+        tutor_id = int(learner["tutor_id"])
+        subject_id = int(learner["subject_id"])
+        student_id = int(learner["student_id"])
+
+        scope_key = (tutor_id, subject_id)
+        learner_key = (tutor_id, subject_id, student_id)
+
+        enrollment_date = _parse_date(learner["enrollment_created_at"])
+
+        eligible_sessions = []
+        for session_row in sessions_by_scope.get(scope_key, []):
+            session_date = _parse_date(session_row["date"])
+            if enrollment_date and session_date and session_date < enrollment_date:
+                continue
+            eligible_sessions.append(session_row)
+
+        present_session_ids = present_by_learner.get(learner_key, set())
+
+        attended_sessions = [
+            row for row in eligible_sessions
+            if int(row["attendance_session_id"]) in present_session_ids
+        ]
+        missed_sessions = [
+            row for row in eligible_sessions
+            if int(row["attendance_session_id"]) not in present_session_ids
+        ]
+
+        assignment_scope = []
+        for assignment in assignments_by_scope.get(scope_key, []):
+            assignment_created = _parse_date(assignment["created_at"])
+            due_date = _parse_date(assignment["due_date"])
+
+            # Do not penalise a learner for work that was already due before
+            # their enrolment started.
+            if (
+                enrollment_date
+                and due_date
+                and due_date < enrollment_date
+                and assignment_created
+                and assignment_created < enrollment_date
+            ):
+                continue
+
+            assignment_scope.append(assignment)
+
+        submitted_material_ids = submitted_ids_by_learner.get(
+            learner_key,
+            set()
+        )
+
+        submitted_assignments = []
+        missing_assignments = []
+        upcoming_assignments = []
+
+        for assignment in assignment_scope:
+            material_id = int(assignment["material_id"])
+
+            if material_id in submitted_material_ids:
+                submitted_assignments.append(assignment)
+                continue
+
+            due_date = _parse_date(assignment["due_date"])
+
+            if due_date and due_date > today_obj:
+                upcoming_assignments.append(assignment)
+            else:
+                missing_assignments.append(assignment)
+
+        session_count = len(eligible_sessions)
+        attended_count = len(attended_sessions)
+        missed_count = len(missed_sessions)
+
+        assignment_count = len(assignment_scope)
+        submitted_count = len(submitted_assignments)
+        missing_count = len(missing_assignments)
+        upcoming_count = len(upcoming_assignments)
+
+        attendance_rate = (
+            round((attended_count / session_count) * 100)
+            if session_count
+            else None
+        )
+
+        actionable_assignment_count = submitted_count + missing_count
+
+        assignment_rate = (
+            round((submitted_count / actionable_assignment_count) * 100)
+            if actionable_assignment_count
+            else None
+        )
+
+        attendance_issue = missed_count > 0
+        assignment_issue = missing_count > 0
+
+        if attendance_issue and assignment_issue:
+            issue_code = "BOTH"
+            issue_label = "Attendance & Assignments"
+            issue_class = "lapsed"
+            risk_rank = 4
+        elif attendance_issue:
+            issue_code = "ATTENDANCE"
+            issue_label = "Attendance Concern"
+            issue_class = "pending"
+            risk_rank = 3
+        elif assignment_issue:
+            issue_code = "ASSIGNMENTS"
+            issue_label = "Assignment Concern"
+            issue_class = "pending"
+            risk_rank = 2
+        else:
+            issue_code = "CLEAR"
+            issue_label = "No Current Concern"
+            issue_class = "active"
+            risk_rank = 1
+
+        analytics_rows.append({
+            "tutor_id": tutor_id,
+            "tutor_name": learner["tutor_name"],
+            "subject_id": subject_id,
+            "subject_name": learner["subject_name"],
+            "grade": learner["grade"],
+            "student_id": student_id,
+            "student_name": learner["student_name"],
+            "phone_whatsapp": learner["phone_whatsapp"],
+            "guardian_name": learner["guardian_name"],
+            "guardian_phone": learner["guardian_phone"],
+            "email": learner["email"],
+            "schedule": schedule_by_scope.get(scope_key, []),
+            "session_count": session_count,
+            "attended_count": attended_count,
+            "missed_count": missed_count,
+            "attendance_rate": attendance_rate,
+            "missed_sessions": missed_sessions,
+            "assignment_count": assignment_count,
+            "actionable_assignment_count": actionable_assignment_count,
+            "submitted_count": submitted_count,
+            "missing_count": missing_count,
+            "upcoming_count": upcoming_count,
+            "assignment_rate": assignment_rate,
+            "missing_assignments": missing_assignments,
+            "upcoming_assignments": upcoming_assignments,
+            "issue_code": issue_code,
+            "issue_label": issue_label,
+            "issue_class": issue_class,
+            "risk_rank": risk_rank
+        })
+
+    analytics_rows.sort(
+        key=lambda item: (
+            -item["risk_rank"],
+            -item["missed_count"],
+            -item["missing_count"],
+            str(item["tutor_name"] or "").lower(),
+            str(item["subject_name"] or "").lower(),
+            str(item["student_name"] or "").lower()
+        )
+    )
+
+    # Summary is based on the selected tutor/subject/search scope before
+    # applying the issue-status filter.
+    unique_student_ids = {row["student_id"] for row in analytics_rows}
+    at_risk_student_ids = {
+        row["student_id"]
+        for row in analytics_rows
+        if row["issue_code"] != "CLEAR"
+    }
+
+    total_session_opportunities = sum(
+        row["session_count"] for row in analytics_rows
+    )
+    total_attended_occurrences = sum(
+        row["attended_count"] for row in analytics_rows
+    )
+    total_missed_occurrences = sum(
+        row["missed_count"] for row in analytics_rows
+    )
+
+    total_assignment_opportunities = sum(
+        row["actionable_assignment_count"] for row in analytics_rows
+    )
+    total_submitted_occurrences = sum(
+        row["submitted_count"] for row in analytics_rows
+    )
+    total_missing_occurrences = sum(
+        row["missing_count"] for row in analytics_rows
+    )
+
+    overall_attendance_rate = (
+        round(
+            (total_attended_occurrences / total_session_opportunities) * 100
+        )
+        if total_session_opportunities
+        else 0
+    )
+
+    overall_assignment_rate = (
+        round(
+            (total_submitted_occurrences / total_assignment_opportunities)
+            * 100
+        )
+        if total_assignment_opportunities
+        else 0
+    )
+
+    if issue_filter == "ATTENTION":
+        visible_rows = [
+            row for row in analytics_rows
+            if row["issue_code"] != "CLEAR"
+        ]
+    elif issue_filter == "ALL":
+        visible_rows = list(analytics_rows)
+    else:
+        visible_rows = [
+            row for row in analytics_rows
+            if row["issue_code"] == issue_filter
+        ]
+
+    total_visible = len(visible_rows)
+    total_pages = max(1, (total_visible + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+
+    offset = (page_num - 1) * per_page
+    page_rows = visible_rows[offset:offset + per_page]
+
+    def _detail_list(items, formatter, empty_text):
+        if not items:
+            return f"<span class='mini muted'>{escape(empty_text)}</span>"
+
+        item_html = "".join(
+            f"<li>{formatter(item)}</li>"
+            for item in items
+        )
+
+        if len(items) <= 3:
+            return f"<ul class='tm-engagement-detail-list'>{item_html}</ul>"
+
+        preview_html = "".join(
+            f"<li>{formatter(item)}</li>"
+            for item in items[:2]
+        )
+
+        return f"""
+        <ul class="tm-engagement-detail-list tm-engagement-preview">
+            {preview_html}
+        </ul>
+        <details class="tm-engagement-more">
+            <summary>View all {len(items)}</summary>
+            <ul class="tm-engagement-detail-list">
+                {item_html}
+            </ul>
+        </details>
+        """
+
+    table_rows = ""
+
+    for item in page_rows:
+        schedule_html = (
+            "".join(
+                f"<span class='tm-engagement-schedule-chip'>{escape(label)}</span>"
+                for label in item["schedule"]
+            )
+            if item["schedule"]
+            else "<span class='mini muted'>No recurring timetable</span>"
+        )
+
+        if item["session_count"]:
+            attendance_rate_html = (
+                f"<span class='chip "
+                f"{'active' if item['attendance_rate'] >= 75 else 'pending' if item['attendance_rate'] >= 50 else 'lapsed'}'>"
+                f"{item['attendance_rate']}%</span>"
+            )
+        else:
+            attendance_rate_html = (
+                "<span class='chip'>No classes captured</span>"
+            )
+
+        if item["actionable_assignment_count"]:
+            assignment_rate_html = (
+                f"<span class='chip "
+                f"{'active' if item['assignment_rate'] >= 75 else 'pending' if item['assignment_rate'] >= 50 else 'lapsed'}'>"
+                f"{item['assignment_rate']}%</span>"
+            )
+        elif item["assignment_count"]:
+            assignment_rate_html = (
+                "<span class='chip'>Not due yet</span>"
+            )
+        else:
+            assignment_rate_html = (
+                "<span class='chip'>No assignments</span>"
+            )
+
+        missed_sessions_html = _detail_list(
+            item["missed_sessions"],
+            _format_session,
+            "No missed captured sessions"
+        )
+
+        missing_assignments_html = _detail_list(
+            item["missing_assignments"],
+            _format_assignment,
+            "No overdue/outstanding assignments"
+        )
+
+        upcoming_html = ""
+        if item["upcoming_count"]:
+            upcoming_html = f"""
+            <div class="mini muted tm-engagement-upcoming">
+                {item['upcoming_count']} upcoming assignment(s) not due yet
+            </div>
+            """
+
+        table_rows += f"""
+        <tr>
+            <td data-label="Tutor & Subject"
+                class="tm-engagement-scope-cell">
+                <strong>{escape(item['tutor_name'] or '—')}</strong>
+                <div class="tm-engagement-subject">
+                    {escape(grade_label(item['grade']))}
+                    ·
+                    {escape(item['subject_name'] or '—')}
+                </div>
+                <a class="btn mini secondary tm-engagement-open-tutor"
+                   href="/manager/tutor/{item['tutor_id']}?month={month}">
+                    Open Tutor
+                </a>
+            </td>
+
+            <td data-label="Learner"
+                class="tm-engagement-learner-cell">
+                <strong>{escape(item['student_name'] or '—')}</strong>
+                <div class="mini muted">
+                    Learner: {escape(item['phone_whatsapp'] or '—')}
+                </div>
+                <div class="mini muted">
+                    Guardian:
+                    {escape(item['guardian_name'] or '—')}
+                    ·
+                    {escape(item['guardian_phone'] or '—')}
+                </div>
+                <div class="mini muted tm-engagement-email">
+                    {escape(item['email'] or '—')}
+                </div>
+            </td>
+
+            <td data-label="Normal Schedule">
+                <div class="tm-engagement-schedule">
+                    {schedule_html}
+                </div>
+            </td>
+
+            <td data-label="Attendance">
+                <div class="tm-engagement-metric-row">
+                    {attendance_rate_html}
+                    <strong>
+                        {item['attended_count']}/{item['session_count']} attended
+                    </strong>
+                </div>
+                <div class="mini muted" style="margin-top:4px">
+                    Missed {item['missed_count']} time(s)
+                </div>
+            </td>
+
+            <td data-label="Missed Session Dates">
+                {missed_sessions_html}
+            </td>
+
+            <td data-label="Assignments">
+                <div class="tm-engagement-metric-row">
+                    {assignment_rate_html}
+                    <strong>
+                        {item['submitted_count']}/{item['assignment_count']} submitted
+                    </strong>
+                </div>
+                <div class="mini muted" style="margin-top:4px">
+                    Missing {item['missing_count']} assignment(s)
+                </div>
+                {upcoming_html}
+            </td>
+
+            <td data-label="Missing Assignments">
+                {missing_assignments_html}
+            </td>
+
+            <td data-label="Concern">
+                <span class="chip {item['issue_class']}">
+                    {escape(item['issue_label'])}
+                </span>
+            </td>
+        </tr>
+        """
+
+    if not table_rows:
+        table_rows = """
+        <tr class="tm-engagement-empty-row">
+            <td colspan="8">
+                <div class="empty">
+                    No learner records match the selected filters.
+                </div>
+            </td>
+        </tr>
+        """
+
+    tutor_options = '<option value="">All My Tutors</option>'
+    for tutor in assigned_tutors:
+        selected = (
+            "selected"
+            if selected_tutor_id == int(tutor["id"])
+            else ""
+        )
+        tutor_options += (
+            f"<option value='{tutor['id']}' {selected}>"
+            f"{escape(tutor['full_name'])}"
+            f"</option>"
+        )
+
+    subject_options = '<option value="">All Subjects</option>'
+    for subject in available_subjects:
+        selected = (
+            "selected"
+            if selected_subject_id == int(subject["id"])
+            else ""
+        )
+        subject_options += (
+            f"<option value='{subject['id']}' {selected}>"
+            f"{escape(grade_label(subject['grade']))} · "
+            f"{escape(subject['name'])}"
+            f"</option>"
+        )
+
+    issue_options = [
+        ("ATTENTION", "Needs Attention"),
+        ("BOTH", "Attendance & Assignment Concerns"),
+        ("ATTENDANCE", "Attendance Concerns"),
+        ("ASSIGNMENTS", "Assignment Concerns"),
+        ("CLEAR", "No Current Concerns"),
+        ("ALL", "All Learners"),
+    ]
+
+    issue_options_html = "".join(
+        f"<option value='{code}' "
+        f"{'selected' if issue_filter == code else ''}>"
+        f"{escape(label)}</option>"
+        for code, label in issue_options
+    )
+
+    pagination = pagination_controls(
+        "/manager/learner-engagement",
+        page_num,
+        total_pages,
+        {
+            "month": month,
+            "tutor_id": selected_tutor_id or "",
+            "subject_id": selected_subject_id or "",
+            "issue": issue_filter,
+            "q": query
+        }
+    )
+
+    body = f"""
+    {manager_compact_ui_styles()}
+    {manager_nav()}
+
+    <style>
+        .tm-engagement-hero {{
+            position:relative;
+            overflow:hidden;
+            margin-bottom:14px;
+            padding:21px;
+            border-radius:20px;
+            color:#fff;
+            background:
+                linear-gradient(135deg,#0d4325,#176b3a 62%,#24854b);
+            box-shadow:0 15px 34px rgba(13,67,37,.19);
+        }}
+
+        .tm-engagement-hero::after {{
+            content:"";
+            position:absolute;
+            width:210px;
+            height:210px;
+            right:-72px;
+            top:-104px;
+            border-radius:50%;
+            background:rgba(227,173,36,.18);
+        }}
+
+        .tm-engagement-hero-content {{
+            position:relative;
+            z-index:1;
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:15px;
+            flex-wrap:wrap;
+        }}
+
+        .tm-engagement-hero h1 {{
+            margin:0;
+            color:#fff;
+        }}
+
+        .tm-engagement-hero h1::after {{
+            background:linear-gradient(90deg,#fff,#f3d277) !important;
+        }}
+
+        .tm-engagement-hero p {{
+            max-width:830px;
+            margin:8px 0 0;
+            color:rgba(255,255,255,.88);
+            line-height:1.5;
+        }}
+
+        .tm-engagement-hero-badge {{
+            position:relative;
+            z-index:1;
+            display:inline-flex;
+            padding:8px 11px;
+            border:1px solid rgba(255,255,255,.27);
+            border-radius:999px;
+            background:rgba(255,255,255,.13);
+            color:#fff;
+            font-size:11px;
+            font-weight:850;
+            white-space:nowrap;
+        }}
+
+        .tm-engagement-filter-card {{
+            margin-bottom:14px;
+        }}
+
+        .tm-engagement-filter-grid {{
+            display:grid;
+            grid-template-columns:145px minmax(190px,1fr) minmax(190px,1fr) 190px minmax(220px,1.2fr) auto;
+            gap:9px;
+            align-items:end;
+        }}
+
+        .tm-engagement-filter-field {{
+            min-width:0;
+        }}
+
+        .tm-engagement-filter-field label {{
+            display:block;
+            margin-bottom:5px;
+            font-size:10px;
+            font-weight:850;
+            letter-spacing:.04em;
+            text-transform:uppercase;
+        }}
+
+        .tm-engagement-filter-field input,
+        .tm-engagement-filter-field select {{
+            width:100%;
+            margin:0;
+        }}
+
+        .tm-engagement-filter-actions {{
+            display:flex;
+            gap:7px;
+            align-items:center;
+        }}
+
+        .tm-engagement-filter-actions .btn {{
+            min-height:44px;
+            white-space:nowrap;
+        }}
+
+        .tm-engagement-stats {{
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(145px,1fr));
+            gap:9px;
+            margin:0 0 14px;
+        }}
+
+        .tm-engagement-stat {{
+            position:relative;
+            overflow:hidden;
+            min-height:78px;
+            padding:12px;
+            border:1px solid #d8e8dd;
+            border-radius:14px;
+            background:linear-gradient(145deg,#fff,#f3faf5);
+        }}
+
+        .tm-engagement-stat strong {{
+            display:block;
+            color:#145f34;
+            font-size:22px;
+            line-height:1.05;
+        }}
+
+        .tm-engagement-stat span {{
+            display:block;
+            margin-top:5px;
+            color:#67786e;
+            font-size:10px;
+            font-weight:800;
+            letter-spacing:.035em;
+            text-transform:uppercase;
+        }}
+
+        .tm-engagement-note {{
+            display:flex;
+            align-items:flex-start;
+            gap:9px;
+            margin-bottom:13px;
+            padding:11px 12px;
+            border:1px solid #ead28a;
+            border-radius:13px;
+            background:#fff9e8;
+            color:#684d0d;
+            font-size:11.5px;
+            line-height:1.45;
+        }}
+
+        .tm-engagement-note strong {{
+            white-space:nowrap;
+        }}
+
+        .tm-engagement-table-shell {{
+            width:100%;
+            max-width:100%;
+            overflow-x:auto;
+            border:1px solid #d8e8dd;
+            border-radius:16px;
+            background:#fff;
+            -webkit-overflow-scrolling:touch;
+        }}
+
+        .tm-engagement-table {{
+            width:100%;
+            min-width:1500px;
+            table-layout:fixed;
+            border:0 !important;
+            border-radius:0 !important;
+            box-shadow:none !important;
+        }}
+
+        .tm-engagement-table th {{
+            padding:10px;
+            white-space:nowrap;
+            vertical-align:middle;
+            font-size:10.5px;
+        }}
+
+        .tm-engagement-table td {{
+            padding:11px 10px;
+            vertical-align:top;
+            white-space:normal;
+            word-break:normal;
+            overflow-wrap:anywhere;
+            line-height:1.32;
+        }}
+
+        .tm-engagement-table th:nth-child(1),
+        .tm-engagement-table td:nth-child(1) {{
+            width:14%;
+        }}
+
+        .tm-engagement-table th:nth-child(2),
+        .tm-engagement-table td:nth-child(2) {{
+            width:16%;
+        }}
+
+        .tm-engagement-table th:nth-child(3),
+        .tm-engagement-table td:nth-child(3) {{
+            width:11%;
+        }}
+
+        .tm-engagement-table th:nth-child(4),
+        .tm-engagement-table td:nth-child(4) {{
+            width:11%;
+        }}
+
+        .tm-engagement-table th:nth-child(5),
+        .tm-engagement-table td:nth-child(5) {{
+            width:15%;
+        }}
+
+        .tm-engagement-table th:nth-child(6),
+        .tm-engagement-table td:nth-child(6) {{
+            width:12%;
+        }}
+
+        .tm-engagement-table th:nth-child(7),
+        .tm-engagement-table td:nth-child(7) {{
+            width:15%;
+        }}
+
+        .tm-engagement-table th:nth-child(8),
+        .tm-engagement-table td:nth-child(8) {{
+            width:6%;
+        }}
+
+        .tm-engagement-scope-cell strong,
+        .tm-engagement-learner-cell strong {{
+            display:block;
+            color:#173421;
+            font-size:13px;
+        }}
+
+        .tm-engagement-subject {{
+            margin-top:4px;
+            color:#607168;
+            font-size:10.5px;
+        }}
+
+        .tm-engagement-open-tutor {{
+            margin-top:8px;
+        }}
+
+        .tm-engagement-email {{
+            word-break:break-word;
+        }}
+
+        .tm-engagement-schedule {{
+            display:flex;
+            flex-wrap:wrap;
+            gap:5px;
+        }}
+
+        .tm-engagement-schedule-chip {{
+            display:inline-flex;
+            padding:4px 7px;
+            border:1px solid #cfe2d4;
+            border-radius:999px;
+            color:#185f34;
+            background:#f1f9f3;
+            font-size:9.5px;
+            font-weight:800;
+            white-space:nowrap;
+        }}
+
+        .tm-engagement-metric-row {{
+            display:flex;
+            align-items:center;
+            gap:6px;
+            flex-wrap:wrap;
+        }}
+
+        .tm-engagement-metric-row strong {{
+            font-size:11px;
+            color:#263b2d;
+        }}
+
+        .tm-engagement-detail-list {{
+            margin:0;
+            padding-left:17px;
+            color:#33483a;
+            font-size:10px;
+            line-height:1.4;
+        }}
+
+        .tm-engagement-detail-list li + li {{
+            margin-top:3px;
+        }}
+
+        .tm-engagement-more {{
+            margin-top:5px;
+            border:0 !important;
+            box-shadow:none !important;
+        }}
+
+        .tm-engagement-more summary {{
+            display:inline-flex;
+            padding:3px 6px;
+            color:#176b3a;
+            background:#eff8f1;
+            border-radius:999px;
+            font-size:9.5px;
+            font-weight:850;
+        }}
+
+        .tm-engagement-more[open] summary {{
+            margin-bottom:5px;
+        }}
+
+        .tm-engagement-upcoming {{
+            margin-top:5px;
+        }}
+
+        .tm-engagement-empty-row td {{
+            padding:18px;
+        }}
+
+        @media(max-width:1180px) {{
+            .tm-engagement-filter-grid {{
+                grid-template-columns:repeat(3,minmax(0,1fr));
+            }}
+
+            .tm-engagement-filter-actions {{
+                grid-column:1 / -1;
+            }}
+        }}
+
+        @media(max-width:720px) {{
+            .tm-engagement-hero {{
+                padding:17px;
+                border-radius:17px;
+            }}
+
+            .tm-engagement-filter-grid {{
+                grid-template-columns:1fr;
+            }}
+
+            .tm-engagement-filter-actions {{
+                grid-column:auto;
+                display:grid;
+                grid-template-columns:1fr 1fr;
+            }}
+
+            .tm-engagement-filter-actions .btn {{
+                width:100%;
+            }}
+
+            .tm-engagement-note {{
+                display:block;
+            }}
+
+            .tm-engagement-note strong {{
+                display:block;
+                margin-bottom:3px;
+            }}
+
+            .tm-engagement-table-shell {{
+                overflow:visible;
+                border:0;
+                background:transparent;
+            }}
+
+            .tm-engagement-table {{
+                display:block;
+                width:100%;
+                min-width:0;
+                background:transparent;
+            }}
+
+            .tm-engagement-table thead {{
+                display:none;
+            }}
+
+            .tm-engagement-table tbody {{
+                display:block;
+                width:100%;
+            }}
+
+            .tm-engagement-table tr {{
+                display:block;
+                width:100%;
+                margin:0 0 13px;
+                padding:12px;
+                border:1px solid #d8e8dd;
+                border-radius:15px;
+                background:#fff;
+                box-shadow:0 5px 14px rgba(12,72,37,.06);
+            }}
+
+            .tm-engagement-table td {{
+                display:grid;
+                grid-template-columns:112px minmax(0,1fr);
+                gap:10px;
+                width:100% !important;
+                padding:8px 0;
+                border:0;
+                border-bottom:1px solid #edf3ef;
+            }}
+
+            .tm-engagement-table td::before {{
+                content:attr(data-label);
+                color:#52665a;
+                font-size:9.5px;
+                font-weight:900;
+                letter-spacing:.04em;
+                text-transform:uppercase;
+            }}
+
+            .tm-engagement-table td:last-child {{
+                border-bottom:0;
+            }}
+
+            .tm-engagement-scope-cell,
+            .tm-engagement-learner-cell {{
+                grid-template-columns:1fr !important;
+            }}
+
+            .tm-engagement-scope-cell::before,
+            .tm-engagement-learner-cell::before {{
+                margin-bottom:1px;
+            }}
+
+            .tm-engagement-empty-row {{
+                padding:0 !important;
+                border:0 !important;
+                box-shadow:none !important;
+                background:transparent !important;
+            }}
+
+            .tm-engagement-empty-row td {{
+                display:block;
+                padding:0;
+                border:0;
+            }}
+
+            .tm-engagement-empty-row td::before {{
+                display:none;
+            }}
+        }}
+
+        @media(max-width:430px) {{
+            .tm-engagement-filter-actions {{
+                grid-template-columns:1fr;
+            }}
+
+            .tm-engagement-table td {{
+                grid-template-columns:96px minmax(0,1fr);
+            }}
+        }}
+    </style>
+
+    <section class="tm-engagement-hero">
+        <div class="tm-engagement-hero-content">
+            <div>
+                <h1>Learner Engagement Monitor</h1>
+                <p>
+                    Monitor learner attendance and assignment submissions by tutor,
+                    subject and month. Missed class dates, recurring class days,
+                    missing assignment titles and frequency are shown below.
+                </p>
+            </div>
+
+            <span class="tm-engagement-hero-badge">
+                Tutor Manager Academic Monitoring
+            </span>
+        </div>
+    </section>
+
+    <section class="card tm-engagement-filter-card">
+        <form method="get"
+              action="/manager/learner-engagement"
+              class="tm-engagement-filter-grid">
+
+            <div class="tm-engagement-filter-field">
+                <label>Month</label>
+                <input type="month"
+                       name="month"
+                       value="{escape(month)}">
+            </div>
+
+            <div class="tm-engagement-filter-field">
+                <label>Tutor</label>
+                <select name="tutor_id"
+                        onchange="this.form.submit()">
+                    {tutor_options}
+                </select>
+            </div>
+
+            <div class="tm-engagement-filter-field">
+                <label>Subject</label>
+                <select name="subject_id">
+                    {subject_options}
+                </select>
+            </div>
+
+            <div class="tm-engagement-filter-field">
+                <label>Concern</label>
+                <select name="issue">
+                    {issue_options_html}
+                </select>
+            </div>
+
+            <div class="tm-engagement-filter-field">
+                <label>Search Learner</label>
+                <input name="q"
+                       value="{escape(query)}"
+                       placeholder="Learner, phone, guardian, tutor or subject">
+            </div>
+
+            <div class="tm-engagement-filter-actions">
+                <button class="btn">Apply</button>
+                <a class="btn secondary"
+                   href="/manager/learner-engagement?month={escape(month)}">
+                    Clear
+                </a>
+            </div>
+        </form>
+    </section>
+
+    <section class="tm-engagement-stats">
+        <div class="tm-engagement-stat">
+            <strong>{len(unique_student_ids)}</strong>
+            <span>Learners Monitored</span>
+        </div>
+
+        <div class="tm-engagement-stat">
+            <strong>{len(at_risk_student_ids)}</strong>
+            <span>Learners Needing Attention</span>
+        </div>
+
+        <div class="tm-engagement-stat">
+            <strong>{overall_attendance_rate}%</strong>
+            <span>Attendance Rate</span>
+        </div>
+
+        <div class="tm-engagement-stat">
+            <strong>{total_missed_occurrences}</strong>
+            <span>Missed Session Occurrences</span>
+        </div>
+
+        <div class="tm-engagement-stat">
+            <strong>{overall_assignment_rate}%</strong>
+            <span>Due Assignment Submission Rate</span>
+        </div>
+
+        <div class="tm-engagement-stat">
+            <strong>{total_missing_occurrences}</strong>
+            <span>Missing Assignments</span>
+        </div>
+    </section>
+
+    <div class="tm-engagement-note">
+        <strong>How attendance is calculated:</strong>
+        <span>
+            A learner is marked absent only where the tutor captured that class
+            as having taken place. Sessions that the tutor did not capture are
+            not treated as learner absences. Future assignment deadlines are
+            shown separately and are not counted as missing yet.
+        </span>
+    </div>
+
+    <section class="card">
+        <div style="
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:12px;
+            flex-wrap:wrap;
+            margin-bottom:10px;
+        ">
+            <div>
+                <h2 style="margin:0">
+                    Learner Concerns — {pretty_month_label(month)}
+                </h2>
+                <div class="mini muted" style="margin-top:4px">
+                    Showing {total_visible} tutor-subject learner record(s)
+                    matching the concern filter.
+                </div>
+            </div>
+
+            <span class="chip">
+                Page {page_num} of {total_pages}
+            </span>
+        </div>
+
+        {pagination}
+
+        <div class="tm-engagement-table-shell">
+            <table class="tm-engagement-table">
+                <thead>
+                    <tr>
+                        <th>Tutor & Subject</th>
+                        <th>Learner</th>
+                        <th>Normal Schedule</th>
+                        <th>Attendance</th>
+                        <th>Missed Session Dates</th>
+                        <th>Assignments</th>
+                        <th>Missing Assignments</th>
+                        <th>Concern</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {table_rows}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination}
+    </section>
+    """
+
+    return page("Learner Engagement Monitor", body)
+
+
 @app.get('/manager/tutors')
 def manager_tutors():
 
@@ -39790,7 +41293,13 @@ def manager_view_tutor(tid):
     <section class="grid">
 
         <div class="card">
-            <a href="/manager/tutors" class="btn mini secondary">← Back</a>
+            <div class="toolbar" style="margin:0 0 8px">
+                <a href="/manager/tutors" class="btn mini secondary">← Back</a>
+                <a href="/manager/learner-engagement?tutor_id={tid}&month={month}"
+                   class="btn mini success">
+                    Learner Engagement
+                </a>
+            </div>
 
             <h1 style="margin-top:10px">{tutor['full_name']}</h1>
             {month_selector}
