@@ -14296,6 +14296,17 @@ document.addEventListener("DOMContentLoaded", function () {
 
         payload.append("file", uploadPart, file.name || "proof-of-payment");
 
+        // Tell the server which staged files are still visible on this form.
+        // Old files left behind by a refresh or failed attempt must not count.
+        payload.append(
+            "current_tokens",
+            JSON.stringify(
+                window.ebtaStagedPopUploads.map(function (item) {
+                    return item.token;
+                })
+            )
+        );
+
         const response = await fetch("/register/stage-pop", {
             method: "POST",
             body: payload
@@ -14324,9 +14335,15 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     async function handleSelectedFiles(input) {
+        if (input.dataset.ebtaStageBusy === "1") {
+            return;
+        }
+
         const selectedFiles = Array.from(input.files || []);
 
         if (!selectedFiles.length) return;
+
+        input.dataset.ebtaStageBusy = "1";
 
         if (
             window.ebtaStagedPopUploads.length +
@@ -14334,7 +14351,7 @@ document.addEventListener("DOMContentLoaded", function () {
         ) {
             input.value = "";
             showStageStatus(
-                "You can attach a maximum of two proof-of-payment files.",
+                "Two proof-of-payment files are already attached.",
                 "error"
             );
             return;
@@ -14393,8 +14410,6 @@ document.addEventListener("DOMContentLoaded", function () {
                 // The staged server copy is still safe.
             }
 
-            input.dispatchEvent(new Event("change", {bubbles: true}));
-
             window.ebtaPopUploadInProgress =
                 Math.max(0, window.ebtaPopUploadInProgress - 1);
 
@@ -14402,6 +14417,8 @@ document.addEventListener("DOMContentLoaded", function () {
                 submitButton.disabled = false;
                 submitButton.textContent = "Submit Enrollment";
             }
+
+            input.dataset.ebtaStageBusy = "";
         }
     }
 
@@ -15503,11 +15520,48 @@ def register_stage_pop():
 
     entries = staged_enrollment_entries()
 
-    # Remove session entries whose physical temporary file has expired.
+    # The page sends only the tokens that are still displayed on the current
+    # form. Anything else belongs to an abandoned, refreshed or failed upload
+    # attempt and must not count towards the two-file limit.
+    current_tokens_raw = request.form.get("current_tokens", "[]")
+
+    try:
+        current_tokens = json.loads(current_tokens_raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        current_tokens = []
+
+    if not isinstance(current_tokens, list):
+        current_tokens = []
+
+    current_tokens = {
+        str(token).strip()
+        for token in current_tokens
+        if str(token).strip()
+    }
+
     live_entries = []
+
     for entry in entries:
-        if staged_enrollment_source_path(entry.get("token")):
+        token = str(entry.get("token", "")).strip()
+        source = staged_enrollment_source_path(token)
+
+        keep_entry = (
+            token
+            and token in current_tokens
+            and source
+            and source.exists()
+        )
+
+        if keep_entry:
             live_entries.append(entry)
+            continue
+
+        # Best-effort removal of a stale temporary file.
+        if source:
+            try:
+                source.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     entries = live_entries
     session["staged_enrollment_pop_files"] = entries
@@ -15516,7 +15570,10 @@ def register_stage_pop():
     if len(entries) >= 2:
         return {
             "ok": False,
-            "message": "A maximum of two proof-of-payment files is allowed."
+            "message": (
+                "Two proof-of-payment files are already attached. "
+                "Remove one before adding another."
+            )
         }, 400
 
     try:
