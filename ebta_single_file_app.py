@@ -61372,7 +61372,7 @@ def admission_enrollments():
             e.pop_url,
             e.amount_paid,
             e.created_at,
-            
+
             e.coupon_code,
             e.coupon_discount_amount,
             e.coupon_type,
@@ -61415,34 +61415,40 @@ def admission_enrollments():
     trs = ""
 
     for row in rows:
+        period_html = active_enrollment_period_badge_for_student_subject(
+            row["student_id"],
+            row["subject_id"],
+            month
+        )
+
+        is_returning = bool(
+            row["previous_month_count"]
+            and int(row["previous_month_count"]) > 0
+        )
+        history_label = "Returning student" if is_returning else "First month"
+        history_class = "pending" if is_returning else "active"
+
         pop_link = "—"
-        period_html = active_enrollment_period_badge_for_student_subject(row['student_id'], row['subject_id'], month)
-        
-        history_label = "First month"
+        if row["pop_url"]:
+            pop_link = (
+                f"<a class='admission-pop-link' target='_blank' "
+                f"href='{escape(row['pop_url'])}'>View PoP</a>"
+            )
 
-        if row["previous_month_count"] and int(row["previous_month_count"]) > 0:
-            history_label = "Returning student"
+        amount = (
+            row["amount_paid"]
+            if row["amount_paid"] not in [None, ""]
+            else "—"
+        )
 
-        history_html = f"""
-        <span class="chip {'active' if history_label == 'First month' else 'pending'}">
-            {history_label}
-        </span>
-        <div class="mini muted">
-            First enrolled: {escape(row['first_enrolled_month'] or '—')}
-        </div>
+        coupon_html = """
+            <span class="admission-no-code">No code used</span>
         """
 
-
-        if row["pop_url"]:
-            pop_link = f"<a target='_blank' href='{escape(row['pop_url'])}'>PoP</a>"
-
-        amount = row["amount_paid"] if row["amount_paid"] not in [None, ""] else "—"
-        
-        
-        coupon_html = "<span class='mini muted'>No code used</span>"
-
         if row["coupon_code"]:
-            coupon_discount_amount = float(row["coupon_discount_amount"] or 0)
+            coupon_discount_amount = float(
+                row["coupon_discount_amount"] or 0
+            )
 
             coupon_type_label = row["coupon_type"] or "—"
 
@@ -61454,20 +61460,18 @@ def admission_enrollments():
                 coupon_type_label = "Manual Discount"
 
             coupon_html = f"""
-            <div>
-                <span class="chip" style="letter-spacing:1px">
+            <div class="admission-code-block">
+                <span class="chip admission-code-chip">
                     {escape(row['coupon_code'])}
                 </span>
-
-                <div class="mini muted" style="margin-top:4px">
-                    Type: {escape(coupon_type_label)}<br>
-                    Discount: R{coupon_discount_amount:,.2f}
-                </div>
+                <span class="admission-code-meta">
+                    {escape(coupon_type_label)} ·
+                    R{coupon_discount_amount:,.2f} discount
+                </span>
             </div>
-            """        
+            """
 
         status_class = "pending"
-
         if row["status"] == "ACTIVE":
             status_class = "active"
         elif row["status"] == "LAPSED":
@@ -61477,95 +61481,606 @@ def admission_enrollments():
 
         if approval_locked:
             actions = f"""
-            <div style="display:flex;gap:6px;flex-wrap:wrap">
-                <span class="mini muted">
-                    Approvals/rejections locked by High Admin
-                </span>
+            <div class="admission-enrollment-actions locked">
+                <div class="admission-lock-note">
+                    Approvals locked by High Admin
+                </div>
 
-                <form method="post" action="/admission/enrollment/{row['id']}/sms" style="display:inline">
-                    <button class="btn secondary mini">SMS Only</button>
+                <form method="post"
+                      action="/admission/enrollment/{row['id']}/sms">
+                    <button class="btn secondary mini">Send SMS</button>
                 </form>
             </div>
             """
         else:
             actions = f"""
-            <div style="display:flex;gap:6px;flex-wrap:wrap">
-
-                <form method="post" action="/admission/enrollment/{row['id']}/approve" style="display:inline">
-                    <button class="btn success mini">Approve Only</button>
+            <div class="admission-enrollment-actions">
+                <form method="post"
+                      action="/admission/enrollment/{row['id']}/approve">
+                    <button class="btn success mini"
+                            title="Approve this enrollment without sending an SMS">
+                        Approve
+                    </button>
                 </form>
 
-                <form method="post" action="/admission/enrollment/{row['id']}/approve_sms" style="display:inline">
-                    <button class="btn warn mini">Approve + SMS</button>
+                <form method="post"
+                      action="/admission/enrollment/{row['id']}/approve_sms">
+                    <button class="btn warn mini"
+                            title="Approve this enrollment and send login details by SMS">
+                        Approve + SMS
+                    </button>
                 </form>
 
-                <form method="post" action="/admission/enrollment/{row['id']}/sms" style="display:inline">
-                    <button class="btn secondary mini">SMS Only</button>
+                <form method="post"
+                      action="/admission/enrollment/{row['id']}/sms">
+                    <button class="btn secondary mini"
+                            title="Send the learner's login details by SMS">
+                        SMS Only
+                    </button>
                 </form>
 
-                <form method="post" action="/admission/enrollment/{row['id']}/lapse" style="display:inline"
+                <form method="post"
+                      action="/admission/enrollment/{row['id']}/lapse"
                       onsubmit="return confirm('Lapse this enrollment?');">
-                    <button class="btn danger mini">Lapse</button>
+                    <button class="btn danger mini">
+                        Lapse
+                    </button>
                 </form>
-
             </div>
             """
 
+        created_at = escape(
+            (row["created_at"] or "")[:16].replace("T", " ")
+        )
+        created_date = created_at[:10] if created_at else "—"
+        created_time = created_at[11:16] if len(created_at) >= 16 else ""
+
         trs += f"""
         <tr>
-            <td>
-                <strong>{escape(row['full_name'])}</strong>
-                <div class="mini muted">{escape(row['phone_whatsapp'] or '')}</div>
-            </td>
+            <td data-label="Student" class="admission-student-cell">
+                <strong class="admission-student-name">
+                    {escape(row['full_name'])}
+                </strong>
 
-            <td>{grade_label(row['grade'])}</td>
-
-            <td>
-                {escape(row['subject_name'])}
-                <div class="mini muted">{grade_label(row['subject_grade'])}</div>
-            </td>
-
-            <td>
-                <span class="chip {status_class}">
-                    {escape(row['status'])}
-                </span>
-            </td>
-
-            <td>{period_html}</td>
-
-            <td>{history_html}</td>
-
-            <td>{coupon_html}</td>
-
-            <td>{pop_link}</td>
-
-            <td>R{escape(str(amount))}</td>
-
-            <td>
-                <div class="mini muted">
-                    Guardian: {escape(row['guardian_name'] or '—')}<br>
-                    Guardian Phone: {escape(row['guardian_phone'] or '—')}<br>
-                    Email: {escape(row['email'] or '—')}
+                <div class="admission-inline-meta">
+                    <span>{escape(row['phone_whatsapp'] or '—')}</span>
+                    <span class="admission-grade-pill">
+                        {escape(grade_label(row['grade']))}
+                    </span>
                 </div>
             </td>
 
-            <td>{actions}</td>
+            <td data-label="Enrollment">
+                <strong class="admission-subject-name">
+                    {escape(row['subject_name'])}
+                </strong>
 
-            <td>{escape((row['created_at'] or '')[:16].replace('T',' '))}</td>
+                <div class="admission-inline-meta">
+                    <span>{escape(grade_label(row['subject_grade']))}</span>
+                    <span class="chip {status_class}">
+                        {escape(row['status'])}
+                    </span>
+                </div>
+            </td>
+
+            <td data-label="Period & History"
+                class="admission-period-history-cell">
+                <div class="admission-period-block">
+                    {period_html}
+                </div>
+
+                <div class="admission-history-row">
+                    <span class="chip {history_class}">
+                        {history_label}
+                    </span>
+                    <span class="admission-first-month">
+                        Since {escape(row['first_enrolled_month'] or '—')}
+                    </span>
+                </div>
+            </td>
+
+            <td data-label="Payment" class="admission-payment-cell">
+                <div class="admission-payment-top">
+                    <strong class="admission-amount">
+                        R{escape(str(amount))}
+                    </strong>
+                    {pop_link}
+                </div>
+
+                {coupon_html}
+            </td>
+
+            <td data-label="Contact" class="admission-contact-cell">
+                <div>
+                    <span class="admission-contact-label">Guardian</span>
+                    <strong>{escape(row['guardian_name'] or '—')}</strong>
+                </div>
+
+                <div class="admission-contact-line">
+                    {escape(row['guardian_phone'] or '—')}
+                </div>
+
+                <div class="admission-contact-line admission-email">
+                    {escape(row['email'] or '—')}
+                </div>
+            </td>
+
+            <td data-label="Actions" class="admission-actions-cell">
+                {actions}
+            </td>
+
+            <td data-label="Timestamp" class="admission-timestamp-cell">
+                <strong>{created_date}</strong>
+                <span>{created_time}</span>
+            </td>
         </tr>
         """
 
     body = f"""
     {admission_nav()}
 
-    <section class="card">
-        <h1>Manage Enrollments</h1>
+    <style>
+        .admission-enrollments-card {{
+            overflow:hidden;
+        }}
 
-        <p class="muted">
-            Admission Coordinators can approve enrollments, send SMS login details, and lapse incorrect enrollments.
-        </p>
+        .admission-enrollments-header {{
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:16px;
+            flex-wrap:wrap;
+            margin-bottom:12px;
+        }}
 
-        <form method="get" class="toolbar">
+        .admission-enrollments-header p {{
+            max-width:820px;
+            margin-bottom:0;
+        }}
+
+        .admission-enrollment-toolbar {{
+            display:grid;
+            grid-template-columns:150px minmax(260px,1fr) 140px 150px auto;
+            gap:9px;
+            align-items:end;
+            margin-bottom:8px;
+        }}
+
+        .admission-enrollment-toolbar input,
+        .admission-enrollment-toolbar select,
+        .admission-enrollment-toolbar button {{
+            width:100%;
+            margin:0;
+        }}
+
+        .admission-month-note {{
+            display:flex;
+            align-items:center;
+            gap:7px;
+            margin:8px 0 10px;
+            color:#607168;
+            font-size:12px;
+        }}
+
+        .admission-table-shell {{
+            width:100%;
+            max-width:100%;
+            overflow-x:auto;
+            border:1px solid #d7e7dc;
+            border-radius:16px;
+            background:#fff;
+            -webkit-overflow-scrolling:touch;
+        }}
+
+        .admission-enrollments-table {{
+            width:100%;
+            min-width:1180px;
+            table-layout:fixed;
+            border:0 !important;
+            border-radius:0 !important;
+            box-shadow:none !important;
+        }}
+
+        .admission-enrollments-table th {{
+            padding:10px 10px;
+            white-space:nowrap;
+            word-break:normal;
+            overflow-wrap:normal;
+            vertical-align:middle;
+            font-size:11px;
+            letter-spacing:.025em;
+        }}
+
+        .admission-enrollments-table td {{
+            padding:10px 10px;
+            vertical-align:middle;
+            white-space:normal;
+            word-break:normal;
+            overflow-wrap:anywhere;
+            line-height:1.22;
+        }}
+
+        .admission-enrollments-table th:nth-child(1),
+        .admission-enrollments-table td:nth-child(1) {{
+            width:13%;
+        }}
+
+        .admission-enrollments-table th:nth-child(2),
+        .admission-enrollments-table td:nth-child(2) {{
+            width:14%;
+        }}
+
+        .admission-enrollments-table th:nth-child(3),
+        .admission-enrollments-table td:nth-child(3) {{
+            width:17%;
+        }}
+
+        .admission-enrollments-table th:nth-child(4),
+        .admission-enrollments-table td:nth-child(4) {{
+            width:14%;
+        }}
+
+        .admission-enrollments-table th:nth-child(5),
+        .admission-enrollments-table td:nth-child(5) {{
+            width:19%;
+        }}
+
+        .admission-enrollments-table th:nth-child(6),
+        .admission-enrollments-table td:nth-child(6) {{
+            width:16%;
+        }}
+
+        .admission-enrollments-table th:nth-child(7),
+        .admission-enrollments-table td:nth-child(7) {{
+            width:7%;
+        }}
+
+        .admission-enrollments-table tbody tr {{
+            min-height:0;
+        }}
+
+        .admission-enrollments-table tbody tr:nth-child(even) {{
+            background:#f9fcfa;
+        }}
+
+        .admission-student-name,
+        .admission-subject-name {{
+            display:block;
+            color:#173421;
+            font-size:13.5px;
+            line-height:1.25;
+        }}
+
+        .admission-inline-meta {{
+            display:flex;
+            align-items:center;
+            gap:6px;
+            flex-wrap:wrap;
+            margin-top:4px;
+            color:#6b7b71;
+            font-size:10.5px;
+        }}
+
+        .admission-grade-pill {{
+            display:inline-flex;
+            align-items:center;
+            padding:2px 6px;
+            border-radius:999px;
+            color:#1b5c35;
+            background:#edf7f0;
+            border:1px solid #cfe2d4;
+            font-weight:800;
+            white-space:nowrap;
+        }}
+
+        .admission-enrollments-table .chip {{
+            padding:4px 7px;
+            font-size:10px;
+            line-height:1.1;
+            white-space:normal;
+        }}
+
+        .admission-period-history-cell {{
+            font-size:10.5px;
+        }}
+
+        .admission-period-block {{
+            color:#66776d;
+            line-height:1.2;
+        }}
+
+        .admission-period-block .chip {{
+            margin-bottom:3px;
+        }}
+
+        .admission-history-row {{
+            display:flex;
+            align-items:center;
+            gap:5px;
+            flex-wrap:wrap;
+            margin-top:5px;
+        }}
+
+        .admission-first-month {{
+            color:#6b7b71;
+            font-size:10px;
+            white-space:nowrap;
+        }}
+
+        .admission-payment-top {{
+            display:flex;
+            align-items:center;
+            gap:8px;
+            flex-wrap:wrap;
+        }}
+
+        .admission-amount {{
+            color:#173421;
+            font-size:14px;
+            white-space:nowrap;
+        }}
+
+        .admission-pop-link {{
+            display:inline-flex;
+            align-items:center;
+            padding:3px 7px;
+            border:1px solid #bfd9c7;
+            border-radius:999px;
+            color:#176b3a;
+            background:#f5fbf7;
+            font-size:10px;
+            font-weight:850;
+            text-decoration:none;
+            white-space:nowrap;
+        }}
+
+        .admission-pop-link:hover {{
+            color:#fff;
+            background:#176b3a;
+        }}
+
+        .admission-code-block {{
+            display:flex;
+            align-items:center;
+            gap:5px;
+            flex-wrap:wrap;
+            margin-top:5px;
+        }}
+
+        .admission-code-chip {{
+            letter-spacing:.04em;
+        }}
+
+        .admission-code-meta,
+        .admission-no-code {{
+            color:#6b7b71;
+            font-size:9.5px;
+            line-height:1.2;
+        }}
+
+        .admission-contact-cell {{
+            font-size:10.5px;
+        }}
+
+        .admission-contact-cell > div:first-child {{
+            display:flex;
+            align-items:baseline;
+            gap:5px;
+            flex-wrap:wrap;
+        }}
+
+        .admission-contact-label {{
+            color:#6b7b71;
+            font-size:9px;
+            font-weight:850;
+            letter-spacing:.04em;
+            text-transform:uppercase;
+        }}
+
+        .admission-contact-line {{
+            margin-top:3px;
+            color:#607168;
+            line-height:1.2;
+        }}
+
+        .admission-email {{
+            word-break:break-word;
+        }}
+
+        .admission-enrollment-actions {{
+            display:grid;
+            grid-template-columns:repeat(2,minmax(0,1fr));
+            gap:5px;
+            width:100%;
+        }}
+
+        .admission-enrollment-actions form {{
+            display:block;
+            width:100%;
+            margin:0;
+        }}
+
+        .admission-enrollment-actions .btn {{
+            width:100%;
+            min-width:0;
+            min-height:30px;
+            padding:5px 6px;
+            border-radius:9px;
+            justify-content:center;
+            font-size:9.5px;
+            line-height:1.05;
+            white-space:normal;
+            box-shadow:0 3px 8px rgba(12,72,37,.09);
+        }}
+
+        .admission-enrollment-actions.locked {{
+            grid-template-columns:1fr;
+        }}
+
+        .admission-lock-note {{
+            padding:6px 7px;
+            border-radius:9px;
+            color:#7a5810;
+            background:#fff7df;
+            border:1px solid #efd995;
+            font-size:9.5px;
+            line-height:1.2;
+        }}
+
+        .admission-timestamp-cell {{
+            text-align:center;
+            white-space:nowrap !important;
+        }}
+
+        .admission-timestamp-cell strong,
+        .admission-timestamp-cell span {{
+            display:block;
+        }}
+
+        .admission-timestamp-cell strong {{
+            color:#24382b;
+            font-size:10.5px;
+        }}
+
+        .admission-timestamp-cell span {{
+            margin-top:2px;
+            color:#708076;
+            font-size:9.5px;
+        }}
+
+        @media(max-width:1050px) {{
+            .admission-enrollment-toolbar {{
+                grid-template-columns:repeat(2,minmax(0,1fr));
+            }}
+
+            .admission-enrollment-toolbar button {{
+                grid-column:1 / -1;
+            }}
+        }}
+
+        @media(max-width:700px) {{
+            .admission-enrollments-card {{
+                overflow:visible;
+            }}
+
+            .admission-enrollment-toolbar {{
+                grid-template-columns:1fr;
+            }}
+
+            .admission-enrollment-toolbar button {{
+                grid-column:auto;
+            }}
+
+            .admission-table-shell {{
+                overflow:visible;
+                border:0;
+                background:transparent;
+            }}
+
+            .admission-enrollments-table {{
+                display:block;
+                width:100%;
+                min-width:0;
+                background:transparent;
+            }}
+
+            .admission-enrollments-table thead {{
+                display:none;
+            }}
+
+            .admission-enrollments-table tbody {{
+                display:block;
+                width:100%;
+            }}
+
+            .admission-enrollments-table tr {{
+                display:block;
+                width:100%;
+                margin:0 0 12px;
+                padding:12px;
+                border:1px solid #d7e7dc;
+                border-radius:15px;
+                background:#fff !important;
+                box-shadow:0 5px 14px rgba(12,72,37,.06);
+            }}
+
+            .admission-enrollments-table td {{
+                display:grid;
+                grid-template-columns:105px minmax(0,1fr);
+                gap:10px;
+                width:100% !important;
+                padding:7px 0;
+                border:0;
+                border-bottom:1px solid #edf3ef;
+                text-align:left;
+            }}
+
+            .admission-enrollments-table td::before {{
+                content:attr(data-label);
+                color:#52665a;
+                font-size:9.5px;
+                font-weight:900;
+                letter-spacing:.04em;
+                text-transform:uppercase;
+            }}
+
+            .admission-enrollments-table td:last-child {{
+                border-bottom:0;
+            }}
+
+            .admission-student-cell,
+            .admission-actions-cell {{
+                grid-template-columns:1fr !important;
+            }}
+
+            .admission-student-cell::before {{
+                margin-bottom:1px;
+            }}
+
+            .admission-actions-cell::before {{
+                margin-bottom:3px;
+            }}
+
+            .admission-enrollment-actions .btn {{
+                min-height:36px;
+                font-size:10.5px;
+            }}
+
+            .admission-timestamp-cell {{
+                text-align:left;
+            }}
+
+            .admission-timestamp-cell strong,
+            .admission-timestamp-cell span {{
+                display:inline;
+            }}
+
+            .admission-timestamp-cell span {{
+                margin-left:5px;
+            }}
+        }}
+
+        @media(max-width:390px) {{
+            .admission-enrollment-actions {{
+                grid-template-columns:1fr;
+            }}
+        }}
+    </style>
+
+    <section class="card admission-enrollments-card">
+        <div class="admission-enrollments-header">
+            <div>
+                <h1>Manage Enrollments</h1>
+
+                <p class="muted">
+                    Approve enrollments, send learner login details by SMS,
+                    and lapse incorrect enrollment records.
+                </p>
+            </div>
+        </div>
+
+        <form method="get"
+              class="admission-enrollment-toolbar">
 
             <input type="month"
                    name="month"
@@ -61579,59 +62094,94 @@ def admission_enrollments():
             <select name="grade">
                 <option value="">All Grades</option>
                 {''.join(
-                    f"<option value='{g}' {'selected' if grade==g else ''}>{grade_label(g)}</option>"
+                    f"<option value='{g}' {'selected' if grade == g else ''}>"
+                    f"{grade_label(g)}</option>"
                     for g in ["G8","G9","G10","G11","G12","G13"]
                 )}
             </select>
 
             <select name="status">
                 <option value="">All Statuses</option>
-                <option value="PENDING" {'selected' if status=="PENDING" else ""}>PENDING</option>
-                <option value="ACTIVE" {'selected' if status=="ACTIVE" else ""}>ACTIVE</option>
-                <option value="LAPSED" {'selected' if status=="LAPSED" else ""}>LAPSED</option>
+                <option value="PENDING"
+                        {'selected' if status == "PENDING" else ""}>
+                    PENDING
+                </option>
+                <option value="ACTIVE"
+                        {'selected' if status == "ACTIVE" else ""}>
+                    ACTIVE
+                </option>
+                <option value="LAPSED"
+                        {'selected' if status == "LAPSED" else ""}>
+                    LAPSED
+                </option>
             </select>
 
             <button class="btn mini">Filter</button>
         </form>
-        
-        <div class="mini muted" style="margin:10px 0">
-            Showing enrollments for: <b>{pretty_month_label(month)}</b>
-        </div>
-        
-        {pagination_controls("/admission/enrollments", page_num, total_pages, {"month": month, "q": q, "grade": grade, "status": status})}
 
-        <div class="scroll-x">
-            <table>
+        <div class="admission-month-note">
+            <span>Showing:</span>
+            <strong>{pretty_month_label(month)}</strong>
+            <span>·</span>
+            <span>{total} enrollment{"s" if total != 1 else ""}</span>
+        </div>
+
+        {pagination_controls(
+            "/admission/enrollments",
+            page_num,
+            total_pages,
+            {
+                "month": month,
+                "q": q,
+                "grade": grade,
+                "status": status
+            }
+        )}
+
+        <div class="admission-table-shell">
+            <table class="admission-enrollments-table">
                 <thead>
                     <tr>
                         <th>Student</th>
-                        <th>Grade</th>
-                        <th>Subject</th>
-                        <th>Status</th>
-                        <th>Active Period</th>
-                        <th>History</th>
-                        <th>Coupon / Referral</th>
-                        <th>PoP</th>
-                        <th>Amount</th>
-                        <th>Contact Details</th>
+                        <th>Enrollment</th>
+                        <th>Period & History</th>
+                        <th>Payment</th>
+                        <th>Contact</th>
                         <th>Actions</th>
                         <th>Timestamp</th>
                     </tr>
                 </thead>
 
                 <tbody>
-                    {trs or "<tr><td colspan='12'>No enrollments found.</td></tr>"}
+                    {
+                        trs
+                        or (
+                            "<tr><td colspan='7'>"
+                            "<div class='empty'>No enrollments found.</div>"
+                            "</td></tr>"
+                        )
+                    }
                 </tbody>
             </table>
         </div>
 
-        {pagination_controls("/admission/enrollments", page_num, total_pages, {"month": month, "q": q, "grade": grade, "status": status})}
+        {pagination_controls(
+            "/admission/enrollments",
+            page_num,
+            total_pages,
+            {
+                "month": month,
+                "q": q,
+                "grade": grade,
+                "status": status
+            }
+        )}
     </section>
     """
 
     return page("Admission Enrollments", body)
-    
-    
+
+
 @app.get('/admission/students')
 def admission_students():
 
