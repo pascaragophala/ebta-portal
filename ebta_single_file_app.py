@@ -13881,9 +13881,10 @@ def home():
                 </div>
 
                 <div class="mini muted" style="margin-top:8px;">
-                    Once the portal says <strong>Saved securely to EBTA</strong>,
+                    Once the portal says <strong>Proof of payment uploaded</strong>,
                     the file is protected even if your phone clears the original selection.
-                    Maximum 1–2 files.
+                    Your enrollment is <strong>not submitted yet</strong> — complete the form
+                    and press <strong>Submit Enrollment</strong>. Maximum 1–2 files.
                 </div>
 
             </div>
@@ -14193,9 +14194,10 @@ document.addEventListener("DOMContentLoaded", function () {
             stagedStatus.style.background = "#fffbeb";
             stagedStatus.style.borderColor = "#fde68a";
         } else {
-            stagedStatus.style.color = "#166534";
+            stagedStatus.style.color = "#14532d";
             stagedStatus.style.background = "#f0fdf4";
             stagedStatus.style.borderColor = "#86efac";
+            stagedStatus.style.fontWeight = "800";
         }
     }
 
@@ -14218,11 +14220,15 @@ document.addEventListener("DOMContentLoaded", function () {
                 '">' +
                     '<div style="min-width:0;flex:1;">' +
                         '<strong style="display:block;color:#166534;font-size:12px;">' +
-                            '✅ Saved securely to EBTA' +
+                            '✅ Step 1 complete: Proof uploaded' +
                         '</strong>' +
                         '<span style="display:block;color:#64748b;font-size:11px;' +
                                      'word-break:break-word;margin-top:2px;">' +
                             escapeHtml(item.name) + ' · ' + formatSize(item.size) +
+                        '</span>' +
+                        '<span style="display:block;color:#166534;font-size:10px;' +
+                                     'font-weight:800;margin-top:4px;">' +
+                            'Next: complete the form and press Submit Enrollment.' +
                         '</span>' +
                     '</div>' +
                     '<button type="button" ' +
@@ -14357,13 +14363,13 @@ document.addEventListener("DOMContentLoaded", function () {
             }
 
             showStageStatus(
-                "Saved securely to EBTA. You may now submit your enrollment.",
+                "Proof of payment uploaded. Your enrollment is NOT submitted yet. Complete the form and press Submit Enrollment.",
                 "success"
             );
 
             const cameraLabel = document.getElementById("camera_file_name");
             if (input.id === "camera_input" && cameraLabel) {
-                cameraLabel.textContent = "Photo saved securely to EBTA";
+                cameraLabel.textContent = "Photo uploaded — enrollment not submitted yet";
                 cameraLabel.style.color = "#166534";
                 cameraLabel.style.fontWeight = "800";
             }
@@ -14730,7 +14736,7 @@ function showPopup(message, type='info', timeout=4000){
         if (window.ebtaPopUploadInProgress > 0) {
             e.preventDefault();
             showPopup(
-                "Please wait until your proof of payment says Saved securely to EBTA.",
+                "Please wait until your proof of payment finishes uploading.",
                 "error"
             );
             return;
@@ -14762,7 +14768,7 @@ function showPopup(message, type='info', timeout=4000){
             if (totalPopFiles < 1 || totalPopFiles > 2) {
                 e.preventDefault();
                 showPopup(
-                    "Please attach 1 to 2 files and wait for the message Saved securely to EBTA.",
+                    "Please attach 1 to 2 files and wait until the upload is complete.",
                     "error"
                 );
                 return;
@@ -15572,7 +15578,7 @@ def register_stage_pop():
         "token": token,
         "name": original_name,
         "size": len(file_bytes),
-        "message": "Proof of payment saved securely to EBTA."
+        "message": "Proof of payment uploaded to EBTA. Enrollment still needs to be submitted."
     }
 
 
@@ -15902,7 +15908,7 @@ def register():
                 card_msg(
                     "Your phone's temporary file expired before it could be used. "
                     "Please return to the enrollment page, attach the proof again, "
-                    "and wait for 'Saved securely to EBTA' before submitting."
+                    "and wait until the proof-of-payment upload is complete before submitting."
                 )
             )
 
@@ -15919,7 +15925,7 @@ def register():
                 "Error",
                 card_msg(
                     "Attach 1 or 2 Proof of Payment files and wait until "
-                    "the portal confirms they were saved securely to EBTA."
+                    "the portal confirms the proof-of-payment upload is complete."
                 )
             )
     elif total_pop_count > 2:
@@ -15991,7 +15997,7 @@ def register():
                 card_msg(
                     "The browser lost access to the selected file. "
                     "Please attach it again and wait for "
-                    "'Saved securely to EBTA' before submitting."
+                    "the proof-of-payment upload to finish before submitting."
                 )
             )
 
