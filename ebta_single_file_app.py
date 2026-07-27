@@ -213,6 +213,12 @@ CEO_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 ONE_ON_ONE_DIR = UPLOADS_DIR / "one_on_one"
 ONE_ON_ONE_DIR.mkdir(parents=True, exist_ok=True)
 
+# Proof-of-payment files selected on mobile are uploaded here immediately.
+# The final enrolment submission then consumes the server-side staged copy,
+# avoiding Android/Chrome ERR_UPLOAD_FILE_CHANGED errors.
+STAGED_ENROLLMENT_UPLOAD_DIR = UPLOADS_DIR / "staged_enrollment"
+STAGED_ENROLLMENT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
 UPLOAD_DIR = UPLOADS_DIR
 MATERIALS_DIR = Path(BASE_DATA_DIR) / "materials"
 SUBMISSIONS_DIR = Path(BASE_DATA_DIR) / "submissions"
@@ -5279,6 +5285,91 @@ def secure_name(name):
     return ''.join(ch if ch in keep else '_' for ch in name)
     
     
+ALLOWED_ENROLLMENT_POP_EXTENSIONS = {
+    ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp"
+}
+ENROLLMENT_POP_MAX_FILE_BYTES = 15 * 1024 * 1024
+STAGED_ENROLLMENT_MAX_AGE_SECONDS = 3 * 60 * 60
+
+
+def cleanup_staged_enrollment_uploads():
+    """Remove abandoned staged PoP files older than three hours."""
+    cutoff = time.time() - STAGED_ENROLLMENT_MAX_AGE_SECONDS
+
+    try:
+        for path in STAGED_ENROLLMENT_UPLOAD_DIR.iterdir():
+            if not path.is_file():
+                continue
+
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                continue
+    except OSError:
+        pass
+
+
+def staged_enrollment_entries():
+    entries = session.get("staged_enrollment_pop_files", [])
+    if not isinstance(entries, list):
+        entries = []
+
+    valid_entries = []
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+
+        token = str(entry.get("token", "")).strip()
+        name = str(entry.get("name", "")).strip()
+
+        if token and name:
+            valid_entries.append(entry)
+
+    return valid_entries
+
+
+def staged_enrollment_source_path(token):
+    token = str(token or "").strip()
+    if not token:
+        return None
+
+    try:
+        matches = list(
+            STAGED_ENROLLMENT_UPLOAD_DIR.glob(f"{token}__*")
+        )
+    except OSError:
+        return None
+
+    return matches[0] if matches else None
+
+
+def remove_staged_enrollment_token(token):
+    token = str(token or "").strip()
+    entries = staged_enrollment_entries()
+    kept = []
+    removed = False
+
+    for entry in entries:
+        if str(entry.get("token", "")) == token:
+            removed = True
+            source = staged_enrollment_source_path(token)
+
+            if source:
+                try:
+                    source.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        else:
+            kept.append(entry)
+
+    session["staged_enrollment_pop_files"] = kept
+    session.modified = True
+
+    return removed
+
+
 def save_uploaded_files_as_single_file(files, target_dir, prefix, public_url_prefix=None):
     """
     Saves one or multiple uploaded files.
@@ -13726,6 +13817,7 @@ def home():
                         </div>
 
                         <input type="file"
+                               id="pop_file_input"
                                name="pop"
                                accept=".pdf,.png,.jpg,.jpeg,.gif,.webp"
                                multiple>
@@ -13763,8 +13855,35 @@ def home():
 
                 </div>
 
+                <input type="hidden"
+                       name="staged_pop_tokens"
+                       id="staged_pop_tokens"
+                       value="[]">
+
+                <div id="staged_pop_upload_status"
+                     class="mini"
+                     style="
+                        display:none;
+                        margin-top:10px;
+                        padding:10px 12px;
+                        border-radius:12px;
+                        border:1px solid #bfdbca;
+                        background:#f2fbf5;
+                     ">
+                </div>
+
+                <div id="staged_pop_list"
+                     style="
+                        display:grid;
+                        gap:8px;
+                        margin-top:8px;
+                     ">
+                </div>
+
                 <div class="mini muted" style="margin-top:8px;">
-                    Please upload clear proof with a visible date. Maximum 1–2 files recommended.
+                    Once the portal says <strong>Saved securely to EBTA</strong>,
+                    the file is protected even if your phone clears the original selection.
+                    Maximum 1–2 files.
                 </div>
 
             </div>
@@ -14016,6 +14135,310 @@ document.addEventListener("DOMContentLoaded", function(){
 });
 
 
+
+window.ebtaStagedPopUploads = [];
+window.ebtaPopUploadInProgress = 0;
+
+document.addEventListener("DOMContentLoaded", function () {
+    const form = document.getElementById("reg_form");
+    if (!form) return;
+
+    const hiddenTokens = document.getElementById("staged_pop_tokens");
+    const stagedList = document.getElementById("staged_pop_list");
+    const stagedStatus = document.getElementById("staged_pop_upload_status");
+    const submitButton = form.querySelector("button[type='submit']");
+    const fileInputs = Array.from(
+        form.querySelectorAll("input[type='file'][name='pop']")
+    );
+
+    function formatSize(bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) {
+            return (bytes / 1024).toFixed(1) + " KB";
+        }
+        return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    function escapeHtml(value) {
+        return String(value || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    function syncHiddenTokens() {
+        if (hiddenTokens) {
+            hiddenTokens.value = JSON.stringify(
+                window.ebtaStagedPopUploads.map(function (item) {
+                    return item.token;
+                })
+            );
+        }
+    }
+
+    function showStageStatus(message, type) {
+        if (!stagedStatus) return;
+
+        stagedStatus.style.display = "block";
+        stagedStatus.textContent = message;
+
+        if (type === "error") {
+            stagedStatus.style.color = "#991b1b";
+            stagedStatus.style.background = "#fff1f2";
+            stagedStatus.style.borderColor = "#fecaca";
+        } else if (type === "working") {
+            stagedStatus.style.color = "#7c4a03";
+            stagedStatus.style.background = "#fffbeb";
+            stagedStatus.style.borderColor = "#fde68a";
+        } else {
+            stagedStatus.style.color = "#166534";
+            stagedStatus.style.background = "#f0fdf4";
+            stagedStatus.style.borderColor = "#86efac";
+        }
+    }
+
+    function renderStagedFiles() {
+        syncHiddenTokens();
+
+        if (!stagedList) return;
+
+        if (!window.ebtaStagedPopUploads.length) {
+            stagedList.innerHTML = "";
+            return;
+        }
+
+        stagedList.innerHTML = window.ebtaStagedPopUploads.map(function (item) {
+            return (
+                '<div style="' +
+                    'display:flex;align-items:center;justify-content:space-between;' +
+                    'gap:10px;padding:10px 11px;border-radius:12px;' +
+                    'border:1px solid #86efac;background:#f0fdf4;' +
+                '">' +
+                    '<div style="min-width:0;flex:1;">' +
+                        '<strong style="display:block;color:#166534;font-size:12px;">' +
+                            '✅ Saved securely to EBTA' +
+                        '</strong>' +
+                        '<span style="display:block;color:#64748b;font-size:11px;' +
+                                     'word-break:break-word;margin-top:2px;">' +
+                            escapeHtml(item.name) + ' · ' + formatSize(item.size) +
+                        '</span>' +
+                    '</div>' +
+                    '<button type="button" ' +
+                            'class="ebta-remove-staged-pop" ' +
+                            'data-token="' + escapeHtml(item.token) + '" ' +
+                            'style="' +
+                                'width:32px;height:32px;min-width:32px;' +
+                                'border-radius:999px;border:1px solid #fecaca;' +
+                                'background:#fff1f2;color:#b91c1c;' +
+                                'font-weight:900;cursor:pointer;' +
+                            '" ' +
+                            'aria-label="Remove saved proof of payment">×</button>' +
+                '</div>'
+            );
+        }).join("");
+
+        stagedList.querySelectorAll(".ebta-remove-staged-pop").forEach(function (button) {
+            button.addEventListener("click", async function () {
+                const token = button.dataset.token || "";
+
+                try {
+                    await fetch("/register/remove-staged-pop", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({token: token})
+                    });
+                } catch (error) {
+                    // Remove it from this form even if the clean-up request fails.
+                }
+
+                window.ebtaStagedPopUploads =
+                    window.ebtaStagedPopUploads.filter(function (item) {
+                        return item.token !== token;
+                    });
+
+                renderStagedFiles();
+
+                if (!window.ebtaStagedPopUploads.length) {
+                    showStageStatus(
+                        "No proof of payment is saved yet. Please attach a file.",
+                        "working"
+                    );
+                }
+            });
+        });
+    }
+
+    async function makeIndependentUploadPart(file) {
+        /*
+         * Android document providers can revoke the original content URI.
+         * Reading it immediately into memory creates an independent browser
+         * copy before sending it to EBTA.
+         */
+        try {
+            const bytes = await file.arrayBuffer();
+
+            return new Blob(
+                [bytes],
+                {type: file.type || "application/octet-stream"}
+            );
+        } catch (error) {
+            return file;
+        }
+    }
+
+    async function stageOneFile(file) {
+        const uploadPart = await makeIndependentUploadPart(file);
+        const payload = new FormData();
+
+        payload.append("file", uploadPart, file.name || "proof-of-payment");
+
+        const response = await fetch("/register/stage-pop", {
+            method: "POST",
+            body: payload
+        });
+
+        let data = {};
+
+        try {
+            data = await response.json();
+        } catch (error) {
+            data = {};
+        }
+
+        if (!response.ok || !data.ok) {
+            throw new Error(
+                data.message ||
+                "The file could not be saved. Please select it again."
+            );
+        }
+
+        window.ebtaStagedPopUploads.push({
+            token: data.token,
+            name: data.name || file.name,
+            size: Number(data.size || file.size || 0)
+        });
+    }
+
+    async function handleSelectedFiles(input) {
+        const selectedFiles = Array.from(input.files || []);
+
+        if (!selectedFiles.length) return;
+
+        if (
+            window.ebtaStagedPopUploads.length +
+            selectedFiles.length > 2
+        ) {
+            input.value = "";
+            showStageStatus(
+                "You can attach a maximum of two proof-of-payment files.",
+                "error"
+            );
+            return;
+        }
+
+        window.ebtaPopUploadInProgress += 1;
+
+        if (submitButton) {
+            submitButton.disabled = true;
+            submitButton.textContent = "Saving proof of payment...";
+        }
+
+        showStageStatus(
+            "Securing your proof of payment on the EBTA server. Please wait...",
+            "working"
+        );
+
+        try {
+            for (const file of selectedFiles) {
+                await stageOneFile(file);
+                renderStagedFiles();
+            }
+
+            showStageStatus(
+                "Saved securely to EBTA. You may now submit your enrollment.",
+                "success"
+            );
+
+            const cameraLabel = document.getElementById("camera_file_name");
+            if (input.id === "camera_input" && cameraLabel) {
+                cameraLabel.textContent = "Photo saved securely to EBTA";
+                cameraLabel.style.color = "#166534";
+                cameraLabel.style.fontWeight = "800";
+            }
+        } catch (error) {
+            showStageStatus(
+                error.message ||
+                "The file could not be saved. Please select it again.",
+                "error"
+            );
+            showPopup(
+                error.message ||
+                "The file could not be saved. Please select it again.",
+                "error",
+                7000
+            );
+        } finally {
+            /*
+             * Clear the original Android file reference. The server-side copy
+             * is now used during final submission, so Chrome never needs to
+             * reopen the temporary phone file.
+             */
+            try {
+                input.value = "";
+            } catch (error) {
+                // The staged server copy is still safe.
+            }
+
+            input.dispatchEvent(new Event("change", {bubbles: true}));
+
+            window.ebtaPopUploadInProgress =
+                Math.max(0, window.ebtaPopUploadInProgress - 1);
+
+            if (submitButton) {
+                submitButton.disabled = false;
+                submitButton.textContent = "Submit Enrollment";
+            }
+        }
+    }
+
+    fileInputs.forEach(function (input) {
+        input.addEventListener("change", function () {
+            if (input.files && input.files.length) {
+                handleSelectedFiles(input);
+            }
+        });
+    });
+
+    window.ebtaClearAllStagedPops = async function () {
+        const current = window.ebtaStagedPopUploads.slice();
+
+        window.ebtaStagedPopUploads = [];
+        renderStagedFiles();
+
+        for (const item of current) {
+            try {
+                await fetch("/register/remove-staged-pop", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({token: item.token})
+                });
+            } catch (error) {
+                // Best-effort clean-up only.
+            }
+        }
+
+        if (stagedStatus) {
+            stagedStatus.style.display = "none";
+            stagedStatus.textContent = "";
+        }
+    };
+
+    renderStagedFiles();
+});
+
+
 function copyAccountNumber(){
     const acc = document.getElementById("acc_number").innerText;
 
@@ -14157,6 +14580,10 @@ function showPopup(message, type='info', timeout=4000){
         } else {
             popSection.style.display = 'none';
             popInputs.forEach(input => input.value = '');
+
+            if (typeof window.ebtaClearAllStagedPops === "function") {
+                window.ebtaClearAllStagedPops();
+            }
         }
         });
     }
@@ -14300,6 +14727,15 @@ function showPopup(message, type='info', timeout=4000){
         }
 
         
+        if (window.ebtaPopUploadInProgress > 0) {
+            e.preventDefault();
+            showPopup(
+                "Please wait until your proof of payment says Saved securely to EBTA.",
+                "error"
+            );
+            return;
+        }
+
         let totalPopFiles = 0;
 
         popInputs.forEach(input => {
@@ -14308,16 +14744,36 @@ function showPopup(message, type='info', timeout=4000){
             }
         });
 
+        let stagedPopFiles = [];
+
+        try {
+            stagedPopFiles = JSON.parse(
+                document.getElementById("staged_pop_tokens")?.value || "[]"
+            );
+        } catch (error) {
+            stagedPopFiles = [];
+        }
+
+        totalPopFiles += Array.isArray(stagedPopFiles)
+            ? stagedPopFiles.length
+            : 0;
+
         if (paid > 0) {
             if (totalPopFiles < 1 || totalPopFiles > 2) {
                 e.preventDefault();
-                showPopup('Please upload or take 1 to 2 Proof of Payment files.', 'error');
+                showPopup(
+                    "Please attach 1 to 2 files and wait for the message Saved securely to EBTA.",
+                    "error"
+                );
                 return;
             }
         } else {
             if (totalPopFiles > 2) {
                 e.preventDefault();
-                showPopup('You can upload a maximum of 2 Proof of Payment files.', 'error');
+                showPopup(
+                    "You can upload a maximum of 2 Proof of Payment files.",
+                    "error"
+                );
                 return;
             }
         }
@@ -15008,6 +15464,137 @@ def returning_student_lookup():
     }
 
 
+@app.post('/register/stage-pop')
+def register_stage_pop():
+    """
+    Immediately save a selected proof-of-payment file to the EBTA server.
+
+    This prevents Android document-provider files from disappearing between
+    file selection and the final enrolment form submission.
+    """
+    if get_setting('enrollment_open', '1') != '1':
+        return {
+            "ok": False,
+            "message": "Enrollments are currently closed."
+        }, 403
+
+    cleanup_staged_enrollment_uploads()
+
+    upload = request.files.get("file")
+
+    if not upload or not upload.filename:
+        return {
+            "ok": False,
+            "message": "No proof-of-payment file was received."
+        }, 400
+
+    original_name = Path(upload.filename).name.strip()
+    extension = Path(original_name).suffix.lower()
+
+    if extension not in ALLOWED_ENROLLMENT_POP_EXTENSIONS:
+        return {
+            "ok": False,
+            "message": (
+                "Please upload a PDF, PNG, JPG, JPEG, GIF or WEBP file."
+            )
+        }, 400
+
+    entries = staged_enrollment_entries()
+
+    # Remove session entries whose physical temporary file has expired.
+    live_entries = []
+    for entry in entries:
+        if staged_enrollment_source_path(entry.get("token")):
+            live_entries.append(entry)
+
+    entries = live_entries
+    session["staged_enrollment_pop_files"] = entries
+    session.modified = True
+
+    if len(entries) >= 2:
+        return {
+            "ok": False,
+            "message": "A maximum of two proof-of-payment files is allowed."
+        }, 400
+
+    try:
+        file_bytes = upload.read(ENROLLMENT_POP_MAX_FILE_BYTES + 1)
+    except Exception:
+        return {
+            "ok": False,
+            "message": (
+                "The phone stopped sharing this file. Please select it again "
+                "from Downloads, Gallery or Files."
+            )
+        }, 400
+
+    if not file_bytes:
+        return {
+            "ok": False,
+            "message": "The selected file is empty. Please choose it again."
+        }, 400
+
+    if len(file_bytes) > ENROLLMENT_POP_MAX_FILE_BYTES:
+        return {
+            "ok": False,
+            "message": "Each proof-of-payment file must be 15 MB or smaller."
+        }, 413
+
+    token = secrets.token_urlsafe(24)
+    safe_original_name = secure_name(original_name) or f"proof{extension}"
+    staged_name = f"{token}__{safe_original_name}"
+    staged_path = STAGED_ENROLLMENT_UPLOAD_DIR / staged_name
+
+    try:
+        staged_path.write_bytes(file_bytes)
+    except OSError:
+        return {
+            "ok": False,
+            "message": (
+                "EBTA could not save the file right now. "
+                "Please wait a moment and try again."
+            )
+        }, 500
+
+    entry = {
+        "token": token,
+        "name": original_name,
+        "size": len(file_bytes),
+        "created_at": int(time.time())
+    }
+
+    entries.append(entry)
+    session["staged_enrollment_pop_files"] = entries
+    session.modified = True
+
+    return {
+        "ok": True,
+        "token": token,
+        "name": original_name,
+        "size": len(file_bytes),
+        "message": "Proof of payment saved securely to EBTA."
+    }
+
+
+@app.post('/register/remove-staged-pop')
+def register_remove_staged_pop():
+    data = request.get_json(silent=True) or {}
+    token = str(data.get("token", "")).strip()
+
+    if not token:
+        return {
+            "ok": False,
+            "message": "No staged file was selected."
+        }, 400
+
+    removed = remove_staged_enrollment_token(token)
+
+    return {
+        "ok": True,
+        "removed": removed
+    }
+
+
 @app.post('/register/discount-preview')
 def register_discount_preview():
 
@@ -15079,6 +15666,22 @@ def register():
     subject_ids = request.form.getlist('subject_ids')
     pin = request.form.get('pin','').strip()
     pops = request.files.getlist('pop')
+
+    staged_tokens_raw = request.form.get("staged_pop_tokens", "[]")
+    try:
+        staged_pop_tokens = json.loads(staged_tokens_raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        staged_pop_tokens = []
+
+    if not isinstance(staged_pop_tokens, list):
+        staged_pop_tokens = []
+
+    staged_pop_tokens = [
+        str(token).strip()
+        for token in staged_pop_tokens
+        if str(token).strip()
+    ][:2]
+
     province = request.form.get('province')
     school = request.form.get('school')
     
@@ -15281,24 +15884,128 @@ def register():
 
     pops = [f for f in pops if f and f.filename]
 
+    session_staged_entries = {
+        str(entry.get("token", "")): entry
+        for entry in staged_enrollment_entries()
+    }
+
+    staged_sources = []
+
+    for token in staged_pop_tokens:
+        entry = session_staged_entries.get(token)
+        source = staged_enrollment_source_path(token)
+
+        if not entry or not source or not source.exists():
+            conn.close()
+            return page(
+                "Proof of Payment Needs Reattachment",
+                card_msg(
+                    "Your phone's temporary file expired before it could be used. "
+                    "Please return to the enrollment page, attach the proof again, "
+                    "and wait for 'Saved securely to EBTA' before submitting."
+                )
+            )
+
+        staged_sources.append((token, entry, source))
+
+    total_pop_count = len(staged_sources) + len(pops)
+
     # Require PoP whenever the parent says they paid something.
     # If they enter R0 because of a code, allow no PoP and let admin review.
     if amount_paid > 0:
-        if len(pops) < 1 or len(pops) > 2:
+        if total_pop_count < 1 or total_pop_count > 2:
             conn.close()
-            return page("Error", card_msg("Upload 1 or 2 Proof of Payment files."))
-    else:
-        pops = []
+            return page(
+                "Error",
+                card_msg(
+                    "Attach 1 or 2 Proof of Payment files and wait until "
+                    "the portal confirms they were saved securely to EBTA."
+                )
+            )
+    elif total_pop_count > 2:
+        conn.close()
+        return page(
+            "Error",
+            card_msg("A maximum of 2 Proof of Payment files is allowed.")
+        )
 
-    # Save PoP files only after the final amount has been validated.
+    # Save staged files and retain the old direct-upload path as a fallback
+    # for desktop browsers or users with JavaScript disabled.
     saved_paths = []
     ts = int(datetime.datetime.now().timestamp())
+    consumed_staged_tokens = []
 
-    for idx, pop in enumerate(pops, start=1):
-        safe = f"{ts}_{secrets.token_hex(8)}_{idx}_{secure_name(pop.filename)}"
+    for idx, (token, entry, source) in enumerate(staged_sources, start=1):
+        original_name = (
+            secure_name(str(entry.get("name", "")))
+            or source.name.split("__", 1)[-1]
+            or f"proof_{idx}"
+        )
+
+        safe = (
+            f"{ts}_{secrets.token_hex(8)}_{idx}_{original_name}"
+        )
         dest = UPLOAD_DIR / safe
-        pop.save(dest)
+
+        try:
+            os.replace(source, dest)
+        except OSError:
+            conn.close()
+            return page(
+                "Upload Error",
+                card_msg(
+                    "The saved proof of payment could not be finalised. "
+                    "Please attach it again and retry."
+                )
+            )
+
         saved_paths.append(f"/uploads/{safe}")
+        consumed_staged_tokens.append(token)
+
+    direct_start_index = len(saved_paths) + 1
+
+    for idx, pop in enumerate(pops, start=direct_start_index):
+        extension = Path(pop.filename).suffix.lower()
+
+        if extension not in ALLOWED_ENROLLMENT_POP_EXTENSIONS:
+            conn.close()
+            return page(
+                "Upload Error",
+                card_msg(
+                    "Proof of payment must be PDF, PNG, JPG, JPEG, GIF or WEBP."
+                )
+            )
+
+        safe = (
+            f"{ts}_{secrets.token_hex(8)}_{idx}_"
+            f"{secure_name(pop.filename)}"
+        )
+        dest = UPLOAD_DIR / safe
+
+        try:
+            pop.save(dest)
+        except Exception:
+            conn.close()
+            return page(
+                "Upload Error",
+                card_msg(
+                    "The browser lost access to the selected file. "
+                    "Please attach it again and wait for "
+                    "'Saved securely to EBTA' before submitting."
+                )
+            )
+
+        saved_paths.append(f"/uploads/{safe}")
+
+    if consumed_staged_tokens:
+        remaining_entries = [
+            entry
+            for entry in staged_enrollment_entries()
+            if str(entry.get("token", ""))
+            not in set(consumed_staged_tokens)
+        ]
+        session["staged_enrollment_pop_files"] = remaining_entries
+        session.modified = True
         
 
     is_new_referral_student = is_first_time_student(conn, sid)
