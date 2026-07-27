@@ -13883,8 +13883,7 @@ def home():
                 <div class="mini muted" style="margin-top:8px;">
                     Once the portal says <strong>Proof of payment uploaded</strong>,
                     the file is protected even if your phone clears the original selection.
-                    Your enrollment is <strong>not submitted yet</strong> — complete the form
-                    and press <strong>Submit Enrollment</strong>. Maximum 1–2 files.
+                    Maximum 1–2 files.
                 </div>
 
             </div>
@@ -14220,16 +14219,13 @@ document.addEventListener("DOMContentLoaded", function () {
                 '">' +
                     '<div style="min-width:0;flex:1;">' +
                         '<strong style="display:block;color:#166534;font-size:12px;">' +
-                            '✅ Step 1 complete: Proof uploaded' +
+                            '✅ Proof of payment uploaded' +
                         '</strong>' +
                         '<span style="display:block;color:#64748b;font-size:11px;' +
                                      'word-break:break-word;margin-top:2px;">' +
                             escapeHtml(item.name) + ' · ' + formatSize(item.size) +
                         '</span>' +
-                        '<span style="display:block;color:#166534;font-size:10px;' +
-                                     'font-weight:800;margin-top:4px;">' +
-                            'Next: complete the form and press Submit Enrollment.' +
-                        '</span>' +
+
                     '</div>' +
                     '<button type="button" ' +
                             'class="ebta-remove-staged-pop" ' +
@@ -14363,13 +14359,13 @@ document.addEventListener("DOMContentLoaded", function () {
             }
 
             showStageStatus(
-                "Proof of payment uploaded. Your enrollment is NOT submitted yet. Complete the form and press Submit Enrollment.",
+                "Proof of payment uploaded.",
                 "success"
             );
 
             const cameraLabel = document.getElementById("camera_file_name");
             if (input.id === "camera_input" && cameraLabel) {
-                cameraLabel.textContent = "Photo uploaded — enrollment not submitted yet";
+                cameraLabel.textContent = "Proof of payment photo uploaded";
                 cameraLabel.style.color = "#166534";
                 cameraLabel.style.fontWeight = "800";
             }
@@ -15578,7 +15574,7 @@ def register_stage_pop():
         "token": token,
         "name": original_name,
         "size": len(file_bytes),
-        "message": "Proof of payment uploaded to EBTA. Enrollment still needs to be submitted."
+        "message": "Proof of payment uploaded."
     }
 
 
