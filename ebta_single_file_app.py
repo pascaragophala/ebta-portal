@@ -1043,10 +1043,28 @@ def init_db():
         "Social Media Manager",
         "Graphic Designer",
         "Academic Quality Manager",
-        "Tutor Manager"
+        "Tutor Manager",
+        "One-on-One Manager"
     ]
 
     management_role_default_descriptions = {
+        "One-on-One Manager": (
+            "The One-on-One Manager oversees the planning, coordination and quality of EBTA one-on-one tutoring sessions.\n\n"
+            "Main duties may include:\n"
+            "- Reviewing and managing one-on-one tutoring requests.\n"
+            "- Monitoring one-on-one tutors, their subjects and availability.\n"
+            "- Assigning suitable tutors to learners and confirming session arrangements.\n"
+            "- Adding or checking meeting links, meeting IDs and passcodes.\n"
+            "- Monitoring scheduled, confirmed, completed and cancelled sessions.\n"
+            "- Following up on outstanding tutor availability or session information.\n"
+            "- Working with High Admin, AQM and other EBTA leaders when support or escalation is required.\n"
+            "- Maintaining accurate records and protecting learner and tutor information.\n\n"
+            "Requirements:\n"
+            "- Strong organisation, communication and follow-up skills.\n"
+            "- Reliable internet access and a suitable device.\n"
+            "- Ability to work professionally with learners, parents, tutors and EBTA management.\n"
+            "- Good attention to detail and ability to manage confidential information."
+        ),
         "Graphic Designer": (
             "The Graphic Designer supports EBTA with professional visual content for academic, marketing and operational communication.\n\n"
             "Main duties may include:\n"
