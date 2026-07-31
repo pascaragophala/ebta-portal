@@ -9066,13 +9066,50 @@ const q=(document.getElementById(inputId)?.value||"").toLowerCase();
 const rows=document.querySelectorAll('#'+tableId+' tbody tr');
 rows.forEach(r=>{ r.style.display = r.innerText.toLowerCase().includes(q) ? '' : 'none'; });
 }
-document.addEventListener('DOMContentLoaded',()=> {
-const appear = new IntersectionObserver((entries)=>{
-    entries.forEach(e=>{
-    if(e.isIntersecting){ e.target.style.transition='transform .4s, opacity .4s'; e.target.style.transform='translateY(0)'; e.target.style.opacity='1'; appear.unobserve(e.target); }
+document.addEventListener('DOMContentLoaded', function () {
+    const cards = Array.from(document.querySelectorAll('.card'));
+
+    // Portal content must never depend on an animation callback to become
+    // visible. This is especially important on iOS Safari.
+    cards.forEach(function (card) {
+        card.style.opacity = '1';
+        card.style.visibility = 'visible';
+        card.style.transform = 'none';
     });
-}, {threshold:.12});
-document.querySelectorAll('.card').forEach(el=>{ el.style.transform='translateY(8px)'; el.style.opacity='.0'; appear.observe(el); });
+
+    const reduceMotion = (
+        window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    );
+
+    if (reduceMotion || !Element.prototype.animate) {
+        return;
+    }
+
+    cards.slice(0, 40).forEach(function (card, index) {
+        const rect = card.getBoundingClientRect();
+
+        if (rect.top < window.innerHeight * 1.6 && rect.bottom > -80) {
+            try {
+                card.animate(
+                    [
+                        { opacity: 0.94, transform: 'translateY(6px)' },
+                        { opacity: 1, transform: 'translateY(0)' }
+                    ],
+                    {
+                        duration: 260,
+                        delay: Math.min(index * 20, 160),
+                        easing: 'cubic-bezier(.2,.8,.2,1)',
+                        fill: 'none'
+                    }
+                );
+            } catch (error) {
+                card.style.opacity = '1';
+                card.style.visibility = 'visible';
+                card.style.transform = 'none';
+            }
+        }
+    });
 });
 
 function smoothScrollIntoView(el){
@@ -12346,7 +12383,17 @@ def page(title, body_html, extra_head="", extra_js=""):
     <meta name="theme-color" content="#0e4325">
     <script>
       if ("serviceWorker" in navigator) {{
-        navigator.serviceWorker.register("/static/sw.js");
+        navigator.serviceWorker
+          .register(
+            "/static/sw.js?v=409",
+            {{ updateViaCache: "none" }}
+          )
+          .then(function(registration) {{
+            registration.update();
+          }})
+          .catch(function() {{
+            // Portal pages remain usable without service-worker support.
+          }});
       }}
 
       window.addEventListener("beforeinstallprompt", e => {{
@@ -18262,7 +18309,12 @@ def student_materials():
     conn = get_db()
     cur = conn.cursor()
 
-    materials_html = "<div class='empty'>No materials yet.</div>"
+    materials_html = f"""
+    <div class='empty' style='padding:16px'>
+        No learning materials are available for
+        <strong>{pretty_month_label(month)}</strong> yet.
+    </div>
+    """
 
     cur.execute("""
         SELECT DISTINCT m.*, sub.name AS subject_name, sub.grade, t.full_name AS tutor_name
@@ -18404,6 +18456,23 @@ def student_materials():
     {month_selector}
 
     <style>
+        .student-materials-page-card {{
+            display:block !important;
+            opacity:1 !important;
+            visibility:visible !important;
+            transform:none !important;
+            width:100% !important;
+            max-width:100% !important;
+            min-width:0 !important;
+            min-height:170px;
+            overflow:visible !important;
+        }}
+
+        .student-materials-page-card *,
+        .student-materials-page-card .material-subject-section {{
+            visibility:visible !important;
+        }}
+
         .material-subject-section {{
             border:1px solid #e2e8f0;
             border-left:6px solid #1b5e20;
@@ -18479,7 +18548,9 @@ def student_materials():
         }}
     </style>
 
-    <div class='card' style="border-left:6px solid #25D366">
+    <div class='card student-materials-page-card'
+         id='studentMaterialsPageCard'
+         style="border-left:6px solid #25D366">
 
         <a class='btn mini secondary' href='/student'>← Back</a>
 
@@ -18496,7 +18567,63 @@ def student_materials():
     </div>
     """
 
-    return page("Materials", body)
+    materials_visibility_js = """
+    <script>
+        (function () {
+            function forceStudentMaterialsVisible() {
+                const card = document.getElementById(
+                    "studentMaterialsPageCard"
+                );
+
+                if (!card) return;
+
+                card.style.setProperty("display", "block", "important");
+                card.style.setProperty("opacity", "1", "important");
+                card.style.setProperty("visibility", "visible", "important");
+                card.style.setProperty("transform", "none", "important");
+
+                card.querySelectorAll(
+                    ".material-subject-section, " +
+                    ".material-subject-content, h2, .mini, .empty"
+                ).forEach(function (element) {
+                    element.style.setProperty(
+                        "visibility",
+                        "visible",
+                        "important"
+                    );
+                    element.style.setProperty(
+                        "opacity",
+                        "1",
+                        "important"
+                    );
+                });
+            }
+
+            if (document.readyState === "loading") {
+                document.addEventListener(
+                    "DOMContentLoaded",
+                    forceStudentMaterialsVisible
+                );
+            } else {
+                forceStudentMaterialsVisible();
+            }
+
+            window.addEventListener(
+                "pageshow",
+                forceStudentMaterialsVisible
+            );
+
+            window.setTimeout(forceStudentMaterialsVisible, 120);
+            window.setTimeout(forceStudentMaterialsVisible, 900);
+        })();
+    </script>
+    """
+
+    return page(
+        "Materials",
+        body,
+        extra_js=materials_visibility_js
+    )
     
     
 @app.get('/student/assignments')
