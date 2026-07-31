@@ -94321,6 +94321,135 @@ def tutor_one_on_one_session_note_post(booking_id):
     return redirect(url_for("tutor_one_on_one"))
 
 
+ONE_ON_ONE_AVAILABILITY_DAYS = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday"
+]
+
+ONE_ON_ONE_AVAILABILITY_GRADES = [
+    "G8",
+    "G9",
+    "G10",
+    "G11",
+    "G12",
+    "G13"
+]
+
+
+def one_on_one_availability_subject_options(
+    subjects,
+    selected_subject="",
+    selected_grade=""
+):
+    selected_subject = str(selected_subject or "")
+    selected_grade = str(selected_grade or "")
+
+    general_selected = "selected" if not selected_subject else ""
+
+    html = (
+        f"<option value='' {general_selected}>"
+        "General / Any One-on-One subject"
+        "</option>"
+    )
+
+    subjects_by_grade = {}
+
+    for subject_row in subjects:
+        subject_grade = subject_row["grade"] or ""
+        subjects_by_grade.setdefault(subject_grade, []).append(subject_row)
+
+    for subject_grade, grade_subjects in subjects_by_grade.items():
+        html += (
+            f"<optgroup label='"
+            f"{escape(grade_label(subject_grade), quote=True)}"
+            f"'>"
+        )
+
+        for subject_row in grade_subjects:
+            subject_name = str(subject_row["name"] or "")
+
+            selected = (
+                "selected"
+                if (
+                    subject_name == selected_subject
+                    and subject_grade == selected_grade
+                )
+                else ""
+            )
+
+            html += (
+                f"<option "
+                f"value='{escape(subject_name, quote=True)}' "
+                f"data-grade='{escape(subject_grade, quote=True)}' "
+                f"{selected}>"
+                f"{escape(subject_name)}"
+                f"</option>"
+            )
+
+        html += "</optgroup>"
+
+    return html
+
+
+def validate_tutor_one_on_one_availability(
+    cur,
+    subject,
+    grade_level,
+    available_day,
+    available_start_time,
+    available_end_time
+):
+    if available_day not in ONE_ON_ONE_AVAILABILITY_DAYS:
+        return "Please select a valid day."
+
+    if grade_level not in {"", *ONE_ON_ONE_AVAILABILITY_GRADES}:
+        return "Please select a valid EBTA grade level."
+
+    if not available_start_time or not available_end_time:
+        return "Please enter both the start time and end time."
+
+    try:
+        start_value = datetime.datetime.strptime(
+            available_start_time,
+            "%H:%M"
+        ).time()
+        end_value = datetime.datetime.strptime(
+            available_end_time,
+            "%H:%M"
+        ).time()
+    except ValueError:
+        return "Please enter valid availability times."
+
+    if start_value >= end_value:
+        return "The end time must be later than the start time."
+
+    if subject:
+        if grade_level:
+            cur.execute("""
+                SELECT 1
+                FROM subjects
+                WHERE name=? AND grade=?
+                LIMIT 1
+            """, (subject, grade_level))
+        else:
+            cur.execute("""
+                SELECT 1
+                FROM subjects
+                WHERE name=?
+                LIMIT 1
+            """, (subject,))
+
+        if not cur.fetchone():
+            return "Please select a subject offered by EBTA."
+
+    return None
+
+
 @app.get('/tutor/one-on-one/availability')
 def tutor_one_on_one_availability():
     r = require_tutor()
@@ -94328,43 +94457,539 @@ def tutor_one_on_one_availability():
         return r
 
     tid = is_tutor()
+    edit_id_raw = request.args.get("edit", "").strip()
+    edit_id = None
+
+    if edit_id_raw:
+        try:
+            edit_id = int(edit_id_raw)
+        except ValueError:
+            return redirect(url_for("tutor_one_on_one_availability"))
+
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM one_on_one_tutor_availability WHERE tutor_id=? ORDER BY is_active DESC, available_day, available_start_time", (tid,))
-    rows = cur.fetchall()
+
     cur.execute("""
-        SELECT s.name, s.grade
-        FROM tutor_subjects ts
-        JOIN subjects s ON s.id=ts.subject_id
-        WHERE ts.tutor_id=?
-          AND COALESCE(ts.delivery_mode, 'GROUP') IN ('ONE_ON_ONE','BOTH')
-        ORDER BY s.grade, s.name
+        SELECT *
+        FROM one_on_one_tutor_availability
+        WHERE tutor_id=?
+        ORDER BY
+            is_active DESC,
+            CASE available_day
+                WHEN 'Monday' THEN 1
+                WHEN 'Tuesday' THEN 2
+                WHEN 'Wednesday' THEN 3
+                WHEN 'Thursday' THEN 4
+                WHEN 'Friday' THEN 5
+                WHEN 'Saturday' THEN 6
+                WHEN 'Sunday' THEN 7
+                ELSE 8
+            END,
+            available_start_time
     """, (tid,))
+    rows = cur.fetchall()
+
+    edit_row = None
+
+    if edit_id is not None:
+        cur.execute("""
+            SELECT *
+            FROM one_on_one_tutor_availability
+            WHERE id=? AND tutor_id=?
+        """, (edit_id, tid))
+        edit_row = cur.fetchone()
+
+        if not edit_row:
+            conn.close()
+            return page(
+                "Availability Not Found",
+                card_msg(
+                    "This availability record was not found or does not "
+                    "belong to your tutor account."
+                )
+            )
+
+    # Tutors can select any subject currently offered by EBTA.
+    cur.execute("""
+        SELECT DISTINCT name, grade
+        FROM subjects
+        ORDER BY
+            CASE grade
+                WHEN 'G8' THEN 8
+                WHEN 'G9' THEN 9
+                WHEN 'G10' THEN 10
+                WHEN 'G11' THEN 11
+                WHEN 'G12' THEN 12
+                WHEN 'G13' THEN 13
+                ELSE 99
+            END,
+            name
+    """)
     subjects = cur.fetchall()
     conn.close()
 
-    subject_opts = "<option value=''>General / Any One-on-One subject</option>" + "".join([f"<option value='{escape(s['name'], quote=True)}'>{escape(grade_label(s['grade']))} - {escape(s['name'])}</option>" for s in subjects])
-    rows_html = "".join([
-        f"<tr><td>{escape(rw['available_day'] or '')}</td><td>{escape(rw['available_start_time'] or '')} - {escape(rw['available_end_time'] or '')}</td><td>{escape(rw['grade_level'] or '')}</td><td>{escape(rw['subject'] or 'General')}</td><td>{one_on_one_badge('Active' if rw['is_active'] else 'Inactive')}</td></tr>"
-        for rw in rows
-    ])
+    selected_day = (
+        edit_row["available_day"]
+        if edit_row
+        else "Monday"
+    )
+    selected_start_time = (
+        edit_row["available_start_time"]
+        if edit_row
+        else ""
+    )
+    selected_end_time = (
+        edit_row["available_end_time"]
+        if edit_row
+        else ""
+    )
+    selected_grade = (
+        edit_row["grade_level"]
+        if edit_row
+        else ""
+    )
+    selected_subject = (
+        edit_row["subject"]
+        if edit_row
+        else ""
+    )
+    selected_notes = (
+        edit_row["notes"]
+        if edit_row
+        else ""
+    )
+
+    subject_opts = one_on_one_availability_subject_options(
+        subjects,
+        selected_subject=selected_subject,
+        selected_grade=selected_grade
+    )
+
+    if edit_row:
+        form_action = (
+            f"/tutor/one-on-one/availability/{edit_row['id']}/edit"
+        )
+        form_heading = "Edit Availability"
+        submit_label = "Update Availability"
+        cancel_button = """
+            <a class="btn secondary mini"
+               href="/tutor/one-on-one/availability">
+                Cancel
+            </a>
+        """
+        form_note = (
+            "Update the selected availability slot below."
+        )
+    else:
+        form_action = "/tutor/one-on-one/availability"
+        form_heading = "Add Availability"
+        submit_label = "Add Availability"
+        cancel_button = ""
+        form_note = (
+            "Add the days and times when you are available for "
+            "one-on-one tutoring."
+        )
+
+    rows_html = ""
+
+    for availability_row in rows:
+        row_is_editing = (
+            edit_row
+            and int(edit_row["id"]) == int(availability_row["id"])
+        )
+
+        row_class = (
+            " class='ooo-availability-editing-row'"
+            if row_is_editing
+            else ""
+        )
+
+        rows_html += f"""
+        <tr{row_class}>
+            <td data-label="Day">
+                <strong>{escape(availability_row['available_day'] or '—')}</strong>
+            </td>
+
+            <td data-label="Time">
+                {escape(availability_row['available_start_time'] or '—')}
+                –
+                {escape(availability_row['available_end_time'] or '—')}
+            </td>
+
+            <td data-label="Grade">
+                {escape(
+                    grade_label(availability_row['grade_level'])
+                    if availability_row['grade_level']
+                    else 'Any grade'
+                )}
+            </td>
+
+            <td data-label="Subject">
+                {escape(availability_row['subject'] or 'General')}
+            </td>
+
+            <td data-label="Notes">
+                {escape(availability_row['notes'] or '—')}
+            </td>
+
+            <td data-label="Status">
+                {one_on_one_badge(
+                    'Active'
+                    if availability_row['is_active']
+                    else 'Inactive'
+                )}
+            </td>
+
+            <td data-label="Actions">
+                <div class="ooo-availability-actions">
+                    <a class="btn mini secondary"
+                       href="/tutor/one-on-one/availability?edit={availability_row['id']}">
+                        Edit
+                    </a>
+
+                    <form method="post"
+                          action="/tutor/one-on-one/availability/{availability_row['id']}/delete"
+                          onsubmit="return confirm(
+                              'Delete this availability permanently?'
+                          );">
+                        <button class="btn mini danger">
+                            Delete
+                        </button>
+                    </form>
+                </div>
+            </td>
+        </tr>
+        """
+
+    empty_row = """
+        <tr>
+            <td colspan="7">
+                <div class="empty">
+                    No availability added yet.
+                </div>
+            </td>
+        </tr>
+    """
 
     body = f"""
-    <section class="card">
-        <div class="toolbar"><a class="btn mini secondary" href="/tutor/one-on-one">← Back</a></div>
-        <h1>My One-on-One Availability</h1>
-        <form method="post" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px">
-            <div><label>Day</label><select name="available_day">{one_on_one_options(['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'])}</select></div>
-            <div><label>Start Time</label><input type="time" name="available_start_time" required></div>
-            <div><label>End Time</label><input type="time" name="available_end_time" required></div>
-            <div><label>Grade Level</label><select name="grade_level">{one_on_one_options(['G8','G9','G10','G11','G12','G13'], '', 'Any grade')}</select></div>
-            <div><label>Subject</label><select name="subject">{subject_opts}</select></div>
-            <div><label>Notes</label><input name="notes" placeholder="Optional notes"></div>
-            <div style="align-self:end"><button class="btn success mini">Add Availability</button></div>
-        </form>
-        <div class="scroll-x" style="margin-top:14px"><table><thead><tr><th>Day</th><th>Time</th><th>Grade</th><th>Subject</th><th>Status</th></tr></thead><tbody>{rows_html or "<tr><td colspan='5'>No availability added yet.</td></tr>"}</tbody></table></div>
+    <style>
+        .ooo-availability-page {{
+            overflow:hidden;
+        }}
+
+        .ooo-availability-header {{
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:14px;
+            flex-wrap:wrap;
+            margin-bottom:14px;
+        }}
+
+        .ooo-availability-form-card {{
+            margin-bottom:16px;
+            border-left:5px solid
+                {'#e3ad24' if edit_row else '#1b6f3b'};
+        }}
+
+        .ooo-availability-form-grid {{
+            display:grid;
+            grid-template-columns:repeat(
+                auto-fit,
+                minmax(180px, 1fr)
+            );
+            gap:10px;
+            align-items:start;
+        }}
+
+        .ooo-availability-form-grid label {{
+            display:block;
+            margin-bottom:5px;
+        }}
+
+        .ooo-availability-form-grid input,
+        .ooo-availability-form-grid select {{
+            width:100%;
+            margin:0;
+        }}
+
+        .ooo-availability-form-actions {{
+            display:flex;
+            align-items:center;
+            gap:8px;
+            flex-wrap:wrap;
+            align-self:end;
+        }}
+
+        .ooo-availability-form-actions .btn {{
+            min-height:42px;
+            justify-content:center;
+        }}
+
+        .ooo-availability-table {{
+            min-width:980px;
+        }}
+
+        .ooo-availability-table th,
+        .ooo-availability-table td {{
+            vertical-align:middle;
+        }}
+
+        .ooo-availability-table td {{
+            padding-top:11px;
+            padding-bottom:11px;
+        }}
+
+        .ooo-availability-actions {{
+            display:flex;
+            align-items:center;
+            gap:6px;
+            flex-wrap:wrap;
+        }}
+
+        .ooo-availability-actions form {{
+            display:inline-flex;
+            margin:0;
+        }}
+
+        .ooo-availability-actions .btn {{
+            min-width:68px;
+            justify-content:center;
+        }}
+
+        .ooo-availability-editing-row {{
+            background:#fff9e8 !important;
+            box-shadow:inset 4px 0 0 #e3ad24;
+        }}
+
+        @media(max-width:700px) {{
+            .ooo-availability-page {{
+                overflow:visible;
+            }}
+
+            .ooo-availability-form-grid {{
+                grid-template-columns:1fr;
+            }}
+
+            .ooo-availability-form-actions,
+            .ooo-availability-form-actions .btn {{
+                width:100%;
+            }}
+
+            .ooo-availability-table-shell {{
+                overflow:visible;
+            }}
+
+            .ooo-availability-table {{
+                display:block;
+                width:100%;
+                min-width:0;
+                background:transparent;
+                box-shadow:none !important;
+                border:0 !important;
+            }}
+
+            .ooo-availability-table thead {{
+                display:none;
+            }}
+
+            .ooo-availability-table tbody {{
+                display:block;
+            }}
+
+            .ooo-availability-table tr {{
+                display:block;
+                margin-bottom:12px;
+                padding:12px;
+                border:1px solid #d7e7dc;
+                border-radius:15px;
+                background:#fff;
+                box-shadow:0 5px 14px rgba(12,72,37,.06);
+            }}
+
+            .ooo-availability-table td {{
+                display:grid;
+                grid-template-columns:85px minmax(0,1fr);
+                gap:10px;
+                width:100%;
+                padding:7px 0;
+                border:0;
+                border-bottom:1px solid #edf3ef;
+            }}
+
+            .ooo-availability-table td::before {{
+                content:attr(data-label);
+                color:#52665a;
+                font-size:9.5px;
+                font-weight:900;
+                letter-spacing:.04em;
+                text-transform:uppercase;
+            }}
+
+            .ooo-availability-table td:last-child {{
+                border-bottom:0;
+            }}
+
+            .ooo-availability-actions {{
+                display:grid;
+                grid-template-columns:1fr 1fr;
+                width:100%;
+            }}
+
+            .ooo-availability-actions form,
+            .ooo-availability-actions .btn {{
+                width:100%;
+            }}
+        }}
+    </style>
+
+    <section class="card ooo-availability-page">
+        <div class="ooo-availability-header">
+            <div>
+                <h1>My One-on-One Availability</h1>
+                <p class="muted">
+                    Add, update or delete your available one-on-one tutoring slots.
+                </p>
+            </div>
+
+            <a class="btn mini secondary"
+               href="/tutor/one-on-one">
+                ← Back
+            </a>
+        </div>
+
+        <section class="card soft ooo-availability-form-card">
+            <h2>{form_heading}</h2>
+            <p class="mini muted">{form_note}</p>
+
+            <form method="post"
+                  action="{form_action}"
+                  class="ooo-availability-form-grid">
+
+                <div>
+                    <label>Day</label>
+                    <select name="available_day" required>
+                        {one_on_one_options(
+                            ONE_ON_ONE_AVAILABILITY_DAYS,
+                            selected_day
+                        )}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Start Time</label>
+                    <input type="time"
+                           name="available_start_time"
+                           value="{escape(
+                               selected_start_time or '',
+                               quote=True
+                           )}"
+                           required>
+                </div>
+
+                <div>
+                    <label>End Time</label>
+                    <input type="time"
+                           name="available_end_time"
+                           value="{escape(
+                               selected_end_time or '',
+                               quote=True
+                           )}"
+                           required>
+                </div>
+
+                <div>
+                    <label>Grade Level</label>
+                    <select name="grade_level"
+                            id="ooo_availability_grade">
+                        {one_on_one_options(
+                            ONE_ON_ONE_AVAILABILITY_GRADES,
+                            selected_grade,
+                            'Any grade'
+                        )}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Subject</label>
+                    <select name="subject"
+                            id="ooo_availability_subject"
+                            onchange="syncOneOnOneAvailabilityGrade()">
+                        {subject_opts}
+                    </select>
+
+                    <div class="mini muted"
+                         style="margin-top:4px">
+                        Choose any subject offered by EBTA.
+                    </div>
+                </div>
+
+                <div>
+                    <label>Notes</label>
+                    <input name="notes"
+                           value="{escape(
+                               selected_notes or '',
+                               quote=True
+                           )}"
+                           placeholder="Optional notes">
+                </div>
+
+                <div class="ooo-availability-form-actions">
+                    <button class="btn success mini">
+                        {submit_label}
+                    </button>
+                    {cancel_button}
+                </div>
+            </form>
+        </section>
+
+        <div class="scroll-x ooo-availability-table-shell">
+            <table class="ooo-availability-table">
+                <thead>
+                    <tr>
+                        <th>Day</th>
+                        <th>Time</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Notes</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {rows_html or empty_row}
+                </tbody>
+            </table>
+        </div>
     </section>
+
+    <script>
+        function syncOneOnOneAvailabilityGrade() {{
+            const subjectSelect = document.getElementById(
+                "ooo_availability_subject"
+            );
+            const gradeSelect = document.getElementById(
+                "ooo_availability_grade"
+            );
+
+            if (!subjectSelect || !gradeSelect) return;
+
+            const selectedOption =
+                subjectSelect.options[subjectSelect.selectedIndex];
+
+            if (!selectedOption) return;
+
+            const subjectGrade =
+                selectedOption.getAttribute("data-grade") || "";
+
+            if (subjectGrade) {{
+                gradeSelect.value = subjectGrade;
+            }}
+        }}
+    </script>
     """
+
     return page("Tutor One-on-One Availability", body)
 
 
@@ -94377,18 +95002,55 @@ def tutor_one_on_one_availability_post():
     tid = is_tutor()
     conn = get_db()
     cur = conn.cursor()
+
     subject = request.form.get("subject", "").strip()
     grade_level = request.form.get("grade_level", "").strip()
     available_day = request.form.get("available_day", "").strip()
-    available_start_time = request.form.get("available_start_time", "").strip()
-    available_end_time = request.form.get("available_end_time", "").strip()
+    available_start_time = request.form.get(
+        "available_start_time",
+        ""
+    ).strip()
+    available_end_time = request.form.get(
+        "available_end_time",
+        ""
+    ).strip()
     notes = request.form.get("notes", "").strip()
+
+    validation_error = validate_tutor_one_on_one_availability(
+        cur,
+        subject,
+        grade_level,
+        available_day,
+        available_start_time,
+        available_end_time
+    )
+
+    if validation_error:
+        conn.close()
+        return page(
+            "Invalid Availability",
+            card_msg(validation_error)
+        )
 
     cur.execute("""
         INSERT INTO one_on_one_tutor_availability(
-            tutor_id, subject, grade_level, available_day, available_start_time, available_end_time, notes, is_active, created_at
-        ) VALUES(?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(tutor_id, available_day, available_start_time, available_end_time)
+            tutor_id,
+            subject,
+            grade_level,
+            available_day,
+            available_start_time,
+            available_end_time,
+            notes,
+            is_active,
+            created_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(
+            tutor_id,
+            available_day,
+            available_start_time,
+            available_end_time
+        )
         DO UPDATE SET
             subject=excluded.subject,
             grade_level=excluded.grade_level,
@@ -94396,10 +95058,168 @@ def tutor_one_on_one_availability_post():
             is_active=1,
             created_at=excluded.created_at
     """, (
-        tid, subject, grade_level, available_day, available_start_time, available_end_time, notes, 1, now_utc_iso()
+        tid,
+        subject,
+        grade_level,
+        available_day,
+        available_start_time,
+        available_end_time,
+        notes,
+        1,
+        now_utc_iso()
     ))
+
     conn.commit()
     conn.close()
+
+    return redirect(url_for("tutor_one_on_one_availability"))
+
+
+@app.post(
+    '/tutor/one-on-one/availability/<int:availability_id>/edit'
+)
+def tutor_one_on_one_availability_edit(availability_id):
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM one_on_one_tutor_availability
+        WHERE id=? AND tutor_id=?
+    """, (availability_id, tid))
+    existing = cur.fetchone()
+
+    if not existing:
+        conn.close()
+        return page(
+            "Availability Not Found",
+            card_msg(
+                "This availability record was not found or does not "
+                "belong to your tutor account."
+            )
+        )
+
+    subject = request.form.get("subject", "").strip()
+    grade_level = request.form.get("grade_level", "").strip()
+    available_day = request.form.get("available_day", "").strip()
+    available_start_time = request.form.get(
+        "available_start_time",
+        ""
+    ).strip()
+    available_end_time = request.form.get(
+        "available_end_time",
+        ""
+    ).strip()
+    notes = request.form.get("notes", "").strip()
+
+    validation_error = validate_tutor_one_on_one_availability(
+        cur,
+        subject,
+        grade_level,
+        available_day,
+        available_start_time,
+        available_end_time
+    )
+
+    if validation_error:
+        conn.close()
+        return page(
+            "Invalid Availability",
+            card_msg(validation_error)
+        )
+
+    cur.execute("""
+        SELECT id
+        FROM one_on_one_tutor_availability
+        WHERE tutor_id=?
+          AND available_day=?
+          AND available_start_time=?
+          AND available_end_time=?
+          AND id<>?
+        LIMIT 1
+    """, (
+        tid,
+        available_day,
+        available_start_time,
+        available_end_time,
+        availability_id
+    ))
+
+    if cur.fetchone():
+        conn.close()
+        return page(
+            "Duplicate Availability",
+            card_msg(
+                "You already have another availability slot with the "
+                "same day and time."
+            )
+        )
+
+    cur.execute("""
+        UPDATE one_on_one_tutor_availability
+        SET subject=?,
+            grade_level=?,
+            available_day=?,
+            available_start_time=?,
+            available_end_time=?,
+            notes=?,
+            is_active=1,
+            created_at=?
+        WHERE id=? AND tutor_id=?
+    """, (
+        subject,
+        grade_level,
+        available_day,
+        available_start_time,
+        available_end_time,
+        notes,
+        now_utc_iso(),
+        availability_id,
+        tid
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("tutor_one_on_one_availability"))
+
+
+@app.post(
+    '/tutor/one-on-one/availability/<int:availability_id>/delete'
+)
+def tutor_one_on_one_availability_delete(availability_id):
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        DELETE FROM one_on_one_tutor_availability
+        WHERE id=? AND tutor_id=?
+    """, (availability_id, tid))
+
+    deleted = cur.rowcount
+
+    conn.commit()
+    conn.close()
+
+    if not deleted:
+        return page(
+            "Availability Not Found",
+            card_msg(
+                "This availability record was not found or does not "
+                "belong to your tutor account."
+            )
+        )
+
     return redirect(url_for("tutor_one_on_one_availability"))
 
 
