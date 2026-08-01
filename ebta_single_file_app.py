@@ -10792,16 +10792,59 @@ EBTA_UNIFIED_UI_JS = """
         }, { passive:true });
     }
 
+    function resetSubmitFeedback(form) {
+        if (!form) return;
+
+        form.querySelectorAll(".ebta-submitting").forEach(function (button) {
+            button.classList.remove("ebta-submitting");
+            button.removeAttribute("aria-busy");
+        });
+    }
+
     function addSubmitFeedback() {
         document.querySelectorAll("form").forEach(function (form) {
-            form.addEventListener("submit", function () {
-                const submitter = form.querySelector(
-                    'button[type="submit"], input[type="submit"], button:not([type])'
-                );
+            form.addEventListener("submit", function (event) {
+                const submitter =
+                    event.submitter ||
+                    form.querySelector(
+                        'button[type="submit"], ' +
+                        'input[type="submit"], ' +
+                        'button:not([type])'
+                    );
+
+                if (event.defaultPrevented || !form.checkValidity()) {
+                    resetSubmitFeedback(form);
+                    return;
+                }
+
                 if (submitter) {
                     submitter.classList.add("ebta-submitting");
                     submitter.setAttribute("aria-busy", "true");
                 }
+
+                window.setTimeout(function () {
+                    if (event.defaultPrevented) {
+                        resetSubmitFeedback(form);
+
+                        if (submitter) {
+                            submitter.disabled = false;
+                        }
+                    }
+                }, 0);
+            });
+
+            form.addEventListener(
+                "invalid",
+                function () {
+                    resetSubmitFeedback(form);
+                },
+                true
+            );
+        });
+
+        window.addEventListener("pageshow", function () {
+            document.querySelectorAll("form").forEach(function (form) {
+                resetSubmitFeedback(form);
             });
         });
     }
@@ -14028,6 +14071,12 @@ def home():
 
                
 
+        <div id="enrollment_submit_status"
+             class="mini"
+             role="status"
+             aria-live="polite"
+             style="display:none;"></div>
+
         <div class='toolbar'>
 
             <button type="button" class="btn secondary" onclick="openTermsModal()">
@@ -14698,6 +14747,16 @@ function showPopup(message, type='info', timeout=4000){
     }
 
     form.addEventListener('submit', function(e){
+        const enrollmentSubmitButton =
+            e.submitter ||
+            form.querySelector("button[type='submit']");
+
+        if (enrollmentSubmitButton) {
+            enrollmentSubmitButton.classList.remove("ebta-submitting");
+            enrollmentSubmitButton.removeAttribute("aria-busy");
+            enrollmentSubmitButton.disabled = false;
+        }
+
         const studentPhoneInput = document.getElementById("phone_input");
         const guardianPhoneInput = document.getElementById("guardian_input");
         const termsCheck = document.getElementById('terms_check');
@@ -15218,20 +15277,62 @@ function showPopup(message, type='info', timeout=4000){
 
         if (!form) return;
 
-        form.addEventListener("submit", function (e) {
+        const submitBtn = form.querySelector(
+            "button[type='submit'], button:not([type])"
+        );
 
-            if (e.defaultPrevented) {
+        const originalSubmitText = submitBtn
+            ? submitBtn.textContent.trim()
+            : "Submit Enrollment";
+
+        let enrollmentSubmitTimer = null;
+
+        function resetEnrollmentSubmissionUI(message) {
+            if (enrollmentSubmitTimer) {
+                window.clearTimeout(enrollmentSubmitTimer);
+                enrollmentSubmitTimer = null;
+            }
+
+            const overlay = document.getElementById(
+                "enrollment-loading-overlay"
+            );
+
+            if (overlay) {
+                overlay.remove();
+            }
+
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalSubmitText;
+                submitBtn.classList.remove("ebta-submitting");
+                submitBtn.removeAttribute("aria-busy");
+            }
+
+            if (message && typeof showPopup === "function") {
+                showPopup(message, "error", 9000);
+            }
+        }
+
+        form.addEventListener("submit", function (event) {
+            /*
+             * The main enrollment validator runs first. Only show the loading
+             * state when all enrollment checks have passed.
+             */
+            if (event.defaultPrevented || !form.checkValidity()) {
+                resetEnrollmentSubmissionUI();
                 return;
             }
 
-            const submitBtn = form.querySelector("button[type='submit'], button:not([type])");
-
             if (submitBtn) {
                 submitBtn.disabled = true;
-                submitBtn.innerText = "Submitting enrollment...";
+                submitBtn.textContent = "Submitting enrollment...";
+                submitBtn.classList.add("ebta-submitting");
+                submitBtn.setAttribute("aria-busy", "true");
             }
 
-            let overlay = document.getElementById("enrollment-loading-overlay");
+            let overlay = document.getElementById(
+                "enrollment-loading-overlay"
+            );
 
             if (!overlay) {
                 overlay = document.createElement("div");
@@ -15263,7 +15364,7 @@ function showPopup(message, type='info', timeout=4000){
                                 border-top-color:#1b5e20;
                                 border-radius:50%;
                                 margin:0 auto 14px;
-                                animation:ebtaSpin 1s linear infinite;
+                                animation:ebtaEnrollmentSpin 1s linear infinite;
                             "></div>
 
                             <h2 style="margin:0 0 8px;color:#1b5e20;">
@@ -15271,16 +15372,15 @@ function showPopup(message, type='info', timeout=4000){
                             </h2>
 
                             <p style="margin:0;color:#475569;font-size:14px;">
-                                Please wait while we upload your proof of payment and submit your enrollment.
-                                Do not refresh or close this page.
+                                Please wait while your enrollment is submitted.
                             </p>
                         </div>
                     </div>
                 `;
 
                 const style = document.createElement("style");
-                style.innerHTML = `
-                    @keyframes ebtaSpin {
+                style.textContent = `
+                    @keyframes ebtaEnrollmentSpin {
                         from { transform:rotate(0deg); }
                         to { transform:rotate(360deg); }
                     }
@@ -15289,10 +15389,33 @@ function showPopup(message, type='info', timeout=4000){
                 document.head.appendChild(style);
                 document.body.appendChild(overlay);
             }
+
+            /*
+             * A slow or interrupted mobile connection must not leave the
+             * learner trapped behind a permanent spinner.
+             */
+            enrollmentSubmitTimer = window.setTimeout(function () {
+                resetEnrollmentSubmissionUI(
+                    "The enrollment did not finish. Please check your " +
+                    "internet connection and press Submit Enrollment again."
+                );
+            }, 45000);
+        });
+
+        form.addEventListener(
+            "invalid",
+            function () {
+                resetEnrollmentSubmissionUI();
+            },
+            true
+        );
+
+        window.addEventListener("pageshow", function () {
+            resetEnrollmentSubmissionUI();
         });
     });
 
-    
+
     </script>'''
 
     extra_js = extra_js.replace("{enrollment_month_labels_json}", enrollment_month_labels_json)
