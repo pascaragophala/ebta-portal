@@ -18161,8 +18161,9 @@ def student_home():
     groups_section = ""
     sessions_section = ""
 
-    #if is_current_month and has_active_enrollment and active_sub_ids:
-    if has_active_enrollment and active_sub_ids:
+    #if is_current_month and has_active_enrollment and active_sub_ids: !!!!!best
+    #if has_active_enrollment and active_sub_ids:
+    if has_active_enrollment:
 
         groups_section = f"""
         <div class='card' style="border-left:5px solid #25D366">
