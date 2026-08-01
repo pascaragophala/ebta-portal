@@ -16959,9 +16959,6 @@ def student_home():
     real_month = now.strftime("%Y-%m")
 
     is_current_month = (month == real_month)
-    print("DEBUG STUDENT ID:", sid)
-    print("DEBUG ACTIVE MONTH:", month)
-    print("DEBUG TYPE OF month:", month, len(month))
 
     conn=get_db(); cur=conn.cursor()
     
@@ -17120,14 +17117,6 @@ def student_home():
         """
 
 
-    cur.execute("""
-        SELECT student_id, month, status
-        FROM enrollments
-        WHERE student_id=?
-    """, (sid,))
-    debug_rows = cur.fetchall()
-    print("DEBUG ENROLLMENTS:", [dict(r) for r in debug_rows])
-    
     # Enrollments this month
     cur.execute("""
     SELECT e.subject_id, e.status, s.name AS subject_name, s.grade
@@ -17140,14 +17129,6 @@ def student_home():
 
     enrolls = cur.fetchall()   # FETCH IMMEDIATELY
 
-    # Debug AFTER fetching
-    cur.execute("""
-        SELECT month, LENGTH(month) as len
-        FROM enrollments
-        WHERE student_id=?
-    """, (sid,))
-    print("DEBUG RAW MONTHS IN DB:", [dict(r) for r in cur.fetchall()])
-    
     active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status'].upper()=='ACTIVE']
     has_active_enrollment = any(x['status'].upper() == 'ACTIVE' for x in enrolls)
     
@@ -17299,23 +17280,52 @@ def student_home():
 
 
 
-    # WhatsApp links for enrolled subjects
-    group_html = "<div class='empty'>No group links yet.</div>"
+    # WhatsApp links for subjects where the learner was ACTIVE in the
+    # selected month. Links may be configured for ALL months or for the
+    # specific selected month. A month-specific link takes priority.
+    group_html = "<div class='empty'>No group links have been added for these subjects yet.</div>"
 
-    if is_current_month and has_active_enrollment and active_sub_ids:
+    if has_active_enrollment and active_sub_ids:
 
         q = f"""
-        SELECT g.subject_id, g.invite_link, s.name, s.grade
+        SELECT
+            g.subject_id,
+            g.invite_link,
+            g.month AS group_month,
+            s.name,
+            s.grade
         FROM groups g
         JOIN subjects s ON s.id = g.subject_id
-        WHERE g.month = 'ALL'
-          AND g.is_visible = 1
+        WHERE g.is_visible = 1
           AND g.subject_id IN ({','.join('?' * len(active_sub_ids))})
-        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.name
+          AND (
+                UPPER(TRIM(g.month)) = 'ALL'
+                OR substr(TRIM(g.month), 1, 7) = ?
+          )
+        ORDER BY
+            CASE
+                WHEN substr(TRIM(g.month), 1, 7) = ? THEN 0
+                ELSE 1
+            END,
+            CAST(REPLACE(s.grade,'G','') AS INTEGER),
+            s.name
         """
 
-        cur.execute(q, (*active_sub_ids,))
-        gs = cur.fetchall()
+        cur.execute(q, (*active_sub_ids, month, month))
+        raw_groups = cur.fetchall()
+
+        # Avoid showing two buttons when both an ALL-month link and a
+        # month-specific link exist for the same subject.
+        gs = []
+        seen_group_subject_ids = set()
+
+        for group_row in raw_groups:
+            subject_id = group_row['subject_id']
+            if subject_id in seen_group_subject_ids:
+                continue
+
+            seen_group_subject_ids.add(subject_id)
+            gs.append(group_row)
 
         if gs:
 
@@ -17358,10 +17368,11 @@ def student_home():
             """
 
 
-    # Sessions + Meet link for enrolled subjects
-    sessions_html="<div class='empty'>No sessions yet.</div>"
-    if is_current_month and has_active_enrollment and active_sub_ids:
-    #if has_active_enrollment and active_sub_ids:
+    # Sessions + meeting links for subjects where the learner was ACTIVE in
+    # the selected month. Access is not restricted to the real current month.
+    sessions_html = "<div class='empty'>No session links have been added for these subjects yet.</div>"
+
+    if has_active_enrollment and active_sub_ids:
         q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link,s.meeting_id,s.meeting_passcode
             FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
             WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(active_sub_ids))})
@@ -18161,16 +18172,14 @@ def student_home():
     groups_section = ""
     sessions_section = ""
 
-    #if is_current_month and has_active_enrollment and active_sub_ids: !!!!!best
-    #if has_active_enrollment and active_sub_ids:
-    if has_active_enrollment:
+    if has_active_enrollment and active_sub_ids:
 
         groups_section = f"""
         <div class='card' style="border-left:5px solid #25D366">
             <h2>Subject WhatsApp Groups</h2>
 
             <div class="mini muted" style="margin-bottom:12px">
-                Join your subject-specific WhatsApp groups for class communication.
+                WhatsApp groups for your active subjects in {pretty_month_label(month)}.
             </div>
 
             {group_html}
@@ -18180,6 +18189,11 @@ def student_home():
         sessions_section = f"""
         <div class='card'>
             <h2>Sessions</h2>
+
+            <div class="mini muted" style="margin-bottom:12px">
+                Session details for your active subjects in {pretty_month_label(month)}.
+            </div>
+
             {sessions_html}
         </div>
         """
