@@ -3301,6 +3301,20 @@ def init_db():
             )
         )
         
+    # Student WhatsApp-group and class-session access control.
+    cur.execute(
+        "SELECT value FROM settings "
+        "WHERE key='student_live_access_mode'"
+    )
+    if not cur.fetchone():
+        cur.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?)",
+            (
+                'student_live_access_mode',
+                'ACTIVE_ENROLLMENT_MONTHS'
+            )
+        )
+
     # Tutor application control defaults
     cur.execute("SELECT value FROM settings WHERE key='applications_open'")
     if not cur.fetchone():
@@ -17131,6 +17145,26 @@ def student_home():
 
     active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status'].upper()=='ACTIVE']
     has_active_enrollment = any(x['status'].upper() == 'ACTIVE' for x in enrolls)
+
+    student_live_access_mode = get_setting(
+        'student_live_access_mode',
+        'ACTIVE_ENROLLMENT_MONTHS'
+    ).strip().upper()
+
+    if student_live_access_mode not in {
+        'CURRENT_MONTH_ONLY',
+        'ACTIVE_ENROLLMENT_MONTHS'
+    }:
+        student_live_access_mode = 'ACTIVE_ENROLLMENT_MONTHS'
+
+    student_live_access_allowed = bool(
+        has_active_enrollment
+        and active_sub_ids
+        and (
+            student_live_access_mode == 'ACTIVE_ENROLLMENT_MONTHS'
+            or is_current_month
+        )
+    )
     
     # ===== ASSIGNMENTS PREVIEW (DASHBOARD SUMMARY) =====
 
@@ -17280,12 +17314,12 @@ def student_home():
 
 
 
-    # WhatsApp links for subjects where the learner was ACTIVE in the
-    # selected month. Links may be configured for ALL months or for the
+    # WhatsApp links follow the Student Live Access Mode selected by
+    # High Admin. Links may be configured for ALL months or for the
     # specific selected month. A month-specific link takes priority.
     group_html = "<div class='empty'>No group links have been added for these subjects yet.</div>"
 
-    if has_active_enrollment and active_sub_ids:
+    if student_live_access_allowed:
 
         q = f"""
         SELECT
@@ -17368,11 +17402,11 @@ def student_home():
             """
 
 
-    # Sessions + meeting links for subjects where the learner was ACTIVE in
-    # the selected month. Access is not restricted to the real current month.
+    # Sessions + meeting links follow the Student Live Access Mode
+    # selected by High Admin.
     sessions_html = "<div class='empty'>No session links have been added for these subjects yet.</div>"
 
-    if has_active_enrollment and active_sub_ids:
+    if student_live_access_allowed:
         q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link,s.meeting_id,s.meeting_passcode
             FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
             WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(active_sub_ids))})
@@ -18172,7 +18206,7 @@ def student_home():
     groups_section = ""
     sessions_section = ""
 
-    if has_active_enrollment and active_sub_ids:
+    if student_live_access_allowed:
 
         groups_section = f"""
         <div class='card' style="border-left:5px solid #25D366">
@@ -35071,6 +35105,17 @@ def admin_settings():
     
     enrollment_open = '1' if get_setting('enrollment_open', '1') == '1' else '0'
     enrollment_message = get_setting('enrollment_message', '')
+
+    student_live_access_mode = get_setting(
+        'student_live_access_mode',
+        'ACTIVE_ENROLLMENT_MONTHS'
+    ).strip().upper()
+
+    if student_live_access_mode not in {
+        'CURRENT_MONTH_ONLY',
+        'ACTIVE_ENROLLMENT_MONTHS'
+    }:
+        student_live_access_mode = 'ACTIVE_ENROLLMENT_MONTHS'
     
     celebration_banner_enabled = '1' if get_setting('celebration_banner_enabled', '0') == '1' else '0'
     celebration_banner_text = get_setting(
@@ -35138,6 +35183,53 @@ def admin_settings():
         </form>
     </section>
     
+    <section class='card soft' style="border-left:5px solid #1b6f3b">
+        <h2>Student Live Access</h2>
+
+        <p class='muted mini'>
+            Control when learners can see subject WhatsApp-group links
+            and class-session links. Changes apply immediately without
+            editing the code or redeploying.
+        </p>
+
+        <form class='grid'
+              method='post'
+              action='{url_for("admin_set_student_live_access")}'>
+            <div>
+                <label>WhatsApp groups and session access</label>
+
+                <select name='mode' required>
+                    <option value='CURRENT_MONTH_ONLY'
+                            {"selected" if student_live_access_mode == "CURRENT_MONTH_ONLY" else ""}>
+                        Current month only
+                    </option>
+
+                    <option value='ACTIVE_ENROLLMENT_MONTHS'
+                            {"selected" if student_live_access_mode == "ACTIVE_ENROLLMENT_MONTHS" else ""}>
+                        Any month where the learner was actively enrolled
+                    </option>
+                </select>
+            </div>
+
+            <div class='card soft' style="padding:12px">
+                <strong>Current rule</strong>
+
+                <div class='mini muted' style="margin-top:5px">
+                    {
+                        "Learners only see the links while viewing the real current month."
+                        if student_live_access_mode == "CURRENT_MONTH_ONLY"
+                        else
+                        "Learners see the links in any selected month where their enrollment was ACTIVE."
+                    }
+                </div>
+            </div>
+
+            <button class='btn success'>
+                Save Student Live Access
+            </button>
+        </form>
+    </section>
+
     <section class='card soft'>
         <h2>Homepage Celebration Animation</h2>
 
@@ -35211,6 +35303,34 @@ def admin_set_enrollment():
     return redirect(url_for('admin_settings'))
     
     
+@app.post('/admin/set-student-live-access')
+@require_high_admin
+def admin_set_student_live_access():
+    r = require_admin()
+    if r:
+        return r
+
+    mode = request.form.get(
+        'mode',
+        'ACTIVE_ENROLLMENT_MONTHS'
+    ).strip().upper()
+
+    if mode not in {
+        'CURRENT_MONTH_ONLY',
+        'ACTIVE_ENROLLMENT_MONTHS'
+    }:
+        return page(
+            "Invalid Student Live Access Setting",
+            card_msg(
+                "Please select a valid student live-access option."
+            )
+        )
+
+    set_setting('student_live_access_mode', mode)
+
+    return redirect(url_for('admin_settings'))
+
+
 @app.post('/admin/set-celebration-banner')
 @require_high_admin
 def admin_set_celebration_banner():
