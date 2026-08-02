@@ -35036,6 +35036,287 @@ def admin_group_toggle(gid):
     return redirect(url_for('admin_groups'))
 
 
+def admin_group_excel_normalize_header(value):
+    import re
+
+    value = str(value or "").strip().lower()
+    value = value.replace("&", " and ")
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return " ".join(value.split())
+
+
+def admin_group_excel_normalize_grade(value):
+    import re
+
+    raw = str(value or "").strip().lower()
+
+    if not raw:
+        return ""
+
+    compact = re.sub(r"[^a-z0-9]+", "", raw)
+
+    if compact in {
+        "upgrading",
+        "upgrade",
+        "matricupgrade",
+        "matricupgrading",
+        "grade13",
+        "g13",
+        "13"
+    }:
+        return "G13"
+
+    match = re.search(r"(8|9|10|11|12|13)", raw)
+
+    if not match:
+        return ""
+
+    grade_number = match.group(1)
+
+    if grade_number not in {"8", "9", "10", "11", "12", "13"}:
+        return ""
+
+    return f"G{grade_number}"
+
+
+def admin_group_excel_normalize_subject(value):
+    import re
+
+    raw = str(value or "").strip().lower()
+    raw = raw.replace("&", " and ")
+    compact = re.sub(r"[^a-z0-9]+", " ", raw)
+    compact = " ".join(compact.split())
+
+    aliases = {
+        "math": "mathematics",
+        "maths": "mathematics",
+        "mathematics": "mathematics",
+
+        "math lit": "mathematical literacy",
+        "maths lit": "mathematical literacy",
+        "math literacy": "mathematical literacy",
+        "maths literacy": "mathematical literacy",
+        "mathematics literacy": "mathematical literacy",
+        "mathematical literacy": "mathematical literacy",
+
+        "physical science": "physical sciences",
+        "physical sciences": "physical sciences",
+
+        "life science": "life sciences",
+        "life sciences": "life sciences",
+
+        "natural science": "natural sciences",
+        "natural sciences": "natural sciences",
+
+        "business study": "business studies",
+        "business studies": "business studies",
+
+        "economic management sciences": "ems",
+        "economics and management sciences": "ems",
+        "ems": "ems",
+
+        "english first additional language": "english fal",
+        "english additional language": "english fal",
+        "english fal": "english fal",
+
+        "english home language": "english hl",
+        "english hl": "english hl",
+
+        "afrikaans first additional language": "afrikaans fal",
+        "afrikaans additional language": "afrikaans fal",
+        "afrikaans fal": "afrikaans fal",
+    }
+
+    return aliases.get(compact, compact)
+
+
+def admin_group_excel_valid_whatsapp_link(value):
+    from urllib.parse import urlparse
+
+    link = str(value or "").strip()
+
+    if not link:
+        return False
+
+    try:
+        parsed = urlparse(link)
+    except Exception:
+        return False
+
+    host = str(parsed.netloc or "").lower()
+
+    return (
+        parsed.scheme in {"http", "https"}
+        and (
+            host == "whatsapp.com"
+            or host.endswith(".whatsapp.com")
+        )
+    )
+
+
+def admin_group_excel_parse(file_bytes):
+    try:
+        from openpyxl import load_workbook
+    except Exception as exc:
+        raise RuntimeError(
+            "The Excel reader is not available on the server."
+        ) from exc
+
+    workbook = load_workbook(
+        io.BytesIO(file_bytes),
+        data_only=True,
+        read_only=False
+    )
+
+    grade_headers = {
+        "grade",
+        "grade programme",
+        "grade program",
+        "grade level",
+        "programme",
+        "program"
+    }
+    subject_headers = {"subject", "subject name"}
+    link_headers = {
+        "whatsapp group link",
+        "whatsapp link",
+        "group link",
+        "invite link",
+        "whatsapp invite link"
+    }
+
+    parsed_rows = {}
+    issues = []
+    headers_found = False
+    duplicate_count = 0
+
+    for worksheet in workbook.worksheets:
+        header_row_number = None
+        grade_column = None
+        subject_column = None
+        link_column = None
+
+        scan_limit = min(int(worksheet.max_row or 0), 30)
+
+        for row_number in range(1, scan_limit + 1):
+            row_cells = list(worksheet[row_number])
+            header_map = {}
+
+            for column_number, cell in enumerate(row_cells, start=1):
+                header_name = admin_group_excel_normalize_header(
+                    cell.value
+                )
+                if header_name:
+                    header_map[header_name] = column_number
+
+            grade_column = next(
+                (
+                    header_map[name]
+                    for name in grade_headers
+                    if name in header_map
+                ),
+                None
+            )
+            subject_column = next(
+                (
+                    header_map[name]
+                    for name in subject_headers
+                    if name in header_map
+                ),
+                None
+            )
+            link_column = next(
+                (
+                    header_map[name]
+                    for name in link_headers
+                    if name in header_map
+                ),
+                None
+            )
+
+            if grade_column and subject_column and link_column:
+                header_row_number = row_number
+                headers_found = True
+                break
+
+        if not header_row_number:
+            continue
+
+        for row_number in range(
+            header_row_number + 1,
+            int(worksheet.max_row or 0) + 1
+        ):
+            grade_cell = worksheet.cell(row_number, grade_column)
+            subject_cell = worksheet.cell(row_number, subject_column)
+            link_cell = worksheet.cell(row_number, link_column)
+
+            grade_raw = grade_cell.value
+            subject_raw = subject_cell.value
+
+            if link_cell.hyperlink and link_cell.hyperlink.target:
+                link_raw = link_cell.hyperlink.target
+            else:
+                link_raw = link_cell.value
+
+            if all(
+                value in (None, "")
+                for value in (grade_raw, subject_raw, link_raw)
+            ):
+                continue
+
+            grade = admin_group_excel_normalize_grade(grade_raw)
+            subject_key = admin_group_excel_normalize_subject(
+                subject_raw
+            )
+            link = str(link_raw or "").strip()
+
+            row_reference = (
+                f"{worksheet.title}, row {row_number}"
+            )
+
+            if not grade:
+                issues.append(
+                    f"{row_reference}: grade is missing or not recognised."
+                )
+                continue
+
+            if not subject_key:
+                issues.append(
+                    f"{row_reference}: subject is missing."
+                )
+                continue
+
+            if not admin_group_excel_valid_whatsapp_link(link):
+                issues.append(
+                    f"{row_reference}: the WhatsApp group link is not valid."
+                )
+                continue
+
+            row_key = (grade, subject_key)
+
+            if row_key in parsed_rows:
+                duplicate_count += 1
+
+            parsed_rows[row_key] = {
+                "grade": grade,
+                "subject_key": subject_key,
+                "subject_entered": str(subject_raw or "").strip(),
+                "invite_link": link,
+                "sheet_name": worksheet.title,
+                "row_number": row_number
+            }
+
+    workbook.close()
+
+    if not headers_found:
+        issues.append(
+            "The Excel file must contain the columns "
+            "Grade / Programme, Subject and WhatsApp Group Link."
+        )
+
+    return list(parsed_rows.values()), issues, duplicate_count
+
+
 @app.get('/admin/groups')
 @require_high_admin
 def admin_groups():
@@ -35046,84 +35327,415 @@ def admin_groups():
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY
+            CASE grade
+                WHEN 'G8' THEN 8
+                WHEN 'G9' THEN 9
+                WHEN 'G10' THEN 10
+                WHEN 'G11' THEN 11
+                WHEN 'G12' THEN 12
+                WHEN 'G13' THEN 13
+                ELSE 99
+            END,
+            name
+    """)
     subjects = cur.fetchall()
 
     cur.execute("""
-        SELECT g.id, g.invite_link, g.is_visible, s.name, s.grade
+        SELECT
+            g.id,
+            g.subject_id,
+            g.invite_link,
+            g.is_visible,
+            s.name,
+            s.grade
         FROM groups g
         JOIN subjects s ON s.id = g.subject_id
         WHERE g.month = 'ALL'
-        ORDER BY s.grade, s.name
+        ORDER BY
+            CASE s.grade
+                WHEN 'G8' THEN 8
+                WHEN 'G9' THEN 9
+                WHEN 'G10' THEN 10
+                WHEN 'G11' THEN 11
+                WHEN 'G12' THEN 12
+                WHEN 'G13' THEN 13
+                ELSE 99
+            END,
+            s.name
     """)
     groups = cur.fetchall()
     conn.close()
 
-    group_map = {g['name'] + g['grade']: g for g in groups}
+    group_map = {
+        int(group["subject_id"]): group
+        for group in groups
+    }
+
+    total_subjects = len(subjects)
+    links_set = len(groups)
+    links_missing = max(0, total_subjects - links_set)
+    links_visible = sum(
+        1
+        for group in groups
+        if int(group["is_visible"] or 0) == 1
+    )
+
+    imported_count = request.args.get("imported", "").strip()
+    replaced_count = request.args.get("replaced", "").strip()
+    duplicate_count = request.args.get("duplicates", "").strip()
+    imported_file = request.args.get("file", "").strip()
+
+    import_notice = ""
+
+    if imported_count:
+        duplicate_note = (
+            f" {escape(duplicate_count)} duplicate row(s) were combined."
+            if duplicate_count and duplicate_count != "0"
+            else ""
+        )
+
+        import_notice = f"""
+        <div class="card soft group-import-success">
+            <strong>Group links updated</strong>
+            <div class="mini" style="margin-top:4px">
+                {escape(imported_count)} link(s) imported from
+                {escape(imported_file or 'the Excel file')}.
+                {escape(replaced_count or '0')} old link(s) were replaced.
+                {duplicate_note}
+            </div>
+        </div>
+        """
 
     rows = ""
-    for s in subjects:
-        key = s['name'] + s['grade']
-        g = group_map.get(key)
 
-        if g:
+    for subject in subjects:
+        group = group_map.get(int(subject["id"]))
+
+        if group:
             visibility = (
                 "<span class='chip active'>Shown</span>"
-                if g['is_visible'] == 1
+                if int(group["is_visible"] or 0) == 1
                 else "<span class='chip lapsed'>Hidden</span>"
             )
 
             rows += f"""
             <tr>
-                <td>{grade_label(s['grade'])} — {s['name']}</td>
-                <td><a class='links' target='_blank' href='{g['invite_link']}'>Open</a></td>
-                <td>{visibility}</td>
-                <td>                    
-                    <a class='btn mini' href='{url_for("admin_group_edit", gid=g["id"])}'>
-                        Edit
-                    </a>    
-                
-                    <form method='post' action='{url_for('admin_group_toggle', gid=g['id'])}' style='display:inline'>
-                        <button class='btn mini secondary'>
-                            {'Hide' if g['is_visible'] else 'Show'}
-                        </button>
-                    </form>
-                    
-                    
-                    <form method='post' action='{url_for('admin_group_delete', gid=g['id'])}'
-                          style='display:inline'
-                          onsubmit='return confirm("Delete this group link?")'>
-                        <button class='btn danger mini'>Delete</button>
-                    </form>
+                <td data-label="Subject">
+                    <strong>
+                        {escape(grade_label(subject['grade']))}
+                    </strong>
+                    <div class="mini muted">
+                        {escape(subject['name'])}
+                    </div>
+                </td>
+
+                <td data-label="Link">
+                    <a class='btn mini secondary'
+                       target='_blank'
+                       rel='noopener noreferrer'
+                       href='{escape(group['invite_link'], quote=True)}'>
+                        Open WhatsApp
+                    </a>
+                </td>
+
+                <td data-label="Visibility">
+                    {visibility}
+                </td>
+
+                <td data-label="Actions">
+                    <div class="group-link-actions">
+                        <a class='btn mini'
+                           href='{url_for(
+                               "admin_group_edit",
+                               gid=group["id"]
+                           )}'>
+                            Edit
+                        </a>
+
+                        <form method='post'
+                              action='{url_for(
+                                  "admin_group_toggle",
+                                  gid=group["id"]
+                              )}'>
+                            <button class='btn mini secondary'>
+                                {
+                                    'Hide'
+                                    if group['is_visible']
+                                    else 'Show'
+                                }
+                            </button>
+                        </form>
+
+                        <form method='post'
+                              action='{url_for(
+                                  "admin_group_delete",
+                                  gid=group["id"]
+                              )}'
+                              onsubmit='return confirm(
+                                  "Delete this group link?"
+                              )'>
+                            <button class='btn danger mini'>
+                                Delete
+                            </button>
+                        </form>
+                    </div>
                 </td>
             </tr>
             """
-
         else:
             rows += f"""
             <tr>
-                <td>{grade_label(s['grade'])} — {s['name']}</td>
-                <td class='muted'>Not set</td>
-                <td>-</td>
+                <td data-label="Subject">
+                    <strong>
+                        {escape(grade_label(subject['grade']))}
+                    </strong>
+                    <div class="mini muted">
+                        {escape(subject['name'])}
+                    </div>
+                </td>
+
+                <td data-label="Link" class='muted'>
+                    Not set
+                </td>
+
+                <td data-label="Visibility">—</td>
+                <td data-label="Actions">—</td>
             </tr>
             """
 
-    options = ''.join(
-        [f"<option value='{s['id']}'>{s['grade']} — {s['name']}</option>" for s in subjects]
+    options = "".join(
+        f"<option value='{subject['id']}'>"
+        f"{escape(grade_label(subject['grade']))} — "
+        f"{escape(subject['name'])}"
+        f"</option>"
+        for subject in subjects
     )
 
     body = f"""
     {admin_nav()}
-    <section class='card'>
-        <h1>Group links (persistent)</h1>
-        
-        <div style="margin-bottom:12px; display:flex; gap:10px; flex-wrap:wrap;">
 
+    <style>
+        .group-links-hero {{
+            color:#fff;
+            background:
+                linear-gradient(135deg,#0d4024,#1b6f3b 70%,#25894b);
+            border:1px solid rgba(227,173,36,.55);
+            box-shadow:0 16px 38px rgba(7,44,24,.16);
+        }}
+
+        .group-links-hero h1 {{
+            color:#fff !important;
+        }}
+
+        .group-link-stats {{
+            display:grid;
+            grid-template-columns:repeat(
+                auto-fit,
+                minmax(145px,1fr)
+            );
+            gap:10px;
+            margin-top:14px;
+        }}
+
+        .group-link-stat {{
+            padding:12px;
+            border:1px solid rgba(255,255,255,.20);
+            border-radius:14px;
+            background:rgba(255,255,255,.10);
+        }}
+
+        .group-link-stat strong {{
+            display:block;
+            color:#fff;
+            font-size:21px;
+        }}
+
+        .group-link-stat span {{
+            color:#dff3e5;
+            font-size:10px;
+            font-weight:800;
+            text-transform:uppercase;
+        }}
+
+        .group-import-card {{
+            border-left:5px solid #e3ad24;
+        }}
+
+        .group-import-grid {{
+            display:grid;
+            grid-template-columns:minmax(240px,1fr) auto;
+            gap:12px;
+            align-items:end;
+        }}
+
+        .group-import-grid input {{
+            width:100%;
+            margin:0;
+        }}
+
+        .group-import-warning {{
+            margin-top:10px;
+            padding:10px 12px;
+            border:1px solid #efd995;
+            border-radius:12px;
+            color:#6d4c08;
+            background:#fff9e8;
+        }}
+
+        .group-import-success {{
+            margin-bottom:15px;
+            border-left:5px solid #22c55e;
+            color:#14532d;
+            background:#f0fdf4;
+        }}
+
+        .group-link-toolbar {{
+            display:flex;
+            gap:8px;
+            flex-wrap:wrap;
+            margin-bottom:12px;
+        }}
+
+        .group-link-toolbar form {{
+            margin:0;
+        }}
+
+        .group-manual-grid {{
+            display:grid;
+            grid-template-columns:minmax(230px,1fr) minmax(280px,2fr) auto;
+            gap:10px;
+            align-items:end;
+        }}
+
+        .group-manual-grid select,
+        .group-manual-grid input {{
+            width:100%;
+            margin:0;
+        }}
+
+        .group-link-actions {{
+            display:grid;
+            grid-template-columns:repeat(3,minmax(65px,1fr));
+            gap:5px;
+            min-width:230px;
+        }}
+
+        .group-link-actions form,
+        .group-link-actions .btn {{
+            width:100%;
+            margin:0;
+        }}
+
+        .group-links-table {{
+            min-width:850px;
+        }}
+
+        @media(max-width:760px) {{
+            .group-import-grid,
+            .group-manual-grid {{
+                grid-template-columns:1fr;
+            }}
+
+            .group-import-grid .btn,
+            .group-manual-grid .btn {{
+                width:100%;
+            }}
+
+            .group-link-actions {{
+                min-width:0;
+                grid-template-columns:1fr;
+            }}
+        }}
+    </style>
+
+    <section class='card group-links-hero'>
+        <h1>WhatsApp Group Links</h1>
+
+        <p style="color:#e2f3e7;margin-bottom:0">
+            Add, replace and control the group links shown to learners.
+        </p>
+
+        <div class="group-link-stats">
+            <div class="group-link-stat">
+                <strong>{total_subjects}</strong>
+                <span>Portal Subjects</span>
+            </div>
+
+            <div class="group-link-stat">
+                <strong>{links_set}</strong>
+                <span>Links Set</span>
+            </div>
+
+            <div class="group-link-stat">
+                <strong>{links_visible}</strong>
+                <span>Shown to Learners</span>
+            </div>
+
+            <div class="group-link-stat">
+                <strong>{links_missing}</strong>
+                <span>Links Missing</span>
+            </div>
+        </div>
+    </section>
+
+    {import_notice}
+
+    <section class='card soft group-import-card'>
+        <h2>Upload Group Links from Excel</h2>
+
+        <p class="mini muted">
+            The Excel file must contain these columns:
+            <strong>Grade / Programme</strong>,
+            <strong>Subject</strong> and
+            <strong>WhatsApp Group Link</strong>.
+        </p>
+
+        <form method="post"
+              action="{url_for('admin_groups_import')}"
+              enctype="multipart/form-data"
+              onsubmit="return confirm(
+                  'This will replace all current persistent group links ' +
+                  'with the links in this Excel file. Continue?'
+              );">
+
+            <div class="group-import-grid">
+                <div>
+                    <label>Excel file</label>
+                    <input type="file"
+                           name="group_file"
+                           accept=".xlsx,.xlsm"
+                           required>
+                </div>
+
+                <button class="btn success">
+                    Replace Group Links
+                </button>
+            </div>
+        </form>
+
+        <div class="group-import-warning mini">
+            All current persistent group links will be replaced.
+            Existing Show/Hide settings will be kept for matching subjects.
+        </div>
+    </section>
+
+    <section class='card'>
+        <h2>Manage Group Links</h2>
+
+        <div class="group-link-toolbar">
             <form method="post"
                   action="/admin/groups/toggle-all"
-                  onsubmit="return confirm('Are you sure you want to show ALL group links?')">
+                  onsubmit="return confirm(
+                      'Show all group links to learners?'
+                  )">
 
-                <input type="hidden" name="action" value="show">
+                <input type="hidden"
+                       name="action"
+                       value="show">
 
                 <button class="btn success mini">
                     Show All Groups
@@ -35132,36 +35744,374 @@ def admin_groups():
 
             <form method="post"
                   action="/admin/groups/toggle-all"
-                  onsubmit="return confirm('Are you sure you want to hide ALL group links?')">
+                  onsubmit="return confirm(
+                      'Hide all group links from learners?'
+                  )">
 
-                <input type="hidden" name="action" value="hide">
+                <input type="hidden"
+                       name="action"
+                       value="hide">
 
                 <button class="btn danger mini">
                     Hide All Groups
                 </button>
             </form>
-
         </div>
 
-        <form class='grid' method='post' action='{url_for('admin_groups_post')}'>
-            <div style='display:grid;grid-template-columns:1fr 2fr auto;gap:10px'>
-                <select name='subject_id' required>{options}</select>
-                <input name='link' placeholder='WhatsApp invite link' required />
-                <button class='btn'>Save</button>
+        <form method='post'
+              action='{url_for('admin_groups_post')}'
+              style="margin-bottom:15px">
+
+            <div class="group-manual-grid">
+                <div>
+                    <label>Subject</label>
+                    <select name='subject_id' required>
+                        {options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>WhatsApp invite link</label>
+                    <input name='link'
+                           placeholder='https://chat.whatsapp.com/...'
+                           required>
+                </div>
+
+                <button class='btn'>
+                    Save Link
+                </button>
             </div>
         </form>
 
         <div class="scroll-x">
-            <table>
+            <table class="group-links-table">
                 <thead>
-                    <tr><th>Subject</th><th>Link</th><th>Visibility</th><th>Actions</th></tr>
+                    <tr>
+                        <th>Subject</th>
+                        <th>Link</th>
+                        <th>Visibility</th>
+                        <th>Actions</th>
+                    </tr>
                 </thead>
-                <tbody>{rows}</tbody>
+
+                <tbody>
+                    {rows}
+                </tbody>
             </table>
         </div>
     </section>
     """
+
     return page("Groups", body)
+
+
+@app.post('/admin/groups/import')
+@require_high_admin
+def admin_groups_import():
+    r = require_admin()
+    if r:
+        return r
+
+    upload = request.files.get("group_file")
+
+    if not upload or not upload.filename:
+        return page(
+            "No Excel File",
+            f"""
+            {admin_nav()}
+            <section class="card">
+                <h1>No Excel File</h1>
+                <p>Please choose an Excel file.</p>
+                <a class="btn secondary"
+                   href="{url_for('admin_groups')}">
+                    Back to Group Links
+                </a>
+            </section>
+            """
+        )
+
+    extension = Path(upload.filename).suffix.lower()
+
+    if extension not in {".xlsx", ".xlsm"}:
+        return page(
+            "Invalid Excel File",
+            f"""
+            {admin_nav()}
+            <section class="card">
+                <h1>Invalid Excel File</h1>
+                <p>Please upload an XLSX or XLSM file.</p>
+                <a class="btn secondary"
+                   href="{url_for('admin_groups')}">
+                    Back to Group Links
+                </a>
+            </section>
+            """
+        )
+
+    file_bytes = upload.read()
+
+    if not file_bytes:
+        return page(
+            "Empty Excel File",
+            f"""
+            {admin_nav()}
+            <section class="card">
+                <h1>Empty Excel File</h1>
+                <p>The selected Excel file is empty.</p>
+                <a class="btn secondary"
+                   href="{url_for('admin_groups')}">
+                    Back to Group Links
+                </a>
+            </section>
+            """
+        )
+
+    if len(file_bytes) > 10 * 1024 * 1024:
+        return page(
+            "Excel File Too Large",
+            f"""
+            {admin_nav()}
+            <section class="card">
+                <h1>Excel File Too Large</h1>
+                <p>Please use an Excel file smaller than 10 MB.</p>
+                <a class="btn secondary"
+                   href="{url_for('admin_groups')}">
+                    Back to Group Links
+                </a>
+            </section>
+            """
+        )
+
+    try:
+        parsed_rows, parse_issues, duplicate_count = (
+            admin_group_excel_parse(file_bytes)
+        )
+    except Exception as exc:
+        return page(
+            "Excel Import Failed",
+            f"""
+            {admin_nav()}
+            <section class="card">
+                <h1>Excel Import Failed</h1>
+                <p>
+                    The Excel file could not be opened:
+                    {escape(str(exc))}
+                </p>
+                <a class="btn secondary"
+                   href="{url_for('admin_groups')}">
+                    Back to Group Links
+                </a>
+            </section>
+            """
+        )
+
+    if not parsed_rows and not parse_issues:
+        parse_issues.append(
+            "No WhatsApp group links were found in the Excel file."
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+    """)
+    subjects = cur.fetchall()
+
+    subject_index = {}
+
+    for subject in subjects:
+        subject_index[
+            (
+                str(subject["grade"] or "").upper(),
+                admin_group_excel_normalize_subject(
+                    subject["name"]
+                )
+            )
+        ] = subject
+
+    validated_rows = []
+
+    for parsed_row in parsed_rows:
+        subject = subject_index.get(
+            (
+                parsed_row["grade"],
+                parsed_row["subject_key"]
+            )
+        )
+
+        if not subject:
+            parse_issues.append(
+                f"{parsed_row['sheet_name']}, "
+                f"row {parsed_row['row_number']}: "
+                f"{parsed_row['subject_entered']} is not available for "
+                f"{grade_label(parsed_row['grade'])} on the portal."
+            )
+            continue
+
+        validated_rows.append(
+            {
+                "subject_id": int(subject["id"]),
+                "invite_link": parsed_row["invite_link"]
+            }
+        )
+
+    if parse_issues:
+        conn.close()
+
+        issue_rows = "".join(
+            f"<li>{escape(issue)}</li>"
+            for issue in parse_issues[:30]
+        )
+
+        extra_issues = max(0, len(parse_issues) - 30)
+        extra_note = (
+            f"<p class='mini muted'>"
+            f"{extra_issues} more issue(s) were found."
+            f"</p>"
+            if extra_issues
+            else ""
+        )
+
+        return page(
+            "Check Excel File",
+            f"""
+            {admin_nav()}
+
+            <section class="card"
+                     style="border-left:5px solid #dc2626">
+                <h1>Check the Excel File</h1>
+
+                <p>
+                    No group links were changed. Fix the items below
+                    and upload the file again.
+                </p>
+
+                <ul style="line-height:1.7">
+                    {issue_rows}
+                </ul>
+
+                {extra_note}
+
+                <a class="btn secondary"
+                   href="{url_for('admin_groups')}">
+                    Back to Group Links
+                </a>
+            </section>
+            """
+        )
+
+    if not validated_rows:
+        conn.close()
+        return page(
+            "No Group Links Found",
+            f"""
+            {admin_nav()}
+
+            <section class="card">
+                <h1>No Group Links Found</h1>
+
+                <p>
+                    No valid WhatsApp group links were found in the file.
+                </p>
+
+                <a class="btn secondary"
+                   href="{url_for('admin_groups')}">
+                    Back to Group Links
+                </a>
+            </section>
+            """
+        )
+
+    cur.execute("""
+        SELECT subject_id, is_visible
+        FROM groups
+        WHERE month='ALL'
+    """)
+    visibility_map = {
+        int(row["subject_id"]): int(row["is_visible"] or 0)
+        for row in cur.fetchall()
+    }
+
+    cur.execute("""
+        SELECT COUNT(*) AS link_count
+        FROM groups
+        WHERE month='ALL'
+    """)
+    replaced_count = int(
+        cur.fetchone()["link_count"] or 0
+    )
+
+    try:
+        cur.execute("BEGIN")
+
+        cur.execute("""
+            DELETE FROM groups
+            WHERE month='ALL'
+        """)
+
+        imported_at = now_utc_iso()
+
+        for row in validated_rows:
+            is_visible = visibility_map.get(
+                row["subject_id"],
+                1
+            )
+
+            cur.execute("""
+                INSERT INTO groups(
+                    subject_id,
+                    month,
+                    invite_link,
+                    created_at,
+                    is_visible
+                )
+                VALUES(?, 'ALL', ?, ?, ?)
+            """, (
+                row["subject_id"],
+                row["invite_link"],
+                imported_at,
+                is_visible
+            ))
+
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+
+        return page(
+            "Group Import Failed",
+            f"""
+            {admin_nav()}
+
+            <section class="card">
+                <h1>Group Import Failed</h1>
+
+                <p>
+                    The group links were not changed:
+                    {escape(str(exc))}
+                </p>
+
+                <a class="btn secondary"
+                   href="{url_for('admin_groups')}">
+                    Back to Group Links
+                </a>
+            </section>
+            """
+        )
+
+    conn.close()
+
+    return redirect(
+        url_for(
+            "admin_groups",
+            imported=len(validated_rows),
+            replaced=replaced_count,
+            duplicates=duplicate_count,
+            file=Path(upload.filename).name
+        )
+    )
 
 
 @app.post('/admin/groups')
