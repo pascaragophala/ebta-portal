@@ -3594,6 +3594,224 @@ def init_db():
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_payments_request ON one_on_one_payment_logs(request_id)")
 
+    # ================= HIGH ADMIN COST CENTRE =================
+    # Flexible monthly cost register with dynamic columns, Excel import/export
+    # and the July 2026 workbook data supplied by EBTA.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS admin_cost_months(
+            cost_month TEXT PRIMARY KEY,
+            report_title TEXT,
+            planned_tutor_slots INTEGER NOT NULL DEFAULT 0,
+            vacant_tutor_slots INTEGER NOT NULL DEFAULT 0,
+            notes TEXT,
+            source_summary_json TEXT,
+            source_bank_summary_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT
+        )
+    """)
+
+    ensure_column(conn, "admin_cost_months", "source_summary_json", "TEXT")
+    ensure_column(conn, "admin_cost_months", "source_bank_summary_json", "TEXT")
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS admin_cost_columns(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            section_key TEXT NOT NULL,
+            column_key TEXT NOT NULL,
+            label TEXT NOT NULL,
+            data_type TEXT NOT NULL DEFAULT 'TEXT',
+            display_order INTEGER NOT NULL DEFAULT 0,
+            is_system INTEGER NOT NULL DEFAULT 0,
+            is_visible INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            UNIQUE(section_key, column_key)
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS admin_cost_records(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cost_month TEXT NOT NULL,
+            section_key TEXT NOT NULL,
+            row_data TEXT NOT NULL DEFAULT '{}',
+            monthly_cost REAL NOT NULL DEFAULT 0,
+            yearly_cost REAL NOT NULL DEFAULT 0,
+            display_order INTEGER NOT NULL DEFAULT 0,
+            source TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            FOREIGN KEY(cost_month) REFERENCES admin_cost_months(cost_month)
+                ON DELETE CASCADE
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS admin_cost_imports(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_name TEXT,
+            cost_month TEXT NOT NULL,
+            import_mode TEXT NOT NULL,
+            imported_sections TEXT,
+            imported_rows INTEGER NOT NULL DEFAULT 0,
+            imported_by TEXT,
+            imported_at TEXT NOT NULL
+        )
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_admin_cost_records_month
+        ON admin_cost_records(cost_month)
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_admin_cost_records_section
+        ON admin_cost_records(section_key)
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_admin_cost_records_month_section
+        ON admin_cost_records(cost_month, section_key)
+    """)
+
+    cost_column_seed = [
+        ('SUBSCRIPTIONS', 'service', 'Service', 'TEXT', 10, 1),
+        ('SUBSCRIPTIONS', 'purpose', 'Purpose', 'TEXT', 20, 1),
+        ('SUBSCRIPTIONS', 'cost_display', 'Cost', 'TEXT', 30, 1),
+        ('SUBSCRIPTIONS', 'billing_cycle', 'Billing Cycle', 'TEXT', 40, 1),
+        ('SUBSCRIPTIONS', 'monthly_cost', 'Monthly Cost', 'CURRENCY', 50, 1),
+        ('SUBSCRIPTIONS', 'yearly_cost', 'Yearly Cost', 'CURRENCY', 60, 1),
+
+        ('TUTORS', 'grade', 'Grade', 'TEXT', 10, 1),
+        ('TUTORS', 'subject', 'Subject', 'TEXT', 20, 1),
+        ('TUTORS', 'tutor', 'Tutor', 'TEXT', 30, 1),
+        ('TUTORS', 'tutor_manager', 'Tutor Manager', 'TEXT', 40, 1),
+        ('TUTORS', 'contact', 'Contact', 'TEXT', 50, 1),
+        ('TUTORS', 'bank', 'Bank', 'TEXT', 60, 1),
+        ('TUTORS', 'account_no', 'Account No.', 'TEXT', 70, 1),
+        ('TUTORS', 'monthly_cost', 'Pay', 'CURRENCY', 80, 1),
+        ('TUTORS', 'status', 'Status', 'TEXT', 90, 1),
+
+        ('TUTOR_MANAGERS', 'full_name', 'Full Name', 'TEXT', 10, 1),
+        ('TUTOR_MANAGERS', 'department_area', 'Department / Area', 'TEXT', 20, 1),
+        ('TUTOR_MANAGERS', 'contact', 'Contact', 'TEXT', 30, 1),
+        ('TUTOR_MANAGERS', 'email', 'Email', 'EMAIL', 40, 1),
+        ('TUTOR_MANAGERS', 'bank', 'Bank', 'TEXT', 50, 1),
+        ('TUTOR_MANAGERS', 'account_no', 'Account No.', 'TEXT', 60, 1),
+        ('TUTOR_MANAGERS', 'institution_year', 'Institution / Year', 'TEXT', 70, 1),
+        ('TUTOR_MANAGERS', 'monthly_cost', 'Pay', 'CURRENCY', 80, 1),
+
+        ('OPERATIONAL_TEAM', 'full_name', 'Full Name', 'TEXT', 10, 1),
+        ('OPERATIONAL_TEAM', 'department_area', 'Department / Area', 'TEXT', 20, 1),
+        ('OPERATIONAL_TEAM', 'contact', 'Contact', 'TEXT', 30, 1),
+        ('OPERATIONAL_TEAM', 'email', 'Email', 'EMAIL', 40, 1),
+        ('OPERATIONAL_TEAM', 'bank', 'Bank', 'TEXT', 50, 1),
+        ('OPERATIONAL_TEAM', 'account_no', 'Account No.', 'TEXT', 60, 1),
+        ('OPERATIONAL_TEAM', 'institution_year', 'Institution / Year', 'TEXT', 70, 1),
+        ('OPERATIONAL_TEAM', 'monthly_cost', 'Pay', 'CURRENCY', 80, 1),
+
+        ('OTHER_COSTS', 'description', 'Description', 'TEXT', 10, 1),
+        ('OTHER_COSTS', 'category', 'Category', 'TEXT', 20, 1),
+        ('OTHER_COSTS', 'supplier_payee', 'Supplier / Payee', 'TEXT', 30, 1),
+        ('OTHER_COSTS', 'billing_cycle', 'Billing Cycle', 'TEXT', 40, 1),
+        ('OTHER_COSTS', 'monthly_cost', 'Monthly Cost', 'CURRENCY', 50, 1),
+        ('OTHER_COSTS', 'yearly_cost', 'Yearly Cost', 'CURRENCY', 60, 1),
+        ('OTHER_COSTS', 'status', 'Status', 'TEXT', 70, 1),
+        ('OTHER_COSTS', 'notes', 'Notes', 'TEXT', 80, 1),
+    ]
+
+    for section_key, column_key, label, data_type, display_order, is_system in cost_column_seed:
+        cur.execute("""
+            INSERT OR IGNORE INTO admin_cost_columns(
+                section_key, column_key, label, data_type,
+                display_order, is_system, is_visible,
+                created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?)
+        """, (
+            section_key, column_key, label, data_type,
+            display_order, is_system, 1,
+            now_utc_iso(), now_utc_iso()
+        ))
+
+    cur.execute("""
+        INSERT OR IGNORE INTO admin_cost_months(
+            cost_month, report_title, planned_tutor_slots,
+            vacant_tutor_slots, notes, source_summary_json,
+            source_bank_summary_json, created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?)
+    """, (
+        '2026-07',
+        'JULY 2026 SUBSCRIPTIONS AND OPERATIONAL COSTS SUMMARY',
+        35,
+        2,
+        'CONFIDENTIAL - INTERNAL FINANCIAL AND BANKING INFORMATION',
+        json.dumps({
+            'Tutor Monthly Cost': 22200,
+            'Tutor Manager Monthly Cost': 3500,
+            'Operational Team Monthly Cost': 26200,
+            'Total Management Monthly Cost': 29700,
+            'Total Monthly Payroll': 51900,
+            'Monthly Subscriptions': 1540,
+            'Yearly Subscriptions': 1100,
+            'Total Monthly Cash Requirement': 53440,
+            'Effective Monthly Cost': 53532,
+        }),
+        json.dumps({
+            'Capitec': {'members': 34, 'payroll': 41000},
+            'Standard Bank': {'members': 4, 'payroll': 4200},
+            'ABSA': {'members': 5, 'payroll': 3900},
+            'Nedbank': {'members': 1, 'payroll': 700},
+            'African Bank': {'members': 1, 'payroll': 600},
+            'Tyme Bank': {'members': 1, 'payroll': 700},
+            'FNB': {'members': 1, 'payroll': 800},
+        }),
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+    cur.execute(
+        "SELECT value FROM settings "
+        "WHERE key='admin_cost_centre_july_2026_seed_v1'"
+    )
+    cost_seed_done = cur.fetchone()
+
+    if not cost_seed_done:
+        cost_seed_data = {'subscriptions': [{'service': 'Microsoft 365', 'purpose': 'Email and productivity suite', 'cost_display': '$30 / ± R500', 'billing_cycle': 'Monthly', 'monthly_cost': 500.0, 'yearly_cost': 0.0}, {'service': 'Google One / Google Drive', 'purpose': 'Cloud storage for recordings', 'cost_display': 'R185', 'billing_cycle': 'Monthly', 'monthly_cost': 185.0, 'yearly_cost': 0.0}, {'service': 'Twilio SMS Service', 'purpose': 'Student and tutor SMS communication', 'cost_display': '$20 / ± R330', 'billing_cycle': 'Monthly', 'monthly_cost': 330.0, 'yearly_cost': 0.0}, {'service': 'EBTAPORTAL Hosting (Render)', 'purpose': 'Production portal hosting', 'cost_display': '$25 / ± R410', 'billing_cycle': 'Monthly', 'monthly_cost': 410.0, 'yearly_cost': 0.0}, {'service': 'EBTAPORTAL Testing Hosting', 'purpose': 'Testing environment hosting', 'cost_display': '$7 / ± R115', 'billing_cycle': 'Monthly', 'monthly_cost': 115.0, 'yearly_cost': 0.0}, {'service': 'EBTA.co.za Domain', 'purpose': 'Main EBTA website domain', 'cost_display': 'R100', 'billing_cycle': 'Yearly', 'monthly_cost': 0.0, 'yearly_cost': 100.0}, {'service': 'EBTAPORTAL.co.za Domain', 'purpose': 'Portal domain', 'cost_display': 'R100', 'billing_cycle': 'Yearly', 'monthly_cost': 0.0, 'yearly_cost': 100.0}, {'service': 'Canva Subscription', 'purpose': 'Branding and design tools', 'cost_display': 'R900', 'billing_cycle': 'Yearly', 'monthly_cost': 0.0, 'yearly_cost': 900.0}], 'tutors': [{'grade': 'Grade 8', 'subject': 'Mathematics', 'tutor': 'Maela Confidence Mmanare', 'tutor_manager': 'Moeletsi Tladi', 'contact': '0793784714', 'bank': 'Capitec', 'account_no': '1979411865', 'monthly_cost': 600.0, 'status': 'Updated'}, {'grade': 'Grade 8', 'subject': 'EMS', 'tutor': 'Ayanda Shoba', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0786509115', 'bank': 'Capitec', 'account_no': '2223389526', 'monthly_cost': 500.0, 'status': 'Updated'}, {'grade': 'Grade 8', 'subject': 'Natural Sciences', 'tutor': 'Ayanda Nxumalo', 'tutor_manager': 'Moeletsi Tladi', 'contact': '0718347725', 'bank': 'Capitec', 'account_no': '2218948873', 'monthly_cost': 500.0, 'status': 'Updated'}, {'grade': 'Grade 8', 'subject': 'English FAL', 'tutor': 'Lungiswa Ntshangase', 'tutor_manager': 'Nokulunga Ndlovu', 'contact': '0718236547', 'bank': 'Capitec', 'account_no': '2227406484', 'monthly_cost': 500.0, 'status': 'Updated'}, {'grade': 'Grade 9', 'subject': 'Mathematics', 'tutor': 'Gift Ndone', 'tutor_manager': 'Moeletsi Tladi', 'contact': '0710467840', 'bank': 'Capitec', 'account_no': '2182460949', 'monthly_cost': 800.0, 'status': 'Updated'}, {'grade': 'Grade 9', 'subject': 'EMS', 'tutor': 'Lungile Taaiboos', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0684983276 / 0784049471', 'bank': 'Capitec', 'account_no': '1994804694', 'monthly_cost': 500.0, 'status': 'Updated'}, {'grade': 'Grade 9', 'subject': 'Natural Sciences', 'tutor': 'Siphosenkosi Moyo', 'tutor_manager': 'Moeletsi Tladi', 'contact': '0842493040', 'bank': 'Nedbank', 'account_no': '1311820507', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 9', 'subject': 'English FAL', 'tutor': 'Mbongiseni Ethan Mbuyane', 'tutor_manager': 'Nokulunga Ndlovu', 'contact': '0716127518', 'bank': 'Capitec', 'account_no': '2143021611', 'monthly_cost': 600.0, 'status': 'Updated'}, {'grade': 'Grade 9', 'subject': 'Afrikaans FAL', 'tutor': 'Palesa Precious Seekoei', 'tutor_manager': 'Nokulunga Ndlovu', 'contact': '0765769742', 'bank': 'Capitec', 'account_no': '1716118830', 'monthly_cost': 500.0, 'status': 'Updated'}, {'grade': 'Grade 10', 'subject': 'Mathematics', 'tutor': 'Katlego Mokwena', 'tutor_manager': 'Moeletsi Tladi', 'contact': '0640790664', 'bank': 'Capitec', 'account_no': '1930801821', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 10', 'subject': 'Accounting', 'tutor': 'Snenhlanhla Vilakazi', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0822830834', 'bank': 'Capitec', 'account_no': '2110822429', 'monthly_cost': 500.0, 'status': 'Updated'}, {'grade': 'Grade 10', 'subject': 'Physical Sciences', 'tutor': 'Vhulenda Matshona', 'tutor_manager': 'Rolivhuwa Mohale', 'contact': '0713858487', 'bank': 'Capitec', 'account_no': '2189975243', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 10', 'subject': 'Life Sciences', 'tutor': 'Abenathi Mabhena', 'tutor_manager': 'Rolivhuwa Mohale', 'contact': '0608084046', 'bank': 'Capitec', 'account_no': '1772813298', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 11', 'subject': 'Mathematics', 'tutor': 'Rhulani Modipane', 'tutor_manager': 'Moeletsi Tladi', 'contact': '0718593381', 'bank': 'Capitec', 'account_no': '2178065852', 'monthly_cost': 800.0, 'status': 'Updated'}, {'grade': 'Grade 11', 'subject': 'Accounting', 'tutor': 'Siyabonga Mncube', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0785285827', 'bank': 'Capitec', 'account_no': '2262066627', 'monthly_cost': 600.0, 'status': 'Updated'}, {'grade': 'Grade 11', 'subject': 'Business Studies', 'tutor': 'Seiphemelo Lekgari', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0640448632', 'bank': 'Capitec', 'account_no': '2221930025', 'monthly_cost': 0.0, 'status': 'Form outstanding'}, {'grade': 'Grade 11', 'subject': 'Physical Sciences', 'tutor': 'Xolani Maseko', 'tutor_manager': 'Rolivhuwa Mohale', 'contact': '0769563890', 'bank': 'Capitec', 'account_no': '2070209896', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 11', 'subject': 'Life Sciences', 'tutor': 'Amahle Ngidi', 'tutor_manager': 'Rolivhuwa Mohale', 'contact': '0665116212', 'bank': 'Standard Bank', 'account_no': '10267640216', 'monthly_cost': 600.0, 'status': 'Updated'}, {'grade': 'Grade 11', 'subject': 'English FAL', 'tutor': 'Thandeka Blessing Rakgwale', 'tutor_manager': 'Nokulunga Ndlovu', 'contact': '0769485836', 'bank': 'ABSA', 'account_no': '4114251983', 'monthly_cost': 500.0, 'status': 'Form outstanding'}, {'grade': 'Grade 12', 'subject': 'Mathematics', 'tutor': 'Siphosethu Lubisi', 'tutor_manager': 'Moeletsi Tladi', 'contact': '0637230350', 'bank': 'Capitec', 'account_no': '2209564251', 'monthly_cost': 800.0, 'status': 'Updated'}, {'grade': 'Grade 12', 'subject': 'Mathematical Literacy', 'tutor': 'Kamogelo Malatji', 'tutor_manager': 'Nokulunga Ndlovu', 'contact': '0726885365', 'bank': 'Capitec', 'account_no': '1979179385', 'monthly_cost': 600.0, 'status': 'Updated'}, {'grade': 'Grade 12', 'subject': 'Accounting', 'tutor': 'Katlego Phiri', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0639669186', 'bank': 'Capitec', 'account_no': '2341860121', 'monthly_cost': 800.0, 'status': 'Updated'}, {'grade': 'Grade 12', 'subject': 'Business Studies', 'tutor': 'Oarabile Maake', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0750143485', 'bank': 'Capitec', 'account_no': '2141191862', 'monthly_cost': 0.0, 'status': 'Form outstanding'}, {'grade': 'Grade 12', 'subject': 'Business Studies', 'tutor': 'Siphuxolo Mngomezulu', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0785144945', 'bank': 'Capitec', 'account_no': '2220481642', 'monthly_cost': 500.0, 'status': 'Updated'}, {'grade': 'Grade 12', 'subject': 'Physical Sciences', 'tutor': 'Sipho Phakathi', 'tutor_manager': 'Rolivhuwa Mohale', 'contact': '0763482910', 'bank': 'Capitec', 'account_no': '2022210235', 'monthly_cost': 800.0, 'status': 'Updated'}, {'grade': 'Grade 12', 'subject': 'Life Sciences', 'tutor': 'Ayanda Motsweni', 'tutor_manager': 'Rolivhuwa Mohale', 'contact': '0764549516', 'bank': 'Capitec', 'account_no': '1206743245', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 12', 'subject': 'Geography', 'tutor': 'Phumudzo Ramosoeu', 'tutor_manager': 'Nokulunga Ndlovu', 'contact': '0673928871', 'bank': 'Capitec', 'account_no': '1886313898', 'monthly_cost': 600.0, 'status': 'Updated'}, {'grade': 'Grade 13', 'subject': 'Mathematics', 'tutor': 'Mposula Mamiki', 'tutor_manager': 'Oshianah Rakgoale', 'contact': '0728465471', 'bank': 'ABSA', 'account_no': '2169026440', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 13', 'subject': 'Mathematical Literacy', 'tutor': 'Alwande Mzila', 'tutor_manager': 'Oshianah Rakgoale', 'contact': '0646114236', 'bank': 'Capitec', 'account_no': '2262294050', 'monthly_cost': 0.0, 'status': 'Updated'}, {'grade': 'Grade 13', 'subject': 'Accounting', 'tutor': 'Hlengiwe Khumalo', 'tutor_manager': 'Oshianah Rakgoale', 'contact': '0605931306', 'bank': 'ABSA', 'account_no': '4126334759', 'monthly_cost': 600.0, 'status': 'Updated'}, {'grade': 'Grade 13', 'subject': 'Accounting', 'tutor': 'Samuel Nkhumane', 'tutor_manager': 'Oshianah Rakgoale', 'contact': '0604805041', 'bank': 'Capitec', 'account_no': '1873020080', 'monthly_cost': 0.0, 'status': 'Updated'}, {'grade': 'Grade 13', 'subject': 'Physical Sciences', 'tutor': 'Thapelo Kevin Sebogo', 'tutor_manager': 'Oshianah Rakgoale', 'contact': '0621798816', 'bank': 'Capitec', 'account_no': '2333574573', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 13', 'subject': 'Life Sciences', 'tutor': 'Snethemba Maseko', 'tutor_manager': 'Oshianah Rakgoale', 'contact': '0792990080', 'bank': 'Standard Bank', 'account_no': '10190899571', 'monthly_cost': 0.0, 'status': 'Updated'}], 'tutor_managers': [{'full_name': 'Moeletsi Tladi', 'department_area': 'Mathematics and Natural Sciences', 'contact': '0661847684', 'email': 'moeletsilehumo@gmail.com', 'bank': 'Capitec', 'account_no': '1997681380', 'institution_year': 'UCT - Honours', 'monthly_cost': 800.0}, {'full_name': 'Mohale Rolivhuwa', 'department_area': 'Physical Sciences and Life Sciences', 'contact': '0797969488', 'email': 'rolivhuwamohale@gmail.com', 'bank': 'Capitec', 'account_no': '2070776340', 'institution_year': 'UCT - 2nd year', 'monthly_cost': 700.0}, {'full_name': 'Nokulunga Ndlovu', 'department_area': 'English FAL / Mathematical Literacy / Geography', 'contact': '0614489387', 'email': 'nokulungandlovu220@gmail.com', 'bank': 'Standard Bank', 'account_no': '10219508060', 'institution_year': 'UCT - 3rd year', 'monthly_cost': 700.0}, {'full_name': 'Oshianah Rakgoale', 'department_area': 'Upgrading / Matric Rewrite', 'contact': '0630763571', 'email': 'Rkgosh001@myuct.ac.za', 'bank': 'African Bank', 'account_no': '20080868319', 'institution_year': 'UCT - Honours', 'monthly_cost': 700.0}, {'full_name': 'Siphokazi Sibeko', 'department_area': 'EMS / Accounting / Business Studies', 'contact': '0792408942', 'email': 'Siphokazisibeko01@icloud.com', 'bank': 'ABSA', 'account_no': '4120879323', 'institution_year': 'UCT - 2nd year', 'monthly_cost': 800.0}], 'operational_team': [{'full_name': 'Testimony Mohale', 'department_area': 'Chief Executive Officer (CEO)', 'contact': '0825510824', 'email': 'ebtaprincipal@gmail.com', 'bank': 'Capitec', 'account_no': '2062604285', 'institution_year': 'UCT - 3rd year', 'monthly_cost': 10000.0}, {'full_name': 'Amanda Phakathi', 'department_area': 'Chief Operations Officer (COO)', 'contact': '0832468940', 'email': 'amandaphakathi139@gmail.com', 'bank': 'Standard Bank', 'account_no': '10164775917', 'institution_year': 'Rhodes University - Graduate', 'monthly_cost': 2000.0}, {'full_name': 'Pasca Ragophala', 'department_area': 'Chief Academic Officer (CAO)', 'contact': '0828352873', 'email': 'ragophalalenovom10@gmail.com', 'bank': 'Capitec', 'account_no': '1742459488', 'institution_year': 'UJ - Graduate', 'monthly_cost': 9000.0}, {'full_name': 'Samuel Sithole', 'department_area': 'Academic Content Coordinator (ACC)', 'contact': '0719224121', 'email': '202404150@spu.ac.za', 'bank': 'Tyme Bank', 'account_no': '51055002556', 'institution_year': 'Sol Plaatje University - 3rd year', 'monthly_cost': 700.0}, {'full_name': 'Refilwe Sekome', 'department_area': 'Academic Quality Manager', 'contact': '0798040680', 'email': 'refilwesekome@gmail.com', 'bank': 'ABSA', 'account_no': '4126603108', 'institution_year': 'UCT - 3rd year', 'monthly_cost': 1000.0}, {'full_name': 'Atheeqah Blauw', 'department_area': 'Admissions Coordinator', 'contact': '0784998797', 'email': 'blaauwatheeqah@gmail.com', 'bank': 'Capitec', 'account_no': '1485014075', 'institution_year': 'UCT - 3rd year', 'monthly_cost': 900.0}, {'full_name': 'Mikendra Isaacs', 'department_area': 'Administrator', 'contact': '0791995001', 'email': 'mikendrajordan@gmail.com', 'bank': 'Capitec', 'account_no': '2348469665', 'institution_year': 'Teachers Record - 1st year', 'monthly_cost': 1200.0}, {'full_name': 'Nokukhanya Mayiyane', 'department_area': 'Secretary General', 'contact': '0616043670', 'email': 'khanyamayiyane@gmail.com', 'bank': 'FNB', 'account_no': '63036329836', 'institution_year': 'UCT - 3rd year', 'monthly_cost': 800.0}, {'full_name': 'Tshiamo Mathelele', 'department_area': 'Social Media Manager', 'contact': '0663820973', 'email': 'tshiamonjabulo71@gmail.com', 'bank': 'Capitec', 'account_no': '2415003758', 'institution_year': 'UJ - 2nd year', 'monthly_cost': 600.0}]}
+        section_seed_map = [
+            ('SUBSCRIPTIONS', cost_seed_data.get('subscriptions', [])),
+            ('TUTORS', cost_seed_data.get('tutors', [])),
+            ('TUTOR_MANAGERS', cost_seed_data.get('tutor_managers', [])),
+            ('OPERATIONAL_TEAM', cost_seed_data.get('operational_team', [])),
+        ]
+
+        for section_key, section_rows in section_seed_map:
+            for row_index, item in enumerate(section_rows, start=1):
+                item = dict(item)
+                monthly_cost = float(item.pop('monthly_cost', 0) or 0)
+                yearly_cost = float(item.pop('yearly_cost', 0) or 0)
+
+                cur.execute("""
+                    INSERT INTO admin_cost_records(
+                        cost_month, section_key, row_data,
+                        monthly_cost, yearly_cost, display_order,
+                        source, created_at, updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?)
+                """, (
+                    '2026-07',
+                    section_key,
+                    json.dumps(item, ensure_ascii=False),
+                    monthly_cost,
+                    yearly_cost,
+                    row_index,
+                    'EBTA_Subscriptions_and_Costs_July_2026.xlsx',
+                    now_utc_iso(),
+                    now_utc_iso()
+                ))
+
+        cur.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?)",
+            ('admin_cost_centre_july_2026_seed_v1', '1')
+        )
+
 
     conn.commit()
     conn.close()
@@ -27775,6 +27993,7 @@ def admin_nav():
                     ("CEOs", "admin_ceos", "/admin/ceos"),
                     ("Treasurers", "admin_treasurers", "/admin/treasurers"),
                     ("Finance Overview", "admin_finance_overview", "/admin/finance-overview"),
+                    ("Cost Centre", "admin_cost_centre", "/admin/cost-centre"),
                     ("Management Roles", "admin_management_roles", "/admin/management-roles"),
                     ("Management Applications", "admin_management_applications", "/admin/management-applications"),
                     ("Duty Admins", "admin_duty_admins", "/admin/duty-admins"),
@@ -35114,6 +35333,1538 @@ def admin_groups_toggle_all():
     return redirect(url_for('admin_groups'))
     
     
+
+# =============================================================
+# HIGH ADMIN COST CENTRE
+# =============================================================
+
+ADMIN_COST_SECTIONS = {
+    'SUBSCRIPTIONS': 'Subscriptions',
+    'TUTORS': 'Tutors',
+    'TUTOR_MANAGERS': 'Tutor Managers',
+    'OPERATIONAL_TEAM': 'Operational Team',
+    'OTHER_COSTS': 'Other Costs',
+}
+
+
+def admin_cost_valid_month(value):
+    value = str(value or '').strip()
+    try:
+        datetime.datetime.strptime(value, '%Y-%m')
+        return value
+    except Exception:
+        return ''
+
+
+def admin_cost_money(value):
+    if value in (None, '', '-'):
+        return 0.0
+
+    raw = str(value).strip()
+    raw = raw.replace(',', '').replace('R', '').replace('r', '')
+    raw = raw.replace('±', '').replace('$', '')
+
+    import re
+    matches = re.findall(r'-?\d+(?:\.\d+)?', raw)
+    if not matches:
+        return 0.0
+
+    try:
+        return float(matches[-1])
+    except Exception:
+        return 0.0
+
+
+def admin_cost_format_money(value):
+    amount = float(value or 0)
+    if abs(amount) < 0.005:
+        return '—'
+    if amount < 0:
+        return f"(R{abs(amount):,.2f})"
+    return f"R{amount:,.2f}"
+
+
+def admin_cost_json(value):
+    try:
+        parsed = json.loads(value or '{}')
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def admin_cost_slug(label):
+    import re
+    key = re.sub(r'[^a-z0-9]+', '_', str(label or '').strip().lower())
+    return key.strip('_') or 'field'
+
+
+def admin_cost_header_key(label):
+    label_clean = str(label or '').strip()
+    known = {
+        'service': 'service',
+        'purpose': 'purpose',
+        'cost': 'cost_display',
+        'billing cycle': 'billing_cycle',
+        'monthly cost': 'monthly_cost',
+        'yearly cost': 'yearly_cost',
+        'grade': 'grade',
+        'subject': 'subject',
+        'tutor': 'tutor',
+        'tutor manager': 'tutor_manager',
+        'contact': 'contact',
+        'bank': 'bank',
+        'account no.': 'account_no',
+        'account no': 'account_no',
+        'pay': 'monthly_cost',
+        'status': 'status',
+        'full name': 'full_name',
+        'department / area': 'department_area',
+        'department/area': 'department_area',
+        'email': 'email',
+        'institution / year': 'institution_year',
+        'institution/year': 'institution_year',
+        'description': 'description',
+        'category': 'category',
+        'supplier / payee': 'supplier_payee',
+        'supplier/payee': 'supplier_payee',
+        'notes': 'notes',
+    }
+    return known.get(label_clean.lower(), admin_cost_slug(label_clean))
+
+
+def admin_cost_columns(cur, section_key):
+    cur.execute("""
+        SELECT *
+        FROM admin_cost_columns
+        WHERE section_key=? AND is_visible=1
+        ORDER BY display_order, id
+    """, (section_key,))
+    return cur.fetchall()
+
+
+def admin_cost_ensure_month(cur, cost_month):
+    cur.execute("""
+        INSERT OR IGNORE INTO admin_cost_months(
+            cost_month, report_title, planned_tutor_slots,
+            vacant_tutor_slots, notes, source_summary_json,
+            source_bank_summary_json, created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?)
+    """, (
+        cost_month,
+        f"{pretty_month_label(cost_month).upper()} SUBSCRIPTIONS AND OPERATIONAL COSTS SUMMARY",
+        0,
+        0,
+        'CONFIDENTIAL - INTERNAL FINANCIAL AND BANKING INFORMATION',
+        None,
+        None,
+        now_utc_iso(),
+        now_utc_iso()
+    ))
+
+
+def admin_cost_ensure_column(cur, section_key, column_key, label,
+                             data_type='TEXT', is_system=0):
+    cur.execute("""
+        SELECT id
+        FROM admin_cost_columns
+        WHERE section_key=? AND column_key=?
+    """, (section_key, column_key))
+    existing = cur.fetchone()
+    if existing:
+        return existing['id']
+
+    cur.execute("""
+        SELECT COALESCE(MAX(display_order), 0) + 10 AS next_order
+        FROM admin_cost_columns
+        WHERE section_key=?
+    """, (section_key,))
+    next_order = cur.fetchone()['next_order'] or 10
+
+    cur.execute("""
+        INSERT INTO admin_cost_columns(
+            section_key, column_key, label, data_type,
+            display_order, is_system, is_visible,
+            created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?)
+    """, (
+        section_key, column_key, label, data_type,
+        next_order, is_system, 1,
+        now_utc_iso(), now_utc_iso()
+    ))
+    return cur.lastrowid
+
+
+def admin_cost_summary(conn, cost_month):
+    cur = conn.cursor()
+    totals = {}
+    counts = {}
+
+    for section_key in ADMIN_COST_SECTIONS:
+        cur.execute("""
+            SELECT
+                COUNT(*) AS row_count,
+                COALESCE(SUM(monthly_cost), 0) AS monthly_total,
+                COALESCE(SUM(yearly_cost), 0) AS yearly_total
+            FROM admin_cost_records
+            WHERE cost_month=? AND section_key=?
+        """, (cost_month, section_key))
+        row = cur.fetchone()
+        totals[section_key] = {
+            'monthly': float(row['monthly_total'] or 0),
+            'yearly': float(row['yearly_total'] or 0),
+        }
+        counts[section_key] = int(row['row_count'] or 0)
+
+    tutor_cost = totals['TUTORS']['monthly']
+    tutor_manager_cost = totals['TUTOR_MANAGERS']['monthly']
+    operational_cost = totals['OPERATIONAL_TEAM']['monthly']
+    management_cost = tutor_manager_cost + operational_cost
+    payroll = tutor_cost + management_cost
+    subscriptions_monthly = totals['SUBSCRIPTIONS']['monthly']
+    subscriptions_yearly = totals['SUBSCRIPTIONS']['yearly']
+    other_monthly = totals['OTHER_COSTS']['monthly']
+    other_yearly = totals['OTHER_COSTS']['yearly']
+    monthly_cash = payroll + subscriptions_monthly + other_monthly
+    yearly_total = subscriptions_yearly + other_yearly
+    effective_monthly = monthly_cash + (yearly_total / 12.0)
+
+    cur.execute("""
+        SELECT *
+        FROM admin_cost_months
+        WHERE cost_month=?
+    """, (cost_month,))
+    month_meta = cur.fetchone()
+
+    bank_summary = {}
+    cur.execute("""
+        SELECT row_data, monthly_cost
+        FROM admin_cost_records
+        WHERE cost_month=?
+          AND section_key IN ('TUTORS','TUTOR_MANAGERS','OPERATIONAL_TEAM')
+    """, (cost_month,))
+
+    for record in cur.fetchall():
+        data = admin_cost_json(record['row_data'])
+        bank = str(data.get('bank') or 'Not captured').strip() or 'Not captured'
+        entry = bank_summary.setdefault(bank, {'members': 0, 'payroll': 0.0})
+        entry['members'] += 1
+        entry['payroll'] += float(record['monthly_cost'] or 0)
+
+    source_summary = admin_cost_json(
+        month_meta['source_summary_json'] if month_meta else None
+    )
+    source_bank_summary = admin_cost_json(
+        month_meta['source_bank_summary_json'] if month_meta else None
+    )
+
+    return {
+        'totals': totals,
+        'counts': counts,
+        'tutor_cost': tutor_cost,
+        'tutor_manager_cost': tutor_manager_cost,
+        'operational_cost': operational_cost,
+        'management_cost': management_cost,
+        'payroll': payroll,
+        'subscriptions_monthly': subscriptions_monthly,
+        'subscriptions_yearly': subscriptions_yearly,
+        'other_monthly': other_monthly,
+        'other_yearly': other_yearly,
+        'monthly_cash': monthly_cash,
+        'yearly_total': yearly_total,
+        'effective_monthly': effective_monthly,
+        'bank_summary': sorted(
+            bank_summary.items(),
+            key=lambda item: (-item[1]['payroll'], item[0].lower())
+        ),
+        'source_summary': source_summary,
+        'source_bank_summary': source_bank_summary,
+        'month_meta': month_meta,
+    }
+
+
+def admin_cost_input_html(column, value=''):
+    key = column['column_key']
+    label = column['label']
+    data_type = str(column['data_type'] or 'TEXT').upper()
+    value = '' if value is None else value
+    escaped_value = escape(str(value), quote=True)
+
+    if data_type in ('CURRENCY', 'NUMBER'):
+        return f"""
+        <div>
+            <label>{escape(label)}</label>
+            <input type='number' step='0.01'
+                   name='field__{escape(key, quote=True)}'
+                   value='{escaped_value}'>
+        </div>
+        """
+
+    if data_type == 'DATE':
+        return f"""
+        <div>
+            <label>{escape(label)}</label>
+            <input type='date'
+                   name='field__{escape(key, quote=True)}'
+                   value='{escaped_value}'>
+        </div>
+        """
+
+    input_type = 'email' if data_type == 'EMAIL' else 'text'
+    return f"""
+    <div>
+        <label>{escape(label)}</label>
+        <input type='{input_type}'
+               name='field__{escape(key, quote=True)}'
+               value='{escaped_value}'>
+    </div>
+    """
+
+
+def admin_cost_record_from_form(columns):
+    row_data = {}
+    monthly_cost = 0.0
+    yearly_cost = 0.0
+
+    for column in columns:
+        key = column['column_key']
+        raw = request.form.get(f'field__{key}', '').strip()
+
+        if key == 'monthly_cost':
+            monthly_cost = admin_cost_money(raw)
+            continue
+        if key == 'yearly_cost':
+            yearly_cost = admin_cost_money(raw)
+            continue
+
+        data_type = str(column['data_type'] or 'TEXT').upper()
+        if data_type in ('NUMBER', 'CURRENCY'):
+            row_data[key] = admin_cost_money(raw)
+        else:
+            row_data[key] = raw
+
+    return row_data, monthly_cost, yearly_cost
+
+
+@app.get('/admin/cost-centre')
+@require_high_admin
+def admin_cost_centre():
+    r = require_admin()
+    if r:
+        return r
+
+    requested_month = admin_cost_valid_month(request.args.get('month'))
+    selected_section = request.args.get('section', 'TUTORS').strip().upper()
+    search = request.args.get('q', '').strip()
+
+    if selected_section not in ADMIN_COST_SECTIONS:
+        selected_section = 'TUTORS'
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    if not requested_month:
+        cur.execute("SELECT MAX(cost_month) AS latest FROM admin_cost_months")
+        latest = cur.fetchone()['latest']
+        requested_month = latest or get_setting('current_month')
+
+    cost_month = requested_month
+    admin_cost_ensure_month(cur, cost_month)
+    conn.commit()
+
+    summary = admin_cost_summary(conn, cost_month)
+    columns = admin_cost_columns(cur, selected_section)
+
+    sql = """
+        SELECT *
+        FROM admin_cost_records
+        WHERE cost_month=? AND section_key=?
+    """
+    params = [cost_month, selected_section]
+
+    if search:
+        sql += " AND (row_data LIKE ? OR CAST(monthly_cost AS TEXT) LIKE ? OR CAST(yearly_cost AS TEXT) LIKE ?)"
+        like = f'%{search}%'
+        params.extend([like, like, like])
+
+    sql += " ORDER BY display_order, id"
+    cur.execute(sql, params)
+    records = cur.fetchall()
+
+    cur.execute("SELECT cost_month FROM admin_cost_months ORDER BY cost_month DESC")
+    available_months = [row['cost_month'] for row in cur.fetchall()]
+
+    cur.execute("""
+        SELECT *
+        FROM admin_cost_imports
+        ORDER BY imported_at DESC
+        LIMIT 5
+    """)
+    recent_imports = cur.fetchall()
+    conn.close()
+
+    month_options = ''.join(
+        f"<option value='{escape(month, quote=True)}' {'selected' if month == cost_month else ''}>"
+        f"{escape(pretty_month_label(month))}</option>"
+        for month in available_months
+    )
+
+    section_tabs = ''.join(
+        f"<a class='btn mini {'success' if key == selected_section else 'secondary'}' "
+        f"href='{url_for('admin_cost_centre')}?month={escape(cost_month, quote=True)}&section={key}'>"
+        f"{escape(label)}</a>"
+        for key, label in ADMIN_COST_SECTIONS.items()
+    )
+
+    header_html = ''.join(
+        f"<th>{escape(column['label'])}</th>"
+        for column in columns
+    ) + '<th>Actions</th>'
+
+    row_html = ''
+    for record in records:
+        data = admin_cost_json(record['row_data'])
+        cells = ''
+        for column in columns:
+            key = column['column_key']
+            data_type = str(column['data_type'] or 'TEXT').upper()
+            if key == 'monthly_cost':
+                value_html = admin_cost_format_money(record['monthly_cost'])
+            elif key == 'yearly_cost':
+                value_html = admin_cost_format_money(record['yearly_cost'])
+            else:
+                raw_value = data.get(key, '')
+                if data_type == 'CURRENCY':
+                    value_html = admin_cost_format_money(raw_value)
+                else:
+                    value_html = escape(str(raw_value or '—'))
+            cells += f"<td data-label='{escape(column['label'], quote=True)}'>{value_html}</td>"
+
+        row_html += f"""
+        <tr>
+            {cells}
+            <td data-label='Actions'>
+                <div class='cost-action-grid'>
+                    <a class='btn mini secondary'
+                       href='{url_for('admin_cost_record_edit', record_id=record['id'])}'>Edit</a>
+                    <form method='post'
+                          action='{url_for('admin_cost_record_delete', record_id=record['id'])}'
+                          onsubmit="return confirm('Delete this cost record?');">
+                        <button class='btn mini danger'>Delete</button>
+                    </form>
+                </div>
+            </td>
+        </tr>
+        """
+
+    if not row_html:
+        row_html = f"<tr><td colspan='{len(columns)+1}'><div class='empty'>No cost records found for this section and month.</div></td></tr>"
+
+    form_fields = ''.join(admin_cost_input_html(column) for column in columns)
+
+    custom_columns = [column for column in columns if not column['is_system']]
+    custom_column_html = ''.join(
+        f"""
+        <div class='cost-custom-column-item'>
+            <div>
+                <strong>{escape(column['label'])}</strong>
+                <span>{escape(column['data_type'])}</span>
+            </div>
+            <form method='post'
+                  action='{url_for('admin_cost_column_delete', column_id=column['id'])}'
+                  onsubmit="return confirm('Delete this custom column and its saved values?');">
+                <button class='btn mini danger'>Remove</button>
+            </form>
+        </div>
+        """
+        for column in custom_columns
+    ) or "<div class='mini muted'>No custom columns added to this section.</div>"
+
+    bank_rows = ''.join(
+        f"<tr><td>{escape(bank)}</td><td>{values['members']}</td><td>{admin_cost_format_money(values['payroll'])}</td></tr>"
+        for bank, values in summary['bank_summary']
+    ) or "<tr><td colspan='3'>No banking records for this month.</td></tr>"
+
+    meta = summary['month_meta']
+    planned_slots = int(meta['planned_tutor_slots'] or 0) if meta else 0
+    vacant_slots = int(meta['vacant_tutor_slots'] or 0) if meta else 0
+    report_title = meta['report_title'] if meta else ''
+    month_notes = meta['notes'] if meta else ''
+
+    import_rows_html = ''.join(
+        f"<tr><td>{escape(item['file_name'] or 'Uploaded workbook')}</td><td>{escape(pretty_month_label(item['cost_month']))}</td><td>{escape(item['import_mode'])}</td><td>{item['imported_rows']}</td><td>{escape((item['imported_at'] or '')[:16].replace('T',' '))}</td></tr>"
+        for item in recent_imports
+    ) or "<tr><td colspan='5'>No workbook imports yet.</td></tr>"
+
+    portal_summary_map = {
+        'Tutor Monthly Cost': summary['tutor_cost'],
+        'Tutor Manager Monthly Cost': summary['tutor_manager_cost'],
+        'Operational Team Monthly Cost': summary['operational_cost'],
+        'Total Management Monthly Cost': summary['management_cost'],
+        'Total Monthly Payroll': summary['payroll'],
+        'Monthly Subscriptions': summary['subscriptions_monthly'],
+        'Yearly Subscriptions': summary['subscriptions_yearly'],
+        'Total Monthly Cash Requirement': summary['monthly_cash'],
+        'Effective Monthly Cost': summary['effective_monthly'],
+    }
+    reconciliation_rows = ''
+    for label, source_amount in summary['source_summary'].items():
+        portal_amount = float(portal_summary_map.get(label, 0) or 0)
+        source_amount = float(source_amount or 0)
+        variance = portal_amount - source_amount
+        variance_class = 'active' if abs(variance) < 0.01 else 'pending'
+        reconciliation_rows += f"""
+        <tr>
+            <td>{escape(label)}</td>
+            <td>{admin_cost_format_money(source_amount)}</td>
+            <td>{admin_cost_format_money(portal_amount)}</td>
+            <td><span class='chip {variance_class}'>{admin_cost_format_money(variance)}</span></td>
+        </tr>
+        """
+
+    source_bank_rows = ''
+    calculated_bank_map = dict(summary['bank_summary'])
+    all_banks = sorted(
+        set(summary['source_bank_summary']) | set(calculated_bank_map),
+        key=lambda name: name.lower()
+    )
+    for bank in all_banks:
+        source_values = summary['source_bank_summary'].get(bank, {})
+        portal_values = calculated_bank_map.get(bank, {})
+        source_bank_rows += f"""
+        <tr>
+            <td>{escape(bank)}</td>
+            <td>{int(source_values.get('members', 0) or 0)}</td>
+            <td>{admin_cost_format_money(source_values.get('payroll', 0))}</td>
+            <td>{int(portal_values.get('members', 0) or 0)}</td>
+            <td>{admin_cost_format_money(portal_values.get('payroll', 0))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <style>
+        .cost-centre-hero {{
+            color:#fff;
+            background:linear-gradient(135deg,#0d4024,#1b6f3b 68%,#25894b);
+            border:1px solid rgba(227,173,36,.55);
+            box-shadow:0 18px 42px rgba(7,44,24,.18);
+        }}
+        .cost-centre-hero h1,
+        .cost-centre-hero h2 {{ color:#fff !important; }}
+        .cost-summary-grid {{
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+            gap:10px;
+            margin-top:14px;
+        }}
+        .cost-summary-box {{
+            padding:14px;
+            border:1px solid rgba(255,255,255,.20);
+            border-radius:15px;
+            background:rgba(255,255,255,.10);
+            backdrop-filter:blur(8px);
+        }}
+        .cost-summary-box span {{
+            display:block;
+            color:#dff3e5;
+            font-size:10px;
+            font-weight:800;
+            text-transform:uppercase;
+            letter-spacing:.04em;
+        }}
+        .cost-summary-box strong {{
+            display:block;
+            margin-top:4px;
+            color:#fff;
+            font-size:21px;
+        }}
+        .cost-toolbar {{
+            display:flex;
+            align-items:center;
+            gap:8px;
+            flex-wrap:wrap;
+        }}
+        .cost-toolbar form {{ margin:0; }}
+        .cost-section-tabs {{
+            display:flex;
+            gap:7px;
+            overflow-x:auto;
+            padding-bottom:4px;
+        }}
+        .cost-section-tabs > * {{ flex:0 0 auto; }}
+        .cost-data-shell {{
+            width:100%;
+            overflow-x:auto;
+            border:1px solid #d7e7dc;
+            border-radius:16px;
+            background:#fff;
+        }}
+        .cost-data-table {{
+            width:100%;
+            min-width:1050px;
+            border:0 !important;
+            box-shadow:none !important;
+        }}
+        .cost-data-table th,
+        .cost-data-table td {{
+            padding:10px;
+            vertical-align:top;
+            font-size:12px;
+        }}
+        .cost-data-table th {{ white-space:nowrap; }}
+        .cost-action-grid {{
+            display:grid;
+            grid-template-columns:1fr 1fr;
+            gap:5px;
+            min-width:135px;
+        }}
+        .cost-action-grid form,
+        .cost-action-grid .btn {{ width:100%; margin:0; }}
+        .cost-form-grid {{
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+            gap:10px;
+        }}
+        .cost-form-grid input,
+        .cost-form-grid select {{ width:100%; margin:0; }}
+        .cost-custom-column-item {{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:10px;
+            padding:9px 10px;
+            border:1px solid #dbe9df;
+            border-radius:12px;
+            background:#fff;
+            margin-top:7px;
+        }}
+        .cost-custom-column-item span {{
+            display:block;
+            color:#68796f;
+            font-size:10px;
+        }}
+        .cost-two-column {{
+            display:grid;
+            grid-template-columns:minmax(0,1.35fr) minmax(300px,.65fr);
+            gap:14px;
+        }}
+        @media(max-width:900px) {{
+            .cost-two-column {{ grid-template-columns:1fr; }}
+        }}
+        @media(max-width:700px) {{
+            .cost-data-shell {{ overflow:visible; border:0; background:transparent; }}
+            .cost-data-table {{ display:block; min-width:0; background:transparent; }}
+            .cost-data-table thead {{ display:none; }}
+            .cost-data-table tbody {{ display:block; }}
+            .cost-data-table tr {{
+                display:block;
+                margin-bottom:12px;
+                padding:12px;
+                border:1px solid #d7e7dc;
+                border-radius:15px;
+                background:#fff;
+            }}
+            .cost-data-table td {{
+                display:grid;
+                grid-template-columns:115px minmax(0,1fr);
+                gap:8px;
+                width:100%;
+                padding:7px 0;
+                border:0;
+                border-bottom:1px solid #edf3ef;
+            }}
+            .cost-data-table td::before {{
+                content:attr(data-label);
+                color:#52665a;
+                font-size:9px;
+                font-weight:900;
+                text-transform:uppercase;
+            }}
+            .cost-data-table td:last-child {{ border-bottom:0; }}
+        }}
+    </style>
+
+    <section class='card cost-centre-hero'>
+        <div class='cost-toolbar' style='justify-content:space-between'>
+            <div>
+                <h1>EBTA Cost Centre</h1>
+                <p style='margin:0;color:#dff3e5'>
+                    High Admin-only payroll, subscriptions, banking and operational cost register.
+                </p>
+            </div>
+            <div class='cost-toolbar'>
+                <a class='btn success' href='{url_for('admin_cost_export')}?month={escape(cost_month, quote=True)}'>Export Excel</a>
+            </div>
+        </div>
+
+        <div class='cost-summary-grid'>
+            <div class='cost-summary-box'><span>Tutor Monthly Cost</span><strong>{admin_cost_format_money(summary['tutor_cost'])}</strong></div>
+            <div class='cost-summary-box'><span>Management Monthly Cost</span><strong>{admin_cost_format_money(summary['management_cost'])}</strong></div>
+            <div class='cost-summary-box'><span>Total Monthly Payroll</span><strong>{admin_cost_format_money(summary['payroll'])}</strong></div>
+            <div class='cost-summary-box'><span>Monthly Subscriptions</span><strong>{admin_cost_format_money(summary['subscriptions_monthly'])}</strong></div>
+            <div class='cost-summary-box'><span>Yearly Costs</span><strong>{admin_cost_format_money(summary['yearly_total'])}</strong></div>
+            <div class='cost-summary-box'><span>Monthly Cash Requirement</span><strong>{admin_cost_format_money(summary['monthly_cash'])}</strong></div>
+            <div class='cost-summary-box'><span>Effective Monthly Cost</span><strong>{admin_cost_format_money(summary['effective_monthly'])}</strong></div>
+        </div>
+    </section>
+
+    <section class='card'>
+        <form method='get' class='cost-toolbar'>
+            <div>
+                <label>Cost month</label>
+                <select name='month'>{month_options}</select>
+            </div>
+            <input type='hidden' name='section' value='{escape(selected_section, quote=True)}'>
+            <div style='flex:1;min-width:220px'>
+                <label>Search selected table</label>
+                <input name='q' value='{escape(search, quote=True)}' placeholder='Search names, subjects, bank or status'>
+            </div>
+            <button class='btn'>Apply</button>
+        </form>
+    </section>
+
+    <section class='card'>
+        <div class='cost-section-tabs'>{section_tabs}</div>
+    </section>
+
+    <div class='cost-two-column'>
+        <section class='card'>
+            <div class='cost-toolbar' style='justify-content:space-between;margin-bottom:12px'>
+                <div>
+                    <h2>{escape(ADMIN_COST_SECTIONS[selected_section])}</h2>
+                    <div class='mini muted'>{len(records)} record(s) for {escape(pretty_month_label(cost_month))}</div>
+                </div>
+                <span class='chip active'>Monthly total: {admin_cost_format_money(summary['totals'][selected_section]['monthly'])}</span>
+            </div>
+
+            <details class='card soft' style='margin-bottom:12px'>
+                <summary><strong>Add New Record</strong></summary>
+                <form method='post'
+                      action='{url_for('admin_cost_record_add')}'
+                      class='cost-form-grid'
+                      style='margin-top:12px'>
+                    <input type='hidden' name='cost_month' value='{escape(cost_month, quote=True)}'>
+                    <input type='hidden' name='section_key' value='{escape(selected_section, quote=True)}'>
+                    {form_fields}
+                    <div style='grid-column:1/-1'>
+                        <button class='btn success'>Add Record</button>
+                    </div>
+                </form>
+            </details>
+
+            <div class='cost-data-shell'>
+                <table class='cost-data-table'>
+                    <thead><tr>{header_html}</tr></thead>
+                    <tbody>{row_html}</tbody>
+                </table>
+            </div>
+        </section>
+
+        <aside>
+            <section class='card soft'>
+                <h2>Upload Excel</h2>
+                <p class='mini muted'>
+                    Upload the EBTA costs workbook or another workbook using the same sheet structure.
+                    New spreadsheet columns are added automatically.
+                </p>
+                <form method='post'
+                      action='{url_for('admin_cost_import')}'
+                      enctype='multipart/form-data'
+                      class='grid'>
+                    <div>
+                        <label>Import month</label>
+                        <input type='month' name='cost_month' value='{escape(cost_month, quote=True)}' required>
+                    </div>
+                    <div>
+                        <label>Import method</label>
+                        <select name='import_mode'>
+                            <option value='REPLACE'>Replace imported sections for this month</option>
+                            <option value='APPEND'>Append to existing records</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Excel file</label>
+                        <input type='file' name='cost_file' accept='.xlsx,.xlsm' required>
+                    </div>
+                    <button class='btn success'>Import and Populate</button>
+                </form>
+            </section>
+
+            <section class='card soft'>
+                <h2>Add Custom Column</h2>
+                <form method='post' action='{url_for('admin_cost_column_add')}' class='grid'>
+                    <input type='hidden' name='section_key' value='{escape(selected_section, quote=True)}'>
+                    <input type='hidden' name='cost_month' value='{escape(cost_month, quote=True)}'>
+                    <div>
+                        <label>Column name</label>
+                        <input name='label' placeholder='Example: Payment Date' required>
+                    </div>
+                    <div>
+                        <label>Data type</label>
+                        <select name='data_type'>
+                            <option value='TEXT'>Text</option>
+                            <option value='NUMBER'>Number</option>
+                            <option value='CURRENCY'>Currency</option>
+                            <option value='DATE'>Date</option>
+                            <option value='EMAIL'>Email</option>
+                        </select>
+                    </div>
+                    <button class='btn'>Add Column</button>
+                </form>
+                <div style='margin-top:10px'>{custom_column_html}</div>
+            </section>
+
+            <section class='card soft'>
+                <h2>Month Details</h2>
+                <form method='post' action='{url_for('admin_cost_month_update')}' class='grid'>
+                    <input type='hidden' name='cost_month' value='{escape(cost_month, quote=True)}'>
+                    <div>
+                        <label>Report title</label>
+                        <input name='report_title' value='{escape(report_title or '', quote=True)}'>
+                    </div>
+                    <div>
+                        <label>Planned tutor subject slots</label>
+                        <input type='number' min='0' name='planned_tutor_slots' value='{planned_slots}'>
+                    </div>
+                    <div>
+                        <label>Vacant tutor slots</label>
+                        <input type='number' min='0' name='vacant_tutor_slots' value='{vacant_slots}'>
+                    </div>
+                    <div>
+                        <label>Confidential note</label>
+                        <textarea name='notes' rows='3'>{escape(month_notes or '')}</textarea>
+                    </div>
+                    <button class='btn'>Save Month Details</button>
+                </form>
+            </section>
+        </aside>
+    </div>
+
+    {
+        f"""
+        <section class='card' style='border-left:5px solid #e3ad24'>
+            <h2>Workbook Reconciliation</h2>
+            <p class='mini muted'>
+                The attached July workbook contains hardcoded summary amounts that do not fully match
+                the sum of its detailed rows. Both are retained here so High Admin can review and edit
+                the underlying records without losing the original workbook figures.
+            </p>
+            <div class='scroll-x'>
+                <table>
+                    <thead><tr><th>Cost Area</th><th>Source Workbook</th><th>Portal Calculation</th><th>Variance</th></tr></thead>
+                    <tbody>{reconciliation_rows}</tbody>
+                </table>
+            </div>
+        </section>
+        """ if reconciliation_rows else ""
+    }
+
+    {
+        f"""
+        <section class='card' style='border-left:5px solid #e3ad24'>
+            <h2>Source Workbook Bank Summary vs Portal Records</h2>
+            <div class='scroll-x'>
+                <table>
+                    <thead><tr><th>Bank</th><th>Source Members</th><th>Source Payroll</th><th>Portal Members</th><th>Portal Payroll</th></tr></thead>
+                    <tbody>{source_bank_rows}</tbody>
+                </table>
+            </div>
+        </section>
+        """ if source_bank_rows else ""
+    }
+
+    <section class='card'>
+        <h2>Payroll by Bank</h2>
+        <div class='scroll-x'>
+            <table>
+                <thead><tr><th>Bank</th><th>Team Members</th><th>Monthly Payroll</th></tr></thead>
+                <tbody>{bank_rows}</tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class='card'>
+        <h2>Recent Excel Imports</h2>
+        <div class='scroll-x'>
+            <table>
+                <thead><tr><th>File</th><th>Month</th><th>Mode</th><th>Rows</th><th>Imported</th></tr></thead>
+                <tbody>{import_rows_html}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page('EBTA Cost Centre', body)
+
+
+@app.post('/admin/cost-centre/record/add')
+@require_high_admin
+def admin_cost_record_add():
+    r = require_admin()
+    if r:
+        return r
+
+    cost_month = admin_cost_valid_month(request.form.get('cost_month'))
+    section_key = request.form.get('section_key', '').strip().upper()
+    if not cost_month or section_key not in ADMIN_COST_SECTIONS:
+        return page('Invalid Cost Record', card_msg('Please select a valid month and cost section.'))
+
+    conn = get_db()
+    cur = conn.cursor()
+    admin_cost_ensure_month(cur, cost_month)
+    columns = admin_cost_columns(cur, section_key)
+    row_data, monthly_cost, yearly_cost = admin_cost_record_from_form(columns)
+
+    cur.execute("""
+        SELECT COALESCE(MAX(display_order), 0) + 1 AS next_order
+        FROM admin_cost_records
+        WHERE cost_month=? AND section_key=?
+    """, (cost_month, section_key))
+    next_order = cur.fetchone()['next_order'] or 1
+
+    cur.execute("""
+        INSERT INTO admin_cost_records(
+            cost_month, section_key, row_data,
+            monthly_cost, yearly_cost, display_order,
+            source, created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?)
+    """, (
+        cost_month, section_key,
+        json.dumps(row_data, ensure_ascii=False),
+        monthly_cost, yearly_cost, next_order,
+        'Manual portal entry', now_utc_iso(), now_utc_iso()
+    ))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('admin_cost_centre', month=cost_month, section=section_key))
+
+
+@app.get('/admin/cost-centre/record/<int:record_id>/edit')
+@require_high_admin
+def admin_cost_record_edit(record_id):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM admin_cost_records WHERE id=?", (record_id,))
+    record = cur.fetchone()
+    if not record:
+        conn.close()
+        return page('Cost Record Not Found', card_msg('The selected cost record was not found.'))
+
+    columns = admin_cost_columns(cur, record['section_key'])
+    data = admin_cost_json(record['row_data'])
+    conn.close()
+
+    fields = ''
+    for column in columns:
+        key = column['column_key']
+        if key == 'monthly_cost':
+            value = record['monthly_cost']
+        elif key == 'yearly_cost':
+            value = record['yearly_cost']
+        else:
+            value = data.get(key, '')
+        fields += admin_cost_input_html(column, value)
+
+    body = f"""
+    {admin_nav()}
+    <section class='card'>
+        <h1>Edit Cost Record</h1>
+        <p class='muted'>
+            {escape(ADMIN_COST_SECTIONS.get(record['section_key'], record['section_key']))}
+            · {escape(pretty_month_label(record['cost_month']))}
+        </p>
+        <form method='post'
+              action='{url_for('admin_cost_record_update', record_id=record_id)}'
+              class='grid'>
+            {fields}
+            <div class='toolbar' style='grid-column:1/-1'>
+                <button class='btn success'>Save Changes</button>
+                <a class='btn secondary'
+                   href='{url_for('admin_cost_centre', month=record['cost_month'], section=record['section_key'])}'>Cancel</a>
+            </div>
+        </form>
+    </section>
+    """
+    return page('Edit Cost Record', body)
+
+
+@app.post('/admin/cost-centre/record/<int:record_id>/edit')
+@require_high_admin
+def admin_cost_record_update(record_id):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM admin_cost_records WHERE id=?", (record_id,))
+    record = cur.fetchone()
+    if not record:
+        conn.close()
+        return page('Cost Record Not Found', card_msg('The selected cost record was not found.'))
+
+    columns = admin_cost_columns(cur, record['section_key'])
+    row_data, monthly_cost, yearly_cost = admin_cost_record_from_form(columns)
+    cur.execute("""
+        UPDATE admin_cost_records
+        SET row_data=?, monthly_cost=?, yearly_cost=?, updated_at=?
+        WHERE id=?
+    """, (
+        json.dumps(row_data, ensure_ascii=False),
+        monthly_cost, yearly_cost, now_utc_iso(), record_id
+    ))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('admin_cost_centre', month=record['cost_month'], section=record['section_key']))
+
+
+@app.post('/admin/cost-centre/record/<int:record_id>/delete')
+@require_high_admin
+def admin_cost_record_delete(record_id):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT cost_month, section_key FROM admin_cost_records WHERE id=?", (record_id,))
+    record = cur.fetchone()
+    if record:
+        cur.execute("DELETE FROM admin_cost_records WHERE id=?", (record_id,))
+        conn.commit()
+    conn.close()
+
+    if not record:
+        return page('Cost Record Not Found', card_msg('The selected cost record was not found.'))
+    return redirect(url_for('admin_cost_centre', month=record['cost_month'], section=record['section_key']))
+
+
+@app.post('/admin/cost-centre/column/add')
+@require_high_admin
+def admin_cost_column_add():
+    r = require_admin()
+    if r:
+        return r
+
+    section_key = request.form.get('section_key', '').strip().upper()
+    cost_month = admin_cost_valid_month(request.form.get('cost_month'))
+    label = request.form.get('label', '').strip()
+    data_type = request.form.get('data_type', 'TEXT').strip().upper()
+
+    if section_key not in ADMIN_COST_SECTIONS or not label:
+        return page('Invalid Column', card_msg('Please enter a valid column name and section.'))
+    if data_type not in {'TEXT','NUMBER','CURRENCY','DATE','EMAIL'}:
+        data_type = 'TEXT'
+
+    conn = get_db()
+    cur = conn.cursor()
+    base_key = 'custom_' + admin_cost_slug(label)
+    column_key = base_key
+    suffix = 2
+    while True:
+        cur.execute("SELECT 1 FROM admin_cost_columns WHERE section_key=? AND column_key=?", (section_key, column_key))
+        if not cur.fetchone():
+            break
+        column_key = f'{base_key}_{suffix}'
+        suffix += 1
+
+    admin_cost_ensure_column(cur, section_key, column_key, label, data_type, 0)
+    conn.commit()
+    conn.close()
+    return redirect(url_for('admin_cost_centre', month=cost_month, section=section_key))
+
+
+@app.post('/admin/cost-centre/column/<int:column_id>/delete')
+@require_high_admin
+def admin_cost_column_delete(column_id):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM admin_cost_columns WHERE id=?", (column_id,))
+    column = cur.fetchone()
+    if not column:
+        conn.close()
+        return page('Column Not Found', card_msg('The selected custom column was not found.'))
+    if column['is_system']:
+        conn.close()
+        return page('Protected Column', card_msg('Core cost columns cannot be removed.'))
+
+    cur.execute("SELECT id, row_data FROM admin_cost_records WHERE section_key=?", (column['section_key'],))
+    for record in cur.fetchall():
+        data = admin_cost_json(record['row_data'])
+        data.pop(column['column_key'], None)
+        cur.execute("UPDATE admin_cost_records SET row_data=?, updated_at=? WHERE id=?", (
+            json.dumps(data, ensure_ascii=False), now_utc_iso(), record['id']
+        ))
+
+    cur.execute("DELETE FROM admin_cost_columns WHERE id=?", (column_id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('admin_cost_centre', section=column['section_key']))
+
+
+@app.post('/admin/cost-centre/month/update')
+@require_high_admin
+def admin_cost_month_update():
+    r = require_admin()
+    if r:
+        return r
+
+    cost_month = admin_cost_valid_month(request.form.get('cost_month'))
+    if not cost_month:
+        return page('Invalid Month', card_msg('Please select a valid cost month.'))
+
+    report_title = request.form.get('report_title', '').strip()
+    notes = request.form.get('notes', '').strip()
+    try:
+        planned = max(0, int(request.form.get('planned_tutor_slots', 0) or 0))
+    except Exception:
+        planned = 0
+    try:
+        vacant = max(0, int(request.form.get('vacant_tutor_slots', 0) or 0))
+    except Exception:
+        vacant = 0
+
+    conn = get_db()
+    cur = conn.cursor()
+    admin_cost_ensure_month(cur, cost_month)
+    cur.execute("""
+        UPDATE admin_cost_months
+        SET report_title=?, planned_tutor_slots=?, vacant_tutor_slots=?,
+            notes=?, updated_at=?
+        WHERE cost_month=?
+    """, (report_title, planned, vacant, notes, now_utc_iso(), cost_month))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('admin_cost_centre', month=cost_month))
+
+
+@app.post('/admin/cost-centre/import')
+@require_high_admin
+def admin_cost_import():
+    r = require_admin()
+    if r:
+        return r
+
+    upload = request.files.get('cost_file')
+    cost_month = admin_cost_valid_month(request.form.get('cost_month'))
+    import_mode = request.form.get('import_mode', 'REPLACE').strip().upper()
+
+    if not cost_month:
+        return page('Invalid Month', card_msg('Please select a valid import month.'))
+    if import_mode not in {'REPLACE','APPEND'}:
+        import_mode = 'REPLACE'
+    if not upload or not upload.filename:
+        return page('No Excel File', card_msg('Please choose an Excel workbook to import.'))
+    extension = Path(upload.filename).suffix.lower()
+    if extension not in {'.xlsx','.xlsm'}:
+        return page('Invalid Excel File', card_msg('Please upload an XLSX or XLSM workbook.'))
+
+    try:
+        from openpyxl import load_workbook
+        workbook = load_workbook(io.BytesIO(upload.read()), data_only=True, read_only=True)
+    except Exception as exc:
+        return page('Excel Import Failed', card_msg(f'The workbook could not be read: {escape(str(exc))}'))
+
+    source_summary = {}
+    source_bank_summary = {}
+    summary_sheet = next(
+        (ws for ws in workbook.worksheets if str(ws.title).strip().lower() == 'summary'),
+        None
+    )
+    if summary_sheet:
+        for row_number in range(1, summary_sheet.max_row + 1):
+            first = str(summary_sheet.cell(row_number, 1).value or '').strip()
+            second = summary_sheet.cell(row_number, 2).value
+            third = summary_sheet.cell(row_number, 3).value
+            if first == 'Cost Area':
+                scan_row = row_number + 1
+                while scan_row <= summary_sheet.max_row:
+                    label = str(summary_sheet.cell(scan_row, 1).value or '').strip()
+                    amount = summary_sheet.cell(scan_row, 2).value
+                    if not label:
+                        break
+                    source_summary[label] = admin_cost_money(amount)
+                    scan_row += 1
+            if first == 'Bank' and str(second or '').strip() == 'Team Members':
+                scan_row = row_number + 1
+                while scan_row <= summary_sheet.max_row:
+                    bank = str(summary_sheet.cell(scan_row, 1).value or '').strip()
+                    if not bank:
+                        break
+                    source_bank_summary[bank] = {
+                        'members': int(admin_cost_money(summary_sheet.cell(scan_row, 2).value)),
+                        'payroll': admin_cost_money(summary_sheet.cell(scan_row, 3).value),
+                    }
+                    scan_row += 1
+
+    sheet_map = {
+        'subscriptions': 'SUBSCRIPTIONS',
+        'tutors': 'TUTORS',
+        'tutor managers': 'TUTOR_MANAGERS',
+        'operational team': 'OPERATIONAL_TEAM',
+        'other costs': 'OTHER_COSTS',
+    }
+
+    conn = get_db()
+    cur = conn.cursor()
+    admin_cost_ensure_month(cur, cost_month)
+    parsed_sections = {}
+
+    for worksheet in workbook.worksheets:
+        section_key = sheet_map.get(str(worksheet.title).strip().lower())
+        if not section_key:
+            continue
+
+        header_row_number = None
+        headers = []
+        for row_number in range(1, min(worksheet.max_row, 20) + 1):
+            values = [worksheet.cell(row_number, col).value for col in range(1, worksheet.max_column + 1)]
+            nonempty = [str(value).strip() for value in values if value not in (None, '')]
+            if not nonempty:
+                continue
+            first = nonempty[0].lower()
+            if first in {'service','grade','full name','description'}:
+                header_row_number = row_number
+                headers = [str(value).strip() if value not in (None, '') else '' for value in values]
+                break
+
+        if not header_row_number:
+            continue
+
+        column_map = []
+        for position, label in enumerate(headers, start=1):
+            if not label:
+                continue
+            key = admin_cost_header_key(label)
+            data_type = 'CURRENCY' if key in {'monthly_cost','yearly_cost'} else 'TEXT'
+            if key == 'email':
+                data_type = 'EMAIL'
+            admin_cost_ensure_column(cur, section_key, key, label, data_type, 1 if key in {'monthly_cost','yearly_cost'} else 0)
+            column_map.append((position, key, label))
+
+        section_rows = []
+        for row_number in range(header_row_number + 1, worksheet.max_row + 1):
+            values = [worksheet.cell(row_number, col).value for col in range(1, worksheet.max_column + 1)]
+            if all(value in (None, '') for value in values):
+                continue
+
+            first_value = str(values[0] or '').strip().upper()
+            if 'TOTAL' in first_value or 'SUBTOTAL' in first_value:
+                continue
+
+            row_data = {}
+            monthly_cost = 0.0
+            yearly_cost = 0.0
+            has_content = False
+
+            for position, key, label in column_map:
+                value = values[position - 1] if position - 1 < len(values) else None
+                if value not in (None, ''):
+                    has_content = True
+
+                if key == 'monthly_cost':
+                    monthly_cost = admin_cost_money(value)
+                    continue
+                if key == 'yearly_cost':
+                    yearly_cost = admin_cost_money(value)
+                    continue
+
+                if key == 'contact' and isinstance(value, (int, float)):
+                    value_text = str(int(value))
+                    if len(value_text) == 9:
+                        value_text = '0' + value_text
+                    value = value_text
+                elif value is None:
+                    value = ''
+                elif isinstance(value, datetime.datetime):
+                    value = value.date().isoformat()
+                elif isinstance(value, datetime.date):
+                    value = value.isoformat()
+                else:
+                    value = str(value)
+
+                row_data[key] = value
+
+            if has_content:
+                section_rows.append((row_data, monthly_cost, yearly_cost))
+
+        if section_rows:
+            parsed_sections[section_key] = section_rows
+
+    if not parsed_sections:
+        conn.close()
+        return page('No Cost Tables Found', card_msg('The workbook did not contain recognised cost sheets. Expected Subscriptions, Tutors, Tutor Managers or Operational Team.'))
+
+    if import_mode == 'REPLACE':
+        for section_key in parsed_sections:
+            cur.execute("DELETE FROM admin_cost_records WHERE cost_month=? AND section_key=?", (cost_month, section_key))
+
+    imported_rows = 0
+    for section_key, section_rows in parsed_sections.items():
+        cur.execute("SELECT COALESCE(MAX(display_order),0) AS max_order FROM admin_cost_records WHERE cost_month=? AND section_key=?", (cost_month, section_key))
+        start_order = int(cur.fetchone()['max_order'] or 0)
+
+        for offset, (row_data, monthly_cost, yearly_cost) in enumerate(section_rows, start=1):
+            cur.execute("""
+                INSERT INTO admin_cost_records(
+                    cost_month, section_key, row_data,
+                    monthly_cost, yearly_cost, display_order,
+                    source, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)
+            """, (
+                cost_month, section_key,
+                json.dumps(row_data, ensure_ascii=False),
+                monthly_cost, yearly_cost, start_order + offset,
+                Path(upload.filename).name, now_utc_iso(), now_utc_iso()
+            ))
+            imported_rows += 1
+
+    if source_summary or source_bank_summary:
+        cur.execute("""
+            UPDATE admin_cost_months
+            SET source_summary_json=?, source_bank_summary_json=?, updated_at=?
+            WHERE cost_month=?
+        """, (
+            json.dumps(source_summary, ensure_ascii=False) if source_summary else None,
+            json.dumps(source_bank_summary, ensure_ascii=False) if source_bank_summary else None,
+            now_utc_iso(),
+            cost_month
+        ))
+
+    cur.execute("""
+        INSERT INTO admin_cost_imports(
+            file_name, cost_month, import_mode, imported_sections,
+            imported_rows, imported_by, imported_at
+        ) VALUES(?,?,?,?,?,?,?)
+    """, (
+        Path(upload.filename).name,
+        cost_month,
+        import_mode,
+        ', '.join(ADMIN_COST_SECTIONS[key] for key in parsed_sections),
+        imported_rows,
+        session.get('admin_username') or 'High Admin',
+        now_utc_iso()
+    ))
+    conn.commit()
+    conn.close()
+
+    first_section = next(iter(parsed_sections))
+    return redirect(url_for('admin_cost_centre', month=cost_month, section=first_section))
+
+
+@app.get('/admin/cost-centre/export')
+@require_high_admin
+def admin_cost_export():
+    r = require_admin()
+    if r:
+        return r
+
+    cost_month = admin_cost_valid_month(request.args.get('month'))
+    if not cost_month:
+        return page('Invalid Month', card_msg('Please select a valid export month.'))
+
+    conn = get_db()
+    cur = conn.cursor()
+    summary = admin_cost_summary(conn, cost_month)
+
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+    except Exception:
+        conn.close()
+        return page('Excel Export Unavailable', card_msg('The Excel export library is not available on the server.'))
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    dark_green = '0D4024'
+    green = '1B6F3B'
+    light_green = 'EAF6ED'
+    gold = 'E3AD24'
+    white = 'FFFFFF'
+    grey = '64748B'
+    thin = Side(style='thin', color='D7E7DC')
+    money_format = 'R#,##0.00;[Red](R#,##0.00);-'
+
+    summary_ws = wb.create_sheet('Summary')
+    summary_ws.sheet_view.showGridLines = False
+    summary_ws.merge_cells('A1:E1')
+    summary_ws['A1'] = 'Early Bird Testimony Academy (EBTA)'
+    summary_ws.merge_cells('A2:E2')
+    title = summary['month_meta']['report_title'] if summary['month_meta'] else ''
+    summary_ws['A2'] = title or f'{pretty_month_label(cost_month).upper()} SUBSCRIPTIONS AND OPERATIONAL COSTS SUMMARY'
+    for cell in ('A1','A2'):
+        summary_ws[cell].fill = PatternFill('solid', fgColor=dark_green)
+        summary_ws[cell].font = Font(color=white, bold=True, size=14 if cell == 'A1' else 12)
+        summary_ws[cell].alignment = Alignment(horizontal='center')
+
+    portal_summary_export = {
+        'Tutor Monthly Cost': summary['tutor_cost'],
+        'Tutor Manager Monthly Cost': summary['tutor_manager_cost'],
+        'Operational Team Monthly Cost': summary['operational_cost'],
+        'Total Management Monthly Cost': summary['management_cost'],
+        'Total Monthly Payroll': summary['payroll'],
+        'Monthly Subscriptions': summary['subscriptions_monthly'],
+        'Yearly Subscriptions': summary['subscriptions_yearly'],
+        'Other Monthly Costs': summary['other_monthly'],
+        'Other Yearly Costs': summary['other_yearly'],
+        'Total Monthly Cash Requirement': summary['monthly_cash'],
+        'Effective Monthly Cost': summary['effective_monthly'],
+    }
+    summary_notes = {
+        'Tutor Monthly Cost': f"{summary['counts']['TUTORS']} tutor cost records across {int(summary['month_meta']['planned_tutor_slots'] or 0) if summary['month_meta'] else 0} subject slots; {int(summary['month_meta']['vacant_tutor_slots'] or 0) if summary['month_meta'] else 0} vacant slots.",
+        'Tutor Manager Monthly Cost': f"{summary['counts']['TUTOR_MANAGERS']} Tutor Managers.",
+        'Operational Team Monthly Cost': f"{summary['counts']['OPERATIONAL_TEAM']} operational team members.",
+        'Total Management Monthly Cost': 'Operational Team + Tutor Managers.',
+        'Total Monthly Payroll': 'Tutors + management.',
+        'Monthly Subscriptions': 'Monthly digital services.',
+        'Yearly Subscriptions': 'Domains and annual services.',
+        'Other Monthly Costs': 'Additional monthly costs captured on the portal.',
+        'Other Yearly Costs': 'Additional yearly costs captured on the portal.',
+        'Total Monthly Cash Requirement': 'Payroll + monthly subscriptions + other monthly costs.',
+        'Effective Monthly Cost': 'Includes yearly costs averaged over 12 months.',
+    }
+    summary_rows = [('Cost Area','Portal Calculated','Source Workbook','Variance','Notes')]
+    for label, portal_amount in portal_summary_export.items():
+        source_amount = summary['source_summary'].get(label, '')
+        variance = portal_amount - float(source_amount or 0) if source_amount != '' else ''
+        summary_rows.append((label, portal_amount, source_amount, variance, summary_notes.get(label, '')))
+    for row_index, row_values in enumerate(summary_rows, start=4):
+        for col_index, value in enumerate(row_values, start=1):
+            cell = summary_ws.cell(row_index, col_index, value)
+            cell.border = Border(bottom=thin)
+            cell.alignment = Alignment(vertical='top', wrap_text=True)
+            if row_index == 4:
+                cell.fill = PatternFill('solid', fgColor=green)
+                cell.font = Font(color=white, bold=True)
+            elif col_index in (2,3,4):
+                cell.number_format = money_format
+
+    bank_start = 4 + len(summary_rows) + 2
+    for col, value in enumerate(('Bank','Portal Members','Portal Payroll','Source Members','Source Payroll'), start=1):
+        cell = summary_ws.cell(bank_start, col, value)
+        cell.fill = PatternFill('solid', fgColor=green)
+        cell.font = Font(color=white, bold=True)
+    calculated_bank_export = dict(summary['bank_summary'])
+    all_export_banks = sorted(
+        set(calculated_bank_export) | set(summary['source_bank_summary']),
+        key=lambda name: name.lower()
+    )
+    for offset, bank in enumerate(all_export_banks, start=1):
+        portal_values = calculated_bank_export.get(bank, {})
+        source_values = summary['source_bank_summary'].get(bank, {})
+        summary_ws.cell(bank_start + offset, 1, bank)
+        summary_ws.cell(bank_start + offset, 2, int(portal_values.get('members', 0) or 0))
+        summary_ws.cell(bank_start + offset, 3, float(portal_values.get('payroll', 0) or 0)).number_format = money_format
+        summary_ws.cell(bank_start + offset, 4, int(source_values.get('members', 0) or 0))
+        summary_ws.cell(bank_start + offset, 5, float(source_values.get('payroll', 0) or 0)).number_format = money_format
+
+    note_row = bank_start + len(all_export_banks) + 3
+    summary_ws.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=5)
+    summary_ws.cell(note_row, 1, summary['month_meta']['notes'] if summary['month_meta'] else 'CONFIDENTIAL - INTERNAL FINANCIAL AND BANKING INFORMATION')
+    summary_ws.cell(note_row, 1).font = Font(color='9B1C1C', bold=True)
+    summary_ws.cell(note_row, 1).alignment = Alignment(horizontal='center')
+    summary_ws.column_dimensions['A'].width = 35
+    summary_ws.column_dimensions['B'].width = 20
+    summary_ws.column_dimensions['C'].width = 20
+    summary_ws.column_dimensions['D'].width = 20
+    summary_ws.column_dimensions['E'].width = 58
+    summary_ws.freeze_panes = 'A4'
+
+    export_sheet_names = {
+        'SUBSCRIPTIONS': 'Subscriptions',
+        'TUTORS': 'Tutors',
+        'TUTOR_MANAGERS': 'Tutor Managers',
+        'OPERATIONAL_TEAM': 'Operational Team',
+        'OTHER_COSTS': 'Other Costs',
+    }
+
+    for section_key, sheet_name in export_sheet_names.items():
+        columns = admin_cost_columns(cur, section_key)
+        cur.execute("SELECT * FROM admin_cost_records WHERE cost_month=? AND section_key=? ORDER BY display_order,id", (cost_month, section_key))
+        records = cur.fetchall()
+
+        ws = wb.create_sheet(sheet_name)
+        ws.sheet_view.showGridLines = False
+        end_col = max(1, len(columns))
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=end_col)
+        ws.cell(1,1, f"EBTA {ADMIN_COST_SECTIONS[section_key]} Costs and Details")
+        ws.cell(1,1).fill = PatternFill('solid', fgColor=dark_green)
+        ws.cell(1,1).font = Font(color=white, bold=True, size=14)
+        ws.cell(1,1).alignment = Alignment(horizontal='center')
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=end_col)
+        ws.cell(2,1, pretty_month_label(cost_month))
+        ws.cell(2,1).fill = PatternFill('solid', fgColor=light_green)
+        ws.cell(2,1).font = Font(color=dark_green, bold=True)
+        ws.cell(2,1).alignment = Alignment(horizontal='center')
+
+        for col_index, column in enumerate(columns, start=1):
+            cell = ws.cell(4, col_index, column['label'])
+            cell.fill = PatternFill('solid', fgColor=green)
+            cell.font = Font(color=white, bold=True)
+            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+        for row_index, record in enumerate(records, start=5):
+            data = admin_cost_json(record['row_data'])
+            for col_index, column in enumerate(columns, start=1):
+                key = column['column_key']
+                if key == 'monthly_cost':
+                    value = float(record['monthly_cost'] or 0)
+                elif key == 'yearly_cost':
+                    value = float(record['yearly_cost'] or 0)
+                else:
+                    value = data.get(key, '')
+                cell = ws.cell(row_index, col_index, value)
+                cell.border = Border(bottom=thin)
+                cell.alignment = Alignment(vertical='top', wrap_text=True)
+                if str(column['data_type']).upper() == 'CURRENCY' or key in {'monthly_cost','yearly_cost'}:
+                    cell.number_format = money_format
+
+        total_row = 5 + len(records)
+        ws.cell(total_row, 1, f"{ADMIN_COST_SECTIONS[section_key].upper()} TOTAL")
+        ws.cell(total_row, 1).font = Font(bold=True, color=dark_green)
+        for col_index, column in enumerate(columns, start=1):
+            if column['column_key'] in {'monthly_cost','yearly_cost'}:
+                letter = get_column_letter(col_index)
+                if records:
+                    ws.cell(total_row, col_index, f"=SUM({letter}5:{letter}{total_row-1})")
+                else:
+                    ws.cell(total_row, col_index, 0)
+                ws.cell(total_row, col_index).number_format = money_format
+                ws.cell(total_row, col_index).font = Font(bold=True)
+
+        ws.freeze_panes = 'A5'
+        ws.auto_filter.ref = f"A4:{get_column_letter(end_col)}{max(4,total_row-1)}"
+        for col_index, column in enumerate(columns, start=1):
+            label = str(column['label'])
+            width = 18
+            if any(term in label.lower() for term in ('purpose','department','institution','description','notes')):
+                width = 34
+            elif any(term in label.lower() for term in ('name','tutor','subject','service','email')):
+                width = 24
+            ws.column_dimensions[get_column_letter(col_index)].width = width
+
+    conn.close()
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=f"EBTA_Cost_Centre_{cost_month.replace('-', '_')}.xlsx",
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
 
 # --- Admin: Settings ---
 
