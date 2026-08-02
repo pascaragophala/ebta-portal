@@ -3595,8 +3595,8 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ooo_payments_request ON one_on_one_payment_logs(request_id)")
 
     # ================= HIGH ADMIN COST CENTRE =================
-    # Flexible monthly cost register with dynamic columns, Excel import/export
-    # and the July 2026 workbook data supplied by EBTA.
+    # Flexible monthly cost register with dynamic columns and Excel import/export.
+    # No staff, banking, subscription or cost records are preloaded in the code.
     cur.execute("""
         CREATE TABLE IF NOT EXISTS admin_cost_months(
             cost_month TEXT PRIMARY KEY,
@@ -3732,84 +3732,80 @@ def init_db():
             now_utc_iso(), now_utc_iso()
         ))
 
-    cur.execute("""
-        INSERT OR IGNORE INTO admin_cost_months(
-            cost_month, report_title, planned_tutor_slots,
-            vacant_tutor_slots, notes, source_summary_json,
-            source_bank_summary_json, created_at, updated_at
-        ) VALUES(?,?,?,?,?,?,?,?,?)
-    """, (
-        '2026-07',
-        'JULY 2026 SUBSCRIPTIONS AND OPERATIONAL COSTS SUMMARY',
-        35,
-        2,
-        'CONFIDENTIAL - INTERNAL FINANCIAL AND BANKING INFORMATION',
-        json.dumps({
-            'Tutor Monthly Cost': 22200,
-            'Tutor Manager Monthly Cost': 3500,
-            'Operational Team Monthly Cost': 26200,
-            'Total Management Monthly Cost': 29700,
-            'Total Monthly Payroll': 51900,
-            'Monthly Subscriptions': 1540,
-            'Yearly Subscriptions': 1100,
-            'Total Monthly Cash Requirement': 53440,
-            'Effective Monthly Cost': 53532,
-        }),
-        json.dumps({
-            'Capitec': {'members': 34, 'payroll': 41000},
-            'Standard Bank': {'members': 4, 'payroll': 4200},
-            'ABSA': {'members': 5, 'payroll': 3900},
-            'Nedbank': {'members': 1, 'payroll': 700},
-            'African Bank': {'members': 1, 'payroll': 600},
-            'Tyme Bank': {'members': 1, 'payroll': 700},
-            'FNB': {'members': 1, 'payroll': 800},
-        }),
-        now_utc_iso(),
-        now_utc_iso()
-    ))
-
+    # Remove the old built-in July 2026 records from databases that ran
+    # a previous version. A real Excel upload is kept when import history exists.
     cur.execute(
         "SELECT value FROM settings "
-        "WHERE key='admin_cost_centre_july_2026_seed_v1'"
+        "WHERE key='admin_cost_centre_remove_hardcoded_data_v1'"
     )
-    cost_seed_done = cur.fetchone()
+    hardcoded_cost_cleanup_done = cur.fetchone()
 
-    if not cost_seed_done:
-        cost_seed_data = {'subscriptions': [{'service': 'Microsoft 365', 'purpose': 'Email and productivity suite', 'cost_display': '$30 / ± R500', 'billing_cycle': 'Monthly', 'monthly_cost': 500.0, 'yearly_cost': 0.0}, {'service': 'Google One / Google Drive', 'purpose': 'Cloud storage for recordings', 'cost_display': 'R185', 'billing_cycle': 'Monthly', 'monthly_cost': 185.0, 'yearly_cost': 0.0}, {'service': 'Twilio SMS Service', 'purpose': 'Student and tutor SMS communication', 'cost_display': '$20 / ± R330', 'billing_cycle': 'Monthly', 'monthly_cost': 330.0, 'yearly_cost': 0.0}, {'service': 'EBTAPORTAL Hosting (Render)', 'purpose': 'Production portal hosting', 'cost_display': '$25 / ± R410', 'billing_cycle': 'Monthly', 'monthly_cost': 410.0, 'yearly_cost': 0.0}, {'service': 'EBTAPORTAL Testing Hosting', 'purpose': 'Testing environment hosting', 'cost_display': '$7 / ± R115', 'billing_cycle': 'Monthly', 'monthly_cost': 115.0, 'yearly_cost': 0.0}, {'service': 'EBTA.co.za Domain', 'purpose': 'Main EBTA website domain', 'cost_display': 'R100', 'billing_cycle': 'Yearly', 'monthly_cost': 0.0, 'yearly_cost': 100.0}, {'service': 'EBTAPORTAL.co.za Domain', 'purpose': 'Portal domain', 'cost_display': 'R100', 'billing_cycle': 'Yearly', 'monthly_cost': 0.0, 'yearly_cost': 100.0}, {'service': 'Canva Subscription', 'purpose': 'Branding and design tools', 'cost_display': 'R900', 'billing_cycle': 'Yearly', 'monthly_cost': 0.0, 'yearly_cost': 900.0}], 'tutors': [{'grade': 'Grade 8', 'subject': 'Mathematics', 'tutor': 'Maela Confidence Mmanare', 'tutor_manager': 'Moeletsi Tladi', 'contact': '0793784714', 'bank': 'Capitec', 'account_no': '1979411865', 'monthly_cost': 600.0, 'status': 'Updated'}, {'grade': 'Grade 8', 'subject': 'EMS', 'tutor': 'Ayanda Shoba', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0786509115', 'bank': 'Capitec', 'account_no': '2223389526', 'monthly_cost': 500.0, 'status': 'Updated'}, {'grade': 'Grade 8', 'subject': 'Natural Sciences', 'tutor': 'Ayanda Nxumalo', 'tutor_manager': 'Moeletsi Tladi', 'contact': '0718347725', 'bank': 'Capitec', 'account_no': '2218948873', 'monthly_cost': 500.0, 'status': 'Updated'}, {'grade': 'Grade 8', 'subject': 'English FAL', 'tutor': 'Lungiswa Ntshangase', 'tutor_manager': 'Nokulunga Ndlovu', 'contact': '0718236547', 'bank': 'Capitec', 'account_no': '2227406484', 'monthly_cost': 500.0, 'status': 'Updated'}, {'grade': 'Grade 9', 'subject': 'Mathematics', 'tutor': 'Gift Ndone', 'tutor_manager': 'Moeletsi Tladi', 'contact': '0710467840', 'bank': 'Capitec', 'account_no': '2182460949', 'monthly_cost': 800.0, 'status': 'Updated'}, {'grade': 'Grade 9', 'subject': 'EMS', 'tutor': 'Lungile Taaiboos', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0684983276 / 0784049471', 'bank': 'Capitec', 'account_no': '1994804694', 'monthly_cost': 500.0, 'status': 'Updated'}, {'grade': 'Grade 9', 'subject': 'Natural Sciences', 'tutor': 'Siphosenkosi Moyo', 'tutor_manager': 'Moeletsi Tladi', 'contact': '0842493040', 'bank': 'Nedbank', 'account_no': '1311820507', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 9', 'subject': 'English FAL', 'tutor': 'Mbongiseni Ethan Mbuyane', 'tutor_manager': 'Nokulunga Ndlovu', 'contact': '0716127518', 'bank': 'Capitec', 'account_no': '2143021611', 'monthly_cost': 600.0, 'status': 'Updated'}, {'grade': 'Grade 9', 'subject': 'Afrikaans FAL', 'tutor': 'Palesa Precious Seekoei', 'tutor_manager': 'Nokulunga Ndlovu', 'contact': '0765769742', 'bank': 'Capitec', 'account_no': '1716118830', 'monthly_cost': 500.0, 'status': 'Updated'}, {'grade': 'Grade 10', 'subject': 'Mathematics', 'tutor': 'Katlego Mokwena', 'tutor_manager': 'Moeletsi Tladi', 'contact': '0640790664', 'bank': 'Capitec', 'account_no': '1930801821', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 10', 'subject': 'Accounting', 'tutor': 'Snenhlanhla Vilakazi', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0822830834', 'bank': 'Capitec', 'account_no': '2110822429', 'monthly_cost': 500.0, 'status': 'Updated'}, {'grade': 'Grade 10', 'subject': 'Physical Sciences', 'tutor': 'Vhulenda Matshona', 'tutor_manager': 'Rolivhuwa Mohale', 'contact': '0713858487', 'bank': 'Capitec', 'account_no': '2189975243', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 10', 'subject': 'Life Sciences', 'tutor': 'Abenathi Mabhena', 'tutor_manager': 'Rolivhuwa Mohale', 'contact': '0608084046', 'bank': 'Capitec', 'account_no': '1772813298', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 11', 'subject': 'Mathematics', 'tutor': 'Rhulani Modipane', 'tutor_manager': 'Moeletsi Tladi', 'contact': '0718593381', 'bank': 'Capitec', 'account_no': '2178065852', 'monthly_cost': 800.0, 'status': 'Updated'}, {'grade': 'Grade 11', 'subject': 'Accounting', 'tutor': 'Siyabonga Mncube', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0785285827', 'bank': 'Capitec', 'account_no': '2262066627', 'monthly_cost': 600.0, 'status': 'Updated'}, {'grade': 'Grade 11', 'subject': 'Business Studies', 'tutor': 'Seiphemelo Lekgari', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0640448632', 'bank': 'Capitec', 'account_no': '2221930025', 'monthly_cost': 0.0, 'status': 'Form outstanding'}, {'grade': 'Grade 11', 'subject': 'Physical Sciences', 'tutor': 'Xolani Maseko', 'tutor_manager': 'Rolivhuwa Mohale', 'contact': '0769563890', 'bank': 'Capitec', 'account_no': '2070209896', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 11', 'subject': 'Life Sciences', 'tutor': 'Amahle Ngidi', 'tutor_manager': 'Rolivhuwa Mohale', 'contact': '0665116212', 'bank': 'Standard Bank', 'account_no': '10267640216', 'monthly_cost': 600.0, 'status': 'Updated'}, {'grade': 'Grade 11', 'subject': 'English FAL', 'tutor': 'Thandeka Blessing Rakgwale', 'tutor_manager': 'Nokulunga Ndlovu', 'contact': '0769485836', 'bank': 'ABSA', 'account_no': '4114251983', 'monthly_cost': 500.0, 'status': 'Form outstanding'}, {'grade': 'Grade 12', 'subject': 'Mathematics', 'tutor': 'Siphosethu Lubisi', 'tutor_manager': 'Moeletsi Tladi', 'contact': '0637230350', 'bank': 'Capitec', 'account_no': '2209564251', 'monthly_cost': 800.0, 'status': 'Updated'}, {'grade': 'Grade 12', 'subject': 'Mathematical Literacy', 'tutor': 'Kamogelo Malatji', 'tutor_manager': 'Nokulunga Ndlovu', 'contact': '0726885365', 'bank': 'Capitec', 'account_no': '1979179385', 'monthly_cost': 600.0, 'status': 'Updated'}, {'grade': 'Grade 12', 'subject': 'Accounting', 'tutor': 'Katlego Phiri', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0639669186', 'bank': 'Capitec', 'account_no': '2341860121', 'monthly_cost': 800.0, 'status': 'Updated'}, {'grade': 'Grade 12', 'subject': 'Business Studies', 'tutor': 'Oarabile Maake', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0750143485', 'bank': 'Capitec', 'account_no': '2141191862', 'monthly_cost': 0.0, 'status': 'Form outstanding'}, {'grade': 'Grade 12', 'subject': 'Business Studies', 'tutor': 'Siphuxolo Mngomezulu', 'tutor_manager': 'Siphokazi Sibeko', 'contact': '0785144945', 'bank': 'Capitec', 'account_no': '2220481642', 'monthly_cost': 500.0, 'status': 'Updated'}, {'grade': 'Grade 12', 'subject': 'Physical Sciences', 'tutor': 'Sipho Phakathi', 'tutor_manager': 'Rolivhuwa Mohale', 'contact': '0763482910', 'bank': 'Capitec', 'account_no': '2022210235', 'monthly_cost': 800.0, 'status': 'Updated'}, {'grade': 'Grade 12', 'subject': 'Life Sciences', 'tutor': 'Ayanda Motsweni', 'tutor_manager': 'Rolivhuwa Mohale', 'contact': '0764549516', 'bank': 'Capitec', 'account_no': '1206743245', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 12', 'subject': 'Geography', 'tutor': 'Phumudzo Ramosoeu', 'tutor_manager': 'Nokulunga Ndlovu', 'contact': '0673928871', 'bank': 'Capitec', 'account_no': '1886313898', 'monthly_cost': 600.0, 'status': 'Updated'}, {'grade': 'Grade 13', 'subject': 'Mathematics', 'tutor': 'Mposula Mamiki', 'tutor_manager': 'Oshianah Rakgoale', 'contact': '0728465471', 'bank': 'ABSA', 'account_no': '2169026440', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 13', 'subject': 'Mathematical Literacy', 'tutor': 'Alwande Mzila', 'tutor_manager': 'Oshianah Rakgoale', 'contact': '0646114236', 'bank': 'Capitec', 'account_no': '2262294050', 'monthly_cost': 0.0, 'status': 'Updated'}, {'grade': 'Grade 13', 'subject': 'Accounting', 'tutor': 'Hlengiwe Khumalo', 'tutor_manager': 'Oshianah Rakgoale', 'contact': '0605931306', 'bank': 'ABSA', 'account_no': '4126334759', 'monthly_cost': 600.0, 'status': 'Updated'}, {'grade': 'Grade 13', 'subject': 'Accounting', 'tutor': 'Samuel Nkhumane', 'tutor_manager': 'Oshianah Rakgoale', 'contact': '0604805041', 'bank': 'Capitec', 'account_no': '1873020080', 'monthly_cost': 0.0, 'status': 'Updated'}, {'grade': 'Grade 13', 'subject': 'Physical Sciences', 'tutor': 'Thapelo Kevin Sebogo', 'tutor_manager': 'Oshianah Rakgoale', 'contact': '0621798816', 'bank': 'Capitec', 'account_no': '2333574573', 'monthly_cost': 700.0, 'status': 'Updated'}, {'grade': 'Grade 13', 'subject': 'Life Sciences', 'tutor': 'Snethemba Maseko', 'tutor_manager': 'Oshianah Rakgoale', 'contact': '0792990080', 'bank': 'Standard Bank', 'account_no': '10190899571', 'monthly_cost': 0.0, 'status': 'Updated'}], 'tutor_managers': [{'full_name': 'Moeletsi Tladi', 'department_area': 'Mathematics and Natural Sciences', 'contact': '0661847684', 'email': 'moeletsilehumo@gmail.com', 'bank': 'Capitec', 'account_no': '1997681380', 'institution_year': 'UCT - Honours', 'monthly_cost': 800.0}, {'full_name': 'Mohale Rolivhuwa', 'department_area': 'Physical Sciences and Life Sciences', 'contact': '0797969488', 'email': 'rolivhuwamohale@gmail.com', 'bank': 'Capitec', 'account_no': '2070776340', 'institution_year': 'UCT - 2nd year', 'monthly_cost': 700.0}, {'full_name': 'Nokulunga Ndlovu', 'department_area': 'English FAL / Mathematical Literacy / Geography', 'contact': '0614489387', 'email': 'nokulungandlovu220@gmail.com', 'bank': 'Standard Bank', 'account_no': '10219508060', 'institution_year': 'UCT - 3rd year', 'monthly_cost': 700.0}, {'full_name': 'Oshianah Rakgoale', 'department_area': 'Upgrading / Matric Rewrite', 'contact': '0630763571', 'email': 'Rkgosh001@myuct.ac.za', 'bank': 'African Bank', 'account_no': '20080868319', 'institution_year': 'UCT - Honours', 'monthly_cost': 700.0}, {'full_name': 'Siphokazi Sibeko', 'department_area': 'EMS / Accounting / Business Studies', 'contact': '0792408942', 'email': 'Siphokazisibeko01@icloud.com', 'bank': 'ABSA', 'account_no': '4120879323', 'institution_year': 'UCT - 2nd year', 'monthly_cost': 800.0}], 'operational_team': [{'full_name': 'Testimony Mohale', 'department_area': 'Chief Executive Officer (CEO)', 'contact': '0825510824', 'email': 'ebtaprincipal@gmail.com', 'bank': 'Capitec', 'account_no': '2062604285', 'institution_year': 'UCT - 3rd year', 'monthly_cost': 10000.0}, {'full_name': 'Amanda Phakathi', 'department_area': 'Chief Operations Officer (COO)', 'contact': '0832468940', 'email': 'amandaphakathi139@gmail.com', 'bank': 'Standard Bank', 'account_no': '10164775917', 'institution_year': 'Rhodes University - Graduate', 'monthly_cost': 2000.0}, {'full_name': 'Pasca Ragophala', 'department_area': 'Chief Academic Officer (CAO)', 'contact': '0828352873', 'email': 'ragophalalenovom10@gmail.com', 'bank': 'Capitec', 'account_no': '1742459488', 'institution_year': 'UJ - Graduate', 'monthly_cost': 9000.0}, {'full_name': 'Samuel Sithole', 'department_area': 'Academic Content Coordinator (ACC)', 'contact': '0719224121', 'email': '202404150@spu.ac.za', 'bank': 'Tyme Bank', 'account_no': '51055002556', 'institution_year': 'Sol Plaatje University - 3rd year', 'monthly_cost': 700.0}, {'full_name': 'Refilwe Sekome', 'department_area': 'Academic Quality Manager', 'contact': '0798040680', 'email': 'refilwesekome@gmail.com', 'bank': 'ABSA', 'account_no': '4126603108', 'institution_year': 'UCT - 3rd year', 'monthly_cost': 1000.0}, {'full_name': 'Atheeqah Blauw', 'department_area': 'Admissions Coordinator', 'contact': '0784998797', 'email': 'blaauwatheeqah@gmail.com', 'bank': 'Capitec', 'account_no': '1485014075', 'institution_year': 'UCT - 3rd year', 'monthly_cost': 900.0}, {'full_name': 'Mikendra Isaacs', 'department_area': 'Administrator', 'contact': '0791995001', 'email': 'mikendrajordan@gmail.com', 'bank': 'Capitec', 'account_no': '2348469665', 'institution_year': 'Teachers Record - 1st year', 'monthly_cost': 1200.0}, {'full_name': 'Nokukhanya Mayiyane', 'department_area': 'Secretary General', 'contact': '0616043670', 'email': 'khanyamayiyane@gmail.com', 'bank': 'FNB', 'account_no': '63036329836', 'institution_year': 'UCT - 3rd year', 'monthly_cost': 800.0}, {'full_name': 'Tshiamo Mathelele', 'department_area': 'Social Media Manager', 'contact': '0663820973', 'email': 'tshiamonjabulo71@gmail.com', 'bank': 'Capitec', 'account_no': '2415003758', 'institution_year': 'UJ - 2nd year', 'monthly_cost': 600.0}]}
-        section_seed_map = [
-            ('SUBSCRIPTIONS', cost_seed_data.get('subscriptions', [])),
-            ('TUTORS', cost_seed_data.get('tutors', [])),
-            ('TUTOR_MANAGERS', cost_seed_data.get('tutor_managers', [])),
-            ('OPERATIONAL_TEAM', cost_seed_data.get('operational_team', [])),
-        ]
+    if not hardcoded_cost_cleanup_done:
+        cur.execute("""
+            SELECT COUNT(*) AS import_count
+            FROM admin_cost_imports
+            WHERE cost_month='2026-07'
+              AND file_name='EBTA_Subscriptions_and_Costs_July_2026.xlsx'
+        """)
+        genuine_upload_count = int(
+            cur.fetchone()["import_count"] or 0
+        )
 
-        for section_key, section_rows in section_seed_map:
-            for row_index, item in enumerate(section_rows, start=1):
-                item = dict(item)
-                monthly_cost = float(item.pop('monthly_cost', 0) or 0)
-                yearly_cost = float(item.pop('yearly_cost', 0) or 0)
+        if genuine_upload_count == 0:
+            cur.execute("""
+                DELETE FROM admin_cost_records
+                WHERE cost_month='2026-07'
+                  AND source='EBTA_Subscriptions_and_Costs_July_2026.xlsx'
+            """)
 
+            cur.execute("""
+                UPDATE admin_cost_months
+                SET report_title='',
+                    planned_tutor_slots=0,
+                    vacant_tutor_slots=0,
+                    notes='',
+                    source_summary_json=NULL,
+                    source_bank_summary_json=NULL,
+                    updated_at=?
+                WHERE cost_month='2026-07'
+                  AND report_title=?
+            """, (
+                now_utc_iso(),
+                'JULY 2026 SUBSCRIPTIONS AND OPERATIONAL COSTS SUMMARY'
+            ))
+
+            cur.execute("""
+                SELECT COUNT(*) AS record_count
+                FROM admin_cost_records
+                WHERE cost_month='2026-07'
+            """)
+            remaining_records = int(
+                cur.fetchone()["record_count"] or 0
+            )
+
+            cur.execute("""
+                SELECT COUNT(*) AS import_count
+                FROM admin_cost_imports
+                WHERE cost_month='2026-07'
+            """)
+            remaining_imports = int(
+                cur.fetchone()["import_count"] or 0
+            )
+
+            if remaining_records == 0 and remaining_imports == 0:
                 cur.execute("""
-                    INSERT INTO admin_cost_records(
-                        cost_month, section_key, row_data,
-                        monthly_cost, yearly_cost, display_order,
-                        source, created_at, updated_at
-                    ) VALUES(?,?,?,?,?,?,?,?,?)
-                """, (
-                    '2026-07',
-                    section_key,
-                    json.dumps(item, ensure_ascii=False),
-                    monthly_cost,
-                    yearly_cost,
-                    row_index,
-                    'EBTA_Subscriptions_and_Costs_July_2026.xlsx',
-                    now_utc_iso(),
-                    now_utc_iso()
-                ))
+                    DELETE FROM admin_cost_months
+                    WHERE cost_month='2026-07'
+                """)
+
+        cur.execute("""
+            DELETE FROM settings
+            WHERE key='admin_cost_centre_july_2026_seed_v1'
+        """)
 
         cur.execute(
-            "INSERT INTO settings(key,value) VALUES(?,?)",
-            ('admin_cost_centre_july_2026_seed_v1', '1')
+            "INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)",
+            ('admin_cost_centre_remove_hardcoded_data_v1', '1')
         )
 
 
@@ -35451,10 +35447,10 @@ def admin_cost_ensure_month(cur, cost_month):
         ) VALUES(?,?,?,?,?,?,?,?,?)
     """, (
         cost_month,
-        f"{pretty_month_label(cost_month).upper()} SUBSCRIPTIONS AND OPERATIONAL COSTS SUMMARY",
+        '',
         0,
         0,
-        'CONFIDENTIAL - INTERNAL FINANCIAL AND BANKING INFORMATION',
+        '',
         None,
         None,
         now_utc_iso(),
@@ -35757,7 +35753,11 @@ def admin_cost_centre():
         """
 
     if not row_html:
-        row_html = f"<tr><td colspan='{len(columns)+1}'><div class='empty'>No cost records found for this section and month.</div></td></tr>"
+        row_html = (
+            f"<tr><td colspan='{len(columns)+1}'>"
+            f"<div class='empty'>No records yet. Upload an Excel file or add a record.</div>"
+            f"</td></tr>"
+        )
 
     form_fields = ''.join(admin_cost_input_html(column) for column in columns)
 
@@ -35791,9 +35791,9 @@ def admin_cost_centre():
     month_notes = meta['notes'] if meta else ''
 
     import_rows_html = ''.join(
-        f"<tr><td>{escape(item['file_name'] or 'Uploaded workbook')}</td><td>{escape(pretty_month_label(item['cost_month']))}</td><td>{escape(item['import_mode'])}</td><td>{item['imported_rows']}</td><td>{escape((item['imported_at'] or '')[:16].replace('T',' '))}</td></tr>"
+        f"<tr><td>{escape(item['file_name'] or 'Excel file')}</td><td>{escape(pretty_month_label(item['cost_month']))}</td><td>{escape(item['import_mode'])}</td><td>{item['imported_rows']}</td><td>{escape((item['imported_at'] or '')[:16].replace('T',' '))}</td></tr>"
         for item in recent_imports
-    ) or "<tr><td colspan='5'>No workbook imports yet.</td></tr>"
+    ) or "<tr><td colspan='5'>No Excel files uploaded yet.</td></tr>"
 
     portal_summary_map = {
         'Tutor Monthly Cost': summary['tutor_cost'],
@@ -35990,7 +35990,7 @@ def admin_cost_centre():
             <div>
                 <h1>EBTA Cost Centre</h1>
                 <p style='margin:0;color:#dff3e5'>
-                    High Admin-only payroll, subscriptions, banking and operational cost register.
+                    Manage EBTA salaries, subscriptions, banking details and other costs.
                 </p>
             </div>
             <div class='cost-toolbar'>
@@ -36065,8 +36065,8 @@ def admin_cost_centre():
             <section class='card soft'>
                 <h2>Upload Excel</h2>
                 <p class='mini muted'>
-                    Upload the EBTA costs workbook or another workbook using the same sheet structure.
-                    New spreadsheet columns are added automatically.
+                    Upload the EBTA cost sheet. The information will be added to the tables,
+                    including any extra columns in the file.
                 </p>
                 <form method='post'
                       action='{url_for('admin_cost_import')}'
@@ -36077,17 +36077,17 @@ def admin_cost_centre():
                         <input type='month' name='cost_month' value='{escape(cost_month, quote=True)}' required>
                     </div>
                     <div>
-                        <label>Import method</label>
+                        <label>How to add the data</label>
                         <select name='import_mode'>
-                            <option value='REPLACE'>Replace imported sections for this month</option>
-                            <option value='APPEND'>Append to existing records</option>
+                            <option value='REPLACE'>Replace this month's existing records</option>
+                            <option value='APPEND'>Add to the existing records</option>
                         </select>
                     </div>
                     <div>
                         <label>Excel file</label>
                         <input type='file' name='cost_file' accept='.xlsx,.xlsm' required>
                     </div>
-                    <button class='btn success'>Import and Populate</button>
+                    <button class='btn success'>Upload Excel</button>
                 </form>
             </section>
 
@@ -36144,15 +36144,14 @@ def admin_cost_centre():
     {
         f"""
         <section class='card' style='border-left:5px solid #e3ad24'>
-            <h2>Workbook Reconciliation</h2>
+            <h2>Totals Check</h2>
             <p class='mini muted'>
-                The attached July workbook contains hardcoded summary amounts that do not fully match
-                the sum of its detailed rows. Both are retained here so High Admin can review and edit
-                the underlying records without losing the original workbook figures.
+                Compare the totals from the Excel sheet with the totals calculated
+                from the records currently saved below.
             </p>
             <div class='scroll-x'>
                 <table>
-                    <thead><tr><th>Cost Area</th><th>Source Workbook</th><th>Portal Calculation</th><th>Variance</th></tr></thead>
+                    <thead><tr><th>Cost Area</th><th>Excel Total</th><th>Current Total</th><th>Difference</th></tr></thead>
                     <tbody>{reconciliation_rows}</tbody>
                 </table>
             </div>
@@ -36163,10 +36162,10 @@ def admin_cost_centre():
     {
         f"""
         <section class='card' style='border-left:5px solid #e3ad24'>
-            <h2>Source Workbook Bank Summary vs Portal Records</h2>
+            <h2>Bank Totals Check</h2>
             <div class='scroll-x'>
                 <table>
-                    <thead><tr><th>Bank</th><th>Source Members</th><th>Source Payroll</th><th>Portal Members</th><th>Portal Payroll</th></tr></thead>
+                    <thead><tr><th>Bank</th><th>Excel Members</th><th>Excel Payroll</th><th>Current Members</th><th>Current Payroll</th></tr></thead>
                     <tbody>{source_bank_rows}</tbody>
                 </table>
             </div>
@@ -36185,7 +36184,7 @@ def admin_cost_centre():
     </section>
 
     <section class='card'>
-        <h2>Recent Excel Imports</h2>
+        <h2>Recent Excel Uploads</h2>
         <div class='scroll-x'>
             <table>
                 <thead><tr><th>File</th><th>Month</th><th>Mode</th><th>Rows</th><th>Imported</th></tr></thead>
@@ -36463,16 +36462,16 @@ def admin_cost_import():
     if import_mode not in {'REPLACE','APPEND'}:
         import_mode = 'REPLACE'
     if not upload or not upload.filename:
-        return page('No Excel File', card_msg('Please choose an Excel workbook to import.'))
+        return page('No Excel File', card_msg('Please choose an Excel file.'))
     extension = Path(upload.filename).suffix.lower()
     if extension not in {'.xlsx','.xlsm'}:
-        return page('Invalid Excel File', card_msg('Please upload an XLSX or XLSM workbook.'))
+        return page('Invalid Excel File', card_msg('Please upload an XLSX or XLSM file.'))
 
     try:
         from openpyxl import load_workbook
         workbook = load_workbook(io.BytesIO(upload.read()), data_only=True, read_only=True)
     except Exception as exc:
-        return page('Excel Import Failed', card_msg(f'The workbook could not be read: {escape(str(exc))}'))
+        return page('Excel Import Failed', card_msg(f'The Excel file could not be opened: {escape(str(exc))}'))
 
     source_summary = {}
     source_bank_summary = {}
@@ -36602,7 +36601,7 @@ def admin_cost_import():
 
     if not parsed_sections:
         conn.close()
-        return page('No Cost Tables Found', card_msg('The workbook did not contain recognised cost sheets. Expected Subscriptions, Tutors, Tutor Managers or Operational Team.'))
+        return page('No Cost Tables Found', card_msg('The Excel file does not contain the expected cost sheets: Subscriptions, Tutors, Tutor Managers or Operational Team.'))
 
     if import_mode == 'REPLACE':
         for section_key in parsed_sections:
@@ -36734,7 +36733,7 @@ def admin_cost_export():
         'Total Monthly Cash Requirement': 'Payroll + monthly subscriptions + other monthly costs.',
         'Effective Monthly Cost': 'Includes yearly costs averaged over 12 months.',
     }
-    summary_rows = [('Cost Area','Portal Calculated','Source Workbook','Variance','Notes')]
+    summary_rows = [('Cost Area','Current Total','Excel Total','Difference','Notes')]
     for label, portal_amount in portal_summary_export.items():
         source_amount = summary['source_summary'].get(label, '')
         variance = portal_amount - float(source_amount or 0) if source_amount != '' else ''
@@ -36751,7 +36750,7 @@ def admin_cost_export():
                 cell.number_format = money_format
 
     bank_start = 4 + len(summary_rows) + 2
-    for col, value in enumerate(('Bank','Portal Members','Portal Payroll','Source Members','Source Payroll'), start=1):
+    for col, value in enumerate(('Bank','Current Members','Current Payroll','Excel Members','Excel Payroll'), start=1):
         cell = summary_ws.cell(bank_start, col, value)
         cell.fill = PatternFill('solid', fgColor=green)
         cell.font = Font(color=white, bold=True)
