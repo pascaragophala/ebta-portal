@@ -11779,7 +11779,11 @@ def page(title, body_html, extra_head="", extra_js=""):
                 status_extra = ""
             else:
                 status_text = f"Not enrolled for {month}"
-                status_extra = f" <a class='links' href='/'>(Enroll now)</a>"
+                status_extra = (
+                    f" <a class='btn mini success' "
+                    f"href='{url_for('student_start_enrollment')}' "
+                    f"style='margin-left:8px'>Enroll now</a>"
+                )
 
             status_banner = f"""
             <div id='status-banner' class='card'>
@@ -16933,11 +16937,29 @@ def card_msg(text):
     return f"<div class='card'><div>{text}</div></div>"
 
 
-@app.get('/student/logout')
-def student_logout():
+def clear_student_session():
+    """Remove the learner login state before leaving the student portal."""
     session.pop('student_id', None)
     session.pop('student_name', None)
-    session.pop('student_month', None)  # 🔑 clear month override
+    session.pop('student_month', None)
+    session.pop('last_activity_ts', None)
+
+
+@app.get('/student/enroll')
+def student_start_enrollment():
+    """
+    Log the learner out and open the public enrolment form.
+
+    The public home route redirects logged-in users back to their portal,
+    so the student session must be cleared before redirecting there.
+    """
+    clear_student_session()
+    return redirect(url_for('home') + '#reg_form')
+
+
+@app.get('/student/logout')
+def student_logout():
+    clear_student_session()
     return redirect(url_for('student_login'))
 
 
@@ -17297,7 +17319,9 @@ def student_home():
             <p class='muted'>
                 You were not enrolled for this month.
             </p>
-            <a class='btn' href='{url_for("home")}' style="display:inline-block;">
+            <a class='btn success'
+               href='{url_for("student_start_enrollment")}'
+               style="display:inline-flex;align-items:center;justify-content:center;">
                 Enroll now
             </a>
         </div>
