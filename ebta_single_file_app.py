@@ -14012,6 +14012,7 @@ def home():
                     <div class="ebta-bank-detail">
                         <span>Business Name</span>
                         <strong>EBTA PTY LTD</strong>
+                        <strong>K2025591697 SOUTH AFRICA (PTY)LTD</strong>
                     </div>
 
                     <div class="ebta-bank-detail">
