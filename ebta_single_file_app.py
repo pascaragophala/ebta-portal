@@ -14011,8 +14011,7 @@ def home():
                 <div class="ebta-business-bank-grid">
                     <div class="ebta-bank-detail">
                         <span>Business Name</span>
-                        <strong>EBTA PTY LTD</strong>
-                        <strong>K2025591697 SOUTH AFRICA (PTY)LTD</strong>
+                        <strong>EBTA/K2025591697 SA PTY LTD</strong>
                     </div>
 
                     <div class="ebta-bank-detail">
