@@ -33653,12 +33653,25 @@ def admin_tutors():
         </div>
         """
 
+    bulk_pin_notice = ""
+
+    if request.args.get("pins_reset") == "1":
+        reset_count = request.args.get("count", "0").strip()
+
+        bulk_pin_notice = f"""
+        <div class="alert success" style="margin-bottom:12px">
+            PINs were reset for {escape(reset_count)} tutor(s).
+            The new PINs are shown in the PIN column below.
+        </div>
+        """
+
     body = f"""
     {admin_nav()}
 
     <section class='card'>
         <h1>Tutors</h1>
         {assignment_saved_notice}
+        {bulk_pin_notice}
 
         <div class="stats" style="margin-bottom:14px">
             <div class="stat">
@@ -33673,6 +33686,29 @@ def admin_tutors():
         </div>
 
         <style>
+            .tutor-pin-management-card{{
+                margin-bottom:14px;
+                border-left:5px solid #e3ad24;
+                background:linear-gradient(145deg,#fffdf7,#fff8e6);
+            }}
+            .tutor-pin-management-content{{
+                display:flex;
+                align-items:center;
+                justify-content:space-between;
+                gap:14px;
+                flex-wrap:wrap;
+            }}
+            .tutor-pin-management-content h2{{
+                margin-bottom:5px;
+            }}
+            .tutor-pin-management-content form{{
+                margin:0;
+                flex:0 0 auto;
+            }}
+            .tutor-pin-management-content .btn{{
+                min-height:42px;
+                white-space:nowrap;
+            }}
             .tutor-add-form{{display:grid;grid-template-columns:minmax(220px,1fr) minmax(170px,.55fr) auto;gap:10px;align-items:end}}
             .tutor-filter-form{{display:grid;grid-template-columns:minmax(220px,1.5fr) minmax(140px,1fr) minmax(160px,1fr) auto auto;gap:10px;align-items:end}}
             .tutor-action-panel{{
@@ -33715,6 +33751,11 @@ def admin_tutors():
                 .tutor-actions-cell{{min-width:390px}}
             }}
             @media(max-width:700px){{
+                .tutor-pin-management-content,
+                .tutor-pin-management-content form,
+                .tutor-pin-management-content .btn{{
+                    width:100%;
+                }}
                 .tutor-add-form,.tutor-filter-form{{grid-template-columns:1fr}}
                 .tutor-admin-scroll{{overflow:visible}}
                 .tutor-admin-table,.tutor-admin-table tbody,.tutor-admin-table tr,.tutor-admin-table td{{display:block;width:100%}}
@@ -33736,6 +33777,31 @@ def admin_tutors():
                 .tutor-subject-form{{grid-column:auto}}
             }}
         </style>
+
+        <div class="card soft tutor-pin-management-card">
+            <div class="tutor-pin-management-content">
+                <div>
+                    <h2>Reset Tutor PINs</h2>
+
+                    <p class="mini muted" style="margin-bottom:0">
+                        Reset the PINs for all active tutors on the portal.
+                        Their current PINs will stop working immediately.
+                    </p>
+                </div>
+
+                <form method="post"
+                      action="{url_for('admin_tutors_reset_all_pins')}"
+                      onsubmit="return confirm(
+                          'Reset the PINs for ALL active tutors? ' +
+                          'Every current tutor PIN will stop working immediately.'
+                      );">
+
+                    <button class="btn warn">
+                        Reset All Tutor PINs
+                    </button>
+                </form>
+            </div>
+        </div>
 
         <div class='card soft' style="border-left:5px solid #1b5e20;margin-bottom:14px">
             <h2>Add Tutor</h2>
@@ -33999,6 +34065,131 @@ def admin_tutor_add():
         return page("Error", card_msg("Phone already exists."))
     conn.close()
     return page("Tutor Added", card_msg(f"Tutor added. Share this PIN securely: {pin}"))
+
+@app.post('/admin/tutors/reset-all-pins')
+@require_high_admin
+def admin_tutors_reset_all_pins():
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id
+        FROM tutors
+        WHERE COALESCE(is_active, 1) = 1
+        ORDER BY id
+    """)
+    active_tutors = cur.fetchall()
+
+    if not active_tutors:
+        conn.close()
+
+        return page(
+            "No Tutors",
+            f"""
+            {admin_nav()}
+
+            <section class="card">
+                <h1>No Active Tutors</h1>
+                <p>There are no active tutor PINs to reset.</p>
+
+                <a class="btn secondary"
+                   href="{url_for('admin_tutors')}">
+                    Back to Tutors
+                </a>
+            </section>
+            """
+        )
+
+    # Include every PIN currently in use so newly generated tutor PINs
+    # cannot clash with a learner, active tutor or inactive tutor.
+    pins_in_use = set()
+
+    cur.execute("""
+        SELECT pin
+        FROM students
+        WHERE pin IS NOT NULL
+          AND TRIM(pin) <> ''
+    """)
+    pins_in_use.update(
+        str(row["pin"])
+        for row in cur.fetchall()
+        if row["pin"] is not None
+    )
+
+    cur.execute("""
+        SELECT pin
+        FROM tutors
+        WHERE pin IS NOT NULL
+          AND TRIM(pin) <> ''
+    """)
+    pins_in_use.update(
+        str(row["pin"])
+        for row in cur.fetchall()
+        if row["pin"] is not None
+    )
+
+    reset_count = 0
+
+    try:
+        cur.execute("BEGIN")
+
+        for tutor in active_tutors:
+            new_pin = gen_pin(pins_in_use)
+            pins_in_use.add(new_pin)
+
+            cur.execute("""
+                UPDATE tutors
+                SET pin=?
+                WHERE id=?
+                  AND COALESCE(is_active, 1) = 1
+            """, (
+                new_pin,
+                tutor["id"]
+            ))
+
+            reset_count += int(cur.rowcount or 0)
+
+        conn.commit()
+
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+
+        return page(
+            "Tutor PIN Reset Failed",
+            f"""
+            {admin_nav()}
+
+            <section class="card">
+                <h1>Tutor PIN Reset Failed</h1>
+
+                <p>
+                    The tutor PINs were not changed:
+                    {escape(str(exc))}
+                </p>
+
+                <a class="btn secondary"
+                   href="{url_for('admin_tutors')}">
+                    Back to Tutors
+                </a>
+            </section>
+            """
+        )
+
+    conn.close()
+
+    return redirect(
+        url_for(
+            "admin_tutors",
+            pins_reset="1",
+            count=reset_count
+        )
+    )
+
 
 @app.post('/admin/tutors/<int:tid>/reset-pin')
 def admin_tutor_reset_pin(tid:int):
