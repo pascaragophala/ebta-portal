@@ -42718,6 +42718,10 @@ def manager_nav():
             Tasks from CEO
         </a>
         
+        <a class="btn mini" href="/manager/session-links">
+            Session Links
+        </a>
+
         <a class="btn mini" href="/manager/whatsapp-groups">
             WhatsApp Groups
         </a>
@@ -42730,6 +42734,800 @@ def manager_nav():
     """
     
     
+@app.get('/manager/session-links')
+def manager_session_links():
+    r = require_manager()
+    if r:
+        return r
+
+    manager_id = session.get("manager_id")
+
+    tutor_filter = request.args.get(
+        "tutor_id",
+        ""
+    ).strip()
+
+    grade_filter = request.args.get(
+        "grade",
+        ""
+    ).strip()
+
+    subject_filter = request.args.get(
+        "subject_id",
+        ""
+    ).strip()
+
+    status_filter = request.args.get(
+        "status",
+        ""
+    ).strip().upper()
+
+    if status_filter not in {
+        "",
+        "ACTIVE",
+        "HIDDEN",
+        "NO_LINK"
+    }:
+        status_filter = ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Only tutors assigned to the logged-in Tutor Manager.
+    cur.execute("""
+        SELECT DISTINCT
+            t.id,
+            t.full_name
+        FROM manager_tutors mt
+        JOIN tutors t
+          ON t.id = mt.tutor_id
+        WHERE mt.manager_id = ?
+          AND COALESCE(t.is_active, 1) = 1
+          AND t.deleted_at IS NULL
+        ORDER BY t.full_name
+    """, (manager_id,))
+
+    assigned_tutors = cur.fetchall()
+
+    assigned_tutor_ids = {
+        str(row["id"])
+        for row in assigned_tutors
+    }
+
+    if (
+        tutor_filter
+        and tutor_filter not in assigned_tutor_ids
+    ):
+        conn.close()
+
+        return page(
+            "Access Denied",
+            card_msg(
+                "You can only view sessions for tutors assigned to you."
+            )
+        )
+
+    # Subjects that currently have sessions under this manager.
+    cur.execute("""
+        SELECT DISTINCT
+            s.id,
+            s.name,
+            s.grade
+        FROM sessions se
+
+        JOIN manager_tutors mt
+          ON mt.tutor_id = se.tutor_id
+         AND mt.manager_id = ?
+
+        JOIN tutors t
+          ON t.id = se.tutor_id
+
+        JOIN subjects s
+          ON s.id = se.subject_id
+
+        WHERE COALESCE(t.is_active, 1) = 1
+          AND t.deleted_at IS NULL
+
+        ORDER BY
+            CAST(
+                REPLACE(s.grade, 'G', '')
+                AS INTEGER
+            ),
+            s.name
+    """, (manager_id,))
+
+    available_subjects = cur.fetchall()
+
+    where = [
+        "mt.manager_id = ?",
+        "COALESCE(t.is_active, 1) = 1",
+        "t.deleted_at IS NULL"
+    ]
+
+    params = [manager_id]
+
+    if tutor_filter:
+        where.append("se.tutor_id = ?")
+        params.append(tutor_filter)
+
+    if grade_filter:
+        where.append("s.grade = ?")
+        params.append(grade_filter)
+
+    if subject_filter:
+        where.append("se.subject_id = ?")
+        params.append(subject_filter)
+
+    if status_filter == "ACTIVE":
+        where.append(
+            "COALESCE(se.active, 1) = 1"
+        )
+        where.append(
+            "COALESCE(se.is_visible, 1) = 1"
+        )
+
+    elif status_filter == "HIDDEN":
+        where.append("""
+            (
+                COALESCE(se.active, 1) = 0
+                OR COALESCE(se.is_visible, 1) = 0
+            )
+        """)
+
+    elif status_filter == "NO_LINK":
+        where.append("""
+            (
+                se.meet_link IS NULL
+                OR TRIM(se.meet_link) = ''
+            )
+        """)
+
+    where_sql = (
+        "WHERE " + " AND ".join(where)
+    )
+
+    cur.execute(f"""
+        SELECT DISTINCT
+            se.id,
+            se.subject_id,
+            se.tutor_id,
+            se.day_of_week,
+            se.start_time,
+            se.end_time,
+            se.meet_link,
+            se.meeting_id,
+            se.meeting_passcode,
+
+            COALESCE(
+                se.active,
+                1
+            ) AS active,
+
+            COALESCE(
+                se.is_visible,
+                1
+            ) AS is_visible,
+
+            s.name AS subject_name,
+            s.grade,
+
+            t.full_name AS tutor_name,
+            t.phone AS tutor_phone
+
+        FROM sessions se
+
+        JOIN manager_tutors mt
+          ON mt.tutor_id = se.tutor_id
+
+        JOIN tutors t
+          ON t.id = se.tutor_id
+
+        JOIN subjects s
+          ON s.id = se.subject_id
+
+        {where_sql}
+
+        ORDER BY
+            CAST(
+                REPLACE(
+                    s.grade,
+                    'G',
+                    ''
+                ) AS INTEGER
+            ),
+            s.name,
+            t.full_name,
+            se.day_of_week,
+            se.start_time
+    """, params)
+
+    session_rows = cur.fetchall()
+
+    # Totals for all sessions under this manager.
+    cur.execute("""
+        SELECT
+            COUNT(
+                DISTINCT se.id
+            ) AS total_sessions,
+
+            COUNT(
+                DISTINCT CASE
+                    WHEN se.meet_link IS NOT NULL
+                     AND TRIM(se.meet_link) != ''
+                    THEN se.id
+                END
+            ) AS sessions_with_links,
+
+            COUNT(
+                DISTINCT CASE
+                    WHEN se.meet_link IS NULL
+                      OR TRIM(se.meet_link) = ''
+                    THEN se.id
+                END
+            ) AS sessions_without_links
+
+        FROM sessions se
+
+        JOIN manager_tutors mt
+          ON mt.tutor_id = se.tutor_id
+
+        JOIN tutors t
+          ON t.id = se.tutor_id
+
+        WHERE mt.manager_id = ?
+          AND COALESCE(t.is_active, 1) = 1
+          AND t.deleted_at IS NULL
+    """, (manager_id,))
+
+    stats_row = cur.fetchone()
+
+    conn.close()
+
+    assigned_tutor_count = len(
+        assigned_tutors
+    )
+
+    total_sessions = int(
+        stats_row["total_sessions"] or 0
+    )
+
+    sessions_with_links = int(
+        stats_row["sessions_with_links"] or 0
+    )
+
+    sessions_without_links = int(
+        stats_row["sessions_without_links"] or 0
+    )
+
+    tutor_options = (
+        "<option value=''>All My Tutors</option>"
+    )
+
+    for tutor in assigned_tutors:
+        selected = (
+            "selected"
+            if tutor_filter == str(tutor["id"])
+            else ""
+        )
+
+        tutor_options += f"""
+        <option value="{tutor['id']}" {selected}>
+            {escape(tutor['full_name'])}
+        </option>
+        """
+
+    grade_options = (
+        "<option value=''>All Grades</option>"
+    )
+
+    for grade_value in (
+        "G8",
+        "G9",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+    ):
+        selected = (
+            "selected"
+            if grade_filter == grade_value
+            else ""
+        )
+
+        grade_options += f"""
+        <option value="{grade_value}" {selected}>
+            {grade_label(grade_value)}
+        </option>
+        """
+
+    subject_options = (
+        "<option value=''>All Subjects</option>"
+    )
+
+    for subject in available_subjects:
+        selected = (
+            "selected"
+            if subject_filter
+            == str(subject["id"])
+            else ""
+        )
+
+        subject_options += f"""
+        <option value="{subject['id']}" {selected}>
+            {escape(
+                grade_label(
+                    subject['grade']
+                )
+            )}
+            — {escape(subject['name'])}
+        </option>
+        """
+
+    status_options = f"""
+        <option value=""
+            {'selected' if status_filter == '' else ''}>
+            All Sessions
+        </option>
+
+        <option value="ACTIVE"
+            {'selected' if status_filter == 'ACTIVE' else ''}>
+            Active & Shown
+        </option>
+
+        <option value="HIDDEN"
+            {'selected' if status_filter == 'HIDDEN' else ''}>
+            Hidden
+        </option>
+
+        <option value="NO_LINK"
+            {'selected' if status_filter == 'NO_LINK' else ''}>
+            Missing Session Link
+        </option>
+    """
+
+    rows_html = ""
+
+    for row in session_rows:
+        try:
+            day_name = DOW[
+                int(row["day_of_week"])
+            ]
+        except Exception:
+            day_name = str(
+                row["day_of_week"]
+                or "—"
+            )
+
+        meet_link = str(
+            row["meet_link"] or ""
+        ).strip()
+
+        meeting_id = str(
+            row["meeting_id"] or ""
+        ).strip()
+
+        meeting_passcode = str(
+            row["meeting_passcode"] or ""
+        ).strip()
+
+        if meet_link:
+            link_html = f"""
+            <a class="btn mini success"
+               href="{escape(
+                   meet_link,
+                   quote=True
+               )}"
+               target="_blank"
+               rel="noopener noreferrer">
+                Open Session
+            </a>
+            """
+        else:
+            link_html = """
+            <span class="chip pending">
+                No Link
+            </span>
+            """
+
+        session_is_shown = (
+            int(row["active"] or 0) == 1
+            and
+            int(row["is_visible"] or 0) == 1
+        )
+
+        if session_is_shown:
+            session_status = """
+            <span class="chip active">
+                Active
+            </span>
+            """
+        else:
+            session_status = """
+            <span class="chip lapsed">
+                Hidden
+            </span>
+            """
+
+        meeting_details = ""
+
+        if meeting_id:
+            meeting_details += f"""
+            <div class="mini">
+                <strong>Meeting ID:</strong>
+                {escape(meeting_id)}
+            </div>
+            """
+
+        if meeting_passcode:
+            meeting_details += f"""
+            <div class="mini">
+                <strong>Passcode:</strong>
+                {escape(meeting_passcode)}
+            </div>
+            """
+
+        if not meeting_details:
+            meeting_details = """
+            <div class="mini muted">
+                No Meeting ID or passcode added.
+            </div>
+            """
+
+        rows_html += f"""
+        <tr>
+            <td data-label="Subject">
+                <strong>
+                    {escape(
+                        grade_label(
+                            row['grade']
+                        )
+                    )}
+                    —
+                    {escape(
+                        row['subject_name']
+                    )}
+                </strong>
+            </td>
+
+            <td data-label="Tutor">
+                <strong>
+                    {escape(
+                        row['tutor_name']
+                    )}
+                </strong>
+
+                <div class="mini muted">
+                    {escape(
+                        row['tutor_phone']
+                        or '—'
+                    )}
+                </div>
+            </td>
+
+            <td data-label="When">
+                <strong>
+                    {escape(day_name)}
+                </strong>
+
+                <div class="mini muted">
+                    {escape(
+                        row['start_time']
+                        or '—'
+                    )}
+                    -
+                    {escape(
+                        row['end_time']
+                        or '—'
+                    )}
+                </div>
+            </td>
+
+            <td data-label="Session Link">
+                {link_html}
+            </td>
+
+            <td data-label="Meeting Details">
+                {meeting_details}
+            </td>
+
+            <td data-label="Status">
+                {session_status}
+            </td>
+        </tr>
+        """
+
+    if not rows_html:
+        rows_html = """
+        <tr>
+            <td colspan="6">
+                <div class="empty">
+                    No sessions found for the selected filters.
+                </div>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {manager_compact_ui_styles()}
+    {manager_nav()}
+
+    <style>
+        .tm-session-hero {{
+            background:
+                linear-gradient(
+                    135deg,
+                    #0f3d1e,
+                    #1b5e20,
+                    #2e7d32
+                );
+            color:white;
+            border-radius:18px;
+            padding:20px;
+            margin-bottom:14px;
+            box-shadow:
+                0 12px 30px
+                rgba(15,61,30,.18);
+        }}
+
+        .tm-session-hero h1 {{
+            color:white !important;
+            margin-bottom:6px;
+        }}
+
+        .tm-session-hero p {{
+            color:#e7f6eb;
+            margin-bottom:0;
+        }}
+
+        .tm-session-filters {{
+            display:grid;
+            grid-template-columns:
+                repeat(
+                    4,
+                    minmax(
+                        145px,
+                        1fr
+                    )
+                )
+                auto;
+            gap:9px;
+            align-items:end;
+        }}
+
+        .tm-session-filters select {{
+            width:100%;
+            margin:0;
+        }}
+
+        .tm-session-table {{
+            min-width:980px;
+        }}
+
+        .tm-session-table td {{
+            vertical-align:top;
+        }}
+
+        .tm-session-note {{
+            border-left:
+                5px solid #e3ad24;
+            margin-top:14px;
+        }}
+
+        @media(max-width:800px) {{
+            .tm-session-filters {{
+                grid-template-columns:
+                    1fr 1fr;
+            }}
+
+            .tm-session-filters .btn {{
+                width:100%;
+            }}
+        }}
+
+        @media(max-width:650px) {{
+            .tm-session-filters {{
+                grid-template-columns:
+                    1fr;
+            }}
+
+            .tm-session-scroll {{
+                overflow:visible;
+            }}
+
+            .tm-session-table,
+            .tm-session-table tbody,
+            .tm-session-table tr,
+            .tm-session-table td {{
+                display:block;
+                width:100%;
+            }}
+
+            .tm-session-table thead {{
+                display:none;
+            }}
+
+            .tm-session-table {{
+                min-width:0;
+            }}
+
+            .tm-session-table tr {{
+                background:#fff;
+                border:
+                    1px solid #dbe4ea;
+                border-radius:14px;
+                padding:12px;
+                margin-bottom:12px;
+                box-shadow:
+                    0 4px 12px
+                    rgba(15,23,42,.05);
+            }}
+
+            .tm-session-table td {{
+                border:0 !important;
+                padding:
+                    9px 0 !important;
+            }}
+
+            .tm-session-table td + td {{
+                border-top:
+                    1px solid
+                    #edf2f7 !important;
+            }}
+
+            .tm-session-table td::before {{
+                content:
+                    attr(data-label);
+                display:block;
+                font-size:10px;
+                font-weight:800;
+                text-transform:uppercase;
+                color:#64748b;
+                margin-bottom:5px;
+                letter-spacing:.04em;
+            }}
+        }}
+    </style>
+
+    <section class="tm-session-hero">
+        <h1>Session Links</h1>
+
+        <p>
+            Sessions for the tutors currently assigned to you.
+        </p>
+    </section>
+
+    <section class="card">
+        <div class="tm-top-stats">
+            <div class="tm-stat">
+                <div class="k">
+                    {assigned_tutor_count}
+                </div>
+                <div class="t">
+                    Tutors Assigned
+                </div>
+            </div>
+
+            <div class="tm-stat">
+                <div class="k">
+                    {total_sessions}
+                </div>
+                <div class="t">
+                    Sessions
+                </div>
+            </div>
+
+            <div class="tm-stat">
+                <div class="k">
+                    {sessions_with_links}
+                </div>
+                <div class="t">
+                    Links Available
+                </div>
+            </div>
+
+            <div class="tm-stat">
+                <div class="k">
+                    {sessions_without_links}
+                </div>
+                <div class="t">
+                    Missing Links
+                </div>
+            </div>
+        </div>
+
+        <div class="card soft"
+             style="margin-top:14px">
+            <h2>Filter Sessions</h2>
+
+            <form method="get"
+                  action="{url_for(
+                      'manager_session_links'
+                  )}"
+                  class="tm-session-filters">
+
+                <div>
+                    <label>Tutor</label>
+                    <select name="tutor_id">
+                        {tutor_options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Grade</label>
+                    <select name="grade">
+                        {grade_options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Subject</label>
+                    <select name="subject_id">
+                        {subject_options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Status</label>
+                    <select name="status">
+                        {status_options}
+                    </select>
+                </div>
+
+                <div style="
+                    display:flex;
+                    gap:6px;
+                    flex-wrap:wrap;
+                ">
+                    <button class="btn success mini">
+                        Apply
+                    </button>
+
+                    <a class="btn secondary mini"
+                       href="{url_for(
+                           'manager_session_links'
+                       )}">
+                        Clear
+                    </a>
+                </div>
+            </form>
+        </div>
+
+        <div class="card soft tm-session-note">
+            <div class="mini muted">
+                Session information can be viewed here.
+                Session changes are managed by High Admin.
+            </div>
+        </div>
+
+        <div class="scroll-x tm-session-scroll"
+             style="margin-top:14px">
+
+            <table class="tm-session-table">
+                <thead>
+                    <tr>
+                        <th>Subject</th>
+                        <th>Tutor</th>
+                        <th>When</th>
+                        <th>Session Link</th>
+                        <th>Meeting Details</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page(
+        "Tutor Manager Session Links",
+        body
+    )
+
+
 @app.get('/manager/whatsapp-groups')
 def manager_whatsapp_groups():
 
