@@ -67820,19 +67820,70 @@ def admission_enrollment_action(id, action):
     needs_sms_details = action in ["approve_sms", "sms"]
     should_approve = action in ["approve", "approve_sms"]
 
+    # Multi-month enrolments share one enrollment_period_ref.
+    # Admissions approves or lapses the whole linked paid period in one action.
+    cur.execute("""
+        SELECT
+            id,
+            enrollment_period_ref,
+            period_month_count,
+            period_start_month,
+            period_end_month
+        FROM enrollments
+        WHERE id=?
+        LIMIT 1
+    """, (id,))
+
+    selected_enrollment = cur.fetchone()
+
+    if not selected_enrollment:
+        conn.close()
+        return page(
+            "Enrollment Not Found",
+            card_msg("This enrollment could not be found.")
+        )
+
+    period_ref_to_update = str(
+        selected_enrollment["enrollment_period_ref"] or ""
+    ).strip()
+
+    notify_period_count = int(
+        selected_enrollment["period_month_count"] or 1
+    )
+    notify_period_start = (
+        selected_enrollment["period_start_month"] or ""
+    )
+    notify_period_end = (
+        selected_enrollment["period_end_month"] or ""
+    )
+
     if should_approve:
-        cur.execute("""
-            UPDATE enrollments
-            SET status='ACTIVE'
-            WHERE id=?
-        """, (id,))
+        if period_ref_to_update:
+            cur.execute("""
+                UPDATE enrollments
+                SET status='ACTIVE'
+                WHERE enrollment_period_ref=?
+            """, (period_ref_to_update,))
+        else:
+            cur.execute("""
+                UPDATE enrollments
+                SET status='ACTIVE'
+                WHERE id=?
+            """, (id,))
 
     elif action == "lapse":
-        cur.execute("""
-            UPDATE enrollments
-            SET status='LAPSED'
-            WHERE id=?
-        """, (id,))
+        if period_ref_to_update:
+            cur.execute("""
+                UPDATE enrollments
+                SET status='LAPSED'
+                WHERE enrollment_period_ref=?
+            """, (period_ref_to_update,))
+        else:
+            cur.execute("""
+                UPDATE enrollments
+                SET status='LAPSED'
+                WHERE id=?
+            """, (id,))
 
     if needs_sms_details:
         cur.execute("""
@@ -67902,7 +67953,18 @@ def admission_enrollment_action(id, action):
             if notify_subject:
                 sms_body_parts.append(f"Subject: {grade_label_txt} {notify_subject}")
 
-            if month_label:
+            if (
+                notify_period_count > 1
+                and notify_period_start
+                and notify_period_end
+            ):
+                sms_body_parts.append(
+                    "Period: "
+                    f"{pretty_month_label(notify_period_start)} to "
+                    f"{pretty_month_label(notify_period_end)} "
+                    f"({notify_period_count} months)"
+                )
+            elif month_label:
                 sms_body_parts.append(f"Month: {month_label}")
 
             sms_body_parts.append(f"Login: {login_link}")
@@ -67996,6 +68058,13 @@ def admission_enrollments():
             e.coupon_type,
             e.referral_code_used,
 
+            e.enrollment_period_ref,
+            e.period_month_count,
+            e.period_start_month,
+            e.period_end_month,
+            e.period_total_amount,
+            e.period_auto_active,
+
             s.full_name,
             s.phone_whatsapp,
             s.guardian_name,
@@ -68033,11 +68102,90 @@ def admission_enrollments():
     trs = ""
 
     for row in rows:
-        period_html = active_enrollment_period_badge_for_student_subject(
-            row["student_id"],
-            row["subject_id"],
-            month
+        period_ref = str(
+            row["enrollment_period_ref"] or ""
+        ).strip()
+
+        try:
+            period_month_count = max(
+                1,
+                int(row["period_month_count"] or 1)
+            )
+        except Exception:
+            period_month_count = 1
+
+        period_start_month = (
+            row["period_start_month"]
+            or row["month"]
         )
+
+        period_end_month = (
+            row["period_end_month"]
+            or row["month"]
+        )
+
+        has_saved_period = bool(
+            period_ref
+            or row["period_start_month"]
+            or row["period_end_month"]
+            or period_month_count > 1
+        )
+
+        if has_saved_period:
+            period_word = (
+                "month"
+                if period_month_count == 1
+                else "months"
+            )
+
+            period_state = str(
+                row["status"] or "PENDING"
+            ).upper()
+
+            if period_state == "ACTIVE":
+                period_state_text = "Active"
+                period_state_class = "active"
+            elif period_state == "LAPSED":
+                period_state_text = "Lapsed"
+                period_state_class = "lapsed"
+            else:
+                period_state_text = "Pending approval"
+                period_state_class = "pending"
+
+            if period_start_month == period_end_month:
+                period_range = pretty_month_label(
+                    period_start_month
+                )
+            else:
+                period_range = (
+                    f"{pretty_month_label(period_start_month)} "
+                    f"to {pretty_month_label(period_end_month)}"
+                )
+
+            period_html = f"""
+            <div class="admission-period-summary">
+                <div class="admission-period-top">
+                    <span class="chip {period_state_class}">
+                        {period_month_count} {period_word}
+                    </span>
+
+                    <span class="chip {period_state_class}">
+                        {period_state_text}
+                    </span>
+                </div>
+
+                <div class="admission-period-range">
+                    {escape(period_range)}
+                </div>
+            </div>
+            """
+        else:
+            # Legacy enrollment rows that pre-date the period fields.
+            period_html = active_enrollment_period_badge_for_student_subject(
+                row["student_id"],
+                row["subject_id"],
+                month
+            )
 
         is_returning = bool(
             row["previous_month_count"]
@@ -68192,7 +68340,13 @@ def admission_enrollments():
                         {history_label}
                     </span>
                     <span class="admission-first-month">
-                        Since {escape(row['first_enrolled_month'] or '—')}
+                        Since {
+                            escape(
+                                pretty_month_label(row['first_enrolled_month'])
+                                if row['first_enrolled_month']
+                                else '—'
+                            )
+                        }
                     </span>
                 </div>
             </td>
@@ -68409,6 +68563,26 @@ def admission_enrollments():
 
         .admission-period-block .chip {{
             margin-bottom:3px;
+        }}
+
+        .admission-period-summary {{
+            display:flex;
+            flex-direction:column;
+            gap:4px;
+        }}
+
+        .admission-period-top {{
+            display:flex;
+            align-items:center;
+            gap:5px;
+            flex-wrap:wrap;
+        }}
+
+        .admission-period-range {{
+            color:#254532;
+            font-size:11px;
+            font-weight:800;
+            line-height:1.3;
         }}
 
         .admission-history-row {{
@@ -68691,8 +68865,8 @@ def admission_enrollments():
                 <h1>Manage Enrollments</h1>
 
                 <p class="muted">
-                    Approve enrollments, send learner login details by SMS,
-                    and lapse incorrect enrollment records.
+                    Approve enrollments, check single or multi-month enrollment periods,
+                    send learner login details by SMS, and lapse incorrect records.
                 </p>
             </div>
         </div>
