@@ -31961,6 +31961,208 @@ def admin_students_export():
     return send_from_directory("/tmp", file_name, as_attachment=True)
 
 
+
+def student_compare_export_response(prev_month, curr_month, file_prefix="compare"):
+    prev_month = str(prev_month or "").strip()
+    curr_month = str(curr_month or "").strip()
+
+    try:
+        datetime.datetime.strptime(prev_month, "%Y-%m")
+        datetime.datetime.strptime(curr_month, "%Y-%m")
+    except Exception:
+        return page(
+            "Invalid Month",
+            card_msg("Please select valid previous and current months.")
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT
+            s.id,
+            s.full_name,
+            s.phone_whatsapp,
+            s.grade,
+            s.guardian_name,
+            s.guardian_phone,
+            s.email
+        FROM students s
+        JOIN enrollments e ON e.student_id=s.id
+        WHERE e.month=?
+          AND e.status='ACTIVE'
+    """, (prev_month,))
+    prev_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT DISTINCT
+            s.id,
+            s.full_name,
+            s.phone_whatsapp,
+            s.grade,
+            s.guardian_name,
+            s.guardian_phone,
+            s.email
+        FROM students s
+        JOIN enrollments e ON e.student_id=s.id
+        WHERE e.month=?
+          AND e.status IN ('ACTIVE','PENDING')
+    """, (curr_month,))
+    curr_rows = cur.fetchall()
+
+    conn.close()
+
+    prev_dict = {row["id"]: row for row in prev_rows}
+    curr_dict = {row["id"]: row for row in curr_rows}
+
+    continued = []
+    lost = []
+    new_students = []
+
+    for student_id in set(prev_dict) | set(curr_dict):
+        in_prev = student_id in prev_dict
+        in_curr = student_id in curr_dict
+        base = prev_dict.get(student_id) or curr_dict.get(student_id)
+
+        row = [
+            base["full_name"],
+            base["phone_whatsapp"],
+            grade_label(base["grade"]),
+            base["guardian_name"] or "",
+            base["guardian_phone"] or "",
+            base["email"] or "",
+            "YES" if in_prev else "NO",
+            "YES" if in_curr else "NO",
+        ]
+
+        if in_prev and in_curr:
+            continued.append(row)
+        elif in_prev:
+            lost.append(row)
+        else:
+            new_students.append(row)
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+
+    headers = [
+        "Learner Full Name",
+        "Learner Phone",
+        "Grade",
+        "Parent/Guardian Name",
+        "Parent/Guardian Phone",
+        "Parent/Guardian Email",
+        f"Enrolled {prev_month}",
+        f"Enrolled {curr_month}",
+        "Status"
+    ]
+
+    ws.append([f"Comparison: {prev_month} vs {curr_month}"])
+    ws.append([])
+
+    total_prev = len(prev_dict)
+    total_curr = len(curr_dict)
+    total_continued = len(continued)
+    retention = (
+        round((total_continued / total_prev) * 100, 2)
+        if total_prev else 0
+    )
+
+    ws.append(["Previous Month Students", total_prev])
+    ws.append(["Current Month Students", total_curr])
+    ws.append(["Continued Students", total_continued])
+    ws.append(["Lost Students", len(lost)])
+    ws.append(["New Students", len(new_students)])
+    ws.append(["Retention %", f"{retention}%"])
+    ws.append([])
+    ws.append(headers)
+
+    for cell in ws[ws.max_row]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal="center")
+
+    green = PatternFill(
+        start_color="C6EFCE",
+        end_color="C6EFCE",
+        fill_type="solid"
+    )
+    red = PatternFill(
+        start_color="FFC7CE",
+        end_color="FFC7CE",
+        fill_type="solid"
+    )
+    yellow = PatternFill(
+        start_color="FFEB9C",
+        end_color="FFEB9C",
+        fill_type="solid"
+    )
+
+    for row in continued:
+        ws.append(row + ["CONTINUED"])
+        for cell in ws[ws.max_row]:
+            cell.fill = green
+
+    for row in lost:
+        ws.append(row + ["LOST"])
+        for cell in ws[ws.max_row]:
+            cell.fill = red
+
+    for row in new_students:
+        ws.append(row + ["NEW"])
+        for cell in ws[ws.max_row]:
+            cell.fill = yellow
+
+    def fit_sheet(sheet):
+        for column in sheet.columns:
+            max_length = max(
+                len(str(cell.value)) if cell.value else 0
+                for cell in column
+            )
+            sheet.column_dimensions[
+                column[0].column_letter
+            ].width = min(max_length + 4, 45)
+
+    fit_sheet(ws)
+    ws.freeze_panes = "A10"
+
+    for title, data_rows in (
+        ("Continued", continued),
+        ("Lost", lost),
+        ("New", new_students),
+    ):
+        sheet = wb.create_sheet(title)
+        sheet.append(headers[:-1])
+
+        for cell in sheet[1]:
+            cell.font = Font(bold=True)
+
+        for row in data_rows:
+            sheet.append(row)
+
+        sheet.freeze_panes = "A2"
+        fit_sheet(sheet)
+
+    safe_prefix = "".join(
+        c for c in str(file_prefix or "compare")
+        if c.isalnum() or c in ("_", "-")
+    ) or "compare"
+
+    file_name = (
+        f"{safe_prefix}_{prev_month}_vs_{curr_month}.xlsx"
+    )
+    wb.save(Path("/tmp") / file_name)
+
+    return send_from_directory(
+        "/tmp",
+        file_name,
+        as_attachment=True
+    )
+
+
 @app.get('/admin/students/compare')
 def admin_students_compare_export():
     r = require_admin()
@@ -74595,6 +74797,34 @@ def coo_students():
             </a>
         </form>
 
+        <div class="card soft"
+             style="border-left:5px solid #1b5e20;margin-top:14px">
+            <h2>Compare & Export</h2>
+
+            <p class="mini muted">
+                Compare learner movement between two months and download the Excel file.
+            </p>
+
+            <form method="get"
+                  action="{url_for('coo_students_compare_export')}"
+                  style="display:flex;gap:8px;align-items:end;flex-wrap:wrap">
+
+                <div>
+                    <label>Previous</label>
+                    <input type="month" name="prev" required>
+                </div>
+
+                <div>
+                    <label>Current</label>
+                    <input type="month" name="curr" required>
+                </div>
+
+                <button class="btn success mini">
+                    Compare & Export
+                </button>
+            </form>
+        </div>
+
         <div class="stats" style="margin-top:12px">
             {stat("All Students", all_students_total)}
             {stat("Filtered Results", total)}
@@ -74654,6 +74884,29 @@ def coo_students():
     """
 
     return page("COO All Students", body)
+
+
+
+@app.get('/coo/students/compare')
+def coo_students_compare_export():
+    r = require_coo_permission(
+        "coo_enrollments_enabled",
+        "student comparison"
+    )
+    if r:
+        return r
+
+    prev_month = request.args.get("prev", "").strip()
+    curr_month = request.args.get("curr", "").strip()
+
+    if not prev_month or not curr_month:
+        return redirect(url_for("coo_students"))
+
+    return student_compare_export_response(
+        prev_month,
+        curr_month,
+        file_prefix="COO_student_compare"
+    )
 
 
 # ---------------- COO FOLLOW-UPS ----------------
@@ -82281,6 +82534,12 @@ def ceo_nav():
             ]
         ),
         (
+            "Students",
+            [
+                ceo_link("All Students", "ceo_students", "/ceo/students", "🎓"),
+            ]
+        ),
+        (
             "Finance & Planning",
             [
                 ceo_link("Finance Analytics", "ceo_finance_analytics", "/ceo/finance-analytics", "📊"),
@@ -83064,6 +83323,13 @@ def ceo_dashboard():
                     <h3>Operations</h3>
                     <p class="muted">Enrollment and student activity for the month.</p>
                     <span class="chip active">{total_enrollments} enrollment record(s)</span>
+
+                    <div style="margin-top:10px">
+                        <a class="btn mini success"
+                           href="{url_for('ceo_students')}?month={escape(month)}">
+                            View Students
+                        </a>
+                    </div>
                 </div>
 
                 <div class="card soft">
@@ -83300,6 +83566,508 @@ def ceo_dashboard():
     return page("CEO Dashboard", body)
     
     
+
+@app.get('/ceo/students')
+def ceo_students():
+    r = require_ceo()
+    if r:
+        return r
+
+    month = (
+        request.args.get("month", "").strip()
+        or get_setting("current_month")
+    )
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+    status = request.args.get("status", "").strip()
+
+    try:
+        page_num = max(
+            1,
+            int(request.args.get("page", "1"))
+        )
+    except Exception:
+        page_num = 1
+
+    per_page = 20
+    offset = (page_num - 1) * per_page
+
+    where = ["1=1"]
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                st.full_name LIKE ?
+                OR st.phone_whatsapp LIKE ?
+                OR st.guardian_name LIKE ?
+                OR st.guardian_phone LIKE ?
+                OR st.email LIKE ?
+                OR st.school LIKE ?
+                OR st.province LIKE ?
+                OR sub.name LIKE ?
+            )
+        """)
+        params.extend([search] * 8)
+
+    if grade:
+        where.append("st.grade=?")
+        params.append(grade)
+
+    if status == "NO_ENROLLMENT":
+        where.append("""
+            NOT EXISTS (
+                SELECT 1
+                FROM enrollments e2
+                WHERE e2.student_id=st.id
+                  AND e2.month=?
+            )
+        """)
+        params.append(month)
+
+    elif status:
+        where.append("""
+            EXISTS (
+                SELECT 1
+                FROM enrollments e2
+                WHERE e2.student_id=st.id
+                  AND e2.month=?
+                  AND e2.status=?
+            )
+        """)
+        params.extend([month, status])
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(DISTINCT st.id) AS c
+        FROM students st
+        LEFT JOIN enrollments e
+               ON e.student_id=st.id
+              AND e.month=?
+        LEFT JOIN subjects sub
+               ON sub.id=e.subject_id
+        {where_sql}
+    """, [month] + params)
+
+    total = int(cur.fetchone()["c"] or 0)
+    total_pages = max(
+        1,
+        (total + per_page - 1) // per_page
+    )
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    cur.execute(f"""
+        SELECT
+            st.id,
+            st.full_name,
+            st.phone_whatsapp,
+            st.guardian_name,
+            st.guardian_phone,
+            st.email,
+            st.grade,
+            COALESCE(st.school,'') AS school,
+            COALESCE(st.province,'') AS province,
+            st.created_at,
+
+            COUNT(DISTINCT e.id) AS enrollment_count,
+
+            SUM(
+                CASE WHEN e.status='ACTIVE'
+                THEN 1 ELSE 0 END
+            ) AS active_count,
+
+            SUM(
+                CASE WHEN e.status='PENDING'
+                THEN 1 ELSE 0 END
+            ) AS pending_count,
+
+            SUM(
+                CASE WHEN e.status='LAPSED'
+                THEN 1 ELSE 0 END
+            ) AS lapsed_count,
+
+            GROUP_CONCAT(
+                DISTINCT
+                CASE
+                    WHEN sub.id IS NOT NULL
+                    THEN sub.grade || ' - ' || sub.name ||
+                         ' (' || e.status || ')'
+                    ELSE NULL
+                END
+            ) AS subjects_list
+
+        FROM students st
+
+        LEFT JOIN enrollments e
+               ON e.student_id=st.id
+              AND e.month=?
+
+        LEFT JOIN subjects sub
+               ON sub.id=e.subject_id
+
+        {where_sql}
+
+        GROUP BY st.id
+        ORDER BY st.created_at DESC, st.full_name ASC
+        LIMIT ? OFFSET ?
+    """, [month] + params + [per_page, offset])
+
+    rows = cur.fetchall()
+
+    cur.execute("SELECT COUNT(*) AS c FROM students")
+    all_students_total = int(
+        cur.fetchone()["c"] or 0
+    )
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM enrollments
+        WHERE month=?
+    """, (month,))
+    students_this_month = int(
+        cur.fetchone()["c"] or 0
+    )
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM enrollments
+        WHERE month=? AND status='ACTIVE'
+    """, (month,))
+    active_students = int(
+        cur.fetchone()["c"] or 0
+    )
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM enrollments
+        WHERE month=? AND status='PENDING'
+    """, (month,))
+    pending_students = int(
+        cur.fetchone()["c"] or 0
+    )
+
+    conn.close()
+
+    grade_options = ""
+
+    for grade_value in (
+        "G8", "G9", "G10",
+        "G11", "G12", "G13"
+    ):
+        selected = (
+            "selected"
+            if grade == grade_value
+            else ""
+        )
+        grade_options += f"""
+        <option value="{grade_value}" {selected}>
+            {grade_label(grade_value)}
+        </option>
+        """
+
+    status_options = ""
+
+    for status_value in (
+        "ACTIVE",
+        "PENDING",
+        "LAPSED",
+        "DECLINED",
+        "NO_ENROLLMENT"
+    ):
+        selected = (
+            "selected"
+            if status == status_value
+            else ""
+        )
+
+        status_label = (
+            "No Enrollment This Month"
+            if status_value == "NO_ENROLLMENT"
+            else status_value
+        )
+
+        status_options += f"""
+        <option value="{status_value}" {selected}>
+            {status_label}
+        </option>
+        """
+
+    trs = ""
+
+    for student in rows:
+        active_count = int(
+            student["active_count"] or 0
+        )
+        pending_count = int(
+            student["pending_count"] or 0
+        )
+        lapsed_count = int(
+            student["lapsed_count"] or 0
+        )
+        enrollment_count = int(
+            student["enrollment_count"] or 0
+        )
+
+        if active_count > 0:
+            month_status = "ACTIVE"
+        elif pending_count > 0:
+            month_status = "PENDING"
+        elif lapsed_count > 0:
+            month_status = "LAPSED"
+        elif enrollment_count > 0:
+            month_status = "OTHER"
+        else:
+            month_status = "No Enrollment"
+
+        if month_status == "No Enrollment":
+            status_html = (
+                "<span class='chip'>No Enrollment</span>"
+            )
+        else:
+            status_html = coo_status_chip(
+                month_status
+            )
+
+        subjects = (
+            student["subjects_list"]
+            or "No subjects for selected month"
+        )
+
+        trs += f"""
+        <tr>
+            <td>
+                <strong>
+                    {escape(student['full_name'] or '—')}
+                </strong>
+                <div class="mini muted">
+                    Student ID: {student['id']}
+                </div>
+            </td>
+
+            <td>
+                <div>
+                    {escape(student['phone_whatsapp'] or '—')}
+                </div>
+                <div class="mini muted">
+                    {escape(student['email'] or '—')}
+                </div>
+            </td>
+
+            <td>
+                <div>
+                    {escape(student['guardian_name'] or '—')}
+                </div>
+                <div class="mini muted">
+                    {escape(student['guardian_phone'] or '—')}
+                </div>
+            </td>
+
+            <td>
+                {grade_label(student['grade'] or '')}
+            </td>
+
+            <td>
+                <div>{escape(student['school'] or '—')}</div>
+                <div class="mini muted">
+                    {escape(student['province'] or '—')}
+                </div>
+            </td>
+
+            <td>{status_html}</td>
+
+            <td style="min-width:260px">
+                {escape(subjects)}
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {ceo_nav()}
+
+    <section class="card">
+        <div style="
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:12px;
+            flex-wrap:wrap
+        ">
+            <div>
+                <h1>Students</h1>
+                <p class="muted">
+                    View learner records and enrollment activity for
+                    {pretty_month_label(month)}.
+                </p>
+            </div>
+
+            <span class="chip active">
+                CEO View
+            </span>
+        </div>
+
+        <form method="get"
+              class="toolbar"
+              style="margin-top:12px">
+
+            <input type="month"
+                   name="month"
+                   value="{escape(month)}">
+
+            <input name="q"
+                   value="{escape(q)}"
+                   placeholder="Search student, phone, guardian, email, school or subject">
+
+            <select name="grade">
+                <option value="">All Grades</option>
+                {grade_options}
+            </select>
+
+            <select name="status">
+                <option value="">All Month Statuses</option>
+                {status_options}
+            </select>
+
+            <button class="btn mini">Search</button>
+
+            <a class="btn mini secondary"
+               href="{url_for('ceo_students')}">
+                Clear
+            </a>
+        </form>
+
+        <div class="card soft"
+             style="border-left:5px solid #1b5e20;margin-top:14px">
+            <h2>Compare & Export</h2>
+
+            <p class="mini muted">
+                Compare learner movement between two months and download the Excel file.
+            </p>
+
+            <form method="get"
+                  action="{url_for('ceo_students_compare_export')}"
+                  style="display:flex;gap:8px;align-items:end;flex-wrap:wrap">
+
+                <div>
+                    <label>Previous</label>
+                    <input type="month"
+                           name="prev"
+                           required>
+                </div>
+
+                <div>
+                    <label>Current</label>
+                    <input type="month"
+                           name="curr"
+                           required>
+                </div>
+
+                <button class="btn success mini">
+                    Compare & Export
+                </button>
+            </form>
+        </div>
+
+        <div class="stats" style="margin-top:14px">
+            {stat("All Students", all_students_total)}
+            {stat("Students This Month", students_this_month)}
+            {stat("Active Students", active_students)}
+            {stat("Pending Students", pending_students)}
+            {stat("Filtered Results", total)}
+        </div>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(rows)} of {total} student(s).
+        </div>
+
+        {pagination_controls(
+            "/ceo/students",
+            page_num,
+            total_pages,
+            {
+                "month": month,
+                "q": q,
+                "grade": grade,
+                "status": status
+            }
+        )}
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Contact</th>
+                        <th>Guardian</th>
+                        <th>Grade</th>
+                        <th>School</th>
+                        <th>Month Status</th>
+                        <th>Subjects for Month</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {
+                        trs
+                        or
+                        "<tr><td colspan='7'>No students found.</td></tr>"
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls(
+            "/ceo/students",
+            page_num,
+            total_pages,
+            {
+                "month": month,
+                "q": q,
+                "grade": grade,
+                "status": status
+            }
+        )}
+    </section>
+    """
+
+    return page("CEO Students", body)
+
+
+@app.get('/ceo/students/compare')
+def ceo_students_compare_export():
+    r = require_ceo()
+    if r:
+        return r
+
+    prev_month = request.args.get(
+        "prev",
+        ""
+    ).strip()
+
+    curr_month = request.args.get(
+        "curr",
+        ""
+    ).strip()
+
+    if not prev_month or not curr_month:
+        return redirect(
+            url_for("ceo_students")
+        )
+
+    return student_compare_export_response(
+        prev_month,
+        curr_month,
+        file_prefix="CEO_student_compare"
+    )
+
+
 @app.get('/ceo/monthly-reports/file/<int:rid>')
 def ceo_monthly_report_file(rid):
 
