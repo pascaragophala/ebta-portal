@@ -280,6 +280,9 @@ def get_logged_in_portal_role():
     if session.get("one_on_one_manager_id"):
         return "one_on_one_manager"
 
+    if session.get("hr_id"):
+        return "hr"
+
     if session.get("coo_id"):
         return "coo"
 
@@ -312,6 +315,7 @@ def logout_path_for_role(role):
         "duty_admin": "/duty-admin/logout",
         "admission": "/admission/logout",
         "one_on_one_manager": "/one-on-one-manager/logout",
+        "hr": "/hr/logout",
         "coo": "/coo/logout",
         "cao": "/cao/logout",
         "ceo": "/ceo/logout",
@@ -338,6 +342,7 @@ def login_path_for_role(role):
         "duty_admin": "/duty-admin/login",
         "admission": "/admission/login",
         "one_on_one_manager": "/one-on-one-manager/login",
+        "hr": "/hr/login",
         "coo": "/coo/login",
         "cao": "/cao/login",
         "ceo": "/ceo/login",
@@ -365,6 +370,7 @@ def home_path_for_logged_in_role(role):
         "duty_admin": "/duty-admin",
         "admission": "/admission",
         "one_on_one_manager": "/one-on-one-manager",
+        "hr": "/hr",
         "coo": "/coo",
         "cao": "/cao",
         "ceo": "/ceo",
@@ -1044,7 +1050,8 @@ def init_db():
         "Graphic Designer",
         "Academic Quality Manager",
         "Tutor Manager",
-        "One-on-One Manager"
+        "One-on-One Manager",
+        "Human Resources (HR)"
     ]
 
     management_role_default_descriptions = {
@@ -1498,6 +1505,19 @@ def init_db():
     """)
 
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS human_resources(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL UNIQUE,
+        email TEXT,
+        pin TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS coos(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         full_name TEXT NOT NULL,
@@ -1904,6 +1924,8 @@ def init_db():
     
     cur.execute("CREATE INDEX IF NOT EXISTS idx_one_on_one_managers_phone ON one_on_one_managers(phone)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_one_on_one_managers_active ON one_on_one_managers(is_active)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_human_resources_phone ON human_resources(phone)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_human_resources_active ON human_resources(is_active)")
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_students_referral_code ON students(referral_code)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_discount_coupons_code ON discount_coupons(code)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_discount_coupons_target ON discount_coupons(target_student_id)")
@@ -5438,6 +5460,26 @@ def is_one_on_one_manager():
 def require_one_on_one_manager():
     if not is_one_on_one_manager():
         return redirect(url_for("one_on_one_manager_login"))
+
+
+def is_hr():
+    return session.get("hr_id")
+
+
+def require_hr():
+    if not is_hr():
+        return redirect(url_for("hr_login"))
+
+
+def require_recruitment_user():
+    if is_high_admin() or is_hr():
+        return None
+    if is_admin():
+        return page(
+            "Access Denied",
+            card_msg("This recruitment section is available to High Admin and HR.")
+        )
+    return redirect(url_for("hr_login"))
 
 
 def is_school_manager():
@@ -27838,6 +27880,21 @@ def require_high_admin(f):
         return f(*args, **kwargs)
     return wrapper
 
+
+def require_recruitment_access(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        r = require_recruitment_user()
+        if r:
+            return r
+        return f(*args, **kwargs)
+    return wrapper
+
+
+def recruitment_nav():
+    return hr_nav() if is_hr() else admin_nav()
+
+
 @app.get('/admin/login')
 def admin_login():
     if is_admin():
@@ -27987,6 +28044,7 @@ def admin_nav():
                     ("COOs", "admin_coos", "/admin/coos"),
                     ("CAOs", "admin_caos", "/admin/caos"),
                     ("CEOs", "admin_ceos", "/admin/ceos"),
+                    ("HR Team", "admin_hr_users", "/admin/hr"),
                     ("Treasurers", "admin_treasurers", "/admin/treasurers"),
                     ("Finance Overview", "admin_finance_overview", "/admin/finance-overview"),
                     ("Cost Centre", "admin_cost_centre", "/admin/cost-centre"),
@@ -29259,6 +29317,315 @@ def admin_enrollment_sms_manual_send():
         </div>
         """
     )
+
+
+
+# ===================== HUMAN RESOURCES PORTAL =====================
+
+def hr_nav():
+    return f"""
+    <nav class="admin-nav">
+        <a class="btn secondary" href="{url_for('hr_home')}">Dashboard</a>
+        <a class="btn secondary" href="{url_for('admin_applications')}">Tutor Applications</a>
+        <a class="btn secondary" href="{url_for('admin_management_applications')}">Management Applications</a>
+        <a class="btn secondary" href="{url_for('admin_management_roles')}">Management Application Roles</a>
+        <a class="btn danger" href="{url_for('hr_logout')}">Logout</a>
+    </nav>
+    """
+
+
+@app.get('/hr/login')
+def hr_login():
+    if is_hr():
+        return redirect(url_for("hr_home"))
+
+    body = """
+    <section class="wrap small">
+        <div class="card auth-card">
+            <h1>HR Login</h1>
+            <p class="muted">Login using the phone number and PIN provided by High Admin.</p>
+            <form method="post" action="/hr/login" class="grid">
+                <div><label>Phone Number</label><input name="phone" required></div>
+                <div><label>PIN</label><input name="pin" type="password" maxlength="5" inputmode="numeric" required></div>
+                <button class="btn success">Login</button>
+            </form>
+        </div>
+    </section>
+    """
+    return page("HR Login", body)
+
+
+@app.post('/hr/login')
+def hr_login_post():
+    phone = request.form.get("phone", "").strip()
+    pin = request.form.get("pin", "").strip()
+    variants = phone_variants(phone)
+
+    conn = get_db()
+    cur = conn.cursor()
+    qmarks = ",".join("?" * len(variants)) if variants else "?"
+    params = variants if variants else [phone]
+
+    cur.execute(f"""
+        SELECT *
+        FROM human_resources
+        WHERE phone IN ({qmarks})
+          AND pin=?
+          AND is_active=1
+        LIMIT 1
+    """, params + [pin])
+
+    hr_user = cur.fetchone()
+    conn.close()
+
+    if not hr_user:
+        return page("Login Failed", card_msg("Invalid HR login details or the account is inactive."))
+
+    session.clear()
+    session["hr_id"] = hr_user["id"]
+    session["hr_name"] = hr_user["full_name"]
+    return redirect(url_for("hr_home"))
+
+
+@app.get('/hr/logout')
+def hr_logout():
+    session.clear()
+    return redirect(url_for("hr_login"))
+
+
+@app.get('/hr')
+def hr_home():
+    r = require_hr()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) AS c FROM tutor_applications")
+    tutor_total = int(cur.fetchone()["c"] or 0)
+    cur.execute("SELECT COUNT(*) AS c FROM tutor_applications WHERE status='NEW'")
+    tutor_new = int(cur.fetchone()["c"] or 0)
+    cur.execute("SELECT COUNT(*) AS c FROM management_applications")
+    management_total = int(cur.fetchone()["c"] or 0)
+    cur.execute("SELECT COUNT(*) AS c FROM management_applications WHERE status='NEW'")
+    management_new = int(cur.fetchone()["c"] or 0)
+    cur.execute("SELECT COUNT(*) AS c FROM management_roles WHERE is_open=1")
+    open_roles = int(cur.fetchone()["c"] or 0)
+    cur.execute("""
+        SELECT 'Tutor' AS application_type, full_name, status, created_at
+        FROM tutor_applications
+        UNION ALL
+        SELECT 'Management' AS application_type, full_name, status, created_at
+        FROM management_applications
+        ORDER BY created_at DESC
+        LIMIT 8
+    """)
+    recent = cur.fetchall()
+    conn.close()
+
+    recent_rows = ""
+    for row in recent:
+        st = str(row["status"] or "NEW").upper()
+        cls = "active" if st == "ACCEPTED" else "lapsed" if st == "REJECTED" else "pending"
+        recent_rows += f"""
+        <tr>
+            <td>{escape(row['full_name'] or '—')}</td>
+            <td>{escape(row['application_type'])}</td>
+            <td><span class="chip {cls}">{escape(st)}</span></td>
+            <td>{escape((row['created_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
+
+    body = f"""
+    {hr_nav()}
+    <style>
+        .hr-hero{{background:linear-gradient(135deg,#0f3d1e,#1b5e20 65%,#2e7d32);color:#fff;border-radius:18px;padding:22px;margin-bottom:14px;box-shadow:0 14px 34px rgba(15,61,30,.17)}}
+        .hr-hero h1{{color:#fff!important;margin-bottom:5px}}
+        .hr-hero p{{color:#e8f5eb;margin:0}}
+        .hr-action-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:14px}}
+        .hr-action-card{{border-top:4px solid #1b5e20}}
+        .hr-action-card .btn{{margin-top:8px}}
+    </style>
+
+    <section class="hr-hero">
+        <h1>HR Dashboard</h1>
+        <p>Welcome, {escape(session.get('hr_name','HR'))}.</p>
+    </section>
+
+    <section class="card">
+        <div class="stats">
+            {stat("Tutor Applications", tutor_total)}
+            {stat("New Tutor Applications", tutor_new)}
+            {stat("Management Applications", management_total)}
+            {stat("New Management Applications", management_new)}
+            {stat("Open Management Roles", open_roles)}
+        </div>
+
+        <div class="hr-action-grid">
+            <div class="card soft hr-action-card">
+                <h2>Tutor Applications</h2>
+                <p class="muted">Review tutor applicants, CVs, qualifications, subjects and application status.</p>
+                <a class="btn success" href="{url_for('admin_applications')}">Open Tutor Applications</a>
+            </div>
+
+            <div class="card soft hr-action-card">
+                <h2>Management Applications</h2>
+                <p class="muted">Review applicants for EBTA management positions.</p>
+                <a class="btn success" href="{url_for('admin_management_applications')}">Open Management Applications</a>
+            </div>
+
+            <div class="card soft hr-action-card">
+                <h2>Management Application Roles</h2>
+                <p class="muted">Open or close management roles and update the role information.</p>
+                <a class="btn success" href="{url_for('admin_management_roles')}">Manage Application Roles</a>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Recent Applications</h2>
+            <div class="scroll-x"><table>
+                <thead><tr><th>Applicant</th><th>Application</th><th>Status</th><th>Submitted</th></tr></thead>
+                <tbody>{recent_rows or "<tr><td colspan='4'>No applications yet.</td></tr>"}</tbody>
+            </table></div>
+        </div>
+    </section>
+    """
+    return page("HR Dashboard", body)
+
+
+@app.get('/admin/hr')
+@require_high_admin
+def admin_hr_users():
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM human_resources ORDER BY is_active DESC, created_at DESC")
+    hr_users = cur.fetchall()
+    conn.close()
+
+    rows = ""
+    for user in hr_users:
+        status_html = "<span class='chip active'>Active</span>" if int(user["is_active"] or 0) == 1 else "<span class='chip lapsed'>Inactive</span>"
+        rows += f"""
+        <tr>
+            <td><strong>{escape(user['full_name'])}</strong><div class="mini muted">{escape(user['phone'])}</div></td>
+            <td>{escape(user['email'] or '—')}</td>
+            <td><span class="chip" style="font-weight:850;letter-spacing:1px">{escape(user['pin'] or '—')}</span></td>
+            <td>{status_html}</td>
+            <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+                <form method="post" action="{url_for('admin_hr_reset_pin', hr_id=user['id'])}" onsubmit="return confirm('Reset this HR PIN?');">
+                    <button class="btn mini warn">Reset PIN</button>
+                </form>
+                <form method="post" action="{url_for('admin_hr_toggle', hr_id=user['id'])}">
+                    <button class="btn mini secondary">{'Deactivate' if user['is_active'] == 1 else 'Activate'}</button>
+                </form>
+            </div></td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+    <section class="card">
+        <h1>HR Team</h1>
+        <p class="muted">Add and manage HR portal accounts.</p>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>Add HR User</h2>
+            <form method="post" action="{url_for('admin_hr_add')}" class="grid" style="grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end">
+                <div><label>Full Name</label><input name="full_name" required></div>
+                <div><label>Phone</label><input name="phone" required></div>
+                <div><label>Email</label><input name="email" type="email"></div>
+                <button class="btn success">Add HR User</button>
+            </form>
+            <p class="mini muted">A 5-digit PIN will be generated automatically.</p>
+            <a class="btn mini secondary" href="{url_for('hr_login')}" target="_blank" rel="noopener noreferrer">Open HR Login</a>
+        </div>
+
+        <div class="scroll-x"><table>
+            <thead><tr><th>HR User</th><th>Email</th><th>PIN</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>{rows or "<tr><td colspan='5'>No HR users added yet.</td></tr>"}</tbody>
+        </table></div>
+    </section>
+    """
+    return page("HR Team", body)
+
+
+@app.post('/admin/hr/add')
+@require_high_admin
+def admin_hr_add():
+    r = require_admin()
+    if r:
+        return r
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    email = request.form.get("email", "").strip()
+    if not full_name or not phone:
+        return page("Missing Details", card_msg("Full name and phone are required."))
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT pin FROM human_resources WHERE pin IS NOT NULL AND TRIM(pin) != ''")
+    used_pins = {str(row["pin"]) for row in cur.fetchall()}
+    pin = gen_pin(used_pins)
+    now = now_utc_iso()
+
+    try:
+        cur.execute("""
+            INSERT INTO human_resources(full_name,phone,email,pin,is_active,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?)
+        """, (full_name, phone, email, pin, 1, now, now))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return page("HR User Exists", card_msg("An HR user with this phone number already exists."))
+
+    conn.close()
+    return redirect(url_for("admin_hr_users"))
+
+
+@app.post('/admin/hr/<int:hr_id>/reset-pin')
+@require_high_admin
+def admin_hr_reset_pin(hr_id):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT pin FROM human_resources WHERE pin IS NOT NULL AND TRIM(pin) != ''")
+    used_pins = {str(row["pin"]) for row in cur.fetchall()}
+    new_pin = gen_pin(used_pins)
+    cur.execute("UPDATE human_resources SET pin=?, updated_at=? WHERE id=?", (new_pin, now_utc_iso(), hr_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_hr_users"))
+
+
+@app.post('/admin/hr/<int:hr_id>/toggle')
+@require_high_admin
+def admin_hr_toggle(hr_id):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT is_active FROM human_resources WHERE id=?", (hr_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return redirect(url_for("admin_hr_users"))
+
+    new_status = 0 if int(row["is_active"] or 0) == 1 else 1
+    cur.execute("UPDATE human_resources SET is_active=?, updated_at=? WHERE id=?", (new_status, now_utc_iso(), hr_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_hr_users"))
 
 
 @app.get('/admin')
@@ -55174,10 +55541,10 @@ def tutor_application_submit():
     return page("Application Submitted", body)
     
 @app.get('/admin/applications')
-@require_high_admin
+@require_recruitment_access
 def admin_applications():
 
-    r = require_admin()
+    r = require_recruitment_user()
     if r: return r
 
     q = request.args.get("q", "").strip()
@@ -55395,7 +55762,7 @@ def admin_applications():
     """
 
     body = f"""
-    {admin_nav()}
+    {recruitment_nav()}
 
     <section class="card">
         <h1>Tutor Applications</h1>
@@ -55482,10 +55849,10 @@ def admin_applications():
     
     
 @app.get('/admin/application/<int:app_id>')
-@require_high_admin
+@require_recruitment_access
 def admin_application_detail(app_id):
 
-    r = require_admin()
+    r = require_recruitment_user()
     if r: return r
     
     return_url = request.args.get("return_url", "").strip()
@@ -55552,7 +55919,7 @@ def admin_application_detail(app_id):
         status_options += f"<option value='{st}' {selected}>{st}</option>"
 
     body = f"""
-    {admin_nav()}
+    {recruitment_nav()}
 
     <section class="card">
     
@@ -55624,7 +55991,7 @@ def admin_application_detail(app_id):
         </div>
 
         <div class="card soft" style="margin-top:12px;border-left:5px solid #f59e0b">
-            <h2>Admin Review</h2>
+            <h2>Application Review</h2>
 
             <form method="post"
                   action="/admin/application/{a['id']}/status"
@@ -55642,7 +56009,7 @@ def admin_application_detail(app_id):
                 </div>
 
                 <div>
-                    <label>Admin Notes</label>
+                    <label>Review Notes</label>
                     <textarea name="admin_notes">{escape(a['admin_notes'] or '')}</textarea>
                 </div>
 
@@ -55659,10 +56026,10 @@ def admin_application_detail(app_id):
     
     
 @app.post('/admin/application/<int:app_id>/status')
-@require_high_admin
+@require_recruitment_access
 def admin_application_update_status(app_id):
 
-    r = require_admin()
+    r = require_recruitment_user()
     if r: return r
 
     status = request.form.get("status", "NEW").strip()
@@ -55701,10 +56068,10 @@ def admin_application_update_status(app_id):
     
 
 @app.get('/admin/application/<int:app_id>/download/<kind>')
-@require_high_admin
+@require_recruitment_access
 def admin_application_download(app_id, kind):
 
-    r = require_admin()
+    r = require_recruitment_user()
     if r: return r
 
     if kind not in ["cv", "certificate"]:
@@ -55827,10 +56194,10 @@ def admin_application_settings_save():
 
 
 @app.get('/admin/application/<int:app_id>/view/<kind>')
-@require_high_admin
+@require_recruitment_access
 def admin_application_view_file(app_id, kind):
 
-    r = require_admin()
+    r = require_recruitment_user()
     if r: return r
 
     if kind not in ["cv", "certificate"]:
@@ -55911,14 +56278,11 @@ def admin_application_delete(app_id):
 #Admin management site
 
 @app.get('/admin/management-roles')
-@require_high_admin
+@require_recruitment_access
 def admin_management_roles():
 
-    r = require_admin()
+    r = require_recruitment_user()
     if r: return r
-
-    if not is_high_admin():
-        return page("Access Denied", card_msg("Only high admin can manage management application roles."))
 
     conn = get_db()
     cur = conn.cursor()
@@ -55974,7 +56338,7 @@ def admin_management_roles():
         """
 
     body = f"""
-    {admin_nav()}
+    {recruitment_nav()}
 
     <section class="card">
         <h1>Management Application Roles</h1>
@@ -56004,14 +56368,11 @@ def admin_management_roles():
 
 
 @app.post('/admin/management-roles/<int:role_id>/update')
-@require_high_admin
+@require_recruitment_access
 def admin_management_role_update(role_id):
 
-    r = require_admin()
+    r = require_recruitment_user()
     if r: return r
-
-    if not is_high_admin():
-        return page("Access Denied", card_msg("Only high admin can manage management application roles."))
 
     is_open = 1 if request.form.get("is_open") == "1" else 0
     description = clean_multiline_text(request.form.get("description", ""))
@@ -56526,10 +56887,10 @@ def management_application_submit():
     return page("Management Application Submitted", body)
 
 @app.get('/admin/management-applications')
-@require_high_admin
+@require_recruitment_access
 def admin_management_applications():
 
-    r = require_admin()
+    r = require_recruitment_user()
     if r: return r
 
     q = request.args.get("q", "").strip()
@@ -56685,7 +57046,7 @@ def admin_management_applications():
     """
 
     body = f"""
-    {admin_nav()}
+    {recruitment_nav()}
 
     <section class="card">
         <h1>Management Applications</h1>
@@ -56757,10 +57118,10 @@ def admin_management_applications():
     
     
 @app.get('/admin/management-application/<int:app_id>')
-@require_high_admin
+@require_recruitment_access
 def admin_management_application_detail(app_id):
 
-    r = require_admin()
+    r = require_recruitment_user()
     if r: return r
 
     conn = get_db()
@@ -56810,7 +57171,7 @@ def admin_management_application_detail(app_id):
         status_options += f"<option value='{st}' {selected}>{st}</option>"
 
     body = f"""
-    {admin_nav()}
+    {recruitment_nav()}
 
     <section class="card">
         <h1>{escape(a['full_name'])}</h1>
@@ -56887,7 +57248,7 @@ def admin_management_application_detail(app_id):
         </div>
 
         <div class="card soft" style="margin-top:12px;border-left:5px solid #f59e0b">
-            <h2>Admin Review</h2>
+            <h2>Application Review</h2>
 
             <form method="post" action="/admin/management-application/{a['id']}/status" class="grid">
 
@@ -56899,7 +57260,7 @@ def admin_management_application_detail(app_id):
                 </div>
 
                 <div>
-                    <label>Admin Notes</label>
+                    <label>Review Notes</label>
                     <textarea name="admin_notes">{escape(a['admin_notes'] or '')}</textarea>
                 </div>
 
@@ -56916,10 +57277,10 @@ def admin_management_application_detail(app_id):
     
     
 @app.post('/admin/management-application/<int:app_id>/status')
-@require_high_admin
+@require_recruitment_access
 def admin_management_application_update_status(app_id):
 
-    r = require_admin()
+    r = require_recruitment_user()
     if r: return r
 
     status = request.form.get("status", "NEW").strip()
@@ -56948,10 +57309,10 @@ def admin_management_application_update_status(app_id):
     
  
 @app.get('/admin/management-application/<int:app_id>/view/<kind>')
-@require_high_admin
+@require_recruitment_access
 def admin_management_application_view_file(app_id, kind):
 
-    r = require_admin()
+    r = require_recruitment_user()
     if r: return r
 
     if kind not in ["cv", "certificate"]:
@@ -56984,10 +57345,10 @@ def admin_management_application_view_file(app_id, kind):
 
 
 @app.get('/admin/management-application/<int:app_id>/download/<kind>')
-@require_high_admin
+@require_recruitment_access
 def admin_management_application_download(app_id, kind):
 
-    r = require_admin()
+    r = require_recruitment_user()
     if r: return r
 
     if kind not in ["cv", "certificate"]:
