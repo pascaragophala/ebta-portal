@@ -79966,7 +79966,16 @@ def cao_tutors():
         offset = (page_num - 1) * per_page
 
     data_params = list(params)
-    data_params.extend([month + "%", month, month, per_page, offset])
+
+    # The tutor query has four non-search placeholders:
+    # 1) materials month, 2) tracker month, 3) LIMIT, 4) OFFSET.
+    # Do not add the selected month twice here.
+    data_params.extend([
+        month + "%",
+        month,
+        per_page,
+        offset
+    ])
 
     cur.execute(f"""
         SELECT
