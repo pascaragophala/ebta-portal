@@ -30686,7 +30686,7 @@ def acc_tutors():
 
         rows += f"""
         <tr>
-            <td><strong>{escape(tutor['full_name'])}</strong><div class="mini muted">{escape(tutor['phone'] or '—')}</div></td>
+            <td><strong>{escape(tutor['full_name'])}</strong></td>
             <td>{escape(tutor['subjects'] or 'No subjects assigned')}</td>
             <td>{escape(tutor['manager_names'] or 'No Tutor Manager assigned')}</td>
             <td>{int(tutor['recording_count'] or 0)}</td>
