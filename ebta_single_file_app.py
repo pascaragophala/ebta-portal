@@ -283,6 +283,9 @@ def get_logged_in_portal_role():
     if session.get("hr_id"):
         return "hr"
 
+    if session.get("acc_id"):
+        return "acc"
+
     if session.get("coo_id"):
         return "coo"
 
@@ -316,6 +319,7 @@ def logout_path_for_role(role):
         "admission": "/admission/logout",
         "one_on_one_manager": "/one-on-one-manager/logout",
         "hr": "/hr/logout",
+        "acc": "/acc/logout",
         "coo": "/coo/logout",
         "cao": "/cao/logout",
         "ceo": "/ceo/logout",
@@ -343,6 +347,7 @@ def login_path_for_role(role):
         "admission": "/admission/login",
         "one_on_one_manager": "/one-on-one-manager/login",
         "hr": "/hr/login",
+        "acc": "/acc/login",
         "coo": "/coo/login",
         "cao": "/cao/login",
         "ceo": "/ceo/login",
@@ -371,6 +376,7 @@ def home_path_for_logged_in_role(role):
         "admission": "/admission",
         "one_on_one_manager": "/one-on-one-manager",
         "hr": "/hr",
+        "acc": "/acc",
         "coo": "/coo",
         "cao": "/cao",
         "ceo": "/ceo",
@@ -1037,13 +1043,41 @@ def init_db():
     );
     """)
     
+    # Keep existing ACC role settings while correcting the role name.
+    cur.execute(
+        "SELECT id FROM management_roles WHERE role_name=? LIMIT 1",
+        ("Academic Content Coordinator",)
+    )
+    academic_content_role = cur.fetchone()
+
+    if academic_content_role:
+        # If both names somehow exist, keep the correct one and remove the old duplicate.
+        cur.execute(
+            "DELETE FROM management_roles WHERE role_name=?",
+            ("Admission Content Coordinator",)
+        )
+    else:
+        cur.execute(
+            """
+            UPDATE management_roles
+            SET role_name=?,
+                updated_at=?
+            WHERE role_name=?
+            """,
+            (
+                "Academic Content Coordinator",
+                now_utc_iso(),
+                "Admission Content Coordinator"
+            )
+        )
+
     management_roles_seed = [
         "CEO",
         "COO",
         "CAO",
         "Admin",
         "Admission Coordinator",
-        "Admission Content Coordinator",
+        "Academic Content Coordinator",
         "Secretary",
         "Treasurer",
         "Social Media Manager",
@@ -1542,6 +1576,60 @@ def init_db():
         updated_at TEXT
     );
     """)
+
+    # ================= ACADEMIC CONTENT COORDINATOR (ACC) =================
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS admission_content_coordinators(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL UNIQUE,
+        email TEXT,
+        pin TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS acc_messages(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_role TEXT NOT NULL,
+        from_id INTEGER NOT NULL,
+        to_role TEXT NOT NULL,
+        to_id INTEGER NOT NULL,
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        is_read INTEGER NOT NULL DEFAULT 0
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS acc_tasks(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        assigned_acc_id INTEGER NOT NULL,
+        assigned_acc_name TEXT,
+        title TEXT NOT NULL,
+        description TEXT,
+        priority TEXT NOT NULL DEFAULT 'MEDIUM',
+        due_date TEXT,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        created_by_cao_id INTEGER NOT NULL,
+        created_by_cao_name TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        completed_at TEXT,
+        completion_note TEXT,
+        FOREIGN KEY(assigned_acc_id) REFERENCES admission_content_coordinators(id) ON DELETE CASCADE,
+        FOREIGN KEY(created_by_cao_id) REFERENCES caos(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_acc_users_active ON admission_content_coordinators(is_active)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_acc_messages_from ON acc_messages(from_role, from_id, created_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_acc_messages_to ON acc_messages(to_role, to_id, is_read, created_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_acc_tasks_assignee ON acc_tasks(assigned_acc_id, status, due_date)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_acc_tasks_cao ON acc_tasks(created_by_cao_id, status, created_at)")
     
     cur.execute("""
     CREATE TABLE IF NOT EXISTS ceos(
@@ -5469,6 +5557,15 @@ def is_hr():
 def require_hr():
     if not is_hr():
         return redirect(url_for("hr_login"))
+
+
+def is_acc():
+    return session.get("acc_id")
+
+
+def require_acc():
+    if not is_acc():
+        return redirect(url_for("acc_login"))
 
 
 def require_recruitment_user():
@@ -24099,6 +24196,25 @@ def tutor_home():
     {inbox_card}
     {admin_chat_card}
 
+    <div class="card" style="border-left:5px solid #e3ad24">
+        <h2>Recording Support - ACC</h2>
+
+        <p class="muted">
+            Contact the Academic Content Coordinator if a class recording is not appearing on Google Drive or you need help with uploaded session content.
+        </p>
+
+        <div class="card soft" style="margin:10px 0">
+            <div class="mini muted">Sample message</div>
+            <strong>
+                Hello sir, my recording is not appearing on my Google Drive. Kindly assist with that.
+            </strong>
+        </div>
+
+        <a class="btn success" href="{url_for('tutor_acc_messages')}">
+            Message ACC
+        </a>
+    </div>
+
     <div id="students">
         {''.join(stu_sections)}
     </div>
@@ -28045,6 +28161,7 @@ def admin_nav():
                     ("CAOs", "admin_caos", "/admin/caos"),
                     ("CEOs", "admin_ceos", "/admin/ceos"),
                     ("HR Team", "admin_hr_users", "/admin/hr"),
+                    ("ACC Team", "admin_acc_users", "/admin/acc"),
                     ("Treasurers", "admin_treasurers", "/admin/treasurers"),
                     ("Finance Overview", "admin_finance_overview", "/admin/finance-overview"),
                     ("Cost Centre", "admin_cost_centre", "/admin/cost-centre"),
@@ -29626,6 +29743,1546 @@ def admin_hr_toggle(hr_id):
     conn.commit()
     conn.close()
     return redirect(url_for("admin_hr_users"))
+
+
+
+# ===================== ACADEMIC CONTENT COORDINATOR (ACC) =====================
+
+ACC_ROLE_LABELS = {
+    "ACC": "ACC",
+    "TUTOR": "Tutor",
+    "TUTOR_MANAGER": "Tutor Manager",
+    "CAO": "CAO",
+}
+
+
+def acc_nav():
+    return f"""
+    <div class="admin-nav">
+        <a class="btn mini" href="{url_for('acc_home')}">Dashboard</a>
+        <a class="btn mini" href="{url_for('acc_tutors')}">Tutors</a>
+        <a class="btn mini" href="{url_for('acc_messages')}">Messages</a>
+        <a class="btn mini" href="{url_for('acc_tasks')}">Tasks from CAO</a>
+        <a class="btn mini danger" href="{url_for('acc_logout')}">Logout</a>
+    </div>
+    """
+
+
+def acc_message_actor():
+    if is_acc():
+        return (
+            "ACC",
+            int(session.get("acc_id")),
+            session.get("acc_name", "ACC"),
+            "acc_messages",
+        )
+
+    if is_tutor():
+        return (
+            "TUTOR",
+            int(session.get("tutor_id")),
+            session.get("tutor_name", "Tutor"),
+            "tutor_acc_messages",
+        )
+
+    if is_tutor_manager():
+        return (
+            "TUTOR_MANAGER",
+            int(session.get("manager_id")),
+            session.get("manager_name", "Tutor Manager"),
+            "manager_acc_messages",
+        )
+
+    if is_cao():
+        return (
+            "CAO",
+            int(session.get("cao_id")),
+            session.get("cao_name", "CAO"),
+            "cao_acc_messages",
+        )
+
+    return None, None, None, None
+
+
+def acc_people_for_role(conn, role, active_only=True):
+    cur = conn.cursor()
+    role = str(role or "").upper()
+
+    if role == "ACC":
+        where = "WHERE is_active=1" if active_only else ""
+        cur.execute(f"""
+            SELECT id, full_name, phone, email,
+                   COALESCE(is_active,1) AS is_active
+            FROM admission_content_coordinators
+            {where}
+            ORDER BY full_name
+        """)
+        return cur.fetchall()
+
+    if role == "TUTOR":
+        active_sql = (
+            "AND COALESCE(is_active,1)=1"
+            if active_only
+            else ""
+        )
+        cur.execute(f"""
+            SELECT id, full_name, phone,
+                   NULL AS email,
+                   COALESCE(is_active,1) AS is_active
+            FROM tutors
+            WHERE deleted_at IS NULL
+            {active_sql}
+            ORDER BY full_name
+        """)
+        return cur.fetchall()
+
+    if role == "TUTOR_MANAGER":
+        cur.execute("""
+            SELECT id, full_name, phone,
+                   NULL AS email,
+                   1 AS is_active
+            FROM tutor_managers
+            ORDER BY full_name
+        """)
+        return cur.fetchall()
+
+    if role == "CAO":
+        where = "WHERE is_active=1" if active_only else ""
+        cur.execute(f"""
+            SELECT id, full_name, phone, email,
+                   COALESCE(is_active,1) AS is_active
+            FROM caos
+            {where}
+            ORDER BY full_name
+        """)
+        return cur.fetchall()
+
+    return []
+
+
+def acc_person_exists(conn, role, person_id):
+    try:
+        person_id = int(person_id)
+    except Exception:
+        return False
+
+    return any(
+        int(row["id"]) == person_id
+        for row in acc_people_for_role(
+            conn,
+            role,
+            active_only=True
+        )
+    )
+
+
+def acc_person_name(conn, role, person_id):
+    try:
+        person_id = int(person_id)
+    except Exception:
+        return ACC_ROLE_LABELS.get(role, role)
+
+    for row in acc_people_for_role(
+        conn,
+        role,
+        active_only=False
+    ):
+        if int(row["id"]) == person_id:
+            return row["full_name"] or ACC_ROLE_LABELS.get(role, role)
+
+    return ACC_ROLE_LABELS.get(role, role)
+
+
+def acc_allowed_target_roles(actor_role):
+    if actor_role == "ACC":
+        return {"TUTOR", "TUTOR_MANAGER", "CAO"}
+    if actor_role in {"TUTOR", "TUTOR_MANAGER", "CAO"}:
+        return {"ACC"}
+    return set()
+
+
+def acc_message_target_options(conn, actor_role, selected_role="", selected_id=""):
+    allowed_roles = acc_allowed_target_roles(actor_role)
+    groups = []
+
+    for role in ("ACC", "TUTOR", "TUTOR_MANAGER", "CAO"):
+        if role not in allowed_roles:
+            continue
+
+        people = acc_people_for_role(conn, role, active_only=True)
+        if not people:
+            continue
+
+        options = []
+        for person in people:
+            selected = (
+                "selected"
+                if str(role) == str(selected_role)
+                and str(person["id"]) == str(selected_id)
+                else ""
+            )
+            value = f"{role}|{person['id']}"
+            options.append(
+                f"<option value='{escape(value, quote=True)}' {selected}>"
+                f"{escape(person['full_name'])}"
+                f"</option>"
+            )
+
+        groups.append(
+            f"<optgroup label='{escape(ACC_ROLE_LABELS.get(role, role))}'>"
+            + "".join(options)
+            + "</optgroup>"
+        )
+
+    return "".join(groups)
+
+
+def acc_message_quick_replies(actor_role):
+    if actor_role == "TUTOR":
+        templates = [
+            "Hello sir, my recording is not appearing on my Google Drive. Kindly assist with that.",
+            "Hello sir, I cannot find the recording for my recent session. Kindly assist me.",
+        ]
+    elif actor_role == "ACC":
+        templates = [
+            "I'm on it.",
+            "It is now sorted. Please check again.",
+        ]
+    else:
+        templates = []
+
+    if not templates:
+        return ""
+
+    buttons = "".join(
+        f"<button type='button' class='btn mini secondary acc-template-btn' "
+        f"data-template='{escape(item, quote=True)}'>{escape(item)}</button>"
+        for item in templates
+    )
+
+    return f"""
+    <div class="card soft" style="margin-bottom:10px">
+        <div class="mini muted" style="margin-bottom:6px">Quick messages</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+            {buttons}
+        </div>
+    </div>
+    """
+
+
+def render_acc_message_center(title, nav_html, actor_role, actor_id, page_endpoint):
+    conn = get_db()
+    cur = conn.cursor()
+
+    allowed_roles = acc_allowed_target_roles(actor_role)
+
+    selected_role = request.args.get("peer_role", "").strip().upper()
+    selected_id = request.args.get("peer_id", "").strip()
+
+    if selected_role not in allowed_roles:
+        selected_role = ""
+        selected_id = ""
+
+    if selected_role and not acc_person_exists(conn, selected_role, selected_id):
+        selected_role = ""
+        selected_id = ""
+
+    # When there is only one active ACC, open that conversation automatically
+    # for tutors, tutor managers and the CAO.
+    if not selected_role and actor_role != "ACC":
+        acc_people = acc_people_for_role(conn, "ACC", active_only=True)
+        if acc_people:
+            selected_role = "ACC"
+            selected_id = str(acc_people[0]["id"])
+
+    target_options = acc_message_target_options(
+        conn,
+        actor_role,
+        selected_role,
+        selected_id
+    )
+
+    selected_name = ""
+    messages_html = ""
+
+    if selected_role and selected_id:
+        selected_name = acc_person_name(
+            conn,
+            selected_role,
+            selected_id
+        )
+
+        cur.execute("""
+            UPDATE acc_messages
+            SET is_read=1
+            WHERE to_role=?
+              AND to_id=?
+              AND from_role=?
+              AND from_id=?
+              AND is_read=0
+        """, (
+            actor_role,
+            actor_id,
+            selected_role,
+            int(selected_id)
+        ))
+        conn.commit()
+
+        cur.execute("""
+            SELECT *
+            FROM acc_messages
+            WHERE
+                (
+                    from_role=? AND from_id=?
+                    AND to_role=? AND to_id=?
+                )
+                OR
+                (
+                    from_role=? AND from_id=?
+                    AND to_role=? AND to_id=?
+                )
+            ORDER BY created_at ASC, id ASC
+        """, (
+            actor_role,
+            actor_id,
+            selected_role,
+            int(selected_id),
+            selected_role,
+            int(selected_id),
+            actor_role,
+            actor_id
+        ))
+
+        for message in cur.fetchall():
+            mine = (
+                message["from_role"] == actor_role
+                and int(message["from_id"]) == int(actor_id)
+            )
+            bubble_class = "me" if mine else "them"
+            sender = "You" if mine else selected_name
+
+            messages_html += f"""
+            <div class="bubble {bubble_class}">
+                <div class="mini" style="font-weight:800;margin-bottom:3px">
+                    {escape(sender)}
+                </div>
+                <div style="white-space:pre-wrap">{escape(message['body'])}</div>
+                <div class="time">
+                    {escape(format_chat_datetime(message['created_at']))}
+                </div>
+            </div>
+            """
+
+    # Recent conversations.
+    cur.execute("""
+        SELECT *
+        FROM acc_messages
+        WHERE (from_role=? AND from_id=?)
+           OR (to_role=? AND to_id=?)
+        ORDER BY created_at DESC, id DESC
+        LIMIT 120
+    """, (actor_role, actor_id, actor_role, actor_id))
+
+    recent_rows = cur.fetchall()
+    seen_peers = set()
+    recent_html = ""
+
+    for message in recent_rows:
+        if (
+            message["from_role"] == actor_role
+            and int(message["from_id"]) == int(actor_id)
+        ):
+            peer_role = message["to_role"]
+            peer_id = int(message["to_id"])
+        else:
+            peer_role = message["from_role"]
+            peer_id = int(message["from_id"])
+
+        key = (peer_role, peer_id)
+        if key in seen_peers:
+            continue
+        seen_peers.add(key)
+
+        peer_name = acc_person_name(conn, peer_role, peer_id)
+        active = (
+            str(selected_role) == str(peer_role)
+            and str(selected_id) == str(peer_id)
+        )
+
+        cls = "btn success mini" if active else "btn secondary mini"
+        recent_html += f"""
+        <a class="{cls}"
+           href="{url_for(page_endpoint, peer_role=peer_role, peer_id=peer_id)}">
+            {escape(peer_name)}
+            <span class="mini">({escape(ACC_ROLE_LABELS.get(peer_role, peer_role))})</span>
+        </a>
+        """
+
+        if len(seen_peers) >= 20:
+            break
+
+    conn.close()
+
+    quick_replies = acc_message_quick_replies(actor_role)
+
+    selected_target_value = (
+        f"{selected_role}|{selected_id}"
+        if selected_role and selected_id
+        else ""
+    )
+
+    default_message = (
+        "Hello sir, my recording is not appearing on my Google Drive. Kindly assist with that."
+        if actor_role == "TUTOR"
+        else ""
+    )
+
+    chat_form = ""
+    if target_options:
+        chat_form = f"""
+        {quick_replies}
+
+        <form method="post"
+              action="{url_for('acc_message_send')}"
+              class="grid">
+
+            <input type="hidden" name="return_endpoint" value="{escape(page_endpoint, quote=True)}">
+
+            <div>
+                <label>Send to</label>
+                <select name="target" required>
+                    <option value="">Select person</option>
+                    {target_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Message</label>
+                <textarea id="accMessageBody"
+                          name="body"
+                          rows="4"
+                          maxlength="3000"
+                          required>{escape(default_message)}</textarea>
+            </div>
+
+            <button class="btn success">Send Message</button>
+        </form>
+        """
+    else:
+        chat_form = "<div class='empty'>No active ACC contact is available yet.</div>"
+
+    body = f"""
+    {nav_html}
+
+    <style>
+        .acc-chat-layout {{
+            display:grid;
+            grid-template-columns:minmax(220px,.7fr) minmax(320px,1.8fr);
+            gap:12px;
+        }}
+        .acc-recent-list {{
+            display:flex;
+            flex-direction:column;
+            gap:6px;
+        }}
+        .acc-chat-box {{
+            min-height:260px;
+            max-height:520px;
+            overflow:auto;
+            padding:12px;
+            border:1px solid var(--border);
+            border-radius:14px;
+            background:#f8fbf9;
+        }}
+        @media(max-width:760px) {{
+            .acc-chat-layout {{grid-template-columns:1fr;}}
+        }}
+    </style>
+
+    <section class="card">
+        <h1>{escape(title)}</h1>
+
+        <p class="muted">
+            Messages are kept inside the EBTA Portal so the recording and content support history stays in one place.
+        </p>
+
+        <div class="acc-chat-layout">
+            <div class="card soft">
+                <h2>Recent Chats</h2>
+                <div class="acc-recent-list">
+                    {recent_html or "<div class='empty'>No conversations yet.</div>"}
+                </div>
+            </div>
+
+            <div>
+                <div class="card soft">
+                    <h2>
+                        {escape(selected_name) if selected_name else 'New Message'}
+                    </h2>
+
+                    <div class="acc-chat-box">
+                        {messages_html or "<div class='empty'>No messages in this conversation yet.</div>"}
+                    </div>
+                </div>
+
+                <div class="card soft" style="margin-top:12px">
+                    {chat_form}
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        document.querySelectorAll('.acc-template-btn').forEach(function(btn) {{
+            btn.addEventListener('click', function() {{
+                var box = document.getElementById('accMessageBody');
+                if (box) {{
+                    box.value = btn.getAttribute('data-template') || '';
+                    box.focus();
+                }}
+            }});
+        }});
+    </script>
+    """
+
+    return page(title, body)
+
+
+@app.post('/acc-chat/send')
+def acc_message_send():
+    actor_role, actor_id, actor_name, default_endpoint = acc_message_actor()
+
+    if not actor_role:
+        return redirect("/")
+
+    raw_target = request.form.get("target", "").strip()
+    body = request.form.get("body", "").strip()
+    return_endpoint = request.form.get("return_endpoint", "").strip()
+
+    if not body:
+        return page("Message", card_msg("Please enter a message."))
+
+    if len(body) > 3000:
+        return page("Message", card_msg("The message is too long."))
+
+    try:
+        target_role, target_id_raw = raw_target.split("|", 1)
+        target_role = target_role.strip().upper()
+        target_id = int(target_id_raw)
+    except Exception:
+        return page("Message", card_msg("Please select a valid recipient."))
+
+    if target_role not in acc_allowed_target_roles(actor_role):
+        return page("Access Denied", card_msg("You cannot message this recipient from this portal."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    if not acc_person_exists(conn, target_role, target_id):
+        conn.close()
+        return page("Message", card_msg("The selected recipient is not available."))
+
+    cur.execute("""
+        INSERT INTO acc_messages(
+            from_role,
+            from_id,
+            to_role,
+            to_id,
+            body,
+            created_at,
+            is_read
+        )
+        VALUES(?,?,?,?,?,?,0)
+    """, (
+        actor_role,
+        actor_id,
+        target_role,
+        target_id,
+        body,
+        now_utc_iso()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    allowed_endpoints = {
+        "ACC": "acc_messages",
+        "TUTOR": "tutor_acc_messages",
+        "TUTOR_MANAGER": "manager_acc_messages",
+        "CAO": "cao_acc_messages",
+    }
+
+    endpoint = allowed_endpoints.get(actor_role, default_endpoint)
+    if return_endpoint == endpoint:
+        endpoint = return_endpoint
+
+    return redirect(
+        url_for(
+            endpoint,
+            peer_role=target_role,
+            peer_id=target_id
+        )
+    )
+
+
+# ---------------- ACC login / logout ----------------
+@app.get('/acc/login')
+def acc_login():
+    if is_acc():
+        return redirect(url_for("acc_home"))
+
+    body = f"""
+    <section class="wrap small">
+        <div class="card auth-card">
+            <h1>ACC Login</h1>
+
+            <p class="muted">
+                Academic Content Coordinator portal.
+            </p>
+
+            <form method="post"
+                  action="{url_for('acc_login_post')}"
+                  class="grid">
+
+                <div>
+                    <label>Phone Number</label>
+                    <input name="phone" required>
+                </div>
+
+                <div>
+                    <label>5-digit PIN</label>
+                    <input name="pin"
+                           type="password"
+                           maxlength="5"
+                           inputmode="numeric"
+                           required>
+                </div>
+
+                <button class="btn success">Login</button>
+            </form>
+        </div>
+    </section>
+    """
+
+    return page("ACC Login", body)
+
+
+@app.post('/acc/login')
+def acc_login_post():
+    phone = request.form.get("phone", "").strip()
+    pin = request.form.get("pin", "").strip()
+
+    variants = phone_variants(phone)
+    qmarks = ",".join("?" * len(variants)) if variants else "?"
+    params = variants if variants else [phone]
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT *
+        FROM admission_content_coordinators
+        WHERE phone IN ({qmarks})
+          AND pin=?
+          AND is_active=1
+        LIMIT 1
+    """, params + [pin])
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return page(
+            "Login Failed",
+            card_msg("Invalid ACC login details or the account is inactive.")
+        )
+
+    session.clear()
+    session["acc_id"] = row["id"]
+    session["acc_name"] = row["full_name"]
+    session["last_activity_ts"] = time.time()
+
+    return redirect(url_for("acc_home"))
+
+
+@app.get('/acc/logout')
+def acc_logout():
+    session.clear()
+    return redirect(url_for("acc_login"))
+
+
+# ---------------- ACC dashboard ----------------
+@app.get('/acc')
+def acc_home():
+    r = require_acc()
+    if r:
+        return r
+
+    acc_id = int(session.get("acc_id"))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM tutors
+        WHERE deleted_at IS NULL
+    """)
+    tutor_count = int(cur.fetchone()["c"] or 0)
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM acc_tasks
+        WHERE assigned_acc_id=?
+          AND status!='DONE'
+    """, (acc_id,))
+    open_tasks = int(cur.fetchone()["c"] or 0)
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM acc_tasks
+        WHERE assigned_acc_id=?
+          AND status='DONE'
+    """, (acc_id,))
+    done_tasks = int(cur.fetchone()["c"] or 0)
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM acc_messages
+        WHERE to_role='ACC'
+          AND to_id=?
+          AND is_read=0
+    """, (acc_id,))
+    unread = int(cur.fetchone()["c"] or 0)
+
+    cur.execute("""
+        SELECT *
+        FROM acc_tasks
+        WHERE assigned_acc_id=?
+        ORDER BY
+            CASE status WHEN 'DONE' THEN 1 ELSE 0 END,
+            COALESCE(due_date,'9999-12-31'),
+            created_at DESC
+        LIMIT 6
+    """, (acc_id,))
+    recent_tasks = cur.fetchall()
+
+    conn.close()
+
+    task_rows = ""
+    for task in recent_tasks:
+        task_rows += f"""
+        <tr>
+            <td><strong>{escape(task['title'])}</strong></td>
+            <td>{escape(task['priority'])}</td>
+            <td>{escape(task['due_date'] or '—')}</td>
+            <td>{escape(task['status'])}</td>
+        </tr>
+        """
+
+    body = f"""
+    {acc_nav()}
+
+    <section class="card" style="border-top:5px solid #1b5e20">
+        <h1>ACC Dashboard</h1>
+
+        <p class="muted">
+            Welcome, {escape(session.get('acc_name', 'ACC'))}. Manage recording support, tutor communication and tasks from the CAO here.
+        </p>
+
+        <div class="stats">
+            {stat("Tutors", tutor_count)}
+            {stat("Open Tasks", open_tasks)}
+            {stat("Completed Tasks", done_tasks)}
+            {stat("Unread Messages", unread)}
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:14px">
+            <div class="card soft">
+                <h2>Tutors</h2>
+                <p class="muted">View all tutors and contact them about recordings or content.</p>
+                <a class="btn success" href="{url_for('acc_tutors')}">View Tutors</a>
+            </div>
+
+            <div class="card soft">
+                <h2>Messages</h2>
+                <p class="muted">Chat with tutors, Tutor Managers and the CAO.</p>
+                <a class="btn success" href="{url_for('acc_messages')}">Open Messages</a>
+            </div>
+
+            <div class="card soft">
+                <h2>Tasks from CAO</h2>
+                <p class="muted">View assigned work and mark it done when completed.</p>
+                <a class="btn success" href="{url_for('acc_tasks')}">Open Tasks</a>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>Recent Tasks</h2>
+            <div class="scroll-x">
+                <table>
+                    <thead><tr><th>Task</th><th>Priority</th><th>Due</th><th>Status</th></tr></thead>
+                    <tbody>{task_rows or "<tr><td colspan='4'>No tasks assigned yet.</td></tr>"}</tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("ACC Dashboard", body)
+
+
+# ---------------- ACC tutors ----------------
+@app.get('/acc/tutors')
+def acc_tutors():
+    r = require_acc()
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    month = request.args.get("month", "").strip() or get_setting("current_month")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    params = [month]
+    where = ["t.deleted_at IS NULL"]
+
+    if q:
+        like = f"%{q}%"
+        where.append("""
+            (
+                t.full_name LIKE ?
+                OR t.phone LIKE ?
+                OR s.name LIKE ?
+                OR s.grade LIKE ?
+                OR tm.full_name LIKE ?
+            )
+        """)
+        params.extend([like, like, like, like, like])
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT
+            t.id,
+            t.full_name,
+            t.phone,
+            COALESCE(t.is_active,1) AS is_active,
+            GROUP_CONCAT(DISTINCT s.grade || ' - ' || s.name) AS subjects,
+            GROUP_CONCAT(DISTINCT tm.full_name) AS manager_names,
+            COUNT(DISTINCT CASE
+                WHEN m.month=?
+                 AND m.youtube_url IS NOT NULL
+                 AND TRIM(m.youtube_url)!=''
+                THEN m.id
+            END) AS recording_count
+        FROM tutors t
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        LEFT JOIN subjects s ON s.id=ts.subject_id
+        LEFT JOIN manager_tutors mt ON mt.tutor_id=t.id
+        LEFT JOIN tutor_managers tm ON tm.id=mt.manager_id
+        LEFT JOIN materials m ON m.tutor_id=t.id
+        {where_sql}
+        GROUP BY t.id
+        ORDER BY COALESCE(t.is_active,1) DESC, t.full_name
+    """, params)
+
+    tutors = cur.fetchall()
+    conn.close()
+
+    rows = ""
+    for tutor in tutors:
+        active = int(tutor["is_active"] or 0) == 1
+        status = (
+            "<span class='chip active'>Active</span>"
+            if active
+            else "<span class='chip lapsed'>Inactive</span>"
+        )
+
+        action = (
+            f"<a class='btn mini success' href='{url_for('acc_messages', peer_role='TUTOR', peer_id=tutor['id'])}'>Message</a>"
+            if active
+            else "<span class='mini muted'>Inactive tutor</span>"
+        )
+
+        rows += f"""
+        <tr>
+            <td><strong>{escape(tutor['full_name'])}</strong><div class="mini muted">{escape(tutor['phone'] or '—')}</div></td>
+            <td>{escape(tutor['subjects'] or 'No subjects assigned')}</td>
+            <td>{escape(tutor['manager_names'] or 'No Tutor Manager assigned')}</td>
+            <td>{int(tutor['recording_count'] or 0)}</td>
+            <td>{status}</td>
+            <td>{action}</td>
+        </tr>
+        """
+
+    body = f"""
+    {acc_nav()}
+
+    <section class="card">
+        <h1>All Tutors</h1>
+
+        <p class="muted">
+            View tutors, their subjects, Tutor Manager and recording count for {pretty_month_label(month)}.
+        </p>
+
+        <form method="get" class="toolbar">
+            <input type="month" name="month" value="{escape(month)}">
+            <input name="q" value="{escape(q)}" placeholder="Search tutor, phone, subject, grade or Tutor Manager">
+            <button class="btn mini success">Search</button>
+            <a class="btn mini secondary" href="{url_for('acc_tutors')}">Clear</a>
+        </form>
+
+        <div class="scroll-x" style="margin-top:14px">
+            <table style="min-width:1000px">
+                <thead>
+                    <tr>
+                        <th>Tutor</th>
+                        <th>Subjects</th>
+                        <th>Tutor Manager</th>
+                        <th>Recordings</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>{rows or "<tr><td colspan='6'>No tutors found.</td></tr>"}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("ACC Tutors", body)
+
+
+# ---------------- Messaging pages on all four portals ----------------
+@app.get('/acc/messages')
+def acc_messages():
+    r = require_acc()
+    if r:
+        return r
+    return render_acc_message_center(
+        "ACC Messages",
+        acc_nav(),
+        "ACC",
+        int(session.get("acc_id")),
+        "acc_messages"
+    )
+
+
+@app.get('/tutor/acc-messages')
+def tutor_acc_messages():
+    r = require_tutor()
+    if r:
+        return r
+
+    nav = f"""
+    <div class="admin-nav">
+        <a class="btn mini secondary" href="{url_for('tutor_home')}">Tutor Portal</a>
+        <a class="btn mini danger" href="{url_for('tutor_logout')}">Logout</a>
+    </div>
+    """
+
+    return render_acc_message_center(
+        "Message ACC",
+        nav,
+        "TUTOR",
+        int(session.get("tutor_id")),
+        "tutor_acc_messages"
+    )
+
+
+@app.get('/manager/acc-messages')
+def manager_acc_messages():
+    r = require_manager()
+    if r:
+        return r
+
+    return render_acc_message_center(
+        "Message ACC",
+        manager_nav(),
+        "TUTOR_MANAGER",
+        int(session.get("manager_id")),
+        "manager_acc_messages"
+    )
+
+
+@app.get('/cao/acc-messages')
+def cao_acc_messages():
+    r = require_cao()
+    if r:
+        return r
+
+    return render_acc_message_center(
+        "Message ACC",
+        cao_nav(),
+        "CAO",
+        int(session.get("cao_id")),
+        "cao_acc_messages"
+    )
+
+
+# ---------------- CAO -> ACC tasks ----------------
+def acc_task_priority_chip(priority):
+    priority = str(priority or "MEDIUM").upper()
+    cls = "lapsed" if priority in {"HIGH", "URGENT"} else "pending" if priority == "MEDIUM" else "active"
+    return f"<span class='chip {cls}'>{escape(priority.title())}</span>"
+
+
+@app.get('/cao/acc')
+def cao_acc_team():
+    r = require_cao()
+    if r:
+        return r
+
+    status_filter = request.args.get("status", "ALL").strip().upper()
+    if status_filter not in {"ALL", "PENDING", "DONE"}:
+        status_filter = "ALL"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM admission_content_coordinators
+        ORDER BY is_active DESC, full_name
+    """)
+    acc_users = cur.fetchall()
+
+    task_where = "WHERE created_by_cao_id=?"
+    task_params = [int(session.get("cao_id"))]
+    if status_filter != "ALL":
+        task_where += " AND status=?"
+        task_params.append(status_filter)
+
+    cur.execute(f"""
+        SELECT *
+        FROM acc_tasks
+        {task_where}
+        ORDER BY
+            CASE status WHEN 'DONE' THEN 1 ELSE 0 END,
+            CASE priority WHEN 'URGENT' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MEDIUM' THEN 3 ELSE 4 END,
+            COALESCE(due_date,'9999-12-31'),
+            created_at DESC
+        LIMIT 250
+    """, task_params)
+    tasks = cur.fetchall()
+
+    conn.close()
+
+    acc_options = "".join(
+        f"<option value='{row['id']}'>{escape(row['full_name'])}</option>"
+        for row in acc_users
+        if int(row["is_active"] or 0) == 1
+    )
+
+    acc_rows = ""
+    for row in acc_users:
+        active = int(row["is_active"] or 0) == 1
+        status = "<span class='chip active'>Active</span>" if active else "<span class='chip lapsed'>Inactive</span>"
+        message_btn = (
+            f"<a class='btn mini success' href='{url_for('cao_acc_messages', peer_role='ACC', peer_id=row['id'])}'>Message</a>"
+            if active else ""
+        )
+        acc_rows += f"""
+        <tr>
+            <td><strong>{escape(row['full_name'])}</strong><div class="mini muted">{escape(row['phone'])}</div></td>
+            <td>{escape(row['email'] or '—')}</td>
+            <td>{status}</td>
+            <td>{message_btn}</td>
+        </tr>
+        """
+
+    task_rows = ""
+    for task in tasks:
+        status = (
+            "<span class='chip active'>Done</span>"
+            if task["status"] == "DONE"
+            else "<span class='chip pending'>Pending</span>"
+        )
+        task_rows += f"""
+        <tr>
+            <td><strong>{escape(task['title'])}</strong><div class="mini muted">{escape(task['description'] or '')}</div></td>
+            <td>{escape(task['assigned_acc_name'] or 'ACC')}</td>
+            <td>{acc_task_priority_chip(task['priority'])}</td>
+            <td>{escape(task['due_date'] or '—')}</td>
+            <td>{status}</td>
+            <td>{escape(task['completion_note'] or '—')}</td>
+        </tr>
+        """
+
+    body = f"""
+    {cao_nav()}
+
+    <section class="card">
+        <h1>ACC Team & Tasks</h1>
+
+        <p class="muted">
+            Assign recording and content-support tasks to the ACC and track completion.
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>Assign Task to ACC</h2>
+
+            {
+                f"""<form method="post" action="{url_for('cao_acc_task_add')}" class="grid">
+                    <div><label>ACC</label><select name="acc_id" required>{acc_options}</select></div>
+                    <div><label>Task</label><input name="title" required placeholder="Example: Check missing Sunday recordings"></div>
+                    <div><label>Details</label><textarea name="description" rows="3" placeholder="Add the task details"></textarea></div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                        <div><label>Priority</label><select name="priority"><option>LOW</option><option selected>MEDIUM</option><option>HIGH</option><option>URGENT</option></select></div>
+                        <div><label>Due Date</label><input type="date" name="due_date"></div>
+                    </div>
+                    <button class="btn success">Assign Task</button>
+                </form>"""
+                if acc_options
+                else "<div class='empty'>No active ACC account is available. High Admin must add an ACC first.</div>"
+            }
+        </div>
+
+        <div class="card soft">
+            <h2>ACC Team</h2>
+            <div class="scroll-x">
+                <table>
+                    <thead><tr><th>ACC</th><th>Email</th><th>Status</th><th>Message</th></tr></thead>
+                    <tbody>{acc_rows or "<tr><td colspan='4'>No ACC users added yet.</td></tr>"}</tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap">
+                <h2 style="margin:0">ACC Tasks</h2>
+                <form method="get" style="display:flex;gap:6px;align-items:center">
+                    <select name="status" onchange="this.form.submit()">
+                        <option value="ALL" {'selected' if status_filter == 'ALL' else ''}>All</option>
+                        <option value="PENDING" {'selected' if status_filter == 'PENDING' else ''}>Pending</option>
+                        <option value="DONE" {'selected' if status_filter == 'DONE' else ''}>Done</option>
+                    </select>
+                </form>
+            </div>
+
+            <div class="scroll-x" style="margin-top:10px">
+                <table style="min-width:900px">
+                    <thead><tr><th>Task</th><th>ACC</th><th>Priority</th><th>Due</th><th>Status</th><th>Completion Note</th></tr></thead>
+                    <tbody>{task_rows or "<tr><td colspan='6'>No ACC tasks found.</td></tr>"}</tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("CAO ACC Team", body)
+
+
+@app.post('/cao/acc/tasks/add')
+def cao_acc_task_add():
+    r = require_cao()
+    if r:
+        return r
+
+    try:
+        acc_id = int(request.form.get("acc_id", ""))
+    except Exception:
+        return page("Task", card_msg("Please select a valid ACC."))
+
+    title = request.form.get("title", "").strip()
+    description = request.form.get("description", "").strip()
+    priority = request.form.get("priority", "MEDIUM").strip().upper()
+    due_date = request.form.get("due_date", "").strip()
+
+    if not title:
+        return page("Task", card_msg("Please enter a task title."))
+
+    if priority not in {"LOW", "MEDIUM", "HIGH", "URGENT"}:
+        priority = "MEDIUM"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, full_name
+        FROM admission_content_coordinators
+        WHERE id=? AND is_active=1
+        LIMIT 1
+    """, (acc_id,))
+    acc_row = cur.fetchone()
+
+    if not acc_row:
+        conn.close()
+        return page("Task", card_msg("The selected ACC is not active."))
+
+    now = now_utc_iso()
+
+    cur.execute("""
+        INSERT INTO acc_tasks(
+            assigned_acc_id,
+            assigned_acc_name,
+            title,
+            description,
+            priority,
+            due_date,
+            status,
+            created_by_cao_id,
+            created_by_cao_name,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,'PENDING',?,?,?,?)
+    """, (
+        acc_id,
+        acc_row["full_name"],
+        title,
+        description,
+        priority,
+        due_date or None,
+        int(session.get("cao_id")),
+        session.get("cao_name", "CAO"),
+        now,
+        now
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("cao_acc_team"))
+
+
+@app.get('/acc/tasks')
+def acc_tasks():
+    r = require_acc()
+    if r:
+        return r
+
+    acc_id = int(session.get("acc_id"))
+    status_filter = request.args.get("status", "ALL").strip().upper()
+    if status_filter not in {"ALL", "PENDING", "DONE"}:
+        status_filter = "ALL"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    params = [acc_id]
+    status_sql = ""
+    if status_filter != "ALL":
+        status_sql = "AND status=?"
+        params.append(status_filter)
+
+    cur.execute(f"""
+        SELECT *
+        FROM acc_tasks
+        WHERE assigned_acc_id=?
+        {status_sql}
+        ORDER BY
+            CASE status WHEN 'DONE' THEN 1 ELSE 0 END,
+            CASE priority WHEN 'URGENT' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MEDIUM' THEN 3 ELSE 4 END,
+            COALESCE(due_date,'9999-12-31'),
+            created_at DESC
+    """, params)
+
+    tasks = cur.fetchall()
+    conn.close()
+
+    rows = ""
+    for task in tasks:
+        status = (
+            "<span class='chip active'>Done</span>"
+            if task["status"] == "DONE"
+            else "<span class='chip pending'>Pending</span>"
+        )
+
+        if task["status"] == "DONE":
+            action = f"""
+            <div class="mini muted">
+                {escape(task['completion_note'] or 'Completed')}
+                <br>{escape(format_chat_datetime(task['completed_at']))}
+            </div>
+            """
+        else:
+            action = f"""
+            <form method="post"
+                  action="{url_for('acc_task_done', task_id=task['id'])}"
+                  style="min-width:220px">
+                <textarea name="completion_note"
+                          rows="2"
+                          placeholder="Completion note optional"></textarea>
+                <button class="btn mini success"
+                        onclick="return confirm('Mark this task as done?')">
+                    Mark Done
+                </button>
+            </form>
+            """
+
+        rows += f"""
+        <tr>
+            <td><strong>{escape(task['title'])}</strong><div class="mini muted">{escape(task['description'] or '')}</div></td>
+            <td>{escape(task['created_by_cao_name'] or 'CAO')}</td>
+            <td>{acc_task_priority_chip(task['priority'])}</td>
+            <td>{escape(task['due_date'] or '—')}</td>
+            <td>{status}</td>
+            <td>{action}</td>
+        </tr>
+        """
+
+    body = f"""
+    {acc_nav()}
+
+    <section class="card">
+        <h1>Tasks from CAO</h1>
+
+        <div class="toolbar">
+            <a class="btn mini {'success' if status_filter == 'ALL' else 'secondary'}" href="{url_for('acc_tasks', status='ALL')}">All</a>
+            <a class="btn mini {'success' if status_filter == 'PENDING' else 'secondary'}" href="{url_for('acc_tasks', status='PENDING')}">Pending</a>
+            <a class="btn mini {'success' if status_filter == 'DONE' else 'secondary'}" href="{url_for('acc_tasks', status='DONE')}">Done</a>
+        </div>
+
+        <div class="scroll-x" style="margin-top:14px">
+            <table style="min-width:950px">
+                <thead><tr><th>Task</th><th>From</th><th>Priority</th><th>Due</th><th>Status</th><th>Action</th></tr></thead>
+                <tbody>{rows or "<tr><td colspan='6'>No tasks found.</td></tr>"}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("ACC Tasks", body)
+
+
+@app.post('/acc/tasks/<int:task_id>/done')
+def acc_task_done(task_id):
+    r = require_acc()
+    if r:
+        return r
+
+    acc_id = int(session.get("acc_id"))
+    note = request.form.get("completion_note", "").strip()
+    now = now_utc_iso()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE acc_tasks
+        SET status='DONE',
+            completion_note=?,
+            completed_at=?,
+            updated_at=?
+        WHERE id=?
+          AND assigned_acc_id=?
+          AND status!='DONE'
+    """, (
+        note,
+        now,
+        now,
+        task_id,
+        acc_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("acc_tasks"))
+
+
+# ---------------- High Admin ACC account management ----------------
+@app.get('/admin/acc')
+@require_high_admin
+def admin_acc_users():
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM admission_content_coordinators
+        ORDER BY is_active DESC, created_at DESC
+    """)
+    users = cur.fetchall()
+    conn.close()
+
+    rows = ""
+    for user in users:
+        status = (
+            "<span class='chip active'>Active</span>"
+            if int(user["is_active"] or 0) == 1
+            else "<span class='chip lapsed'>Inactive</span>"
+        )
+
+        rows += f"""
+        <tr>
+            <td><strong>{escape(user['full_name'])}</strong><div class="mini muted">{escape(user['phone'])}</div></td>
+            <td>{escape(user['email'] or '—')}</td>
+            <td><span class="chip" style="font-weight:850;letter-spacing:1px">{escape(user['pin'])}</span></td>
+            <td>{status}</td>
+            <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    <form method="post" action="{url_for('admin_acc_reset_pin', acc_id=user['id'])}" onsubmit="return confirm('Reset this ACC PIN?')">
+                        <button class="btn mini warn">Reset PIN</button>
+                    </form>
+                    <form method="post" action="{url_for('admin_acc_toggle', acc_id=user['id'])}">
+                        <button class="btn mini secondary">{'Deactivate' if user['is_active'] == 1 else 'Activate'}</button>
+                    </form>
+                </div>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>ACC Team</h1>
+
+        <p class="muted">
+            Add and manage Academic Content Coordinator portal accounts.
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <h2>Add ACC</h2>
+
+            <form method="post"
+                  action="{url_for('admin_acc_add')}"
+                  class="grid"
+                  style="grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end">
+
+                <div><label>Full Name</label><input name="full_name" required></div>
+                <div><label>Phone</label><input name="phone" required></div>
+                <div><label>Email</label><input name="email" type="email"></div>
+                <button class="btn success">Add ACC</button>
+            </form>
+
+            <div style="margin-top:10px">
+                <a class="btn mini secondary" href="{url_for('acc_login')}" target="_blank" rel="noopener noreferrer">Open ACC Login</a>
+            </div>
+        </div>
+
+        <div class="scroll-x">
+            <table>
+                <thead><tr><th>ACC</th><th>Email</th><th>PIN</th><th>Status</th><th>Actions</th></tr></thead>
+                <tbody>{rows or "<tr><td colspan='5'>No ACC users added yet.</td></tr>"}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("ACC Team", body)
+
+
+@app.post('/admin/acc/add')
+@require_high_admin
+def admin_acc_add():
+    r = require_admin()
+    if r:
+        return r
+
+    full_name = request.form.get("full_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    email = request.form.get("email", "").strip()
+
+    if not full_name or not phone:
+        return page("ACC", card_msg("Full name and phone are required."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT pin FROM admission_content_coordinators WHERE pin IS NOT NULL")
+    used_pins = {str(row["pin"]) for row in cur.fetchall() if row["pin"]}
+    pin = gen_pin(used_pins)
+    now = now_utc_iso()
+
+    try:
+        cur.execute("""
+            INSERT INTO admission_content_coordinators(
+                full_name, phone, email, pin,
+                is_active, created_at, updated_at
+            )
+            VALUES(?,?,?,?,1,?,?)
+        """, (full_name, phone, email, pin, now, now))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return page("ACC", card_msg("An ACC with this phone number already exists."))
+
+    conn.close()
+
+    return page(
+        "ACC Created",
+        f"""
+        {admin_nav()}
+        <section class="card">
+            <h1>ACC Created</h1>
+            <div class="card soft" style="border-left:5px solid #e3ad24">
+                <p><strong>Name:</strong> {escape(full_name)}</p>
+                <p><strong>Phone:</strong> {escape(phone)}</p>
+                <p><strong>PIN:</strong> <span class="chip" style="font-size:20px;letter-spacing:2px">{escape(pin)}</span></p>
+            </div>
+            <div class="toolbar" style="margin-top:12px">
+                <a class="btn" href="{url_for('admin_acc_users')}">Back to ACC Team</a>
+                <a class="btn secondary" href="{url_for('acc_login')}" target="_blank">Open ACC Login</a>
+            </div>
+        </section>
+        """
+    )
+
+
+@app.post('/admin/acc/<int:acc_id>/reset-pin')
+@require_high_admin
+def admin_acc_reset_pin(acc_id):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT pin FROM admission_content_coordinators WHERE pin IS NOT NULL")
+    used_pins = {str(row["pin"]) for row in cur.fetchall() if row["pin"]}
+    new_pin = gen_pin(used_pins)
+
+    cur.execute("""
+        UPDATE admission_content_coordinators
+        SET pin=?, updated_at=?
+        WHERE id=?
+    """, (new_pin, now_utc_iso(), acc_id))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_acc_users"))
+
+
+@app.post('/admin/acc/<int:acc_id>/toggle')
+@require_high_admin
+def admin_acc_toggle(acc_id):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT is_active
+        FROM admission_content_coordinators
+        WHERE id=?
+    """, (acc_id,))
+    row = cur.fetchone()
+
+    if row:
+        new_status = 0 if int(row["is_active"] or 0) == 1 else 1
+        cur.execute("""
+            UPDATE admission_content_coordinators
+            SET is_active=?, updated_at=?
+            WHERE id=?
+        """, (new_status, now_utc_iso(), acc_id))
+        conn.commit()
+
+    conn.close()
+    return redirect(url_for("admin_acc_users"))
 
 
 @app.get('/admin')
@@ -43083,6 +44740,10 @@ def manager_nav():
 
         <a class="btn mini" href="/manager/tasks">
             Tasks from CEO
+        </a>
+
+        <a class="btn mini" href="/manager/acc-messages">
+            Message ACC
         </a>
         
         <a class="btn mini" href="/manager/session-links">
@@ -78534,6 +80195,8 @@ def cao_nav():
                 cao_link("Manager Work Progress", "cao_tutor_manager_performance", "cao_tutor_managers_enabled", icon="📈"),
                 cao_link("Manager Ratings", "cao_tutor_manager_ratings", "cao_tutor_managers_enabled", icon="⭐"),
                 cao_link("AQM Team", "cao_aqm_team", "cao_aqm_enabled", icon="✅"),
+                cao_link("ACC Team & Tasks", "cao_acc_team", icon="🎬"),
+                cao_link("Message ACC", "cao_acc_messages", icon="💬"),
             ]
         ),
         (
