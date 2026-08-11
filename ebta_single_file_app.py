@@ -657,6 +657,34 @@ def init_db():
     );
     """)
 
+    # ================= GOOGLE DRIVE LINKS =================
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS google_drive_links(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        subject_id INTEGER NOT NULL,
+        title TEXT NOT NULL DEFAULT 'Google Drive',
+        drive_link TEXT NOT NULL,
+        notes TEXT,
+        is_visible INTEGER NOT NULL DEFAULT 1,
+        visible_to_tutors INTEGER NOT NULL DEFAULT 1,
+        visible_to_managers INTEGER NOT NULL DEFAULT 1,
+        visible_to_acc INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_google_drive_links_subject
+        ON google_drive_links(subject_id)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_google_drive_links_visibility
+        ON google_drive_links(is_visible, visible_to_tutors, visible_to_managers, visible_to_acc)
+    """)
+
     cur.execute("""
     CREATE TABLE IF NOT EXISTS attendance(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24099,6 +24127,48 @@ def tutor_home():
     </div>
     """
 
+    # Google Drive links for the tutor's assigned subjects.
+    cur.execute("""
+        SELECT DISTINCT
+            g.id,
+            g.title,
+            g.drive_link,
+            g.notes,
+            s.name AS subject_name,
+            s.grade
+        FROM tutor_subjects ts
+        JOIN subjects s ON s.id=ts.subject_id
+        JOIN google_drive_links g ON g.subject_id=s.id
+        WHERE ts.tutor_id=?
+          AND g.is_visible=1
+          AND g.visible_to_tutors=1
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.name, g.title
+    """, (tid,))
+
+    tutor_drive_rows = cur.fetchall()
+    tutor_google_drive_html = ""
+
+    for drive_row in tutor_drive_rows:
+        tutor_google_drive_html += f"""
+        <div class='card soft' style='border-left:5px solid #1b5e20;margin-bottom:9px'>
+            <div style='display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap'>
+                <div>
+                    <strong>{escape(grade_label(drive_row['grade']))} — {escape(drive_row['subject_name'])}</strong>
+                    <div class='mini muted'>{escape(drive_row['title'] or 'Google Drive')}</div>
+                    {f"<div class='mini muted'>{escape(drive_row['notes'])}</div>" if drive_row['notes'] else ""}
+                </div>
+                <a class='btn success mini'
+                   href='{escape(drive_row['drive_link'], quote=True)}'
+                   target='_blank'
+                   rel='noopener noreferrer'>
+                    Open Google Drive
+                </a>
+            </div>
+        </div>
+        """
+
+    if not tutor_google_drive_html:
+        tutor_google_drive_html = "<div class='empty'>No Google Drive links are available for your subjects.</div>"
 
 
     conn.close()
@@ -24177,6 +24247,12 @@ def tutor_home():
     </div>
 
     <div class='card'><h2>WhatsApp Group Links</h2>{groups_html}</div>
+
+    <div class='card' style="border-left:5px solid #1b5e20">
+        <h2>Google Drive Links</h2>
+        <p class="mini muted">Drive links available for your assigned subjects.</p>
+        {tutor_google_drive_html}
+    </div>
 
     <div class='card'><h2>Your sessions</h2>
         {sessions_html}
@@ -28144,6 +28220,7 @@ def admin_nav():
                 [
                     ("Groups", "admin_groups", "/admin/groups"),
                     ("Sessions", "admin_sessions", "/admin/sessions"),
+                    ("Google Drive Links", "admin_google_drive_links", "/admin/google-drive-links"),
                     ("Inbox", "admin_messages", "/admin/messages"),
                     ("Uploads Control", "admin_uploads_control", "/admin/uploads-control"),
                     ("Unlock Uploads", "admin_materials", "/admin/materials"),
@@ -29761,6 +29838,7 @@ def acc_nav():
     <div class="admin-nav">
         <a class="btn mini" href="{url_for('acc_home')}">Dashboard</a>
         <a class="btn mini" href="{url_for('acc_tutors')}">Tutors</a>
+        <a class="btn mini" href="{url_for('acc_google_drive_links')}">Google Drive Links</a>
         <a class="btn mini" href="{url_for('acc_messages')}">Messages</a>
         <a class="btn mini" href="{url_for('acc_tasks')}">Tasks from CAO</a>
         <a class="btn mini danger" href="{url_for('acc_logout')}">Logout</a>
@@ -37734,6 +37812,863 @@ def admin_group_excel_parse(file_bytes):
     return list(parsed_rows.values()), issues, duplicate_count
 
 
+
+# ===================== GOOGLE DRIVE LINKS =====================
+
+def google_drive_link_is_valid(value):
+    from urllib.parse import urlparse
+
+    link = str(value or "").strip()
+    if not link:
+        return False
+
+    try:
+        parsed = urlparse(link)
+    except Exception:
+        return False
+
+    host = str(parsed.netloc or "").lower().split(":", 1)[0]
+
+    return (
+        parsed.scheme in {"http", "https"}
+        and (
+            host == "drive.google.com"
+            or host.endswith(".drive.google.com")
+            or host == "docs.google.com"
+            or host.endswith(".docs.google.com")
+        )
+    )
+
+
+def google_drive_visibility_chips(row):
+    if int(row["is_visible"] or 0) != 1:
+        return "<span class='chip lapsed'>Hidden from everyone</span>"
+
+    chips = []
+
+    chips.append(
+        "<span class='chip active'>Tutors</span>"
+        if int(row["visible_to_tutors"] or 0) == 1
+        else "<span class='chip lapsed'>Tutors hidden</span>"
+    )
+
+    chips.append(
+        "<span class='chip active'>Tutor Managers</span>"
+        if int(row["visible_to_managers"] or 0) == 1
+        else "<span class='chip lapsed'>Managers hidden</span>"
+    )
+
+    chips.append(
+        "<span class='chip active'>ACC</span>"
+        if int(row["visible_to_acc"] or 0) == 1
+        else "<span class='chip lapsed'>ACC hidden</span>"
+    )
+
+    return " ".join(chips)
+
+
+def google_drive_subject_options(subjects, selected_id=""):
+    options = []
+    for subject in subjects:
+        selected = (
+            "selected"
+            if str(subject["id"]) == str(selected_id)
+            else ""
+        )
+        options.append(
+            f"<option value='{subject['id']}' {selected}>"
+            f"{escape(grade_label(subject['grade']))} — {escape(subject['name'])}"
+            f"</option>"
+        )
+    return "".join(options)
+
+
+@app.get('/admin/google-drive-links')
+@require_high_admin
+def admin_google_drive_links():
+    r = require_admin()
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+    subject_id = request.args.get("subject_id", "").strip()
+    visibility = request.args.get("visibility", "").strip().upper()
+
+    allowed_visibility = {
+        "", "SHOWN", "HIDDEN_ALL",
+        "HIDDEN_TUTORS", "HIDDEN_MANAGERS", "HIDDEN_ACC"
+    }
+    if visibility not in allowed_visibility:
+        visibility = ""
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
+    """)
+    subjects = cur.fetchall()
+
+    where = ["1=1"]
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("(g.title LIKE ? OR g.drive_link LIKE ? OR g.notes LIKE ? OR s.name LIKE ? OR s.grade LIKE ?)")
+        params.extend([search, search, search, search, search])
+
+    if grade:
+        where.append("s.grade=?")
+        params.append(grade)
+
+    if subject_id:
+        where.append("g.subject_id=?")
+        params.append(subject_id)
+
+    if visibility == "SHOWN":
+        where.append("g.is_visible=1")
+    elif visibility == "HIDDEN_ALL":
+        where.append("g.is_visible=0")
+    elif visibility == "HIDDEN_TUTORS":
+        where.append("g.is_visible=1 AND g.visible_to_tutors=0")
+    elif visibility == "HIDDEN_MANAGERS":
+        where.append("g.is_visible=1 AND g.visible_to_managers=0")
+    elif visibility == "HIDDEN_ACC":
+        where.append("g.is_visible=1 AND g.visible_to_acc=0")
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    cur.execute(f"""
+        SELECT
+            g.*,
+            s.name AS subject_name,
+            s.grade
+        FROM google_drive_links g
+        JOIN subjects s ON s.id=g.subject_id
+        {where_sql}
+        ORDER BY
+            CAST(REPLACE(s.grade,'G','') AS INTEGER),
+            s.name,
+            g.title
+    """, params)
+    links = cur.fetchall()
+
+    cur.execute("SELECT COUNT(*) AS c FROM google_drive_links")
+    total_links = int(cur.fetchone()["c"] or 0)
+
+    cur.execute("SELECT COUNT(*) AS c FROM google_drive_links WHERE is_visible=1")
+    shown_links = int(cur.fetchone()["c"] or 0)
+
+    cur.execute("SELECT COUNT(*) AS c FROM google_drive_links WHERE is_visible=0")
+    hidden_links = int(cur.fetchone()["c"] or 0)
+
+    conn.close()
+
+    subject_options = google_drive_subject_options(subjects)
+
+    grade_options = "<option value=''>All Grades</option>"
+    for grade_value in ("G8", "G9", "G10", "G11", "G12", "G13"):
+        selected = "selected" if grade == grade_value else ""
+        grade_options += f"<option value='{grade_value}' {selected}>{grade_label(grade_value)}</option>"
+
+    filter_subject_options = "<option value=''>All Subjects</option>" + google_drive_subject_options(subjects, subject_id)
+
+    visibility_options = ""
+    for value, label in (
+        ("", "All Visibility"),
+        ("SHOWN", "Globally Shown"),
+        ("HIDDEN_ALL", "Hidden from Everyone"),
+        ("HIDDEN_TUTORS", "Hidden from Tutors"),
+        ("HIDDEN_MANAGERS", "Hidden from Tutor Managers"),
+        ("HIDDEN_ACC", "Hidden from ACC"),
+    ):
+        selected = "selected" if visibility == value else ""
+        visibility_options += f"<option value='{value}' {selected}>{label}</option>"
+
+    rows = ""
+    for row in links:
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(grade_label(row['grade']))} — {escape(row['subject_name'])}</strong>
+                <div class='mini muted'>{escape(row['title'] or 'Google Drive')}</div>
+            </td>
+
+            <td>
+                <a class='btn mini success'
+                   href='{escape(row['drive_link'], quote=True)}'
+                   target='_blank'
+                   rel='noopener noreferrer'>
+                    Open Drive
+                </a>
+                {f"<div class='mini muted' style='margin-top:5px'>{escape(row['notes'])}</div>" if row['notes'] else ""}
+            </td>
+
+            <td style='min-width:260px'>
+                {google_drive_visibility_chips(row)}
+            </td>
+
+            <td style='min-width:330px'>
+                <div class='google-drive-actions'>
+                    <a class='btn mini'
+                       href='{url_for("admin_google_drive_link_edit", link_id=row["id"])}'>
+                        Edit
+                    </a>
+
+                    <form method='post'
+                          action='{url_for("admin_google_drive_link_toggle", link_id=row["id"], target="all")}'
+                          style='display:inline'>
+                        <button class='btn mini secondary'>
+                            {'Show Everyone' if int(row['is_visible'] or 0) == 0 else 'Hide Everyone'}
+                        </button>
+                    </form>
+
+                    <form method='post'
+                          action='{url_for("admin_google_drive_link_toggle", link_id=row["id"], target="tutors")}'
+                          style='display:inline'>
+                        <button class='btn mini secondary'>
+                            {'Show Tutors' if int(row['visible_to_tutors'] or 0) == 0 else 'Hide Tutors'}
+                        </button>
+                    </form>
+
+                    <form method='post'
+                          action='{url_for("admin_google_drive_link_toggle", link_id=row["id"], target="managers")}'
+                          style='display:inline'>
+                        <button class='btn mini secondary'>
+                            {'Show Managers' if int(row['visible_to_managers'] or 0) == 0 else 'Hide Managers'}
+                        </button>
+                    </form>
+
+                    <form method='post'
+                          action='{url_for("admin_google_drive_link_toggle", link_id=row["id"], target="acc")}'
+                          style='display:inline'>
+                        <button class='btn mini secondary'>
+                            {'Show ACC' if int(row['visible_to_acc'] or 0) == 0 else 'Hide ACC'}
+                        </button>
+                    </form>
+
+                    <form method='post'
+                          action='{url_for("admin_google_drive_link_delete", link_id=row["id"])}'
+                          style='display:inline'
+                          onsubmit='return confirm("Delete this Google Drive link?")'>
+                        <button class='btn mini danger'>Delete</button>
+                    </form>
+                </div>
+            </td>
+        </tr>
+        """
+
+    if not rows:
+        rows = "<tr><td colspan='4'><div class='empty'>No Google Drive links found.</div></td></tr>"
+
+    body = f"""
+    {admin_nav()}
+
+    <style>
+        .google-drive-actions {{display:flex;gap:5px;flex-wrap:wrap}}
+        .google-drive-actions form {{margin:0}}
+        .google-drive-add-grid {{
+            display:grid;
+            grid-template-columns:minmax(220px,1fr) minmax(180px,.8fr) minmax(280px,1.5fr);
+            gap:10px;
+        }}
+        .google-drive-visibility-grid {{
+            display:grid;
+            grid-template-columns:repeat(4,minmax(150px,1fr));
+            gap:8px;
+            margin-top:10px;
+        }}
+        .google-drive-check {{
+            display:flex;align-items:center;gap:7px;padding:9px 10px;
+            border:1px solid #dbe4ea;border-radius:10px;background:#fff;
+        }}
+        .google-drive-check input {{width:auto;margin:0}}
+        @media(max-width:760px) {{
+            .google-drive-add-grid,.google-drive-visibility-grid {{grid-template-columns:1fr}}
+        }}
+    </style>
+
+    <section class='card'>
+        <h1>Google Drive Links</h1>
+        <p class='muted'>Manage the Google Drive folders and links used by tutors, Tutor Managers and the ACC.</p>
+
+        <div class='stats'>
+            {stat('All Links', total_links)}
+            {stat('Globally Shown', shown_links)}
+            {stat('Hidden from Everyone', hidden_links)}
+            {stat('Filtered Results', len(links))}
+        </div>
+
+        <div class='card soft' style='margin-top:14px;border-left:5px solid #1b5e20'>
+            <h2>Add Google Drive Link</h2>
+
+            <form method='post' action='{url_for("admin_google_drive_link_add")}'>
+                <div class='google-drive-add-grid'>
+                    <div>
+                        <label>Subject</label>
+                        <select name='subject_id' required>{subject_options}</select>
+                    </div>
+                    <div>
+                        <label>Title</label>
+                        <input name='title' value='Recordings' placeholder='e.g. Recordings'>
+                    </div>
+                    <div>
+                        <label>Google Drive Link</label>
+                        <input name='drive_link' placeholder='https://drive.google.com/...' required>
+                    </div>
+                </div>
+
+                <div style='margin-top:10px'>
+                    <label>Notes</label>
+                    <textarea name='notes' rows='2' placeholder='Optional note'></textarea>
+                </div>
+
+                <div class='google-drive-visibility-grid'>
+                    <label class='google-drive-check'>
+                        <input type='checkbox' name='is_visible' value='1' checked>
+                        Show link
+                    </label>
+                    <label class='google-drive-check'>
+                        <input type='checkbox' name='visible_to_tutors' value='1' checked>
+                        Tutors
+                    </label>
+                    <label class='google-drive-check'>
+                        <input type='checkbox' name='visible_to_managers' value='1' checked>
+                        Tutor Managers
+                    </label>
+                    <label class='google-drive-check'>
+                        <input type='checkbox' name='visible_to_acc' value='1' checked>
+                        ACC
+                    </label>
+                </div>
+
+                <button class='btn success' style='margin-top:10px'>Add Google Drive Link</button>
+            </form>
+        </div>
+
+        <div class='card soft' style='margin-top:14px'>
+            <h2>Filter Links</h2>
+            <form method='get' class='toolbar'>
+                <input name='q' value='{escape(q)}' placeholder='Search title, subject, note or link'>
+                <select name='grade'>{grade_options}</select>
+                <select name='subject_id'>{filter_subject_options}</select>
+                <select name='visibility'>{visibility_options}</select>
+                <button class='btn mini success'>Filter</button>
+                <a class='btn mini secondary' href='{url_for("admin_google_drive_links")}'>Clear</a>
+            </form>
+        </div>
+
+        <div class='scroll-x' style='margin-top:14px'>
+            <table style='min-width:1050px'>
+                <thead>
+                    <tr>
+                        <th>Subject</th>
+                        <th>Drive Link</th>
+                        <th>Visibility</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>{rows}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+    return page("Google Drive Links", body)
+
+
+@app.post('/admin/google-drive-links/add')
+@require_high_admin
+def admin_google_drive_link_add():
+    r = require_admin()
+    if r:
+        return r
+
+    subject_id = request.form.get("subject_id", "").strip()
+    title = request.form.get("title", "").strip() or "Google Drive"
+    drive_link = request.form.get("drive_link", "").strip()
+    notes = request.form.get("notes", "").strip()
+
+    if not subject_id:
+        return page("Missing Subject", card_msg("Please select a subject."))
+
+    if not google_drive_link_is_valid(drive_link):
+        return page(
+            "Invalid Google Drive Link",
+            card_msg("Please enter a valid Google Drive or Google Docs link.")
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT id FROM subjects WHERE id=?", (subject_id,))
+    if not cur.fetchone():
+        conn.close()
+        return page("Invalid Subject", card_msg("The selected subject could not be found."))
+
+    now = now_utc_iso()
+    cur.execute("""
+        INSERT INTO google_drive_links(
+            subject_id, title, drive_link, notes,
+            is_visible, visible_to_tutors,
+            visible_to_managers, visible_to_acc,
+            created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?)
+    """, (
+        subject_id,
+        title,
+        drive_link,
+        notes,
+        1 if request.form.get("is_visible") == "1" else 0,
+        1 if request.form.get("visible_to_tutors") == "1" else 0,
+        1 if request.form.get("visible_to_managers") == "1" else 0,
+        1 if request.form.get("visible_to_acc") == "1" else 0,
+        now,
+        now,
+    ))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_google_drive_links"))
+
+
+@app.get('/admin/google-drive-links/<int:link_id>/edit')
+@require_high_admin
+def admin_google_drive_link_edit(link_id):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM google_drive_links WHERE id=?", (link_id,))
+    row = cur.fetchone()
+
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
+    """)
+    subjects = cur.fetchall()
+    conn.close()
+
+    if not row:
+        return page("Link Not Found", card_msg("This Google Drive link could not be found."))
+
+    subject_options = google_drive_subject_options(subjects, row["subject_id"])
+
+    def checked(value):
+        return "checked" if int(value or 0) == 1 else ""
+
+    body = f"""
+    {admin_nav()}
+    <section class='card'>
+        <h1>Edit Google Drive Link</h1>
+
+        <form method='post' action='{url_for("admin_google_drive_link_edit_post", link_id=link_id)}' class='grid'>
+            <div>
+                <label>Subject</label>
+                <select name='subject_id' required>{subject_options}</select>
+            </div>
+
+            <div>
+                <label>Title</label>
+                <input name='title' value='{escape(row["title"] or "", quote=True)}' required>
+            </div>
+
+            <div>
+                <label>Google Drive Link</label>
+                <input name='drive_link' value='{escape(row["drive_link"] or "", quote=True)}' required>
+            </div>
+
+            <div>
+                <label>Notes</label>
+                <textarea name='notes' rows='3'>{escape(row['notes'] or '')}</textarea>
+            </div>
+
+            <div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px'>
+                <label class='card soft'><input type='checkbox' name='is_visible' value='1' {checked(row['is_visible'])}> Show link</label>
+                <label class='card soft'><input type='checkbox' name='visible_to_tutors' value='1' {checked(row['visible_to_tutors'])}> Tutors</label>
+                <label class='card soft'><input type='checkbox' name='visible_to_managers' value='1' {checked(row['visible_to_managers'])}> Tutor Managers</label>
+                <label class='card soft'><input type='checkbox' name='visible_to_acc' value='1' {checked(row['visible_to_acc'])}> ACC</label>
+            </div>
+
+            <div style='display:flex;gap:8px;flex-wrap:wrap'>
+                <button class='btn success'>Save Changes</button>
+                <a class='btn secondary' href='{url_for("admin_google_drive_links")}'>Cancel</a>
+            </div>
+        </form>
+    </section>
+    """
+    return page("Edit Google Drive Link", body)
+
+
+@app.post('/admin/google-drive-links/<int:link_id>/edit')
+@require_high_admin
+def admin_google_drive_link_edit_post(link_id):
+    r = require_admin()
+    if r:
+        return r
+
+    subject_id = request.form.get("subject_id", "").strip()
+    title = request.form.get("title", "").strip() or "Google Drive"
+    drive_link = request.form.get("drive_link", "").strip()
+    notes = request.form.get("notes", "").strip()
+
+    if not google_drive_link_is_valid(drive_link):
+        return page(
+            "Invalid Google Drive Link",
+            card_msg("Please enter a valid Google Drive or Google Docs link.")
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT id FROM subjects WHERE id=?", (subject_id,))
+    if not cur.fetchone():
+        conn.close()
+        return page("Invalid Subject", card_msg("The selected subject could not be found."))
+
+    cur.execute("""
+        UPDATE google_drive_links
+        SET subject_id=?,
+            title=?,
+            drive_link=?,
+            notes=?,
+            is_visible=?,
+            visible_to_tutors=?,
+            visible_to_managers=?,
+            visible_to_acc=?,
+            updated_at=?
+        WHERE id=?
+    """, (
+        subject_id,
+        title,
+        drive_link,
+        notes,
+        1 if request.form.get("is_visible") == "1" else 0,
+        1 if request.form.get("visible_to_tutors") == "1" else 0,
+        1 if request.form.get("visible_to_managers") == "1" else 0,
+        1 if request.form.get("visible_to_acc") == "1" else 0,
+        now_utc_iso(),
+        link_id,
+    ))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_google_drive_links"))
+
+
+@app.post('/admin/google-drive-links/<int:link_id>/toggle/<target>')
+@require_high_admin
+def admin_google_drive_link_toggle(link_id, target):
+    r = require_admin()
+    if r:
+        return r
+
+    columns = {
+        "all": "is_visible",
+        "tutors": "visible_to_tutors",
+        "managers": "visible_to_managers",
+        "acc": "visible_to_acc",
+    }
+
+    column = columns.get(str(target or "").lower())
+    if not column:
+        return page("Invalid Action", card_msg("Invalid visibility option."))
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(f"SELECT {column} AS current_value FROM google_drive_links WHERE id=?", (link_id,))
+    row = cur.fetchone()
+
+    if row:
+        new_value = 0 if int(row["current_value"] or 0) == 1 else 1
+        cur.execute(
+            f"UPDATE google_drive_links SET {column}=?, updated_at=? WHERE id=?",
+            (new_value, now_utc_iso(), link_id)
+        )
+        conn.commit()
+
+    conn.close()
+    return redirect(request.referrer or url_for("admin_google_drive_links"))
+
+
+@app.post('/admin/google-drive-links/<int:link_id>/delete')
+@require_high_admin
+def admin_google_drive_link_delete(link_id):
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM google_drive_links WHERE id=?", (link_id,))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_google_drive_links"))
+
+
+@app.get('/acc/google-drive-links')
+def acc_google_drive_links():
+    r = require_acc()
+    if r:
+        return r
+
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+    subject_id = request.args.get("subject_id", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
+    """)
+    subjects = cur.fetchall()
+
+    where = ["g.is_visible=1", "g.visible_to_acc=1"]
+    params = []
+
+    if q:
+        search = f"%{q}%"
+        where.append("(g.title LIKE ? OR g.notes LIKE ? OR s.name LIKE ? OR s.grade LIKE ?)")
+        params.extend([search, search, search, search])
+
+    if grade:
+        where.append("s.grade=?")
+        params.append(grade)
+
+    if subject_id:
+        where.append("g.subject_id=?")
+        params.append(subject_id)
+
+    cur.execute(f"""
+        SELECT g.*, s.name AS subject_name, s.grade
+        FROM google_drive_links g
+        JOIN subjects s ON s.id=g.subject_id
+        WHERE {' AND '.join(where)}
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.name, g.title
+    """, params)
+    rows = cur.fetchall()
+    conn.close()
+
+    grade_options = "<option value=''>All Grades</option>"
+    for gv in ("G8", "G9", "G10", "G11", "G12", "G13"):
+        selected = "selected" if grade == gv else ""
+        grade_options += f"<option value='{gv}' {selected}>{grade_label(gv)}</option>"
+
+    subject_options = "<option value=''>All Subjects</option>" + google_drive_subject_options(subjects, subject_id)
+
+    cards = ""
+    for row in rows:
+        cards += f"""
+        <div class='card soft' style='border-left:5px solid #1b5e20'>
+            <div style='display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap'>
+                <div>
+                    <h3 style='margin:0'>{escape(grade_label(row['grade']))} — {escape(row['subject_name'])}</h3>
+                    <div class='mini muted'>{escape(row['title'] or 'Google Drive')}</div>
+                    {f"<div class='mini muted' style='margin-top:4px'>{escape(row['notes'])}</div>" if row['notes'] else ""}
+                </div>
+                <a class='btn success' href='{escape(row['drive_link'], quote=True)}' target='_blank' rel='noopener noreferrer'>Open Google Drive</a>
+            </div>
+        </div>
+        """
+
+    body = f"""
+    {acc_nav()}
+    <section class='card'>
+        <h1>Google Drive Links</h1>
+        <p class='muted'>Google Drive links available to the Academic Content Coordinator.</p>
+
+        <div class='stats'>
+            {stat('Available Links', len(rows))}
+        </div>
+
+        <div class='card soft' style='margin-top:14px'>
+            <h2>Filter Links</h2>
+            <form method='get' class='toolbar'>
+                <input name='q' value='{escape(q)}' placeholder='Search subject, title or note'>
+                <select name='grade'>{grade_options}</select>
+                <select name='subject_id'>{subject_options}</select>
+                <button class='btn mini success'>Filter</button>
+                <a class='btn mini secondary' href='{url_for("acc_google_drive_links")}'>Clear</a>
+            </form>
+        </div>
+
+        <div class='grid' style='margin-top:14px'>
+            {cards or "<div class='empty'>No Google Drive links are available.</div>"}
+        </div>
+    </section>
+    """
+    return page("ACC Google Drive Links", body)
+
+
+@app.get('/manager/google-drive-links')
+def manager_google_drive_links():
+    r = require_manager()
+    if r:
+        return r
+
+    manager_id = session.get("manager_id")
+    q = request.args.get("q", "").strip()
+    grade = request.args.get("grade", "").strip()
+    subject_id = request.args.get("subject_id", "").strip()
+    tutor_id = request.args.get("tutor_id", "").strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT t.id, t.full_name
+        FROM manager_tutors mt
+        JOIN tutors t ON t.id=mt.tutor_id
+        WHERE mt.manager_id=?
+          AND COALESCE(t.is_active,1)=1
+          AND t.deleted_at IS NULL
+        ORDER BY t.full_name
+    """, (manager_id,))
+    tutors = cur.fetchall()
+    allowed_tutor_ids = {str(row['id']) for row in tutors}
+
+    if tutor_id and tutor_id not in allowed_tutor_ids:
+        conn.close()
+        return page("Access Denied", card_msg("You can only view Google Drive links for tutors assigned to you."))
+
+    cur.execute("""
+        SELECT DISTINCT s.id, s.name, s.grade
+        FROM manager_tutors mt
+        JOIN tutors t ON t.id=mt.tutor_id
+        JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        JOIN subjects s ON s.id=ts.subject_id
+        WHERE mt.manager_id=?
+          AND COALESCE(t.is_active,1)=1
+          AND t.deleted_at IS NULL
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.name
+    """, (manager_id,))
+    subjects = cur.fetchall()
+    allowed_subject_ids = {str(row['id']) for row in subjects}
+
+    if subject_id and subject_id not in allowed_subject_ids:
+        conn.close()
+        return page("Access Denied", card_msg("This subject is not assigned to one of your tutors."))
+
+    where = [
+        "mt.manager_id=?",
+        "g.is_visible=1",
+        "g.visible_to_managers=1",
+        "COALESCE(t.is_active,1)=1",
+        "t.deleted_at IS NULL",
+    ]
+    params = [manager_id]
+
+    if q:
+        search = f"%{q}%"
+        where.append("(g.title LIKE ? OR g.notes LIKE ? OR s.name LIKE ? OR t.full_name LIKE ?)")
+        params.extend([search, search, search, search])
+
+    if grade:
+        where.append("s.grade=?")
+        params.append(grade)
+
+    if subject_id:
+        where.append("g.subject_id=?")
+        params.append(subject_id)
+
+    if tutor_id:
+        where.append("t.id=?")
+        params.append(tutor_id)
+
+    cur.execute(f"""
+        SELECT
+            g.id,
+            g.title,
+            g.drive_link,
+            g.notes,
+            s.id AS subject_id,
+            s.name AS subject_name,
+            s.grade,
+            GROUP_CONCAT(DISTINCT t.full_name) AS tutor_names
+        FROM manager_tutors mt
+        JOIN tutors t ON t.id=mt.tutor_id
+        JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        JOIN subjects s ON s.id=ts.subject_id
+        JOIN google_drive_links g ON g.subject_id=s.id
+        WHERE {' AND '.join(where)}
+        GROUP BY g.id, s.id
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.name, g.title
+    """, params)
+    rows = cur.fetchall()
+    conn.close()
+
+    grade_options = "<option value=''>All Grades</option>"
+    for gv in ("G8", "G9", "G10", "G11", "G12", "G13"):
+        selected = "selected" if grade == gv else ""
+        grade_options += f"<option value='{gv}' {selected}>{grade_label(gv)}</option>"
+
+    subject_options = "<option value=''>All My Subjects</option>" + google_drive_subject_options(subjects, subject_id)
+
+    tutor_options = "<option value=''>All My Tutors</option>"
+    for tutor in tutors:
+        selected = "selected" if tutor_id == str(tutor['id']) else ""
+        tutor_options += f"<option value='{tutor['id']}' {selected}>{escape(tutor['full_name'])}</option>"
+
+    cards = ""
+    for row in rows:
+        cards += f"""
+        <div class='card soft' style='border-left:5px solid #1b5e20'>
+            <div style='display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap'>
+                <div>
+                    <h3 style='margin:0'>{escape(grade_label(row['grade']))} — {escape(row['subject_name'])}</h3>
+                    <div class='mini muted'>{escape(row['title'] or 'Google Drive')}</div>
+                    <div class='mini muted'>Tutor(s): {escape(row['tutor_names'] or '—')}</div>
+                    {f"<div class='mini muted' style='margin-top:4px'>{escape(row['notes'])}</div>" if row['notes'] else ""}
+                </div>
+                <a class='btn success' href='{escape(row['drive_link'], quote=True)}' target='_blank' rel='noopener noreferrer'>Open Google Drive</a>
+            </div>
+        </div>
+        """
+
+    body = f"""
+    {manager_compact_ui_styles()}
+    {manager_nav()}
+
+    <section class='card'>
+        <h1>Google Drive Links</h1>
+        <p class='muted'>Drive links for subjects taught by tutors currently assigned to you.</p>
+
+        <div class='stats'>
+            {stat('My Tutors', len(tutors))}
+            {stat('My Subjects', len(subjects))}
+            {stat('Available Links', len(rows))}
+        </div>
+
+        <div class='card soft' style='margin-top:14px'>
+            <h2>Filter Links</h2>
+            <form method='get' class='toolbar'>
+                <input name='q' value='{escape(q)}' placeholder='Search subject, tutor, title or note'>
+                <select name='tutor_id'>{tutor_options}</select>
+                <select name='grade'>{grade_options}</select>
+                <select name='subject_id'>{subject_options}</select>
+                <button class='btn mini success'>Filter</button>
+                <a class='btn mini secondary' href='{url_for("manager_google_drive_links")}'>Clear</a>
+            </form>
+        </div>
+
+        <div class='grid' style='margin-top:14px'>
+            {cards or "<div class='empty'>No Google Drive links are available for your assigned tutors.</div>"}
+        </div>
+    </section>
+    """
+    return page("Tutor Manager Google Drive Links", body)
+
+
 @app.get('/admin/groups')
 @require_high_admin
 def admin_groups():
@@ -44748,6 +45683,10 @@ def manager_nav():
         
         <a class="btn mini" href="/manager/session-links">
             Session Links
+        </a>
+
+        <a class="btn mini" href="/manager/google-drive-links">
+            Google Drive Links
         </a>
 
         <a class="btn mini" href="/manager/whatsapp-groups">
