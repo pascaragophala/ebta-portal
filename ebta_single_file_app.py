@@ -2245,10 +2245,12 @@ def init_db():
             ("Geography","G12"),
 
             # Economics
+            ("Economics","G13"),
 
             # Business Studies
             ("Business Studies","G11"),
             ("Business Studies","G12"),
+            ("Business Studies","G13"),
 
             # Grades 8–9
             ("EMS","G8"), ("EMS","G9"),
@@ -2270,6 +2272,7 @@ def init_db():
             
             #Afrikaans
             ("Afrikaans FAL","G9"),
+            ("Afrikaans FAL","G8"),
         ]
 
         cur.executemany("INSERT OR IGNORE INTO subjects(name,grade) VALUES(?,?)", seed)
@@ -2303,10 +2306,12 @@ def init_db():
             ("Geography","G12"),
 
             # Economics
-
+            ("Economics","G13"),
+            
             # Business Studies
             ("Business Studies","G11"),
             ("Business Studies","G12"),
+            ("Business Studies","G13"),
 
             # Grades 8–9
             ("EMS","G8"), ("EMS","G9"),
@@ -2328,6 +2333,7 @@ def init_db():
             
             #Afrikaans
             ("Afrikaans FAL","G9"),
+            ("Afrikaans FAL","G8"),
         ]
 
         cur.executemany("INSERT OR IGNORE INTO subjects(name,grade) VALUES(?,?)", required_subjects)
@@ -13200,10 +13206,12 @@ def home():
         ("Geography","G12"),
 
         # Economics
+        ("Economics","G13"),
 
         # Business Studies
         ("Business Studies","G11"),
         ("Business Studies","G12"),
+        ("Business Studies","G13"),
 
         # Grades 8–9
         ("EMS","G8"), ("EMS","G9"),
@@ -13225,6 +13233,7 @@ def home():
         
         #Afrikaans
         ("Afrikaans FAL","G9"),
+        ("Afrikaans FAL","G8"),
     ]
 
     try:
