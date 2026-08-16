@@ -57683,6 +57683,57 @@ def download_profile_picture(sid):
 
 
 
+def get_tutor_application_subject_settings():
+    """
+    Returns the public Tutor Application subject scope.
+
+    ALL:
+        Applications are open for every EBTA subject.
+
+    SELECTED:
+        Applications are open only for the subject names selected
+        by High Admin under Tutor Application Settings.
+    """
+    mode = str(
+        get_setting(
+            "tutor_application_subject_mode",
+            "ALL"
+        ) or "ALL"
+    ).strip().upper()
+
+    if mode not in ("ALL", "SELECTED"):
+        mode = "ALL"
+
+    raw_subjects = get_setting(
+        "tutor_application_open_subjects",
+        "[]"
+    )
+
+    try:
+        selected_subjects = json.loads(
+            raw_subjects or "[]"
+        )
+    except Exception:
+        selected_subjects = []
+
+    if not isinstance(selected_subjects, list):
+        selected_subjects = []
+
+    cleaned = []
+    seen = set()
+
+    for subject_name in selected_subjects:
+        subject_name = str(
+            subject_name or ""
+        ).strip()
+
+        if subject_name and subject_name not in seen:
+            cleaned.append(subject_name)
+            seen.add(subject_name)
+
+    return mode, cleaned
+
+
 @app.get('/apply')
 def tutor_application_form():
     applications_open = get_setting("applications_open", "1")
@@ -57733,39 +57784,178 @@ def tutor_application_form():
         """
         return page("Applications Closed", body)
 
+    subject_mode, selected_open_subjects = (
+        get_tutor_application_subject_settings()
+    )
+
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT DISTINCT name
-        FROM subjects
-        ORDER BY name
-    """)
-    subject_rows = cur.fetchall()
+    if subject_mode == "SELECTED":
+        if not selected_open_subjects:
+            conn.close()
+
+            body = """
+            <section class="wrap">
+                <div class="card soft"
+                     style="
+                         max-width:900px;
+                         margin:30px auto;
+                         border-left:5px solid #ef4444;
+                         text-align:center;
+                         padding:44px 30px;
+                     ">
+
+                    <h1>
+                        Tutor Applications Closed
+                    </h1>
+
+                    <p class="muted">
+                        Tutor applications are not currently open
+                        for any subjects. Please check again later.
+                    </p>
+
+                    <a class="btn secondary" href="/">
+                        Back to Home
+                    </a>
+                </div>
+            </section>
+            """
+
+            return page(
+                "Tutor Applications Closed",
+                body
+            )
+
+        placeholders = ",".join(
+            "?"
+            for _ in selected_open_subjects
+        )
+
+        cur.execute(
+            f"""
+            SELECT DISTINCT name
+            FROM subjects
+            WHERE name IN ({placeholders})
+            ORDER BY name
+            """,
+            selected_open_subjects
+        )
+        subject_rows = cur.fetchall()
+
+        cur.execute(
+            f"""
+            SELECT DISTINCT grade
+            FROM subjects
+            WHERE name IN ({placeholders})
+            ORDER BY
+                CAST(
+                    REPLACE(
+                        grade,
+                        'G',
+                        ''
+                    ) AS INTEGER
+                )
+            """,
+            selected_open_subjects
+        )
+        grade_rows = cur.fetchall()
+
+    else:
+        cur.execute("""
+            SELECT DISTINCT name
+            FROM subjects
+            ORDER BY name
+        """)
+        subject_rows = cur.fetchall()
+
+        cur.execute("""
+            SELECT DISTINCT grade
+            FROM subjects
+            ORDER BY
+                CAST(
+                    REPLACE(
+                        grade,
+                        'G',
+                        ''
+                    ) AS INTEGER
+                )
+        """)
+        grade_rows = cur.fetchall()
 
     conn.close()
 
-    subjects = [r["name"] for r in subject_rows]
+    subjects = [
+        r["name"]
+        for r in subject_rows
+        if r["name"]
+    ]
+
+    available_grades = [
+        r["grade"]
+        for r in grade_rows
+        if r["grade"]
+    ]
 
     grade_options = "".join([
         f"""
         <label class="subject-item">
-            <input type="checkbox" name="grades" value="{g}">
-            <span>{grade_label(g)}</span>
+            <input type="checkbox"
+                   name="grades"
+                   value="{escape(g, quote=True)}">
+            <span>
+                {escape(grade_label(g))}
+            </span>
         </label>
         """
-        for g in ["G8", "G9", "G10", "G11", "G12", "G13"]
+        for g in available_grades
     ])
 
     subject_options = "".join([
         f"""
         <label class="subject-item">
-            <input type="checkbox" name="subjects" value="{escape(s)}">
-            <span>{escape(s)}</span>
+            <input type="checkbox"
+                   name="subjects"
+                   value="{escape(s, quote=True)}">
+            <span>
+                {escape(s)}
+            </span>
         </label>
         """
         for s in subjects
     ])
+
+    if subject_mode == "SELECTED":
+        subject_scope_notice = f"""
+        <div class="card soft"
+             style="
+                 margin-bottom:14px;
+                 border-left:5px solid #1b5e20;
+                 background:#f0fdf4;
+             ">
+            <strong>
+                Tutor applications are open for selected subjects only.
+            </strong>
+
+            <div class="mini muted"
+                 style="margin-top:6px">
+                Open subjects:
+                {escape(", ".join(subjects))}
+            </div>
+        </div>
+        """
+    else:
+        subject_scope_notice = """
+        <div class="card soft"
+             style="
+                 margin-bottom:14px;
+                 border-left:5px solid #1b5e20;
+             ">
+            <strong>
+                Tutor applications are open for all EBTA subjects.
+            </strong>
+        </div>
+        """
 
     body = f"""
     <section class="wrap small">
@@ -57776,6 +57966,8 @@ def tutor_application_form():
             <p class="muted">
                 Complete the form below to apply as an EBTA tutor. Please provide accurate details and upload both your CV and Matric Certificate.
             </p>
+
+            {subject_scope_notice}
 
             <form method="post"
                   action="/apply"
@@ -57859,6 +58051,12 @@ def tutor_application_form():
 
                 <div class="card soft">
                     <h2>Subjects You Can Tutor</h2>
+
+                    <p class="mini muted">
+                        Only subjects currently open for tutor
+                        applications are shown here.
+                    </p>
+
                     <div class="subject-grid">
                         {subject_options}
                     </div>
@@ -58037,6 +58235,37 @@ def tutor_application_submit():
     grades = request.form.getlist("grades")
     subjects = request.form.getlist("subjects")
     preferred_session_type = request.form.get("preferred_session_type", "").strip().upper()
+
+    # Enforce the High Admin recruitment subject scope server-side.
+    subject_mode, selected_open_subjects = (
+        get_tutor_application_subject_settings()
+    )
+
+    if subject_mode == "SELECTED":
+        allowed_subjects = set(
+            selected_open_subjects
+        )
+
+        requested_subjects = {
+            str(subject_name or "").strip()
+            for subject_name in subjects
+            if str(subject_name or "").strip()
+        }
+
+        if (
+            not allowed_subjects
+            or not requested_subjects
+            or not requested_subjects.issubset(
+                allowed_subjects
+            )
+        ):
+            return page(
+                "Subject Applications Closed",
+                card_msg(
+                    "One or more selected subjects are not currently open for tutor applications. "
+                    "Please return to the Tutor Application form and choose only the subjects that are currently open."
+                )
+            )
 
     reliable_internet = 1 if request.form.get("reliable_internet") == "1" else 0
     device_access = 1 if request.form.get("device_access") == "1" else 0
@@ -58778,7 +59007,81 @@ def admin_application_settings():
         "Applications are currently closed while we review the submissions already received. Please check this page again soon for the next EBTA tutor recruitment intake. Thank you for your interest in joining the EBTA team."
     )
 
+    subject_mode, selected_open_subjects = (
+        get_tutor_application_subject_settings()
+    )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT name
+        FROM subjects
+        ORDER BY name
+    """)
+
+    all_subject_rows = cur.fetchall()
+    conn.close()
+
+    selected_subjects_set = set(
+        selected_open_subjects
+    )
+
+    subject_checkboxes = ""
+
+    for row in all_subject_rows:
+        subject_name = row["name"] or ""
+
+        if not subject_name:
+            continue
+
+        checked = (
+            "checked"
+            if subject_name in selected_subjects_set
+            else ""
+        )
+
+        subject_checkboxes += f"""
+        <label class="subject-item"
+               style="
+                   display:flex;
+                   gap:8px;
+                   align-items:center;
+               ">
+            <input type="checkbox"
+                   class="tutor-open-subject-checkbox"
+                   name="open_subjects"
+                   value="{escape(subject_name, quote=True)}"
+                   {checked}
+                   style="
+                       width:18px;
+                       height:18px
+                   ">
+            <span>
+                {escape(subject_name)}
+            </span>
+        </label>
+        """
+
     open_checked = "checked" if applications_open == "1" else ""
+
+    all_mode_checked = (
+        "checked"
+        if subject_mode == "ALL"
+        else ""
+    )
+
+    selected_mode_checked = (
+        "checked"
+        if subject_mode == "SELECTED"
+        else ""
+    )
+
+    current_scope_text = (
+        f"Selected subjects only ({len(selected_open_subjects)} selected)"
+        if subject_mode == "SELECTED"
+        else "All subjects"
+    )
 
     body = f"""
     {admin_nav()}
@@ -58787,8 +59090,24 @@ def admin_application_settings():
         <h1>Tutor Application Settings</h1>
 
         <p class="muted">
-            Use this page to open or close public tutor applications.
+            Open or close tutor applications and choose exactly
+            which subjects EBTA is recruiting tutors for.
         </p>
+
+        <div class="card soft"
+             style="
+                 border-left:5px solid #1b5e20;
+                 margin-bottom:14px;
+             ">
+            <strong>
+                Current Subject Scope:
+            </strong>
+
+            <span class="chip"
+                  style="margin-left:6px">
+                {escape(current_scope_text)}
+            </span>
+        </div>
 
         <form method="post"
               action="/admin/application-settings"
@@ -58812,6 +59131,98 @@ def admin_application_settings():
                 </div>
             </div>
 
+            <div class="card soft">
+                <h2>
+                    Subjects Open for Tutor Applications
+                </h2>
+
+                <p class="muted">
+                    Open recruitment for every subject or only
+                    for one or more specific subjects.
+                </p>
+
+                <div class="grid"
+                     style="
+                         grid-template-columns:1fr 1fr;
+                         gap:10px;
+                     ">
+
+                    <label class="card soft"
+                           style="cursor:pointer">
+                        <input type="radio"
+                               name="subject_mode"
+                               value="ALL"
+                               {all_mode_checked}
+                               onchange="updateTutorApplicationSubjectMode()">
+
+                        <strong>
+                            All Subjects
+                        </strong>
+
+                        <div class="mini muted"
+                             style="margin-top:5px">
+                            Applicants can select any EBTA subject.
+                        </div>
+                    </label>
+
+                    <label class="card soft"
+                           style="cursor:pointer">
+                        <input type="radio"
+                               name="subject_mode"
+                               value="SELECTED"
+                               {selected_mode_checked}
+                               onchange="updateTutorApplicationSubjectMode()">
+
+                        <strong>
+                            Selected Subjects Only
+                        </strong>
+
+                        <div class="mini muted"
+                             style="margin-top:5px">
+                            Only the subjects ticked below will
+                            appear on the public tutor application.
+                        </div>
+                    </label>
+                </div>
+
+                <div id="selected-tutor-subjects-box"
+                     style="margin-top:12px">
+
+                    <div class="toolbar"
+                         style="margin-bottom:8px">
+                        <button type="button"
+                                class="btn mini secondary"
+                                onclick="setTutorApplicationSubjects(true)">
+                            Select All
+                        </button>
+
+                        <button type="button"
+                                class="btn mini secondary"
+                                onclick="setTutorApplicationSubjects(false)">
+                            Clear Selection
+                        </button>
+                    </div>
+
+                    <div class="subject-grid"
+                         style="
+                             grid-template-columns:
+                                 repeat(
+                                     auto-fit,
+                                     minmax(180px,1fr)
+                                 );
+                         ">
+                        {subject_checkboxes}
+                    </div>
+                </div>
+
+                <div class="mini muted"
+                     style="margin-top:10px">
+                    Example: selecting only Mathematics and
+                    Accounting means applicants can only apply
+                    for Mathematics and/or Accounting.
+                </div>
+            </div>
+
             <div>
                 <label>Closed Message</label>
                 <textarea name="closed_message"
@@ -58823,6 +59234,36 @@ def admin_application_settings():
             </button>
         </form>
     </section>
+
+    <script>
+        function updateTutorApplicationSubjectMode() {{
+            const selectedMode = document.querySelector(
+                'input[name="subject_mode"][value="SELECTED"]'
+            );
+
+            const box = document.getElementById(
+                'selected-tutor-subjects-box'
+            );
+
+            if (!selectedMode || !box) {{
+                return;
+            }}
+
+            box.style.opacity = selectedMode.checked
+                ? '1'
+                : '0.55';
+        }}
+
+        function setTutorApplicationSubjects(checked) {{
+            document.querySelectorAll(
+                '.tutor-open-subject-checkbox'
+            ).forEach(function(box) {{
+                box.checked = checked;
+            }});
+        }}
+
+        updateTutorApplicationSubjectMode();
+    </script>
     """
 
     return page("Application Settings", body)
@@ -58841,13 +59282,106 @@ def admin_application_settings_save():
     applications_open = "1" if request.form.get("applications_open") == "1" else "0"
     closed_message = request.form.get("closed_message", "").strip()
 
+    subject_mode = request.form.get(
+        "subject_mode",
+        "ALL"
+    ).strip().upper()
+
+    if subject_mode not in (
+        "ALL",
+        "SELECTED"
+    ):
+        subject_mode = "ALL"
+
+    requested_open_subjects = [
+        str(subject_name or "").strip()
+        for subject_name in request.form.getlist(
+            "open_subjects"
+        )
+        if str(subject_name or "").strip()
+    ]
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT name
+        FROM subjects
+        ORDER BY name
+    """)
+
+    valid_subject_names = {
+        row["name"]
+        for row in cur.fetchall()
+        if row["name"]
+    }
+
+    conn.close()
+
+    selected_open_subjects = sorted({
+        subject_name
+        for subject_name in requested_open_subjects
+        if subject_name in valid_subject_names
+    })
+
+    if (
+        subject_mode == "SELECTED"
+        and not selected_open_subjects
+    ):
+        return page(
+            "Select a Subject",
+            f"""
+            {admin_nav()}
+
+            <section class="card">
+                <h1>
+                    Select at Least One Subject
+                </h1>
+
+                <p class="muted">
+                    You selected
+                    <strong>Selected Subjects Only</strong>,
+                    but no subject was selected.
+                </p>
+
+                <a class="btn success"
+                   href="{url_for('admin_application_settings')}">
+                    Back to Tutor Application Settings
+                </a>
+            </section>
+            """
+        )
+
     if not closed_message:
         closed_message = "Applications are currently closed while we review the submissions already received. Please check this page again soon for the next EBTA tutor recruitment intake. Thank you for your interest in joining the EBTA team."
 
-    set_setting("applications_open", applications_open)
-    set_setting("applications_closed_message", closed_message)
+    set_setting(
+        "applications_open",
+        applications_open
+    )
 
-    return redirect(url_for("admin_application_settings"))
+    set_setting(
+        "applications_closed_message",
+        closed_message
+    )
+
+    set_setting(
+        "tutor_application_subject_mode",
+        subject_mode
+    )
+
+    set_setting(
+        "tutor_application_open_subjects",
+        json.dumps(
+            selected_open_subjects
+        )
+    )
+
+    return redirect(
+        url_for(
+            "admin_application_settings"
+        )
+    )
 
 
 @app.get('/admin/application/<int:app_id>/view/<kind>')
