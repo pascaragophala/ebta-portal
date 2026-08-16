@@ -471,6 +471,206 @@ def session_keep_alive():
 
     return {"ok": True}
 
+
+
+PORTAL_PRESENCE_TOUCH_INTERVAL_SECONDS = 90
+PORTAL_PRESENCE_ACTIVE_SECONDS = 5 * 60
+PORTAL_PRESENCE_RECENT_SECONDS = 30 * 60
+
+PORTAL_PRESENCE_ROLE_LABELS = {
+    "student": "Student",
+    "tutor": "Tutor",
+    "high_admin": "High Admin",
+    "admin": "Admin",
+    "manager": "Tutor Manager",
+    "aqm": "Academic Quality Manager",
+    "treasurer": "Treasurer",
+    "secretary": "Secretary",
+    "social_media": "Social Media Manager",
+    "duty_admin": "Duty Admin",
+    "admission": "Admission Coordinator",
+    "one_on_one_manager": "One-on-One Manager",
+    "hr": "Human Resources",
+    "acc": "Academic Content Coordinator",
+    "coo": "COO",
+    "cao": "CAO",
+    "ceo": "CEO",
+    "school_manager": "School Management",
+}
+
+
+def portal_presence_identity():
+    role = get_logged_in_portal_role()
+
+    if not role:
+        return None
+
+    if role == "admin":
+        username = str(session.get("admin_username") or "").strip()
+
+        if not username:
+            return None
+
+        presence_role = (
+            "high_admin"
+            if session.get("admin_role") == "HIGH"
+            else "admin"
+        )
+
+        return presence_role, username, username
+
+    field_map = {
+        "student": ("student_id", "student_name"),
+        "tutor": ("tutor_id", "tutor_name"),
+        "manager": ("manager_id", "manager_name"),
+        "aqm": ("aqm_id", "aqm_name"),
+        "treasurer": ("treasurer_id", "treasurer_name"),
+        "secretary": ("secretary_id", "secretary_name"),
+        "social_media": (
+            "social_media_manager_id",
+            "social_media_manager_name"
+        ),
+        "duty_admin": ("duty_admin_id", "duty_admin_name"),
+        "admission": (
+            "admission_coordinator_id",
+            "admission_coordinator_name"
+        ),
+        "one_on_one_manager": (
+            "one_on_one_manager_id",
+            "one_on_one_manager_name"
+        ),
+        "hr": ("hr_id", "hr_name"),
+        "acc": ("acc_id", "acc_name"),
+        "coo": ("coo_id", "coo_name"),
+        "cao": ("cao_id", "cao_name"),
+        "ceo": ("ceo_id", "ceo_name"),
+        "school_manager": (
+            "school_manager_id",
+            "school_manager_name"
+        ),
+    }
+
+    fields = field_map.get(role)
+
+    if not fields:
+        return None
+
+    id_field, name_field = fields
+
+    user_id = session.get(id_field)
+
+    if user_id in (None, ""):
+        return None
+
+    display_name = str(session.get(name_field) or "").strip()
+
+    if not display_name:
+        display_name = (
+            PORTAL_PRESENCE_ROLE_LABELS.get(
+                role,
+                role.replace("_", " ").title()
+            )
+            + " "
+            + str(user_id)
+        )
+
+    return role, str(user_id), display_name
+
+
+@app.before_request
+def record_portal_presence():
+    if request.method not in ("GET", "POST"):
+        return None
+
+    path = request.path or ""
+
+    # Existing background requests are deliberately excluded.
+    if (
+        path.startswith("/static/")
+        or path.startswith("/uploads/")
+        or path.startswith("/profile-picture/")
+        or path.startswith("/tutor-profile-picture/")
+        or path in (
+            "/session/keep-alive",
+            "/student/activity/ping",
+            "/tutor/activity/ping",
+        )
+    ):
+        return None
+
+    identity = portal_presence_identity()
+
+    if not identity:
+        return None
+
+    role, user_key, display_name = identity
+    identity_key = f"{role}:{user_key}"
+    now_ts = time.time()
+
+    try:
+        previous_touch = float(
+            session.get("_portal_presence_touch_ts", 0) or 0
+        )
+    except Exception:
+        previous_touch = 0
+
+    previous_identity = str(
+        session.get("_portal_presence_identity", "") or ""
+    )
+
+    if (
+        previous_identity == identity_key
+        and now_ts - previous_touch
+        < PORTAL_PRESENCE_TOUCH_INTERVAL_SECONDS
+    ):
+        return None
+
+    conn = None
+
+    try:
+        # Presence is optional. Fail fast if SQLite is temporarily busy.
+        conn = sqlite3.connect(DB_PATH, timeout=0.05)
+
+        conn.execute("""
+            INSERT INTO portal_presence(
+                role,
+                user_key,
+                display_name,
+                last_seen_at
+            )
+            VALUES(?,?,?,?)
+            ON CONFLICT(role, user_key)
+            DO UPDATE SET
+                display_name=excluded.display_name,
+                last_seen_at=excluded.last_seen_at
+        """, (
+            role,
+            user_key,
+            display_name,
+            now_utc_iso()
+        ))
+
+        conn.commit()
+
+        session["_portal_presence_identity"] = identity_key
+        session["_portal_presence_touch_ts"] = now_ts
+
+    except Exception:
+        try:
+            if conn is not None:
+                conn.rollback()
+        except Exception:
+            pass
+
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+    return None
+
 # =============================================================
 
 
@@ -703,6 +903,22 @@ def init_db():
         key TEXT PRIMARY KEY,
         value TEXT
     );
+    """)
+
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS portal_presence(
+        role TEXT NOT NULL,
+        user_key TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        PRIMARY KEY(role, user_key)
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_portal_presence_last_seen
+        ON portal_presence(last_seen_at)
     """)
 
     cur.execute("""
@@ -28494,6 +28710,7 @@ def admin_nav():
                 "System & Exports",
                 [
                     ("Settings", "admin_settings", "/admin/settings"),
+                    ("Portal Activity", "admin_portal_activity", "/admin/portal-activity"),
                     ("SMS Dashboard", "admin_sms_dashboard", "/admin/sms-dashboard"),
                     ("Enrollment Reminders", "admin_enrollment_sms", "/admin/enrollment-sms"),
                     ("Processed SMS", "admin_process_sms", "/admin/process-sms"),
@@ -31584,6 +31801,399 @@ def admin_acc_toggle(acc_id):
 
     conn.close()
     return redirect(url_for("admin_acc_users"))
+
+
+@app.get('/admin/portal-activity')
+@require_high_admin
+def admin_portal_activity():
+
+    q = request.args.get("q", "").strip()
+    role_filter = request.args.get("role", "").strip()
+    status_filter = request.args.get("status", "").strip().upper()
+
+    if status_filter not in ("", "ACTIVE", "RECENT", "OFFLINE"):
+        status_filter = ""
+
+    try:
+        page_num = max(1, int(request.args.get("page", 1)))
+    except Exception:
+        page_num = 1
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            role,
+            user_key,
+            display_name,
+            last_seen_at
+        FROM portal_presence
+        ORDER BY last_seen_at DESC
+    """)
+
+    raw_rows = cur.fetchall()
+    conn.close()
+
+    try:
+        now_dt = datetime.datetime.now(
+            ZoneInfo("Africa/Johannesburg")
+        )
+    except Exception:
+        now_dt = datetime.datetime.now(
+            datetime.timezone(
+                datetime.timedelta(hours=2)
+            )
+        )
+
+    def parse_seen(value):
+        try:
+            dt = datetime.datetime.fromisoformat(
+                str(value).replace("Z", "+00:00")
+            )
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=now_dt.tzinfo)
+            return dt
+        except Exception:
+            return None
+
+    def get_status(age_seconds):
+        if age_seconds <= PORTAL_PRESENCE_ACTIVE_SECONDS:
+            return "ACTIVE"
+        if age_seconds <= PORTAL_PRESENCE_RECENT_SECONDS:
+            return "RECENT"
+        return "OFFLINE"
+
+    def age_label(age_seconds):
+        seconds = max(0, int(age_seconds))
+
+        if seconds < 60:
+            return "Just now"
+
+        minutes = seconds // 60
+
+        if minutes < 60:
+            return f"{minutes} min ago"
+
+        hours = minutes // 60
+
+        if hours < 24:
+            return f"{hours} hr ago"
+
+        days = hours // 24
+        return f"{days} day{'s' if days != 1 else ''} ago"
+
+    prepared = []
+    seen_roles = set()
+
+    for row in raw_rows:
+        role_key = str(row["role"] or "").strip()
+
+        if not role_key:
+            continue
+
+        seen_roles.add(role_key)
+
+        role_label = PORTAL_PRESENCE_ROLE_LABELS.get(
+            role_key,
+            role_key.replace("_", " ").title()
+        )
+
+        seen_dt = parse_seen(row["last_seen_at"])
+
+        if seen_dt:
+            try:
+                age_seconds = max(
+                    0,
+                    (
+                        now_dt
+                        - seen_dt.astimezone(now_dt.tzinfo)
+                    ).total_seconds()
+                )
+            except Exception:
+                age_seconds = PORTAL_PRESENCE_RECENT_SECONDS + 1
+        else:
+            age_seconds = PORTAL_PRESENCE_RECENT_SECONDS + 1
+
+        prepared.append({
+            "role": role_key,
+            "role_label": role_label,
+            "user_key": str(row["user_key"] or ""),
+            "display_name": str(row["display_name"] or ""),
+            "seen_dt": seen_dt,
+            "status": get_status(age_seconds),
+            "age": age_label(age_seconds),
+        })
+
+    q_lower = q.lower()
+
+    filtered = []
+
+    for item in prepared:
+        if role_filter and item["role"] != role_filter:
+            continue
+
+        if status_filter and item["status"] != status_filter:
+            continue
+
+        if q_lower:
+            haystack = " ".join([
+                item["display_name"],
+                item["role_label"],
+                item["user_key"],
+            ]).lower()
+
+            if q_lower not in haystack:
+                continue
+
+        filtered.append(item)
+
+    status_order = {
+        "ACTIVE": 0,
+        "RECENT": 1,
+        "OFFLINE": 2,
+    }
+
+    filtered.sort(
+        key=lambda item: (
+            status_order.get(item["status"], 9),
+            -(
+                item["seen_dt"].timestamp()
+                if item["seen_dt"]
+                else 0
+            )
+        )
+    )
+
+    active_count = sum(
+        1 for item in filtered
+        if item["status"] == "ACTIVE"
+    )
+
+    recent_count = sum(
+        1 for item in filtered
+        if item["status"] == "RECENT"
+    )
+
+    offline_count = sum(
+        1 for item in filtered
+        if item["status"] == "OFFLINE"
+    )
+
+    limit = 50
+    total = len(filtered)
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    if page_num > total_pages:
+        page_num = total_pages
+
+    offset = (page_num - 1) * limit
+    page_rows = filtered[offset:offset + limit]
+
+    role_options = '<option value="">All Roles</option>'
+
+    for role_key in sorted(
+        seen_roles,
+        key=lambda key: PORTAL_PRESENCE_ROLE_LABELS.get(key, key)
+    ):
+        label = PORTAL_PRESENCE_ROLE_LABELS.get(
+            role_key,
+            role_key.replace("_", " ").title()
+        )
+
+        selected = "selected" if role_filter == role_key else ""
+
+        role_options += (
+            f"<option value='{escape(role_key, quote=True)}' {selected}>"
+            f"{escape(label)}</option>"
+        )
+
+    status_options = '<option value="">All Statuses</option>'
+
+    for value, label in (
+        ("ACTIVE", "Active"),
+        ("RECENT", "Recent"),
+        ("OFFLINE", "Offline"),
+    ):
+        selected = "selected" if status_filter == value else ""
+
+        status_options += (
+            f"<option value='{value}' {selected}>{label}</option>"
+        )
+
+    rows = ""
+
+    for item in page_rows:
+        if item["status"] == "ACTIVE":
+            status_chip = "<span class='chip active'>Active</span>"
+        elif item["status"] == "RECENT":
+            status_chip = "<span class='chip pending'>Recent</span>"
+        else:
+            status_chip = "<span class='chip'>Offline</span>"
+
+        if item["seen_dt"]:
+            last_seen = (
+                item["seen_dt"]
+                .astimezone(now_dt.tzinfo)
+                .strftime("%d %b %Y, %H:%M")
+            )
+        else:
+            last_seen = "—"
+
+        user_ref = (
+            escape(item["user_key"])
+            if item["role"] in ("high_admin", "admin")
+            else "#" + escape(item["user_key"])
+        )
+
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(item['display_name'])}</strong>
+                <div class="mini muted">{user_ref}</div>
+            </td>
+
+            <td>{escape(item['role_label'])}</td>
+
+            <td>{status_chip}</td>
+
+            <td>
+                {escape(item['age'])}
+                <div class="mini muted">{escape(last_seen)}</div>
+            </td>
+        </tr>
+        """
+
+    if not rows:
+        rows = """
+        <tr>
+            <td colspan="4">
+                No activity records match the selected filters.
+            </td>
+        </tr>
+        """
+
+    def activity_url(target_page):
+        return url_for(
+            "admin_portal_activity",
+            q=q,
+            role=role_filter,
+            status=status_filter,
+            page=target_page
+        )
+
+    page_links = []
+
+    if page_num > 1:
+        page_links.append(
+            f"<a class='links' href='{escape(activity_url(1), quote=True)}'>"
+            f"« First</a>"
+        )
+        page_links.append(
+            f"<a class='links' href='{escape(activity_url(page_num - 1), quote=True)}'>"
+            f"‹ Prev</a>"
+        )
+
+    page_links.append(
+        f"<span class='chip'>Page {page_num} of {total_pages}</span>"
+    )
+
+    if page_num < total_pages:
+        page_links.append(
+            f"<a class='links' href='{escape(activity_url(page_num + 1), quote=True)}'>"
+            f"Next ›</a>"
+        )
+        page_links.append(
+            f"<a class='links' href='{escape(activity_url(total_pages), quote=True)}'>"
+            f"Last »</a>"
+        )
+
+    pagination = f"""
+    <div class="toolbar" style="margin-top:12px">
+        {''.join(page_links)}
+    </div>
+    """
+
+    refresh_url = activity_url(page_num)
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <div class="toolbar"
+             style="justify-content:space-between;align-items:center">
+
+            <h1 style="margin:0">Portal Activity</h1>
+
+            <a class="btn mini secondary"
+               href="{escape(refresh_url, quote=True)}">
+                Refresh
+            </a>
+        </div>
+
+        <div class="stats" style="margin-top:14px">
+            {stat('Active', str(active_count))}
+            {stat('Recent', str(recent_count))}
+            {stat('Offline', str(offline_count))}
+            {stat('Records', str(total))}
+        </div>
+
+        <form method="get"
+              class="toolbar"
+              style="align-items:end;margin-top:14px">
+
+            <div>
+                <label>Search</label>
+                <input name="q"
+                       value="{escape(q, quote=True)}"
+                       placeholder="Name or ID">
+            </div>
+
+            <div>
+                <label>Role</label>
+                <select name="role">{role_options}</select>
+            </div>
+
+            <div>
+                <label>Status</label>
+                <select name="status">{status_options}</select>
+            </div>
+
+            <button class="btn mini success">Filter</button>
+
+            <a class="btn mini secondary"
+               href="{url_for('admin_portal_activity')}">
+                Clear
+            </a>
+        </form>
+
+        <div class="mini muted" style="margin:10px 0">
+            Showing {len(page_rows)} of {total}
+        </div>
+
+        {pagination}
+
+        <div class="scroll-x">
+            <table style="min-width:720px">
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Last Seen</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination}
+    </section>
+    """
+
+    return page("Portal Activity", body)
 
 
 @app.get('/admin')
