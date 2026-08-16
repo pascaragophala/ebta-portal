@@ -59597,9 +59597,25 @@ def admin_management_applications():
         selected = "selected" if status_filter == st else ""
         status_options += f"<option value='{st}' {selected}>{st}</option>"
 
+    # Keep the exact filtered/paginated list location so that
+    # View -> Back returns the user to the same results.
+    list_return_to = url_for(
+        "admin_management_applications",
+        q=q,
+        role=role_filter,
+        status=status_filter,
+        page=page_num
+    )
+
     rows = ""
 
     for a in applications:
+        detail_url = url_for(
+            "admin_management_application_detail",
+            app_id=a["id"],
+            return_to=list_return_to
+        )
+
         rows += f"""
         <tr>
             <td>
@@ -59616,7 +59632,8 @@ def admin_management_applications():
             <td><span class="chip">{escape(a['status'])}</span></td>
             <td>{a['created_at'][:16].replace('T',' ')}</td>
             <td style="white-space:nowrap">
-                <a class="btn mini" href="/admin/management-application/{a['id']}">
+                <a class="btn mini"
+                   href="{escape(detail_url, quote=True)}">
                     View
                 </a>
 
@@ -59625,6 +59642,11 @@ def admin_management_applications():
                       action="/admin/management-application/{a['id']}/delete"
                       onsubmit="return confirm('Delete this management application? This will also delete uploaded files.');"
                       style="display:inline">
+
+                    <input type="hidden"
+                           name="return_to"
+                           value="{escape(list_return_to, quote=True)}">
+
                     <button class="btn mini danger">
                         Delete
                     </button>
@@ -59634,19 +59656,36 @@ def admin_management_applications():
         </tr>
         """
 
-    query_base = f"q={escape(q)}&role={escape(role_filter)}&status={escape(status_filter)}"
+    def management_list_page_url(target_page):
+        return url_for(
+            "admin_management_applications",
+            q=q,
+            role=role_filter,
+            status=status_filter,
+            page=target_page
+        )
 
     page_links = []
 
     if page_num > 1:
-        page_links.append(f"<a class='links' href='/admin/management-applications?{query_base}&page=1'>« First</a>")
-        page_links.append(f"<a class='links' href='/admin/management-applications?{query_base}&page={page_num-1}'>‹ Prev</a>")
+        page_links.append(
+            f"<a class='links' href='{escape(management_list_page_url(1), quote=True)}'>« First</a>"
+        )
+        page_links.append(
+            f"<a class='links' href='{escape(management_list_page_url(page_num - 1), quote=True)}'>‹ Prev</a>"
+        )
 
-    page_links.append(f"<span class='chip'>Page {page_num} of {total_pages}</span>")
+    page_links.append(
+        f"<span class='chip'>Page {page_num} of {total_pages}</span>"
+    )
 
     if page_num < total_pages:
-        page_links.append(f"<a class='links' href='/admin/management-applications?{query_base}&page={page_num+1}'>Next ›</a>")
-        page_links.append(f"<a class='links' href='/admin/management-applications?{query_base}&page={total_pages}'>Last »</a>")
+        page_links.append(
+            f"<a class='links' href='{escape(management_list_page_url(page_num + 1), quote=True)}'>Next ›</a>"
+        )
+        page_links.append(
+            f"<a class='links' href='{escape(management_list_page_url(total_pages), quote=True)}'>Last »</a>"
+        )
 
     pagination = f"""
     <div class="toolbar" style="margin-top:12px">
@@ -59733,6 +59772,18 @@ def admin_management_application_detail(app_id):
     r = require_recruitment_user()
     if r: return r
 
+    return_to = request.args.get("return_to", "").strip()
+
+    # Only allow returning to the Management Applications list.
+    # This prevents return_to from being used as an external redirect.
+    if not (
+        return_to == "/admin/management-applications"
+        or return_to.startswith("/admin/management-applications?")
+    ):
+        return_to = url_for("admin_management_applications")
+
+    back_href = escape(return_to, quote=True)
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -59790,8 +59841,9 @@ def admin_management_application_detail(app_id):
         </div>
 
         <div class="toolbar" style="margin-top:12px">
-            <a class="btn mini secondary" href="/admin/management-applications">
-                Back to Management Applications
+            <a class="btn mini secondary"
+               href="{back_href}">
+                ← Back to Previous Results
             </a>
 
             {cv_btn}
@@ -59802,6 +59854,11 @@ def admin_management_application_detail(app_id):
                   action="/admin/management-application/{a['id']}/delete"
                   onsubmit="return confirm('Are you sure you want to delete this entire management application? This will also delete the uploaded CV/certificate files.');"
                   style="display:inline">
+
+                <input type="hidden"
+                       name="return_to"
+                       value="{back_href}">
+
                 <button class="btn mini danger">
                     Delete Application
                 </button>
@@ -59859,7 +59916,13 @@ def admin_management_application_detail(app_id):
         <div class="card soft" style="margin-top:12px;border-left:5px solid #f59e0b">
             <h2>Application Review</h2>
 
-            <form method="post" action="/admin/management-application/{a['id']}/status" class="grid">
+            <form method="post"
+                  action="/admin/management-application/{a['id']}/status"
+                  class="grid">
+
+                <input type="hidden"
+                       name="return_to"
+                       value="{back_href}">
 
                 <div>
                     <label>Status</label>
@@ -59894,6 +59957,13 @@ def admin_management_application_update_status(app_id):
 
     status = request.form.get("status", "NEW").strip()
     admin_notes = request.form.get("admin_notes", "").strip()
+    return_to = request.form.get("return_to", "").strip()
+
+    if not (
+        return_to == "/admin/management-applications"
+        or return_to.startswith("/admin/management-applications?")
+    ):
+        return_to = url_for("admin_management_applications")
 
     allowed_statuses = ["NEW", "SHORTLISTED", "INTERVIEWED", "ACCEPTED", "REJECTED"]
 
@@ -59914,7 +59984,13 @@ def admin_management_application_update_status(app_id):
     conn.commit()
     conn.close()
 
-    return redirect(url_for("admin_management_application_detail", app_id=app_id))
+    return redirect(
+        url_for(
+            "admin_management_application_detail",
+            app_id=app_id,
+            return_to=return_to
+        )
+    )
     
  
 @app.get('/admin/management-application/<int:app_id>/view/<kind>')
@@ -59999,6 +60075,14 @@ def admin_management_application_delete(app_id):
     r = require_admin()
     if r: return r
 
+    return_to = request.form.get("return_to", "").strip()
+
+    if not (
+        return_to == "/admin/management-applications"
+        or return_to.startswith("/admin/management-applications?")
+    ):
+        return_to = url_for("admin_management_applications")
+
     if not is_high_admin():
         return page("Access Denied", card_msg("Only high admin can delete management applications."))
 
@@ -60015,7 +60099,7 @@ def admin_management_application_delete(app_id):
 
     if not a:
         conn.close()
-        return redirect(url_for("admin_management_applications"))
+        return redirect(return_to)
 
     for file_path in [a["cv_file_path"], a["certificate_file_path"]]:
         if file_path and os.path.exists(file_path):
@@ -60028,7 +60112,7 @@ def admin_management_application_delete(app_id):
     conn.commit()
     conn.close()
 
-    return redirect(url_for("admin_management_applications"))
+    return redirect(return_to)
     
 
 @app.get('/admin/treasurers')
