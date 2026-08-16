@@ -13605,6 +13605,13 @@ def home():
         'Enrollments are currently closed.'
     )
 
+    one_on_one_home_button_enabled = (
+        get_setting(
+            'one_on_one_home_button_enabled',
+            '1'
+        ) == '1'
+    )
+
     
     # Ensure key subjects exist for all offered grades (idempotent)
     required_subjects = [
@@ -14113,6 +14120,124 @@ def home():
         })();
     </script>
     """.replace("__EBTA_LOADER_LOGO__", escape(str(ebta_loader_logo_url or LOGO_URL), quote=True))
+
+
+    one_on_one_home_cta_html = ""
+
+    if one_on_one_home_button_enabled:
+        one_on_one_home_cta_html = f"""
+        <section class="one-on-one-home-cta">
+            <div class="one-on-one-home-cta-inner">
+                <div class="one-on-one-home-cta-copy">
+                    <div class="one-on-one-home-cta-kicker">
+                        ONE-ON-ONE TUTORING
+                    </div>
+
+                    <h2>Need individual tutoring support?</h2>
+                    <p>Submit a one-on-one tutoring request for a learner.</p>
+                </div>
+
+                <a class="one-on-one-home-cta-button"
+                   href="{url_for('one_on_one_request_form')}">
+                    Request One-on-One
+                    <span aria-hidden="true">→</span>
+                </a>
+            </div>
+        </section>
+
+        <style>
+            .one-on-one-home-cta {{
+                margin:18px 0;
+            }}
+
+            .one-on-one-home-cta-inner {{
+                display:flex;
+                align-items:center;
+                justify-content:space-between;
+                gap:22px;
+                padding:22px 24px;
+                border-radius:20px;
+                background:
+                    radial-gradient(
+                        circle at top right,
+                        rgba(250,204,21,.24),
+                        transparent 34%
+                    ),
+                    linear-gradient(
+                        135deg,
+                        #0f3d16 0%,
+                        #166534 52%,
+                        #1b5e20 100%
+                    );
+                color:#fff;
+                border:1px solid rgba(255,255,255,.18);
+                box-shadow:0 14px 34px rgba(15,61,22,.18);
+            }}
+
+            .one-on-one-home-cta-copy {{
+                min-width:0;
+            }}
+
+            .one-on-one-home-cta-kicker {{
+                margin-bottom:6px;
+                color:#fde047;
+                font-size:11px;
+                font-weight:900;
+                letter-spacing:.09em;
+            }}
+
+            .one-on-one-home-cta h2 {{
+                margin:0 0 6px;
+                color:#fff;
+                font-size:22px;
+                line-height:1.2;
+            }}
+
+            .one-on-one-home-cta p {{
+                margin:0;
+                color:rgba(255,255,255,.88);
+                font-size:13px;
+            }}
+
+            .one-on-one-home-cta-button {{
+                flex:0 0 auto;
+                display:inline-flex;
+                align-items:center;
+                justify-content:center;
+                gap:8px;
+                min-height:46px;
+                padding:11px 17px;
+                border-radius:13px;
+                background:#fff;
+                color:#14532d;
+                text-decoration:none;
+                font-weight:900;
+                box-shadow:0 8px 20px rgba(0,0,0,.14);
+                transition:transform .16s ease, box-shadow .16s ease;
+            }}
+
+            .one-on-one-home-cta-button:hover {{
+                transform:translateY(-1px);
+                box-shadow:0 11px 24px rgba(0,0,0,.18);
+            }}
+
+            @media(max-width:680px) {{
+                .one-on-one-home-cta-inner {{
+                    align-items:stretch;
+                    flex-direction:column;
+                    padding:19px;
+                }}
+
+                .one-on-one-home-cta h2 {{
+                    font-size:19px;
+                }}
+
+                .one-on-one-home-cta-button {{
+                    width:100%;
+                }}
+            }}
+        </style>
+        """
     
     
     if not enrollment_open:
@@ -14120,6 +14245,14 @@ def home():
         body = f"""
         {enrollment_loader_html}
         {enrollment_whatsapp_helper}
+
+        <div style="
+            width:min(980px, calc(100% - 32px));
+            margin:18px auto 0;
+        ">
+            {one_on_one_home_cta_html}
+        </div>
+
         <section style="
             min-height:70vh;
             display:flex;
@@ -14266,7 +14399,9 @@ def home():
     {enrollment_loader_html}
     {celebration_banner_html}
     {enrollment_whatsapp_helper}
+
     <section class='grid' style='margin-top:10px'>
+        {one_on_one_home_cta_html}
     <div class="card soft" style="margin-top:18px;">
 
         <h2 style="margin-bottom:8px;">Portal Help Videos</h2>
@@ -42028,6 +42163,15 @@ def admin_settings():
     enrollment_open = '1' if get_setting('enrollment_open', '1') == '1' else '0'
     enrollment_message = get_setting('enrollment_message', '')
 
+    one_on_one_home_button_enabled = (
+        '1'
+        if get_setting(
+            'one_on_one_home_button_enabled',
+            '1'
+        ) == '1'
+        else '0'
+    )
+
     student_live_access_mode = get_setting(
         'student_live_access_mode',
         'ACTIVE_ENROLLMENT_MONTHS'
@@ -42105,6 +42249,33 @@ def admin_settings():
         </form>
     </section>
     
+    <section class='card soft'
+             style="border-left:5px solid #1b5e20">
+        <h2>One-on-One Homepage Button</h2>
+
+        <form class='grid'
+              method='post'
+              action='{url_for("admin_set_one_on_one_home_button")}'>
+            <div>
+                <label>Enrollment homepage</label>
+
+                <select name='enabled'>
+                    <option value='1'
+                            {"selected" if one_on_one_home_button_enabled == "1" else ""}>
+                        Show
+                    </option>
+
+                    <option value='0'
+                            {"selected" if one_on_one_home_button_enabled == "0" else ""}>
+                        Hide
+                    </option>
+                </select>
+            </div>
+
+            <button class='btn success'>Save</button>
+        </form>
+    </section>
+
     <section class='card soft' style="border-left:5px solid #1b6f3b">
         <h2>Student Live Access</h2>
 
@@ -42225,6 +42396,27 @@ def admin_set_enrollment():
     return redirect(url_for('admin_settings'))
     
     
+@app.post('/admin/set-one-on-one-home-button')
+@require_high_admin
+def admin_set_one_on_one_home_button():
+    r = require_admin()
+    if r:
+        return r
+
+    enabled = (
+        '1'
+        if request.form.get('enabled', '0') == '1'
+        else '0'
+    )
+
+    set_setting(
+        'one_on_one_home_button_enabled',
+        enabled
+    )
+
+    return redirect(url_for('admin_settings'))
+
+
 @app.post('/admin/set-student-live-access')
 @require_high_admin
 def admin_set_student_live_access():
