@@ -534,6 +534,166 @@ def ensure_column(conn, table, column, ddl_tail):
     if column not in cols:
         cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_tail}")
 
+
+def migrate_existing_sessions_to_subject_templates(conn):
+    """Link legacy tutor-owned sessions to subject-owned templates."""
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, subject_id, tutor_id, day_of_week, start_time, end_time,
+               meet_link, meeting_id, meeting_passcode, active, is_visible,
+               session_template_id
+        FROM sessions
+        ORDER BY id
+    """)
+    rows = cur.fetchall()
+
+    for row in rows:
+        if row["session_template_id"]:
+            continue
+
+        meet_link = str(row["meet_link"] or "").strip()
+        meeting_id = str(row["meeting_id"] or "").strip()
+        meeting_passcode = str(row["meeting_passcode"] or "").strip()
+        active = int(row["active"] if row["active"] is not None else 1)
+        is_visible = int(row["is_visible"] if row["is_visible"] is not None else 1)
+
+        cur.execute("""
+            SELECT id
+            FROM subject_session_templates
+            WHERE subject_id=?
+              AND day_of_week=?
+              AND start_time=?
+              AND end_time=?
+              AND COALESCE(meet_link,'')=?
+              AND COALESCE(meeting_id,'')=?
+              AND COALESCE(meeting_passcode,'')=?
+              AND active=?
+              AND is_visible=?
+            ORDER BY id
+            LIMIT 1
+        """, (
+            row["subject_id"], row["day_of_week"], row["start_time"], row["end_time"],
+            meet_link, meeting_id, meeting_passcode, active, is_visible
+        ))
+        template = cur.fetchone()
+
+        if template:
+            template_id = template["id"]
+        else:
+            cur.execute("""
+                INSERT INTO subject_session_templates(
+                    subject_id, day_of_week, start_time, end_time,
+                    meet_link, meeting_id, meeting_passcode,
+                    active, is_visible, created_at, updated_at
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                row["subject_id"], row["day_of_week"], row["start_time"], row["end_time"],
+                meet_link or None, meeting_id or None, meeting_passcode or None,
+                active, is_visible, now_utc_iso(), now_utc_iso()
+            ))
+            template_id = cur.lastrowid
+
+        cur.execute("""
+            UPDATE sessions
+            SET session_template_id=?
+            WHERE id=?
+        """, (template_id, row["id"]))
+
+
+def sync_subject_session_templates(conn, subject_id=None, tutor_id=None, template_id=None):
+    """
+    Copy subject-owned schedule/link details to tutor runtime sessions.
+    This keeps attendance tutor-specific while session setup stays subject-specific.
+    """
+    cur = conn.cursor()
+    where = []
+    params = []
+
+    if subject_id is not None:
+        where.append("sst.subject_id=?")
+        params.append(int(subject_id))
+    if template_id is not None:
+        where.append("sst.id=?")
+        params.append(int(template_id))
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    cur.execute(f"""
+        SELECT sst.*
+        FROM subject_session_templates sst
+        {where_sql}
+        ORDER BY sst.subject_id, sst.day_of_week, sst.start_time, sst.id
+    """, params)
+    templates = cur.fetchall()
+
+    for template in templates:
+        # Propagate edits/show-hide changes to all existing runtime copies.
+        cur.execute("""
+            UPDATE sessions
+            SET subject_id=?,
+                day_of_week=?,
+                start_time=?,
+                end_time=?,
+                meet_link=?,
+                meeting_id=?,
+                meeting_passcode=?,
+                active=?,
+                is_visible=?
+            WHERE session_template_id=?
+        """, (
+            template["subject_id"], template["day_of_week"], template["start_time"],
+            template["end_time"], template["meet_link"], template["meeting_id"],
+            template["meeting_passcode"], template["active"], template["is_visible"],
+            template["id"]
+        ))
+
+        tutor_where = [
+            "ts.subject_id=?",
+            "COALESCE(t.is_active,1)=1",
+            "t.deleted_at IS NULL"
+        ]
+        tutor_params = [template["subject_id"]]
+
+        if tutor_id is not None:
+            tutor_where.append("t.id=?")
+            tutor_params.append(int(tutor_id))
+
+        cur.execute(f"""
+            SELECT DISTINCT t.id AS tutor_id
+            FROM tutor_subjects ts
+            JOIN tutors t ON t.id=ts.tutor_id
+            WHERE {" AND ".join(tutor_where)}
+            ORDER BY t.id
+        """, tutor_params)
+
+        for tutor in cur.fetchall():
+            cur.execute("""
+                SELECT id
+                FROM sessions
+                WHERE session_template_id=?
+                  AND tutor_id=?
+                ORDER BY id
+                LIMIT 1
+            """, (template["id"], tutor["tutor_id"]))
+            if cur.fetchone():
+                continue
+
+            cur.execute("""
+                INSERT INTO sessions(
+                    subject_id, tutor_id, day_of_week, start_time, end_time,
+                    meet_link, active, is_visible, meeting_id, meeting_passcode,
+                    session_template_id
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                template["subject_id"], tutor["tutor_id"], template["day_of_week"],
+                template["start_time"], template["end_time"], template["meet_link"],
+                template["active"], template["is_visible"], template["meeting_id"],
+                template["meeting_passcode"], template["id"]
+            ))
+
+
 def init_db():
     conn = get_db()
     cur = conn.cursor()
@@ -655,6 +815,32 @@ def init_db():
         FOREIGN KEY(subject_id) REFERENCES subjects(id),
         FOREIGN KEY(tutor_id) REFERENCES tutors(id)
     );
+    """)
+
+    # Subject-owned group session templates. High Admin captures a
+    # subject session once; tutor-specific runtime session rows are
+    # generated automatically so existing attendance tools still work.
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS subject_session_templates(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        subject_id INTEGER NOT NULL,
+        day_of_week INTEGER NOT NULL,
+        start_time TEXT NOT NULL,
+        end_time TEXT NOT NULL,
+        meet_link TEXT,
+        meeting_id TEXT,
+        meeting_passcode TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        is_visible INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_subject_session_templates_subject
+        ON subject_session_templates(subject_id)
     """)
 
     # ================= GOOGLE DRIVE LINKS =================
@@ -1931,6 +2117,7 @@ def init_db():
     ensure_column(conn, "students", "guardian_phone_type", "TEXT DEFAULT 'SA'")
     ensure_column(conn, "sessions", "meeting_id", "TEXT")
     ensure_column(conn, "sessions", "meeting_passcode", "TEXT")
+    ensure_column(conn, "sessions", "session_template_id", "INTEGER")
     ensure_column(conn, "one_on_one_bookings", "meeting_id", "TEXT")
     ensure_column(conn, "one_on_one_bookings", "meeting_passcode", "TEXT")
     ensure_column(conn, "followups", "issue_type", "TEXT")
@@ -1964,6 +2151,10 @@ def init_db():
     
     ensure_column(conn, "tutors", "is_active", "INTEGER NOT NULL DEFAULT 1")
     ensure_column(conn, "tutors", "deleted_at", "TEXT")
+
+    # One-time migration of existing sessions plus ongoing repair/sync.
+    migrate_existing_sessions_to_subject_templates(conn)
+    sync_subject_session_templates(conn)
 
     ensure_column(conn, "enrollments", "coupon_code", "TEXT")
     ensure_column(conn, "enrollments", "coupon_discount_amount", "REAL NOT NULL DEFAULT 0")
@@ -17821,7 +18012,7 @@ def student_home():
     sessions_html = "<div class='empty'>No session links have been added for these subjects yet.</div>"
 
     if student_live_access_allowed:
-        q=f"""SELECT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link,s.meeting_id,s.meeting_passcode
+        q=f"""SELECT DISTINCT s.subject_id, sub.name AS subject_name, sub.grade, s.day_of_week, s.start_time, s.end_time, s.meet_link,s.meeting_id,s.meeting_passcode
             FROM sessions s JOIN subjects sub ON sub.id=s.subject_id
             WHERE s.active=1 AND s.subject_id IN ({','.join('?'*len(active_sub_ids))})
             ORDER BY s.day_of_week, s.start_time"""
@@ -36613,23 +36804,36 @@ def admin_tutor_add_subject(tid:int):
     r = require_admin()
     if r:
         return r
+
     subject_id = request.form.get('subject_id','').strip()
     if not subject_id:
         return page("Error", card_msg("Select a subject."))
-    conn=get_db(); cur=conn.cursor()
+
+    conn = get_db()
+    cur = conn.cursor()
     try:
         delivery_mode = request.form.get("delivery_mode", "GROUP").strip().upper()
         if delivery_mode not in ("GROUP", "ONE_ON_ONE", "BOTH"):
             delivery_mode = "GROUP"
+
         cur.execute("""
             INSERT INTO tutor_subjects(tutor_id, subject_id, delivery_mode)
             VALUES(?,?,?)
             ON CONFLICT(tutor_id, subject_id)
             DO UPDATE SET delivery_mode=excluded.delivery_mode
         """, (tid, subject_id, delivery_mode))
+
+        # Session details now come automatically from the subject.
+        sync_subject_session_templates(
+            conn,
+            subject_id=int(subject_id),
+            tutor_id=tid
+        )
+
         conn.commit()
     finally:
         conn.close()
+
     return redirect(url_for('admin_tutors', assignment_saved='1'))
    
 
@@ -41490,203 +41694,216 @@ def admin_sessions():
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
+    sync_subject_session_templates(conn)
+
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
+    """)
     subjects = cur.fetchall()
 
     cur.execute("""
-    SELECT se.*, 
-           s.name AS subject_name, 
-           s.grade,
-           t.full_name AS tutor_name, 
-           t.phone AS tutor_phone
-    FROM sessions se
-    JOIN subjects s ON s.id = se.subject_id
-    JOIN tutors t ON t.id = se.tutor_id
-    ORDER BY
-        CAST(REPLACE(s.grade, 'G', '') AS INTEGER) ASC,
-        s.name ASC,
-        se.day_of_week ASC,
-        se.start_time ASC
+        SELECT
+            sst.id,
+            sst.subject_id,
+            sst.day_of_week,
+            sst.start_time,
+            sst.end_time,
+            sst.meet_link,
+            sst.meeting_id,
+            sst.meeting_passcode,
+            sst.active,
+            sst.is_visible,
+            s.name AS subject_name,
+            s.grade,
+            COUNT(DISTINCT CASE
+                WHEN COALESCE(t.is_active,1)=1 AND t.deleted_at IS NULL
+                THEN t.id END
+            ) AS linked_tutor_count,
+            GROUP_CONCAT(DISTINCT CASE
+                WHEN COALESCE(t.is_active,1)=1 AND t.deleted_at IS NULL
+                THEN t.full_name END
+            ) AS linked_tutor_names
+        FROM subject_session_templates sst
+        JOIN subjects s ON s.id=sst.subject_id
+        LEFT JOIN tutor_subjects ts ON ts.subject_id=sst.subject_id
+        LEFT JOIN tutors t ON t.id=ts.tutor_id
+        GROUP BY sst.id
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER),
+                 s.name, sst.day_of_week, sst.start_time, sst.id
     """)
-
     sessions_rows = cur.fetchall()
 
+    conn.commit()
     conn.close()
 
-    options = ''.join([
-        f"<option value='{s['id']}'>{s['grade']} — {s['name']}</option>"
+    subject_options = "".join(
+        f"<option value='{s['id']}'>{escape(grade_label(s['grade']))} — {escape(s['name'])}</option>"
         for s in subjects
-    ])
+    )
+    dow_options = "".join(
+        f"<option value='{i}'>{escape(day)}</option>"
+        for i, day in enumerate(DOW)
+    )
 
-    dow_opts = ''.join([
-        f"<option value='{i}'>{d}</option>"
-        for i, d in enumerate(DOW)
-    ])
+    rows = ""
+    for row in sessions_rows:
+        try:
+            day_name = DOW[int(row["day_of_week"])]
+        except Exception:
+            day_name = str(row["day_of_week"] or "—")
 
-    rows = ''.join([
-        f"""
+        tutor_count = int(row["linked_tutor_count"] or 0)
+        tutor_names = str(row["linked_tutor_names"] or "").strip()
+
+        if tutor_count:
+            tutors_html = f"""
+            <span class="chip active">
+                {tutor_count} tutor{'s' if tutor_count != 1 else ''} linked
+            </span>
+            <div class="mini muted" style="margin-top:5px;white-space:normal">
+                {escape(tutor_names)}
+            </div>
+            """
+        else:
+            tutors_html = """
+            <span class="chip pending">No tutor assigned yet</span>
+            <div class="mini muted" style="margin-top:5px;white-space:normal">
+                This session stays saved against the subject and will attach automatically when a tutor is assigned.
+            </div>
+            """
+
+        if row["meet_link"]:
+            link_html = f"""
+            <a class="btn mini success"
+               target="_blank"
+               rel="noopener noreferrer"
+               href="{escape(row['meet_link'], quote=True)}">
+                Open Session
+            </a>
+            """
+        else:
+            link_html = "<span class='chip pending'>No Link</span>"
+
+        details = ""
+        if row["meeting_id"] or row["meeting_passcode"]:
+            details = f"""
+            <div class="mini muted" style="margin-top:5px">
+                ID: {escape(row['meeting_id'] or '—')}<br>
+                Passcode: {escape(row['meeting_passcode'] or '—')}
+            </div>
+            """
+
+        shown = int(row["active"] or 0) == 1 and int(row["is_visible"] or 0) == 1
+
+        rows += f"""
         <tr>
-            <td>{grade_label(r['grade'])} — {r['subject_name']}</td>
-
             <td>
-                {r['tutor_name']}<br>
-                <span class='mini muted'>{r['tutor_phone']}</span>
+                <strong>{escape(grade_label(row['grade']))} — {escape(row['subject_name'])}</strong>
+                <div class="mini muted">Session details belong to this subject.</div>
             </td>
-
+            <td>{tutors_html}</td>
             <td>
-                {DOW[r['day_of_week']]}<br>
-                <span class='mini muted'>
-                    {r['start_time']} - {r['end_time']}
-                </span>
+                {escape(day_name)}<br>
+                <span class="mini muted">{escape(row['start_time'])} - {escape(row['end_time'])}</span>
             </td>
-
-            <!-- NEW TEST LINK COLUMN -->
+            <td>{link_html}{details}</td>
             <td>
-                {
-                    f"<a class='btn mini success' target='_blank' href='{r['meet_link']}'>Open</a>"
-                    if r['meet_link']
-                    else "<span class='muted mini'>No link</span>"
-                }
+                {"<span class='chip active'>Shown</span>" if shown else "<span class='chip lapsed'>Hidden</span>"}
             </td>
-
-            <td>
-                {
-                    '<span class="chip active">Shown</span>'
-                    if r['active'] == 1
-                    else '<span class="chip lapsed">Hidden</span>'
-                }
-            </td>
-
             <td style="white-space:nowrap">
-                <a class='links' href='{url_for('session_qr', id=r['id'])}'>QR</a>
-
+                <a class="links" href="{url_for('session_qr', id=row['id'])}">QR</a>
                 ·
-
-                <form method='post'
-                      action='{url_for('admin_session_toggle', sid=r['id'])}'
-                      style='display:inline'>
-
-                    <button class='btn mini secondary'>
-                        {'Hide' if r['active'] == 1 else 'Show'}
-                    </button>
-
+                <form method="post" action="{url_for('admin_session_toggle', sid=row['id'])}" style="display:inline">
+                    <button class="btn mini secondary">{"Hide" if shown else "Show"}</button>
                 </form>
-
                 ·
-                <a class="links"
-                   href="{url_for('admin_session_edit', sid=r['id'])}">
-                   Edit
-                </a>·
-
-                <form method='post'
-                      action='{url_for('admin_session_delete', sid=r['id'])}'
-                      style='display:inline'
-                      onsubmit='return confirm("Delete this session?")'>
-
-                    <button class='btn danger mini'>Delete</button>
-
+                <a class="links" href="{url_for('admin_session_edit', sid=row['id'])}">Edit</a>
+                ·
+                <form method="post"
+                      action="{url_for('admin_session_delete', sid=row['id'])}"
+                      style="display:inline"
+                      onsubmit="return confirm('Delete this subject session and its linked tutor runtime sessions?');">
+                    <button class="btn danger mini">Delete</button>
                 </form>
-                
-                
-
             </td>
-
         </tr>
         """
-        for r in sessions_rows
-    ]) or "<tr><td colspan='6'><div class='empty'>No sessions.</div></td></tr>"
 
+    if not rows:
+        rows = "<tr><td colspan='6'><div class='empty'>No subject sessions yet.</div></td></tr>"
 
     body = f"""
     {admin_nav()}
+    <section class="card">
+        <h1>Subject Session Links</h1>
 
-    <section class='card'>
-
-        <h1>Sessions</h1>
-
-        <form class='grid'
-              method='post'
-              action='{url_for('admin_sessions_post')}'>
-
-            <div style='display:grid;
-                        grid-template-columns:1fr 1fr 110px 110px 1fr auto;
-                        gap:10px'>
-
-                <select name='subject_id'>{options}</select>
-
-                <input name='tutor_name'
-                       placeholder='Tutor name'
-                       required />
-
-                <select name='dow'>{dow_opts}</select>
-
-                <input name='start'
-                       placeholder='Start HH:MM'
-                       required />
-
-                <input name='end'
-                       placeholder='End HH:MM'
-                       required />
-
-                <input name='tutor_phone'
-                       placeholder='Tutor phone'
-                       required />
-
-                <input name='meet'
-                       placeholder='Meet link (optional)' />
-                
-                <input name='meeting_id'
-                       placeholder='Meeting ID (optional)' />
-
-                <input name='meeting_passcode'
-                       placeholder='Meeting Passcode (optional)' />
-
-                <button class='btn'>Add</button>
-
-            </div>
-
-        </form>
-
-
-        <div class="scroll-x">
-
-            <table>
-
-                <thead>
-
-                    <tr>
-
-                        <th>Subject</th>
-
-                        <th>Tutor</th>
-
-                        <th>When</th>
-
-                        <!-- NEW COLUMN -->
-                        <th>Test link</th>
-
-                        <th>Visibility</th>
-
-                        <th>Actions</th>
-
-                    </tr>
-
-                </thead>
-
-                <tbody>
-
-                    {rows}
-
-                </tbody>
-
-            </table>
-
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+            <strong>Create the session once for the subject.</strong>
+            <p class="muted" style="margin-bottom:0">
+                Session links no longer depend on a tutor. When a tutor is assigned to a subject,
+                the portal automatically gives that tutor the subject's day, time, meeting link,
+                Meeting ID and passcode. Replacing a tutor therefore does not require you to
+                capture the session again.
+            </p>
         </div>
 
+        <form method="post" action="{url_for('admin_sessions_post')}" class="grid" style="gap:10px">
+            <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+                <div>
+                    <label>Subject</label>
+                    <select name="subject_id" required>{subject_options}</select>
+                </div>
+                <div>
+                    <label>Day</label>
+                    <select name="dow" required>{dow_options}</select>
+                </div>
+                <div>
+                    <label>Start Time</label>
+                    <input type="time" name="start" required>
+                </div>
+                <div>
+                    <label>End Time</label>
+                    <input type="time" name="end" required>
+                </div>
+                <div>
+                    <label>Meeting Link</label>
+                    <input name="meet" placeholder="Teams / Meet link">
+                </div>
+                <div>
+                    <label>Meeting ID</label>
+                    <input name="meeting_id" placeholder="Meeting ID">
+                </div>
+                <div>
+                    <label>Meeting Passcode</label>
+                    <input name="meeting_passcode" placeholder="Meeting Passcode">
+                </div>
+            </div>
+
+            <div>
+                <button class="btn success">Add Subject Session</button>
+            </div>
+        </form>
+
+        <div class="scroll-x" style="margin-top:16px">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Subject</th>
+                        <th>Linked Tutor(s)</th>
+                        <th>When</th>
+                        <th>Session Link</th>
+                        <th>Visibility</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>{rows}</tbody>
+            </table>
+        </div>
     </section>
     """
-
-    return page("Sessions", body)
+    return page("Subject Session Links", body)
     
 
 @app.post('/admin/sessions/toggle/<int:sid>')
@@ -41698,15 +41915,33 @@ def admin_session_toggle(sid):
 
     conn = get_db()
     cur = conn.cursor()
+
     cur.execute("""
-        UPDATE sessions
-        SET active = CASE WHEN active=1 THEN 0 ELSE 1 END
+        SELECT id, active, is_visible
+        FROM subject_session_templates
         WHERE id=?
+        LIMIT 1
     """, (sid,))
+    row = cur.fetchone()
+
+    if not row:
+        conn.close()
+        return redirect(url_for("admin_sessions"))
+
+    currently_shown = int(row["active"] or 0) == 1 and int(row["is_visible"] or 0) == 1
+    new_value = 0 if currently_shown else 1
+
+    cur.execute("""
+        UPDATE subject_session_templates
+        SET active=?, is_visible=?, updated_at=?
+        WHERE id=?
+    """, (new_value, new_value, now_utc_iso(), sid))
+
+    sync_subject_session_templates(conn, template_id=sid)
+
     conn.commit()
     conn.close()
-
-    return redirect(url_for('admin_sessions'))
+    return redirect(url_for("admin_sessions"))
 
 
 @app.post('/admin/sessions')
@@ -41715,87 +41950,83 @@ def admin_sessions_post():
     r = require_admin()
     if r:
         return r
-    subject_id = request.form.get('subject_id')
-    tutor_name = request.form.get('tutor_name', '').strip()
-    tutor_phone = request.form.get('tutor_phone', '').strip()
-    dow = int(request.form.get('dow', '0'))
-    start = request.form.get('start', '')
-    end = request.form.get('end', '')
-    meet = request.form.get('meet', '') or None
-    meeting_id = request.form.get('meeting_id') or None
-    meeting_passcode = request.form.get('meeting_passcode') or None
+
+    subject_id_raw = request.form.get("subject_id", "").strip()
+    dow_raw = request.form.get("dow", "0").strip()
+    start = request.form.get("start", "").strip()
+    end = request.form.get("end", "").strip()
+    meet = request.form.get("meet", "").strip() or None
+    meeting_id = request.form.get("meeting_id", "").strip() or None
+    meeting_passcode = request.form.get("meeting_passcode", "").strip() or None
+
+    try:
+        subject_id = int(subject_id_raw)
+        dow = int(dow_raw)
+    except Exception:
+        return page("Invalid Session", card_msg("Please select a valid subject and day."))
+
+    if dow < 0 or dow > 6 or not start or not end:
+        return page("Invalid Session", card_msg("Please capture a valid day, start time and end time."))
+
+    if start >= end:
+        return page("Invalid Session Time", card_msg("The session end time must be later than the start time."))
 
     conn = get_db()
     cur = conn.cursor()
-    # First try find tutor by PHONE (most reliable unique field)
-    cur.execute("SELECT id FROM tutors WHERE phone=?", (tutor_phone,))
-    row = cur.fetchone()
 
-    if row:
-        tutor_id = row['id']
-
-        cur.execute("""
-            UPDATE tutors
-            SET full_name=?
-            WHERE id=?
-        """, (tutor_name, tutor_id))
-
-
-    else:
-        # If not found, create new tutor safely
-        pins = set()
-
-        cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
-        pins |= {r['pin'] for r in cur.fetchall()}
-
-        cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
-        pins |= {r['pin'] for r in cur.fetchall()}
-
-        pin = gen_pin(pins)
-        now = now_utc_iso()
-
-        cur.execute("""
-            INSERT INTO tutors(full_name, phone, pin, created_at)
-            VALUES (?, ?, ?, ?)
-        """, (tutor_name, tutor_phone, pin, now))
-
-        tutor_id = cur.lastrowid
+    cur.execute("SELECT id,name,grade FROM subjects WHERE id=? LIMIT 1", (subject_id,))
+    subject = cur.fetchone()
+    if not subject:
+        conn.close()
+        return page("Subject Not Found", card_msg("The selected subject could not be found."))
 
     cur.execute("""
-    INSERT INTO sessions(
-        subject_id,
-        tutor_id,
-        day_of_week,
-        start_time,
-        end_time,
-        meet_link,
-        meeting_id,
-        meeting_passcode
-    )
-    VALUES(?,?,?,?,?,?,?,?)
+        SELECT id
+        FROM subject_session_templates
+        WHERE subject_id=? AND day_of_week=? AND start_time=? AND end_time=?
+        ORDER BY id
+        LIMIT 1
+    """, (subject_id, dow, start, end))
+    duplicate = cur.fetchone()
+
+    if duplicate:
+        conn.close()
+        return page(
+            "Session Already Exists",
+            f"""
+            {admin_nav()}
+            <section class="card">
+                <h1>Session Already Exists</h1>
+                <p class="muted">
+                    {escape(grade_label(subject['grade']))} — {escape(subject['name'])}
+                    already has a session for {escape(DOW[dow])}, {escape(start)} - {escape(end)}.
+                </p>
+                <a class="btn success" href="{url_for('admin_session_edit', sid=duplicate['id'])}">
+                    Edit Existing Session
+                </a>
+                <a class="btn secondary" href="{url_for('admin_sessions')}">Back to Sessions</a>
+            </section>
+            """
+        )
+
+    cur.execute("""
+        INSERT INTO subject_session_templates(
+            subject_id, day_of_week, start_time, end_time,
+            meet_link, meeting_id, meeting_passcode,
+            active, is_visible, created_at, updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
     """, (
-        subject_id,
-        tutor_id,
-        dow,
-        start,
-        end,
-        meet,
-        meeting_id,
-        meeting_passcode
+        subject_id, dow, start, end, meet, meeting_id, meeting_passcode,
+        1, 1, now_utc_iso(), now_utc_iso()
     ))
-    # Ensure tutor-subject mapping exists for uploads and messaging
-    delivery_mode = request.form.get("delivery_mode", "GROUP").strip().upper()
-    if delivery_mode not in ("GROUP", "ONE_ON_ONE", "BOTH"):
-        delivery_mode = "GROUP"
-    cur.execute("""
-        INSERT INTO tutor_subjects(tutor_id, subject_id, delivery_mode)
-        VALUES(?,?,?)
-        ON CONFLICT(tutor_id, subject_id)
-        DO UPDATE SET delivery_mode=excluded.delivery_mode
-    """, (tutor_id, subject_id, delivery_mode))
+    template_id = cur.lastrowid
+
+    sync_subject_session_templates(conn, template_id=template_id)
+
     conn.commit()
     conn.close()
-    return redirect(url_for('admin_sessions'))
+    return redirect(url_for("admin_sessions"))
     
     
 
@@ -41808,68 +42039,63 @@ def admin_session_edit(sid):
 
     conn = get_db()
     cur = conn.cursor()
-
-    cur.execute("SELECT * FROM sessions WHERE id=?", (sid,))
+    cur.execute("""
+        SELECT sst.*, s.name AS subject_name, s.grade
+        FROM subject_session_templates sst
+        JOIN subjects s ON s.id=sst.subject_id
+        WHERE sst.id=?
+        LIMIT 1
+    """, (sid,))
     session_row = cur.fetchone()
     conn.close()
 
     if not session_row:
-        return redirect(url_for('admin_sessions'))
+        return redirect(url_for("admin_sessions"))
 
-    dow_options = ''.join([
-        f"<option value='{i}' {'selected' if i == session_row['day_of_week'] else ''}>{d}</option>"
-        for i, d in enumerate(DOW)
+    dow_options = "".join([
+        f"<option value='{i}' {'selected' if i == session_row['day_of_week'] else ''}>{escape(day)}</option>"
+        for i, day in enumerate(DOW)
     ])
 
     body = f"""
     {admin_nav()}
-    <section class='card'>
-        <h1>Edit Session</h1>
+    <section class="card">
+        <h1>Edit Subject Session</h1>
 
-        <form method="post"
-              action="{url_for('admin_session_update', sid=sid)}"
-              class="grid"
-              style="gap:10px">
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:12px">
+            <strong>{escape(grade_label(session_row['grade']))} — {escape(session_row['subject_name'])}</strong>
+            <p class="mini muted" style="margin-bottom:0">
+                Updating this once automatically updates the session for every tutor assigned to this subject.
+            </p>
+        </div>
 
+        <form method="post" action="{url_for('admin_session_update', sid=sid)}" class="grid" style="gap:10px">
             <label>Day</label>
-            <select name="day_of_week">
-                {dow_options}
-            </select>
+            <select name="day_of_week" required>{dow_options}</select>
 
             <label>Start Time</label>
-            <input name="start_time"
-                   value="{session_row['start_time']}"
-                   required>
+            <input type="time" name="start_time" value="{escape(session_row['start_time'])}" required>
 
             <label>End Time</label>
-            <input name="end_time"
-                   value="{session_row['end_time']}"
-                   required>
+            <input type="time" name="end_time" value="{escape(session_row['end_time'])}" required>
 
             <label>Meeting Link</label>
-            <input name="meet_link"
-                   value="{session_row['meet_link'] or ''}"
-                   placeholder="Meet link">
+            <input name="meet_link" value="{escape(session_row['meet_link'] or '', quote=True)}" placeholder="Teams / Meet link">
 
             <label>Meeting ID</label>
-            <input name="meeting_id"
-                   value="{session_row['meeting_id'] or ''}"
-                   placeholder="Meeting ID">
+            <input name="meeting_id" value="{escape(session_row['meeting_id'] or '', quote=True)}" placeholder="Meeting ID">
 
             <label>Meeting Passcode</label>
-            <input name="meeting_passcode"
-                   value="{session_row['meeting_passcode'] or ''}"
-                   placeholder="Meeting Passcode">
+            <input name="meeting_passcode" value="{escape(session_row['meeting_passcode'] or '', quote=True)}" placeholder="Meeting Passcode">
 
-            <button class="btn success">
-                Update
-            </button>
-
+            <div class="toolbar">
+                <button class="btn success">Update Subject Session</button>
+                <a class="btn secondary" href="{url_for('admin_sessions')}">Cancel</a>
+            </div>
         </form>
     </section>
     """
-
-    return page("Edit Session", body)
+    return page("Edit Subject Session", body)
     
 @app.post('/admin/sessions/update/<int:sid>')
 @require_high_admin
@@ -41878,32 +42104,55 @@ def admin_session_update(sid):
     if r:
         return r
 
+    try:
+        day_of_week = int(request.form.get("day_of_week", "").strip())
+    except Exception:
+        return page("Invalid Session", card_msg("Please select a valid session day."))
+
+    start_time = request.form.get("start_time", "").strip()
+    end_time = request.form.get("end_time", "").strip()
+
+    if day_of_week < 0 or day_of_week > 6 or not start_time or not end_time:
+        return page("Invalid Session", card_msg("Please capture a valid day and session time."))
+
+    if start_time >= end_time:
+        return page("Invalid Session Time", card_msg("The session end time must be later than the start time."))
+
     conn = get_db()
     cur = conn.cursor()
 
+    cur.execute("SELECT id FROM subject_session_templates WHERE id=? LIMIT 1", (sid,))
+    if not cur.fetchone():
+        conn.close()
+        return redirect(url_for("admin_sessions"))
+
     cur.execute("""
-        UPDATE sessions
+        UPDATE subject_session_templates
         SET day_of_week=?,
             start_time=?,
             end_time=?,
             meet_link=?,
             meeting_id=?,
-            meeting_passcode=?
+            meeting_passcode=?,
+            updated_at=?
         WHERE id=?
     """, (
-        request.form.get("day_of_week"),
-        request.form.get("start_time"),
-        request.form.get("end_time"),
-        request.form.get("meet_link"),
-        request.form.get("meeting_id"),
-        request.form.get("meeting_passcode"),
+        day_of_week,
+        start_time,
+        end_time,
+        request.form.get("meet_link", "").strip() or None,
+        request.form.get("meeting_id", "").strip() or None,
+        request.form.get("meeting_passcode", "").strip() or None,
+        now_utc_iso(),
         sid
     ))
 
+    # One edit updates every tutor linked to the subject.
+    sync_subject_session_templates(conn, template_id=sid)
+
     conn.commit()
     conn.close()
-
-    return redirect(url_for('admin_sessions'))
+    return redirect(url_for("admin_sessions"))
 
 
 # --- Session QR (uses PNG endpoint) ---
@@ -41914,30 +42163,91 @@ def session_qr(id: int):
     r = require_admin()
     if r:
         return r
+
     conn = get_db()
     cur = conn.cursor()
+
+    sync_subject_session_templates(conn, template_id=id)
+
     cur.execute("""
-    SELECT se.*, s.name AS subject_name, s.grade, t.full_name AS tutor_name
-    FROM sessions se JOIN subjects s ON s.id=se.subject_id
-    JOIN tutors t ON t.id=se.tutor_id WHERE se.id=?
+        SELECT sst.id, sst.subject_id, s.name AS subject_name, s.grade
+        FROM subject_session_templates sst
+        JOIN subjects s ON s.id=sst.subject_id
+        WHERE sst.id=?
+        LIMIT 1
     """, (id,))
-    se = cur.fetchone()
+    template = cur.fetchone()
+
+    if not template:
+        conn.close()
+        return page("Not found", card_msg("Subject session not found."))
+
+    cur.execute("""
+        SELECT
+            se.id AS session_id,
+            t.id AS tutor_id,
+            t.full_name AS tutor_name,
+            t.phone AS tutor_phone
+        FROM sessions se
+        JOIN tutors t ON t.id=se.tutor_id
+        JOIN tutor_subjects ts
+          ON ts.tutor_id=t.id
+         AND ts.subject_id=se.subject_id
+        WHERE se.session_template_id=?
+          AND COALESCE(t.is_active,1)=1
+          AND t.deleted_at IS NULL
+        ORDER BY t.full_name
+    """, (id,))
+    linked_sessions = cur.fetchall()
+
+    conn.commit()
     conn.close()
-    if not se:
-        return page("Not found", card_msg("Session not found."))
-    today = datetime.date.today().strftime('%Y-%m-%d')
-    payload = {'session_id': id, 'date': today}
-    code = b64url_encode(str(payload).encode('utf-8'))
-    attend_url = url_for('attend_get', _external=True) + '?' + urlencode({'code': code})
-    qr_src = url_for('qr_png') + '?' + urlencode({'text': attend_url})
+
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    cards = ""
+
+    for row in linked_sessions:
+        payload = {"session_id": row["session_id"], "date": today}
+        code = b64url_encode(str(payload).encode("utf-8"))
+        attend_url = url_for("attend_get", _external=True) + "?" + urlencode({"code": code})
+        qr_src = url_for("qr_png") + "?" + urlencode({"text": attend_url})
+
+        cards += f"""
+        <div class="card soft" style="text-align:center;margin-bottom:12px">
+            <h2>{escape(row['tutor_name'])}</h2>
+            <div class="mini muted">{escape(row['tutor_phone'] or '')}</div>
+            <img alt="QR code" src="{escape(qr_src, quote=True)}" width="256" height="256"
+                 style="margin:14px auto;display:block;border-radius:8px;border:1px solid var(--border);background:#fff">
+            <a class="links" target="_blank" href="{escape(attend_url, quote=True)}">
+                Open check-in link
+            </a>
+        </div>
+        """
+
+    if not cards:
+        cards = f"""
+        <div class="card soft" style="border-left:5px solid #f59e0b">
+            <strong>No tutor is currently linked to this subject.</strong>
+            <p class="muted" style="margin-bottom:0">
+                The subject session is already saved. Assign a tutor to
+                {escape(grade_label(template['grade']))} — {escape(template['subject_name'])}
+                and the tutor attendance QR will be created automatically.
+            </p>
+        </div>
+        """
 
     body = f"""
     {admin_nav()}
-    <section class='card' style='text-align:center'>
-        <h1>Scan to check in</h1>
-        <p class='muted'>{grade_label(se['grade'])} — {se['subject_name']} with {se['tutor_name']} ({today})</p>
-        <img alt='QR code' src='{qr_src}' width='256' height='256' style='margin:14px auto;display:block;border-radius:8px;border:1px solid var(--border);background:#fff' />
-        <div class='muted'><a class='links' target='_blank' href='{attend_url}'>Open check-in link</a></div>
+    <section class="card">
+        <h1>Session Attendance QR</h1>
+        <p class="muted">
+            {escape(grade_label(template['grade']))} — {escape(template['subject_name'])} ({escape(today)})
+        </p>
+        <div class="mini muted" style="margin-bottom:14px">
+            The session belongs to the subject. Attendance QR codes remain tutor-specific
+            so attendance can still be attributed correctly.
+        </div>
+        {cards}
     </section>
     """
     return page("Session QR", body)
@@ -41951,11 +42261,36 @@ def admin_session_delete(sid):
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("DELETE FROM sessions WHERE id=?", (sid,))
+
+    cur.execute("""
+        SELECT id
+        FROM sessions
+        WHERE session_template_id=?
+        ORDER BY id
+    """, (sid,))
+    runtime_ids = [row["id"] for row in cur.fetchall()]
+
+    if runtime_ids:
+        placeholders = ",".join("?" for _ in runtime_ids)
+
+        cur.execute(
+            f"DELETE FROM attendance WHERE session_id IN ({placeholders})",
+            runtime_ids
+        )
+        cur.execute(
+            f"DELETE FROM attendance_sessions WHERE session_id IN ({placeholders})",
+            runtime_ids
+        )
+        cur.execute(
+            f"DELETE FROM sessions WHERE id IN ({placeholders})",
+            runtime_ids
+        )
+
+    cur.execute("DELETE FROM subject_session_templates WHERE id=?", (sid,))
+
     conn.commit()
     conn.close()
-
-    return redirect(url_for('admin_sessions'))
+    return redirect(url_for("admin_sessions"))
 
 
 # --- PNG QR endpoint (reliable) ---
@@ -45748,6 +46083,10 @@ def manager_session_links():
 
     conn = get_db()
     cur = conn.cursor()
+
+    # Session links are subject-owned. Newly assigned tutors inherit
+    # the subject session automatically.
+    sync_subject_session_templates(conn)
 
     # Only tutors assigned to the logged-in Tutor Manager.
     cur.execute("""
