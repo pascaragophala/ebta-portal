@@ -41769,9 +41769,6 @@ def admin_sessions():
         else:
             tutors_html = """
             <span class="chip pending">No tutor assigned yet</span>
-            <div class="mini muted" style="margin-top:5px;white-space:normal">
-                This session stays saved against the subject and will attach automatically when a tutor is assigned.
-            </div>
             """
 
         if row["meet_link"]:
@@ -41801,7 +41798,6 @@ def admin_sessions():
         <tr>
             <td>
                 <strong>{escape(grade_label(row['grade']))} — {escape(row['subject_name'])}</strong>
-                <div class="mini muted">Session details belong to this subject.</div>
             </td>
             <td>{tutors_html}</td>
             <td>
@@ -41839,16 +41835,6 @@ def admin_sessions():
     <section class="card">
         <h1>Subject Session Links</h1>
 
-        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
-            <strong>Create the session once for the subject.</strong>
-            <p class="muted" style="margin-bottom:0">
-                Session links no longer depend on a tutor. When a tutor is assigned to a subject,
-                the portal automatically gives that tutor the subject's day, time, meeting link,
-                Meeting ID and passcode. Replacing a tutor therefore does not require you to
-                capture the session again.
-            </p>
-        </div>
-
         <form method="post" action="{url_for('admin_sessions_post')}" class="grid" style="gap:10px">
             <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
                 <div>
@@ -41882,7 +41868,7 @@ def admin_sessions():
             </div>
 
             <div>
-                <button class="btn success">Add Subject Session</button>
+                <button class="btn success">Add Session</button>
             </div>
         </form>
 
@@ -42060,13 +42046,9 @@ def admin_session_edit(sid):
     body = f"""
     {admin_nav()}
     <section class="card">
-        <h1>Edit Subject Session</h1>
-
-        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:12px">
-            <strong>{escape(grade_label(session_row['grade']))} — {escape(session_row['subject_name'])}</strong>
-            <p class="mini muted" style="margin-bottom:0">
-                Updating this once automatically updates the session for every tutor assigned to this subject.
-            </p>
+        <h1>Edit Session</h1>
+        <div class="muted" style="margin-bottom:14px">
+            {escape(grade_label(session_row['grade']))} — {escape(session_row['subject_name'])}
         </div>
 
         <form method="post" action="{url_for('admin_session_update', sid=sid)}" class="grid" style="gap:10px">
@@ -42089,7 +42071,7 @@ def admin_session_edit(sid):
             <input name="meeting_passcode" value="{escape(session_row['meeting_passcode'] or '', quote=True)}" placeholder="Meeting Passcode">
 
             <div class="toolbar">
-                <button class="btn success">Update Subject Session</button>
+                <button class="btn success">Update Session</button>
                 <a class="btn secondary" href="{url_for('admin_sessions')}">Cancel</a>
             </div>
         </form>
@@ -42225,14 +42207,9 @@ def session_qr(id: int):
         """
 
     if not cards:
-        cards = f"""
+        cards = """
         <div class="card soft" style="border-left:5px solid #f59e0b">
-            <strong>No tutor is currently linked to this subject.</strong>
-            <p class="muted" style="margin-bottom:0">
-                The subject session is already saved. Assign a tutor to
-                {escape(grade_label(template['grade']))} — {escape(template['subject_name'])}
-                and the tutor attendance QR will be created automatically.
-            </p>
+            <strong>No tutor assigned yet.</strong>
         </div>
         """
 
@@ -42243,10 +42220,6 @@ def session_qr(id: int):
         <p class="muted">
             {escape(grade_label(template['grade']))} — {escape(template['subject_name'])} ({escape(today)})
         </p>
-        <div class="mini muted" style="margin-bottom:14px">
-            The session belongs to the subject. Attendance QR codes remain tutor-specific
-            so attendance can still be attributed correctly.
-        </div>
         {cards}
     </section>
     """
@@ -46622,12 +46595,6 @@ def manager_session_links():
             vertical-align:top;
         }}
 
-        .tm-session-note {{
-            border-left:
-                5px solid #e3ad24;
-            margin-top:14px;
-        }}
-
         @media(max-width:800px) {{
             .tm-session-filters {{
                 grid-template-columns:
@@ -46805,13 +46772,6 @@ def manager_session_links():
                     </a>
                 </div>
             </form>
-        </div>
-
-        <div class="card soft tm-session-note">
-            <div class="mini muted">
-                Session information can be viewed here.
-                Session changes are managed by High Admin.
-            </div>
         </div>
 
         <div class="scroll-x tm-session-scroll"
