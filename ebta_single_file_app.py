@@ -102812,7 +102812,7 @@ def one_on_one_request_form():
                 </select>
             </div>
             <div>
-                <label>Proof of Payment Optional</label>
+                <label>Proof of Payment</label>
                 <input type="file" name="proof_of_payment" accept=".pdf,.png,.jpg,.jpeg">
             </div>
             <div style="grid-column:1/-1">
@@ -102820,7 +102820,7 @@ def one_on_one_request_form():
                 <textarea name="topic_or_problem_area" required placeholder="Example: Euclidean Geometry, Paper 2 revision, balancing equations"></textarea>
             </div>
             <div style="grid-column:1/-1">
-                <label>Current School Topic Optional</label>
+                <label>Current School Topic</label>
                 <textarea name="school_current_topic" placeholder="What is the learner currently doing at school?"></textarea>
             </div>
             <div style="grid-column:1/-1">
