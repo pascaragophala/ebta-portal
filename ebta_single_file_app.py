@@ -14186,16 +14186,19 @@ def home():
                 letter-spacing:.09em;
             }}
 
-            .one-on-one-home-cta h2 {{
+            .one-on-one-home-cta .one-on-one-home-cta-copy h2 {{
                 margin:0 0 6px;
-                color:#fff;
+                color:#ffffff !important;
+                -webkit-text-fill-color:#ffffff !important;
                 font-size:22px;
                 line-height:1.2;
             }}
 
-            .one-on-one-home-cta p {{
+            .one-on-one-home-cta .one-on-one-home-cta-copy p {{
                 margin:0;
-                color:rgba(255,255,255,.88);
+                color:#ffffff !important;
+                -webkit-text-fill-color:#ffffff !important;
+                opacity:.92;
                 font-size:13px;
             }}
 
@@ -14228,7 +14231,7 @@ def home():
                     padding:19px;
                 }}
 
-                .one-on-one-home-cta h2 {{
+                .one-on-one-home-cta .one-on-one-home-cta-copy h2 {{
                     font-size:19px;
                 }}
 
