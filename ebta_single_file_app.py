@@ -57734,6 +57734,29 @@ def get_tutor_application_subject_settings():
     return mode, cleaned
 
 
+def get_tutor_application_grade_settings():
+    """Return the High Admin grade scope for public Tutor Applications."""
+    mode = str(get_setting("tutor_application_grade_mode", "ALL") or "ALL").strip().upper()
+    if mode not in ("ALL", "SELECTED"):
+        mode = "ALL"
+    raw_grades = get_setting("tutor_application_open_grades", "[]")
+    try:
+        selected_grades = json.loads(raw_grades or "[]")
+    except Exception:
+        selected_grades = []
+    if not isinstance(selected_grades, list):
+        selected_grades = []
+    valid_grades = {"G8", "G9", "G10", "G11", "G12", "G13"}
+    cleaned = []
+    seen = set()
+    for grade_value in selected_grades:
+        grade_value = str(grade_value or "").strip().upper()
+        if grade_value in valid_grades and grade_value not in seen:
+            cleaned.append(grade_value)
+            seen.add(grade_value)
+    return mode, cleaned
+
+
 @app.get('/apply')
 def tutor_application_form():
     applications_open = get_setting("applications_open", "1")
@@ -57784,105 +57807,38 @@ def tutor_application_form():
         """
         return page("Applications Closed", body)
 
-    subject_mode, selected_open_subjects = (
-        get_tutor_application_subject_settings()
-    )
+    subject_mode, selected_open_subjects = get_tutor_application_subject_settings()
+    grade_mode, selected_open_grades = get_tutor_application_grade_settings()
+
+    if subject_mode == "SELECTED" and not selected_open_subjects:
+        return page("Tutor Applications Closed", card_msg("Tutor applications are not currently open for any subjects."))
+
+    if grade_mode == "SELECTED" and not selected_open_grades:
+        return page("Tutor Applications Closed", card_msg("Tutor applications are not currently open for any grades."))
 
     conn = get_db()
     cur = conn.cursor()
+    scope_where = []
+    scope_params = []
 
     if subject_mode == "SELECTED":
-        if not selected_open_subjects:
-            conn.close()
+        subject_placeholders = ",".join("?" for _ in selected_open_subjects)
+        scope_where.append(f"name IN ({subject_placeholders})")
+        scope_params.extend(selected_open_subjects)
 
-            body = """
-            <section class="wrap">
-                <div class="card soft"
-                     style="
-                         max-width:900px;
-                         margin:30px auto;
-                         border-left:5px solid #ef4444;
-                         text-align:center;
-                         padding:44px 30px;
-                     ">
+    if grade_mode == "SELECTED":
+        grade_placeholders = ",".join("?" for _ in selected_open_grades)
+        scope_where.append(f"grade IN ({grade_placeholders})")
+        scope_params.extend(selected_open_grades)
 
-                    <h1>
-                        Tutor Applications Closed
-                    </h1>
+    scope_where_sql = "WHERE " + " AND ".join(scope_where) if scope_where else ""
 
-                    <p class="muted">
-                        Tutor applications are not currently open
-                        for any subjects. Please check again later.
-                    </p>
-
-                    <a class="btn secondary" href="/">
-                        Back to Home
-                    </a>
-                </div>
-            </section>
-            """
-
-            return page(
-                "Tutor Applications Closed",
-                body
-            )
-
-        placeholders = ",".join(
-            "?"
-            for _ in selected_open_subjects
-        )
-
-        cur.execute(
-            f"""
-            SELECT DISTINCT name
-            FROM subjects
-            WHERE name IN ({placeholders})
-            ORDER BY name
-            """,
-            selected_open_subjects
-        )
-        subject_rows = cur.fetchall()
-
-        cur.execute(
-            f"""
-            SELECT DISTINCT grade
-            FROM subjects
-            WHERE name IN ({placeholders})
-            ORDER BY
-                CAST(
-                    REPLACE(
-                        grade,
-                        'G',
-                        ''
-                    ) AS INTEGER
-                )
-            """,
-            selected_open_subjects
-        )
-        grade_rows = cur.fetchall()
-
-    else:
-        cur.execute("""
-            SELECT DISTINCT name
-            FROM subjects
-            ORDER BY name
-        """)
-        subject_rows = cur.fetchall()
-
-        cur.execute("""
-            SELECT DISTINCT grade
-            FROM subjects
-            ORDER BY
-                CAST(
-                    REPLACE(
-                        grade,
-                        'G',
-                        ''
-                    ) AS INTEGER
-                )
-        """)
-        grade_rows = cur.fetchall()
-
+    cur.execute(f"SELECT DISTINCT name FROM subjects {scope_where_sql} ORDER BY name", scope_params)
+    subject_rows = cur.fetchall()
+    cur.execute(f"SELECT DISTINCT grade FROM subjects {scope_where_sql} ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER)", scope_params)
+    grade_rows = cur.fetchall()
+    cur.execute(f"SELECT name, grade FROM subjects {scope_where_sql} ORDER BY name, CAST(REPLACE(grade,'G','') AS INTEGER)", scope_params)
+    subject_grade_rows = cur.fetchall()
     conn.close()
 
     subjects = [
@@ -57901,8 +57857,10 @@ def tutor_application_form():
         f"""
         <label class="subject-item">
             <input type="checkbox"
+                   class="tutor-application-grade-checkbox"
                    name="grades"
-                   value="{escape(g, quote=True)}">
+                   value="{escape(g, quote=True)}"
+                   onchange="filterTutorApplicationSubjectsByGrade()">
             <span>
                 {escape(grade_label(g))}
             </span>
@@ -57911,49 +57869,31 @@ def tutor_application_form():
         for g in available_grades
     ])
 
-    subject_options = "".join([
-        f"""
-        <label class="subject-item">
-            <input type="checkbox"
-                   name="subjects"
-                   value="{escape(s, quote=True)}">
-            <span>
-                {escape(s)}
-            </span>
-        </label>
-        """
-        for s in subjects
-    ])
+    subject_grade_map = {}
+    for row in subject_grade_rows:
+        if row["name"] and row["grade"]:
+            subject_grade_map.setdefault(row["name"], []).append(row["grade"])
 
-    if subject_mode == "SELECTED":
+    subject_options = "".join([f"""
+        <label class="subject-item" data-tutor-subject-item="1" data-grades="{escape(','.join(subject_grade_map.get(s, [])), quote=True)}">
+            <input type="checkbox" name="subjects" value="{escape(s, quote=True)}"><span>{escape(s)}</span>
+        </label>""" for s in subjects])
+
+    grade_scope_text = ", ".join(grade_label(g) for g in available_grades) if available_grades else "No grades"
+    subject_scope_text = ", ".join(subjects) if subjects else "No subjects"
+
+    if subject_mode == "SELECTED" or grade_mode == "SELECTED":
         subject_scope_notice = f"""
-        <div class="card soft"
-             style="
-                 margin-bottom:14px;
-                 border-left:5px solid #1b5e20;
-                 background:#f0fdf4;
-             ">
-            <strong>
-                Tutor applications are open for selected subjects only.
-            </strong>
-
-            <div class="mini muted"
-                 style="margin-top:6px">
-                Open subjects:
-                {escape(", ".join(subjects))}
-            </div>
+        <div class="card soft" style="margin-bottom:14px;border-left:5px solid #1b5e20;background:#f0fdf4;">
+            <strong>Tutor recruitment is currently limited.</strong>
+            <div class="mini muted" style="margin-top:7px"><strong>Open grades:</strong> {escape(grade_scope_text)}</div>
+            <div class="mini muted" style="margin-top:4px"><strong>Open subjects:</strong> {escape(subject_scope_text)}</div>
         </div>
         """
     else:
         subject_scope_notice = """
-        <div class="card soft"
-             style="
-                 margin-bottom:14px;
-                 border-left:5px solid #1b5e20;
-             ">
-            <strong>
-                Tutor applications are open for all EBTA subjects.
-            </strong>
+        <div class="card soft" style="margin-bottom:14px;border-left:5px solid #1b5e20;">
+            <strong>Tutor applications are open for all EBTA grades and subjects.</strong>
         </div>
         """
 
@@ -58163,6 +58103,20 @@ def tutor_application_form():
         </div>
 
     </section>
+
+    <script>
+        function filterTutorApplicationSubjectsByGrade() {{
+            const checkedGrades = Array.from(document.querySelectorAll('.tutor-application-grade-checkbox:checked')).map(box => box.value);
+            document.querySelectorAll('[data-tutor-subject-item="1"]').forEach(function(item) {{
+                const availableGrades = (item.getAttribute('data-grades') || '').split(',').filter(Boolean);
+                const checkbox = item.querySelector('input[name="subjects"]');
+                const allowed = checkedGrades.length === 0 || availableGrades.some(g => checkedGrades.includes(g));
+                item.style.display = allowed ? '' : 'none';
+                if (!allowed && checkbox) checkbox.checked = false;
+            }});
+        }}
+        filterTutorApplicationSubjectsByGrade();
+    </script>
     """
 
     return page("Tutor Application", body)
@@ -58236,36 +58190,31 @@ def tutor_application_submit():
     subjects = request.form.getlist("subjects")
     preferred_session_type = request.form.get("preferred_session_type", "").strip().upper()
 
-    # Enforce the High Admin recruitment subject scope server-side.
-    subject_mode, selected_open_subjects = (
-        get_tutor_application_subject_settings()
-    )
+    subject_mode, selected_open_subjects = get_tutor_application_subject_settings()
+    grade_mode, selected_open_grades = get_tutor_application_grade_settings()
+    requested_subjects = {str(s or "").strip() for s in subjects if str(s or "").strip()}
+    requested_grades = {str(g or "").strip().upper() for g in grades if str(g or "").strip()}
 
     if subject_mode == "SELECTED":
-        allowed_subjects = set(
-            selected_open_subjects
-        )
+        allowed_subjects = set(selected_open_subjects)
+        if not allowed_subjects or not requested_subjects or not requested_subjects.issubset(allowed_subjects):
+            return page("Subject Applications Closed", card_msg("One or more selected subjects are not currently open for tutor applications."))
 
-        requested_subjects = {
-            str(subject_name or "").strip()
-            for subject_name in subjects
-            if str(subject_name or "").strip()
-        }
+    if grade_mode == "SELECTED":
+        allowed_grades = {str(g).upper() for g in selected_open_grades}
+        if not allowed_grades or not requested_grades or not requested_grades.issubset(allowed_grades):
+            return page("Grade Applications Closed", card_msg("One or more selected grades are not currently open for tutor applications."))
 
-        if (
-            not allowed_subjects
-            or not requested_subjects
-            or not requested_subjects.issubset(
-                allowed_subjects
-            )
-        ):
-            return page(
-                "Subject Applications Closed",
-                card_msg(
-                    "One or more selected subjects are not currently open for tutor applications. "
-                    "Please return to the Tutor Application form and choose only the subjects that are currently open."
-                )
-            )
+    if requested_grades and requested_subjects:
+        conn = get_db()
+        cur = conn.cursor()
+        gp = ",".join("?" for _ in requested_grades)
+        sp = ",".join("?" for _ in requested_subjects)
+        cur.execute(f"SELECT DISTINCT name FROM subjects WHERE grade IN ({gp}) AND name IN ({sp})", [*sorted(requested_grades), *sorted(requested_subjects)])
+        matched_subjects = {row["name"] for row in cur.fetchall() if row["name"]}
+        conn.close()
+        if requested_subjects - matched_subjects:
+            return page("Invalid Grade and Subject Selection", card_msg("One or more selected subjects are not offered for the grade(s) you selected."))
 
     reliable_internet = 1 if request.form.get("reliable_internet") == "1" else 0
     device_access = 1 if request.form.get("device_access") == "1" else 0
@@ -59007,25 +58956,32 @@ def admin_application_settings():
         "Applications are currently closed while we review the submissions already received. Please check this page again soon for the next EBTA tutor recruitment intake. Thank you for your interest in joining the EBTA team."
     )
 
-    subject_mode, selected_open_subjects = (
-        get_tutor_application_subject_settings()
-    )
+    subject_mode, selected_open_subjects = get_tutor_application_subject_settings()
+    grade_mode, selected_open_grades = get_tutor_application_grade_settings()
 
     conn = get_db()
     cur = conn.cursor()
-
-    cur.execute("""
-        SELECT DISTINCT name
-        FROM subjects
-        ORDER BY name
-    """)
-
+    cur.execute("SELECT DISTINCT name FROM subjects ORDER BY name")
     all_subject_rows = cur.fetchall()
+    cur.execute("SELECT DISTINCT grade FROM subjects ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER)")
+    all_grade_rows = cur.fetchall()
     conn.close()
 
-    selected_subjects_set = set(
-        selected_open_subjects
-    )
+    selected_subjects_set = set(selected_open_subjects)
+    selected_grades_set = {str(g).upper() for g in selected_open_grades}
+
+    grade_checkboxes = ""
+    for row in all_grade_rows:
+        grade_value = str(row["grade"] or "").strip().upper()
+        if not grade_value:
+            continue
+        checked = "checked" if grade_value in selected_grades_set else ""
+        grade_checkboxes += f"""
+        <label class="subject-item" style="display:flex;gap:8px;align-items:center;">
+            <input type="checkbox" class="tutor-open-grade-checkbox" name="open_grades" value="{escape(grade_value, quote=True)}" {checked} style="width:18px;height:18px">
+            <span>{escape(grade_label(grade_value))}</span>
+        </label>
+        """
 
     subject_checkboxes = ""
 
@@ -59065,23 +59021,12 @@ def admin_application_settings():
 
     open_checked = "checked" if applications_open == "1" else ""
 
-    all_mode_checked = (
-        "checked"
-        if subject_mode == "ALL"
-        else ""
-    )
-
-    selected_mode_checked = (
-        "checked"
-        if subject_mode == "SELECTED"
-        else ""
-    )
-
-    current_scope_text = (
-        f"Selected subjects only ({len(selected_open_subjects)} selected)"
-        if subject_mode == "SELECTED"
-        else "All subjects"
-    )
+    all_mode_checked = "checked" if subject_mode == "ALL" else ""
+    selected_mode_checked = "checked" if subject_mode == "SELECTED" else ""
+    all_grade_mode_checked = "checked" if grade_mode == "ALL" else ""
+    selected_grade_mode_checked = "checked" if grade_mode == "SELECTED" else ""
+    current_subject_scope_text = f"Selected subjects ({len(selected_open_subjects)})" if subject_mode == "SELECTED" else "All subjects"
+    current_grade_scope_text = f"Selected grades ({len(selected_open_grades)})" if grade_mode == "SELECTED" else "All grades"
 
     body = f"""
     {admin_nav()}
@@ -59089,24 +59034,10 @@ def admin_application_settings():
     <section class="card">
         <h1>Tutor Application Settings</h1>
 
-        <p class="muted">
-            Open or close tutor applications and choose exactly
-            which subjects EBTA is recruiting tutors for.
-        </p>
-
-        <div class="card soft"
-             style="
-                 border-left:5px solid #1b5e20;
-                 margin-bottom:14px;
-             ">
-            <strong>
-                Current Subject Scope:
-            </strong>
-
-            <span class="chip"
-                  style="margin-left:6px">
-                {escape(current_scope_text)}
-            </span>
+        <p class="muted">Open or close tutor applications and choose exactly which grades and subjects EBTA is recruiting tutors for.</p>
+        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px;">
+            <strong>Current Recruitment Scope</strong>
+            <div class="toolbar" style="margin-top:8px;gap:6px"><span class="chip">{escape(current_grade_scope_text)}</span><span class="chip">{escape(current_subject_scope_text)}</span></div>
         </div>
 
         <form method="post"
@@ -59128,6 +59059,19 @@ def admin_application_settings():
 
                 <div class="mini muted" style="margin-top:8px">
                     If unticked, the public application form will show the closed message instead.
+                </div>
+            </div>
+
+            <div class="card soft">
+                <h2>Grades Open for Tutor Applications</h2>
+                <p class="muted">Open recruitment for every grade or only for one or more selected grades.</p>
+                <div class="grid" style="grid-template-columns:1fr 1fr;gap:10px">
+                    <label class="card soft" style="cursor:pointer"><input type="radio" name="grade_mode" value="ALL" {all_grade_mode_checked} onchange="updateTutorApplicationGradeMode()"><strong>All Grades</strong></label>
+                    <label class="card soft" style="cursor:pointer"><input type="radio" name="grade_mode" value="SELECTED" {selected_grade_mode_checked} onchange="updateTutorApplicationGradeMode()"><strong>Selected Grades Only</strong></label>
+                </div>
+                <div id="selected-tutor-grades-box" style="margin-top:12px">
+                    <div class="toolbar" style="margin-bottom:8px"><button type="button" class="btn mini secondary" onclick="setTutorApplicationGrades(true)">Select All</button><button type="button" class="btn mini secondary" onclick="setTutorApplicationGrades(false)">Clear Selection</button></div>
+                    <div class="subject-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));">{grade_checkboxes}</div>
                 </div>
             </div>
 
@@ -59236,6 +59180,14 @@ def admin_application_settings():
     </section>
 
     <script>
+        function updateTutorApplicationGradeMode() {{
+            const selectedMode = document.querySelector('input[name="grade_mode"][value="SELECTED"]');
+            const box = document.getElementById('selected-tutor-grades-box');
+            if (!selectedMode || !box) return;
+            box.style.opacity = selectedMode.checked ? '1' : '0.55';
+        }}
+        function setTutorApplicationGrades(checked) {{ document.querySelectorAll('.tutor-open-grade-checkbox').forEach(function(box) {{ box.checked = checked; }}); }}
+
         function updateTutorApplicationSubjectMode() {{
             const selectedMode = document.querySelector(
                 'input[name="subject_mode"][value="SELECTED"]'
@@ -59262,6 +59214,7 @@ def admin_application_settings():
             }});
         }}
 
+        updateTutorApplicationGradeMode();
         updateTutorApplicationSubjectMode();
     </script>
     """
@@ -59282,16 +59235,15 @@ def admin_application_settings_save():
     applications_open = "1" if request.form.get("applications_open") == "1" else "0"
     closed_message = request.form.get("closed_message", "").strip()
 
-    subject_mode = request.form.get(
-        "subject_mode",
-        "ALL"
-    ).strip().upper()
-
-    if subject_mode not in (
-        "ALL",
-        "SELECTED"
-    ):
+    subject_mode = request.form.get("subject_mode", "ALL").strip().upper()
+    if subject_mode not in ("ALL", "SELECTED"):
         subject_mode = "ALL"
+
+    grade_mode = request.form.get("grade_mode", "ALL").strip().upper()
+    if grade_mode not in ("ALL", "SELECTED"):
+        grade_mode = "ALL"
+
+    requested_open_grades = [str(g or "").strip().upper() for g in request.form.getlist("open_grades") if str(g or "").strip()]
 
     requested_open_subjects = [
         str(subject_name or "").strip()
@@ -59310,19 +59262,31 @@ def admin_application_settings_save():
         ORDER BY name
     """)
 
-    valid_subject_names = {
-        row["name"]
-        for row in cur.fetchall()
-        if row["name"]
-    }
-
+    valid_subject_names = {row["name"] for row in cur.fetchall() if row["name"]}
+    cur.execute("SELECT DISTINCT grade FROM subjects ORDER BY grade")
+    valid_grade_values = {str(row["grade"] or "").strip().upper() for row in cur.fetchall() if row["grade"]}
     conn.close()
+
+    selected_open_grades = sorted({g for g in requested_open_grades if g in valid_grade_values}, key=lambda g: int(g.replace("G", "")) if g.startswith("G") and g[1:].isdigit() else 999)
 
     selected_open_subjects = sorted({
         subject_name
         for subject_name in requested_open_subjects
         if subject_name in valid_subject_names
     })
+
+    if grade_mode == "SELECTED" and not selected_open_grades:
+        return page(
+            "Select a Grade",
+            f"""
+            {admin_nav()}
+            <section class="card">
+                <h1>Select at Least One Grade</h1>
+                <p class="muted">You selected <strong>Selected Grades Only</strong>, but no grade was selected.</p>
+                <a class="btn success" href="{url_for('admin_application_settings')}">Back to Tutor Application Settings</a>
+            </section>
+            """
+        )
 
     if (
         subject_mode == "SELECTED"
@@ -59364,6 +59328,9 @@ def admin_application_settings_save():
         "applications_closed_message",
         closed_message
     )
+
+    set_setting("tutor_application_grade_mode", grade_mode)
+    set_setting("tutor_application_open_grades", json.dumps(selected_open_grades))
 
     set_setting(
         "tutor_application_subject_mode",
