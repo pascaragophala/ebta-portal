@@ -2634,6 +2634,29 @@ def init_db():
         FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
     );
     """)
+
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS student_ebta_reviews(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id INTEGER NOT NULL,
+        month TEXT NOT NULL,
+        overall_rating INTEGER,
+        review TEXT,
+        suggestion TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        UNIQUE(student_id, month),
+        FOREIGN KEY(student_id)
+            REFERENCES students(id)
+            ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_student_ebta_reviews_month
+        ON student_ebta_reviews(month)
+    """)
     
     
     
@@ -6965,6 +6988,793 @@ def rating_window_label(current_month: str) -> str:
         end_date = datetime.date(y, m + 1, 5)
 
     return f"{start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')}"
+
+
+
+def leadership_reviews_ratings_data(month, search_text=""):
+    """
+    Combined monthly reviews/ratings used by High Admin, CAO and CEO.
+
+    Sources:
+    - Students -> class/subject ratings
+    - Students -> general EBTA reviews and improvement suggestions
+    - Tutors -> ratings of Tutor Managers
+    - Tutor Managers -> tutor ratings captured in the weekly tracker
+    """
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            lr.id,
+            lr.student_id,
+            st.full_name AS student_name,
+            st.grade AS student_grade,
+            sub.name AS subject_name,
+            sub.grade AS subject_grade,
+            lr.rating,
+            lr.comment,
+            lr.created_at,
+            COALESCE(
+                GROUP_CONCAT(
+                    DISTINCT t.full_name
+                ),
+                'Unassigned'
+            ) AS tutor_names
+        FROM lesson_ratings lr
+
+        JOIN students st
+          ON st.id=lr.student_id
+
+        JOIN subjects sub
+          ON sub.id=lr.subject_id
+
+        LEFT JOIN tutor_subjects ts
+          ON ts.subject_id=lr.subject_id
+
+        LEFT JOIN tutors t
+          ON t.id=ts.tutor_id
+         AND COALESCE(t.is_active,1)=1
+         AND t.deleted_at IS NULL
+
+        WHERE lr.month=?
+
+        GROUP BY lr.id
+
+        ORDER BY lr.created_at DESC
+    """, (
+        month,
+    ))
+
+    student_class_ratings = [
+        dict(row)
+        for row in cur.fetchall()
+    ]
+
+    cur.execute("""
+        SELECT
+            ser.id,
+            ser.student_id,
+            st.full_name AS student_name,
+            st.grade AS student_grade,
+            ser.overall_rating,
+            ser.review,
+            ser.suggestion,
+            ser.created_at,
+            ser.updated_at
+        FROM student_ebta_reviews ser
+
+        JOIN students st
+          ON st.id=ser.student_id
+
+        WHERE ser.month=?
+
+        ORDER BY
+            COALESCE(
+                ser.updated_at,
+                ser.created_at
+            ) DESC
+    """, (
+        month,
+    ))
+
+    student_ebta_reviews = [
+        dict(row)
+        for row in cur.fetchall()
+    ]
+
+    cur.execute("""
+        SELECT
+            tmr.id,
+            tmr.rating,
+            tmr.comment,
+            tmr.created_at,
+            tmr.updated_at,
+
+            t.id AS tutor_id,
+            t.full_name AS tutor_name,
+
+            tm.id AS manager_id,
+            tm.full_name AS manager_name
+
+        FROM tutor_manager_ratings tmr
+
+        JOIN tutors t
+          ON t.id=tmr.tutor_id
+
+        JOIN tutor_managers tm
+          ON tm.id=tmr.manager_id
+
+        WHERE tmr.month=?
+
+        ORDER BY
+            COALESCE(
+                tmr.updated_at,
+                tmr.created_at
+            ) DESC
+    """, (
+        month,
+    ))
+
+    tutor_to_manager_ratings = [
+        dict(row)
+        for row in cur.fetchall()
+    ]
+
+    cur.execute("""
+        SELECT
+            tw.id,
+            tw.session_date,
+            tw.subject,
+            tw.grade,
+            tw.manager_rating AS rating,
+            tw.manager_comments AS comment,
+            tw.created_at,
+
+            t.id AS tutor_id,
+            t.full_name AS tutor_name,
+
+            tm.id AS manager_id,
+            tm.full_name AS manager_name
+
+        FROM tutor_weekly_tracker tw
+
+        JOIN tutors t
+          ON t.id=tw.tutor_id
+
+        LEFT JOIN tutor_managers tm
+          ON tm.id=tw.manager_id
+
+        WHERE tw.manager_rating IS NOT NULL
+          AND TRIM(
+                CAST(
+                    tw.manager_rating
+                    AS TEXT
+                )
+              ) <> ''
+          AND COALESCE(
+                NULLIF(
+                    TRIM(
+                        tw.month
+                    ),
+                    ''
+                ),
+                substr(
+                    tw.session_date,
+                    1,
+                    7
+                )
+              )=?
+
+        ORDER BY
+            tw.session_date DESC,
+            tw.created_at DESC
+    """, (
+        month,
+    ))
+
+    manager_to_tutor_ratings = [
+        dict(row)
+        for row in cur.fetchall()
+    ]
+
+    conn.close()
+
+    q = str(
+        search_text
+        or ""
+    ).strip().lower()
+
+    if q:
+        def row_matches(row):
+            return q in " ".join(
+                str(value or "")
+                for value in row.values()
+            ).lower()
+
+        student_class_ratings = [
+            row
+            for row in student_class_ratings
+            if row_matches(
+                row
+            )
+        ]
+
+        student_ebta_reviews = [
+            row
+            for row in student_ebta_reviews
+            if row_matches(
+                row
+            )
+        ]
+
+        tutor_to_manager_ratings = [
+            row
+            for row in tutor_to_manager_ratings
+            if row_matches(
+                row
+            )
+        ]
+
+        manager_to_tutor_ratings = [
+            row
+            for row in manager_to_tutor_ratings
+            if row_matches(
+                row
+            )
+        ]
+
+    def average(rows, key="rating"):
+        values = []
+
+        for row in rows:
+            raw = row.get(
+                key
+            )
+
+            if raw in (
+                None,
+                ""
+            ):
+                continue
+
+            try:
+                values.append(
+                    float(
+                        raw
+                    )
+                )
+            except Exception:
+                continue
+
+        if not values:
+            return None
+
+        return round(
+            sum(values)
+            / len(values),
+            1
+        )
+
+    return {
+        "month": month,
+        "student_class_ratings": student_class_ratings,
+        "student_ebta_reviews": student_ebta_reviews,
+        "tutor_to_manager_ratings": tutor_to_manager_ratings,
+        "manager_to_tutor_ratings": manager_to_tutor_ratings,
+
+        "student_class_avg": average(
+            student_class_ratings
+        ),
+
+        "student_ebta_avg": average(
+            student_ebta_reviews,
+            "overall_rating"
+        ),
+
+        "tutor_manager_avg": average(
+            tutor_to_manager_ratings
+        ),
+
+        "manager_tutor_avg": average(
+            manager_to_tutor_ratings
+        ),
+    }
+
+
+def leadership_reviews_ratings_page(
+    nav_html,
+    endpoint_name,
+    month,
+    page_title="Reviews & Ratings"
+):
+    search_text = request.args.get(
+        "q",
+        ""
+    ).strip()
+
+    data = leadership_reviews_ratings_data(
+        month,
+        search_text
+    )
+
+    def rating_chip(value):
+        if value in (
+            None,
+            ""
+        ):
+            return (
+                "<span class='chip'>"
+                "Not rated"
+                "</span>"
+            )
+
+        try:
+            numeric = float(
+                value
+            )
+        except Exception:
+            return (
+                "<span class='chip'>"
+                + escape(
+                    str(value)
+                )
+                + "</span>"
+            )
+
+        if numeric >= 4:
+            cls = "active"
+        elif numeric >= 3:
+            cls = "pending"
+        else:
+            cls = "lapsed"
+
+        clean_value = (
+            str(
+                int(
+                    numeric
+                )
+            )
+            if numeric.is_integer()
+            else str(
+                round(
+                    numeric,
+                    1
+                )
+            )
+        )
+
+        return (
+            f"<span class='chip {cls}'>"
+            f"{clean_value}/5"
+            f"</span>"
+        )
+
+    def avg_label(value):
+        return (
+            f"{value}/5"
+            if value is not None
+            else "—"
+        )
+
+    student_rows = ""
+
+    for row in data[
+        "student_class_ratings"
+    ]:
+        student_rows += f"""
+        <tr>
+            <td>
+                <strong>
+                    {escape(row['student_name'] or '')}
+                </strong>
+
+                <div class="mini muted">
+                    {escape(grade_label(row['student_grade']))}
+                </div>
+            </td>
+
+            <td>
+                {escape(grade_label(row['subject_grade']))}
+                — {escape(row['subject_name'] or '')}
+
+                <div class="mini muted">
+                    Tutor(s):
+                    {escape(row['tutor_names'] or 'Unassigned')}
+                </div>
+            </td>
+
+            <td>
+                {rating_chip(row['rating'])}
+            </td>
+
+            <td>
+                {escape(row['comment'] or '—')}
+            </td>
+
+            <td>
+                {escape(
+                    str(
+                        row['created_at']
+                        or ''
+                    )[:16].replace(
+                        'T',
+                        ' '
+                    )
+                )}
+            </td>
+        </tr>
+        """
+
+    general_rows = ""
+
+    for row in data[
+        "student_ebta_reviews"
+    ]:
+        general_rows += f"""
+        <tr>
+            <td>
+                <strong>
+                    {escape(row['student_name'] or '')}
+                </strong>
+
+                <div class="mini muted">
+                    {escape(grade_label(row['student_grade']))}
+                </div>
+            </td>
+
+            <td>
+                {rating_chip(row['overall_rating'])}
+            </td>
+
+            <td>
+                {escape(row['review'] or '—')}
+            </td>
+
+            <td>
+                {escape(row['suggestion'] or '—')}
+            </td>
+
+            <td>
+                {escape(
+                    str(
+                        row['updated_at']
+                        or row['created_at']
+                        or ''
+                    )[:16].replace(
+                        'T',
+                        ' '
+                    )
+                )}
+            </td>
+        </tr>
+        """
+
+    tutor_manager_rows = ""
+
+    for row in data[
+        "tutor_to_manager_ratings"
+    ]:
+        tutor_manager_rows += f"""
+        <tr>
+            <td>
+                {escape(row['tutor_name'] or '')}
+            </td>
+
+            <td>
+                {escape(row['manager_name'] or '')}
+            </td>
+
+            <td>
+                {rating_chip(row['rating'])}
+            </td>
+
+            <td>
+                {escape(row['comment'] or '—')}
+            </td>
+
+            <td>
+                {escape(
+                    str(
+                        row['updated_at']
+                        or row['created_at']
+                        or ''
+                    )[:16].replace(
+                        'T',
+                        ' '
+                    )
+                )}
+            </td>
+        </tr>
+        """
+
+    manager_tutor_rows = ""
+
+    for row in data[
+        "manager_to_tutor_ratings"
+    ]:
+        subject_bits = []
+
+        if row.get(
+            "grade"
+        ):
+            subject_bits.append(
+                grade_label(
+                    row["grade"]
+                )
+            )
+
+        if row.get(
+            "subject"
+        ):
+            subject_bits.append(
+                str(
+                    row["subject"]
+                )
+            )
+
+        subject_label = (
+            " — ".join(
+                subject_bits
+            )
+            or "—"
+        )
+
+        manager_tutor_rows += f"""
+        <tr>
+            <td>
+                {escape(row['manager_name'] or 'Tutor Manager')}
+            </td>
+
+            <td>
+                <strong>
+                    {escape(row['tutor_name'] or '')}
+                </strong>
+
+                <div class="mini muted">
+                    {escape(subject_label)}
+                </div>
+            </td>
+
+            <td>
+                {rating_chip(row['rating'])}
+            </td>
+
+            <td>
+                {escape(row['comment'] or '—')}
+            </td>
+
+            <td>
+                {escape(row['session_date'] or '—')}
+            </td>
+        </tr>
+        """
+
+    empty_five = (
+        "<tr>"
+        "<td colspan='5'>"
+        "No records found for this month."
+        "</td>"
+        "</tr>"
+    )
+
+    body = f"""
+    {nav_html}
+
+    <section class="card">
+        <h1>{escape(page_title)}</h1>
+
+        <form method="get"
+              class="toolbar"
+              style="align-items:end">
+
+            <div>
+                <label>Month</label>
+
+                <input type="month"
+                       name="month"
+                       value="{escape(month)}">
+            </div>
+
+            <div style="min-width:240px">
+                <label>Search</label>
+
+                <input name="q"
+                       value="{escape(search_text, quote=True)}"
+                       placeholder="Name, subject, tutor, manager or comment">
+            </div>
+
+            <button class="btn mini success">
+                View
+            </button>
+
+            <a class="btn mini secondary"
+               href="{url_for(endpoint_name)}?month={escape(month, quote=True)}">
+                Clear Search
+            </a>
+        </form>
+
+        <div class="mini muted"
+             style="margin-top:8px">
+            Monthly rating window:
+            {escape(rating_window_label(month))}
+        </div>
+
+        <div class="stats"
+             style="margin-top:14px">
+            {stat(
+                "Student Class Ratings",
+                len(
+                    data["student_class_ratings"]
+                )
+            )}
+
+            {stat(
+                "Class Average",
+                avg_label(
+                    data["student_class_avg"]
+                )
+            )}
+
+            {stat(
+                "EBTA Reviews",
+                len(
+                    data["student_ebta_reviews"]
+                )
+            )}
+
+            {stat(
+                "EBTA Average",
+                avg_label(
+                    data["student_ebta_avg"]
+                )
+            )}
+
+            {stat(
+                "Tutor → Manager",
+                len(
+                    data["tutor_to_manager_ratings"]
+                )
+            )}
+
+            {stat(
+                "Manager → Tutor",
+                len(
+                    data["manager_to_tutor_ratings"]
+                )
+            )}
+        </div>
+
+        <details class="card soft"
+                 open
+                 style="
+                     margin-top:16px;
+                     border-left:5px solid #1b5e20;
+                 ">
+
+            <summary>
+                <strong>Student Class Ratings</strong>
+            </summary>
+
+            <div class="scroll-x"
+                 style="margin-top:12px">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Student</th>
+                            <th>Class</th>
+                            <th>Rating</th>
+                            <th>Comment</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {student_rows or empty_five}
+                    </tbody>
+                </table>
+            </div>
+        </details>
+
+        <details class="card soft"
+                 open
+                 style="
+                     margin-top:14px;
+                     border-left:5px solid #e3ad24;
+                 ">
+
+            <summary>
+                <strong>Student EBTA Reviews</strong>
+            </summary>
+
+            <div class="scroll-x"
+                 style="margin-top:12px">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Student</th>
+                            <th>Rating</th>
+                            <th>General Review</th>
+                            <th>Suggestion to Improve</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {general_rows or empty_five}
+                    </tbody>
+                </table>
+            </div>
+        </details>
+
+        <details class="card soft"
+                 open
+                 style="
+                     margin-top:14px;
+                     border-left:5px solid #7c3aed;
+                 ">
+
+            <summary>
+                <strong>Tutor Ratings of Tutor Managers</strong>
+            </summary>
+
+            <div class="scroll-x"
+                 style="margin-top:12px">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tutor</th>
+                            <th>Tutor Manager</th>
+                            <th>Rating</th>
+                            <th>Comment</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {tutor_manager_rows or empty_five}
+                    </tbody>
+                </table>
+            </div>
+        </details>
+
+        <details class="card soft"
+                 open
+                 style="
+                     margin-top:14px;
+                     border-left:5px solid #2563eb;
+                 ">
+
+            <summary>
+                <strong>Tutor Manager Ratings of Tutors</strong>
+            </summary>
+
+            <div class="scroll-x"
+                 style="margin-top:12px">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tutor Manager</th>
+                            <th>Tutor</th>
+                            <th>Rating</th>
+                            <th>Comment</th>
+                            <th>Session Date</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {manager_tutor_rows or empty_five}
+                    </tbody>
+                </table>
+            </div>
+        </details>
+    </section>
+    """
+
+    return page(
+        page_title,
+        body
+    )
         
 
 def enrollment_exists(conn, student_id, subject_id, month):
@@ -19142,7 +19952,46 @@ def student_home():
         cur2.execute("""SELECT subject_id, rating, comment FROM lesson_ratings
                     WHERE student_id=? AND month=?""", (sid, month))
         previous = {r["subject_id"]:(r["rating"], r["comment"]) for r in cur2.fetchall()}
+
+        cur2.execute("""
+            SELECT
+                overall_rating,
+                review,
+                suggestion
+            FROM student_ebta_reviews
+            WHERE student_id=?
+              AND month=?
+            LIMIT 1
+        """, (sid, month))
+        previous_ebta_review = cur2.fetchone()
+
         cur2.connection.close()
+
+        ebta_rating_value = (
+            previous_ebta_review["overall_rating"]
+            if previous_ebta_review
+            else None
+        )
+        ebta_review_value = (
+            previous_ebta_review["review"]
+            if previous_ebta_review
+            else ""
+        ) or ""
+        ebta_suggestion_value = (
+            previous_ebta_review["suggestion"]
+            if previous_ebta_review
+            else ""
+        ) or ""
+
+        ebta_rating_options = (
+            "<option value=''>Optional</option>"
+            + "".join([
+                f"<option value='{n}' "
+                f"{'selected' if ebta_rating_value == n else ''}>"
+                f"{n} / 5</option>"
+                for n in range(1, 6)
+            ])
+        )
 
         rows=[]
         for e in enrolls:
@@ -19165,20 +20014,91 @@ def student_home():
 
         rate_card = f"""
         <div class='card'>
-            <h2>Rate your classes for {month}</h2>
+            <h2>Ratings & Feedback for {pretty_month_label(month)}</h2>
+
             <p class='muted mini'>
-                This rating period is open from {rating_window_label(month)}.
+                Rating window: {rating_window_label(month)}.
                 1 ★ (poor) → 5 ★ (excellent).
             </p>
-            <form method='post' action='{url_for('student_submit_ratings')}'>
-            <input type="hidden" name="month" value="{escape(month)}">
-            <div class="scroll-x">
-                <table>
-                    <thead><tr><th>Subject</th><th>Rating</th><th>Comment</th></tr></thead>
-                    <tbody>{''.join(rows)}</tbody>
-                </table>
-            </div>
-            <div class='toolbar'><button class='btn'>Save ratings</button></div>
+
+            <form method='post'
+                  action='{url_for("student_submit_ratings")}'>
+
+                <input type="hidden"
+                       name="month"
+                       value="{escape(month)}">
+
+                <h3>Rate Your Classes</h3>
+
+                <div class="scroll-x">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Subject</th>
+                                <th>Rating</th>
+                                <th>Comment</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            {''.join(rows)}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="card soft"
+                     style="
+                         margin-top:16px;
+                         border-left:5px solid #1b5e20;
+                     ">
+
+                    <h3 style="margin-top:0">
+                        Review EBTA
+                    </h3>
+
+                    <div class="grid two-col"
+                         style="gap:12px">
+
+                        <div>
+                            <label>
+                                Overall EBTA Rating
+                            </label>
+
+                            <select name="ebta_overall_rating">
+                                {ebta_rating_options}
+                            </select>
+                        </div>
+
+                        <div>
+                            <label>
+                                General Review
+                            </label>
+
+                            <textarea
+                                name="ebta_review"
+                                maxlength="1500"
+                                placeholder="Share your overall experience with EBTA.">{escape(ebta_review_value)}</textarea>
+                        </div>
+
+                        <div style="grid-column:1/-1">
+                            <label>
+                                Suggestion to Improve
+                            </label>
+
+                            <textarea
+                                name="ebta_suggestion"
+                                maxlength="1500"
+                                placeholder="What can EBTA improve?">{escape(ebta_suggestion_value)}</textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <div class='toolbar'
+                     style="margin-top:12px">
+                    <button class='btn success'>
+                        Save Ratings & Feedback
+                    </button>
+                </div>
             </form>
         </div>
         """
@@ -20868,10 +21788,27 @@ def student_message_thread():
 @app.post('/student/ratings')
 def student_submit_ratings():
     r = require_student()
-    if r: return r
+    if r:
+        return r
+
     sid = is_student()
-    month = request.form.get("month", "").strip() or get_active_month("student") or get_setting("current_month")
-    if not rating_window_open(month):
+
+    month = (
+        request.form.get(
+            "month",
+            ""
+        ).strip()
+        or get_active_month(
+            "student"
+        )
+        or get_setting(
+            "current_month"
+        )
+    )
+
+    if not rating_window_open(
+        month
+    ):
         return page(
             "Closed",
             card_msg(
@@ -20879,31 +21816,160 @@ def student_submit_ratings():
                 f"It opens from {rating_window_label(month)}."
             )
         )
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("""SELECT subject_id FROM enrollments
-                WHERE student_id=? AND month=? AND status='ACTIVE'""", (sid, month))
-    subids = [row['subject_id'] for row in cur.fetchall()]
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT subject_id
+        FROM enrollments
+        WHERE student_id=?
+          AND month=?
+          AND status='ACTIVE'
+    """, (
+        sid,
+        month
+    ))
+
+    subids = [
+        row["subject_id"]
+        for row in cur.fetchall()
+    ]
+
     now = now_utc_iso()
+
     for subid in subids:
         rkey = f"rating_{subid}"
         ckey = f"comment_{subid}"
-        raw = request.form.get(rkey, "").strip()
+
+        raw = request.form.get(
+            rkey,
+            ""
+        ).strip()
+
         if not raw:
             continue
+
         try:
-            rating = int(raw)
+            rating = int(
+                raw
+            )
         except Exception:
             continue
+
         if rating < 1 or rating > 5:
             continue
-        comment = request.form.get(ckey, "").strip() or None
-        cur.execute("""INSERT INTO lesson_ratings(student_id,subject_id,month,rating,comment,created_at)
-                    VALUES(?,?,?,?,?,?)
-                    ON CONFLICT(student_id,subject_id,month)
-                    DO UPDATE SET rating=excluded.rating, comment=excluded.comment, created_at=excluded.created_at""",
-                    (sid, subid, month, rating, comment, now))
-    conn.commit(); conn.close()
-    return page("Thanks!", card_msg("Your ratings were saved."))
+
+        comment = (
+            request.form.get(
+                ckey,
+                ""
+            ).strip()
+            or None
+        )
+
+        cur.execute("""
+            INSERT INTO lesson_ratings(
+                student_id,
+                subject_id,
+                month,
+                rating,
+                comment,
+                created_at
+            )
+            VALUES(?,?,?,?,?,?)
+            ON CONFLICT(
+                student_id,
+                subject_id,
+                month
+            )
+            DO UPDATE SET
+                rating=excluded.rating,
+                comment=excluded.comment,
+                created_at=excluded.created_at
+        """, (
+            sid,
+            subid,
+            month,
+            rating,
+            comment,
+            now
+        ))
+
+    # Optional overall EBTA review.
+    ebta_rating_raw = request.form.get(
+        "ebta_overall_rating",
+        ""
+    ).strip()
+
+    ebta_review = request.form.get(
+        "ebta_review",
+        ""
+    ).strip()
+
+    ebta_suggestion = request.form.get(
+        "ebta_suggestion",
+        ""
+    ).strip()
+
+    ebta_rating = None
+
+    if ebta_rating_raw:
+        try:
+            parsed_rating = int(
+                ebta_rating_raw
+            )
+
+            if 1 <= parsed_rating <= 5:
+                ebta_rating = parsed_rating
+
+        except Exception:
+            ebta_rating = None
+
+    if (
+        ebta_rating is not None
+        or ebta_review
+        or ebta_suggestion
+    ):
+        cur.execute("""
+            INSERT INTO student_ebta_reviews(
+                student_id,
+                month,
+                overall_rating,
+                review,
+                suggestion,
+                created_at,
+                updated_at
+            )
+            VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(
+                student_id,
+                month
+            )
+            DO UPDATE SET
+                overall_rating=excluded.overall_rating,
+                review=excluded.review,
+                suggestion=excluded.suggestion,
+                updated_at=excluded.updated_at
+        """, (
+            sid,
+            month,
+            ebta_rating,
+            ebta_review or None,
+            ebta_suggestion or None,
+            now,
+            now
+        ))
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "Thanks!",
+        card_msg(
+            "Your ratings and feedback were saved."
+        )
+    )
 
 @app.post('/student/activity/ping')
 def student_activity_ping():
@@ -28787,6 +29853,7 @@ def admin_nav():
                     ("Tutor Applications", "admin_applications", "/admin/applications"),
                     ("Application Settings", "admin_application_settings", "/admin/application-settings"),
                     ("AQ Manager", "admin_academic_quality_managers", "/admin/academic-quality-managers"),
+                    ("Reviews & Ratings", "admin_reviews_ratings", "/admin/reviews-ratings"),
                     ("Student Reports", "admin_reports", "/admin/reports"),
                 ],
                 False
@@ -32332,6 +33399,29 @@ def admin_portal_activity():
     """
 
     return page("Portal Activity", body)
+
+
+@app.get('/admin/reviews-ratings')
+@require_high_admin
+def admin_reviews_ratings():
+    r = require_admin()
+    if r:
+        return r
+
+    month = (
+        request.args.get(
+            "month",
+            ""
+        ).strip()
+        or get_admin_active_month()
+    )
+
+    return leadership_reviews_ratings_page(
+        admin_nav(),
+        "admin_reviews_ratings",
+        month,
+        "Reviews & Ratings"
+    )
 
 
 @app.get('/admin')
@@ -83200,6 +84290,7 @@ def cao_nav():
                 cao_link("Tutor Managers", "cao_tutor_managers", "cao_tutor_managers_enabled", icon="📋"),
                 cao_link("Manager Work Progress", "cao_tutor_manager_performance", "cao_tutor_managers_enabled", icon="📈"),
                 cao_link("Manager Ratings", "cao_tutor_manager_ratings", "cao_tutor_managers_enabled", icon="⭐"),
+                cao_link("Reviews & Ratings", "cao_reviews_ratings", icon="💬"),
                 cao_link("AQM Team", "cao_aqm_team", "cao_aqm_enabled", icon="✅"),
                 cao_link("ACC Team & Tasks", "cao_acc_team", icon="🎬"),
                 cao_link("Message ACC", "cao_acc_messages", icon="💬"),
@@ -85098,6 +86189,28 @@ def cao_tutor_manager_performance():
     return page("Tutor Manager Work Progress", body)    
     
     
+@app.get('/cao/reviews-ratings')
+def cao_reviews_ratings():
+    r = require_cao()
+    if r:
+        return r
+
+    month = (
+        request.args.get(
+            "month",
+            ""
+        ).strip()
+        or cao_selected_month()
+    )
+
+    return leadership_reviews_ratings_page(
+        cao_nav(),
+        "cao_reviews_ratings",
+        month,
+        "Reviews & Ratings"
+    )
+
+
 @app.get('/cao/tutor-manager-ratings')
 def cao_tutor_manager_ratings():
 
@@ -88539,6 +89652,7 @@ def ceo_nav():
                 ceo_link("Risks & Mitigations", "ceo_risks", "/ceo/risks", "⚠️"),
                 ceo_link("Goals", "ceo_goals", "/ceo/goals", "🎯"),
                 ceo_link("Operations Tasks", "ceo_operations_tasks", "/ceo/tasks", "✅"),
+                ceo_link("Reviews & Ratings", "ceo_reviews_ratings", "/ceo/reviews-ratings", "⭐"),
                 ceo_link("Parent WhatsApp Follow-Up", "ceo_non_enrolled_parent_whatsapp", "/ceo/non-enrolled-parent-whatsapp", "💬"),
                 ceo_link("One-on-One Programme", "ceo_one_on_one_dashboard", "/ceo/one-on-one-dashboard", "👤"),
                 ceo_link("School Movement", "ceo_school_movement", "/ceo/school-movement", "🏫"),
@@ -89125,6 +90239,28 @@ def admin_ceo_reset_pin(ceo_id):
         """
     )
     
+
+@app.get('/ceo/reviews-ratings')
+def ceo_reviews_ratings():
+    r = require_ceo()
+    if r:
+        return r
+
+    month = (
+        request.args.get(
+            "month",
+            ""
+        ).strip()
+        or ceo_selected_month()
+    )
+
+    return leadership_reviews_ratings_page(
+        ceo_nav(),
+        "ceo_reviews_ratings",
+        month,
+        "Reviews & Ratings"
+    )
+
 
 @app.get('/ceo')
 def ceo_dashboard():
