@@ -7152,18 +7152,18 @@ def leadership_reviews_ratings_data(month, search_text=""):
                     AS TEXT
                 )
               ) <> ''
-          AND COALESCE(
-                NULLIF(
-                    TRIM(
-                        tw.month
+          AND substr(
+                COALESCE(
+                    NULLIF(
+                        TRIM(
+                            tw.session_date
+                        ),
+                        ''
                     ),
-                    ''
+                    tw.created_at
                 ),
-                substr(
-                    tw.session_date,
-                    1,
-                    7
-                )
+                1,
+                7
               )=?
 
         ORDER BY
