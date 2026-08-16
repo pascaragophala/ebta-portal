@@ -57774,7 +57774,7 @@ def tutor_application_form():
             <h1>EBTA Tutor Application</h1>
 
             <p class="muted">
-                Complete the form below to apply as an EBTA tutor. Please provide accurate details and upload your CV.
+                Complete the form below to apply as an EBTA tutor. Please provide accurate details and upload both your CV and Matric Certificate.
             </p>
 
             <form method="post"
@@ -57904,12 +57904,17 @@ def tutor_application_form():
                         </div>
 
                         <div>
-                            <label>Upload Matric Certificate / Transcript</label>
+                            <label>
+                                Upload Matric Certificate
+                                <span style="color:#b91c1c;font-weight:800">*</span>
+                            </label>
                             <input type="file"
                                    name="certificate"
-                                   accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
+                                   accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                                   required>
                             <div class="mini muted">
-                                Supporting document.
+                                Required. Your application cannot be submitted without your Matric Certificate.
+                                Accepted: PDF, DOC, DOCX, PNG, JPG, JPEG.
                             </div>
                         </div>
                     </div>
@@ -58056,23 +58061,66 @@ def tutor_application_submit():
     certificate = request.files.get("certificate")
 
     if not cv or not cv.filename:
-        return page("CV required", card_msg("Please upload your CV before submitting."))
+        return page(
+            "CV required",
+            card_msg("Please upload your CV before submitting.")
+        )
+
+    if not certificate or not certificate.filename:
+        return page(
+            "Matric Results Required",
+            card_msg(
+                "Please upload your Matric Certificate before submitting your tutor application."
+            )
+        )
 
     if not is_valid_application_file(cv.filename):
-        return page("Invalid CV", card_msg("Please upload your CV as PDF, DOC, or DOCX."))
+        return page(
+            "Invalid CV",
+            card_msg("Please upload your CV as PDF, DOC, or DOCX.")
+        )
 
-    cv_path, cv_name = save_application_file(cv, full_name, "CV")
+    if not is_valid_application_file(certificate.filename):
+        return page(
+            "Invalid Matric Results",
+            card_msg(
+                "Your Matric Certificate must be PDF, DOC, DOCX, PNG, JPG, or JPEG."
+            )
+        )
+
+    cv_path, cv_name = save_application_file(
+        cv,
+        full_name,
+        "CV"
+    )
 
     if not cv_path:
-        return page("Upload failed", card_msg("Your CV could not be uploaded. Please try again."))
+        return page(
+            "Upload failed",
+            card_msg("Your CV could not be uploaded. Please try again.")
+        )
 
-    cert_path, cert_name = None, None
+    cert_path, cert_name = save_application_file(
+        certificate,
+        full_name,
+        "Matric_Certificate_Transcript"
+    )
 
-    if certificate and certificate.filename:
-        if not is_valid_application_file(certificate.filename):
-            return page("Invalid document", card_msg("Certificate must be PDF, DOC, DOCX, PNG, JPG, or JPEG."))
+    if not cert_path:
+        # Do not leave an orphaned CV behind when the required
+        # Matric Results upload fails.
+        try:
+            if cv_path and os.path.exists(cv_path):
+                os.remove(cv_path)
+        except OSError:
+            pass
 
-        cert_path, cert_name = save_application_file(certificate, full_name, "Certificate")
+        return page(
+            "Upload failed",
+            card_msg(
+                "Your Matric Certificate could not be uploaded. Please try again."
+            )
+        )
 
     conn = get_db()
     cur = conn.cursor()
@@ -59188,7 +59236,7 @@ def management_application_form():
             <h1>EBTA Management Application</h1>
 
             <p class="muted">
-                Complete the form below to apply for an available EBTA management role.
+                Complete the form below to apply for an available EBTA management role. Your CV and Matric Certificate are both required.
             </p>
 
             <form method="post"
@@ -59299,11 +59347,18 @@ def management_application_form():
                         </div>
 
                         <div>
-                            <label>Upload Matric Certificate / Transcript</label>
+                            <label>
+                                Upload Matric Certificate
+                                <span style="color:#b91c1c;font-weight:800">*</span>
+                            </label>
                             <input type="file"
                                    name="certificate"
-                                   accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
-                            <div class="mini muted">Optional supporting document.</div>
+                                   accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                                   required>
+                            <div class="mini muted">
+                                Required. Your application cannot be submitted without your Matric Certificate.
+                                Accepted: PDF, DOC, DOCX, PNG, JPG, JPEG.
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -59404,26 +59459,74 @@ def management_application_submit():
 
     if not cv or not cv.filename:
         conn.close()
-        return page("CV required", card_msg("Please upload your CV before submitting."))
+        return page(
+            "CV required",
+            card_msg("Please upload your CV before submitting.")
+        )
+
+    if not certificate or not certificate.filename:
+        conn.close()
+        return page(
+            "Matric Results Required",
+            card_msg(
+                "Please upload your Matric Certificate before submitting your management application."
+            )
+        )
 
     if not is_valid_application_file(cv.filename):
         conn.close()
-        return page("Invalid CV", card_msg("Please upload your CV as PDF, DOC, or DOCX."))
+        return page(
+            "Invalid CV",
+            card_msg("Please upload your CV as PDF, DOC, or DOCX.")
+        )
 
-    cv_path, cv_name = save_management_application_file(cv, full_name, role_applied, "CV")
+    if not is_valid_application_file(certificate.filename):
+        conn.close()
+        return page(
+            "Invalid Matric Results",
+            card_msg(
+                "Your Matric Certificate must be PDF, DOC, DOCX, PNG, JPG, or JPEG."
+            )
+        )
+
+    cv_path, cv_name = save_management_application_file(
+        cv,
+        full_name,
+        role_applied,
+        "CV"
+    )
 
     if not cv_path:
         conn.close()
-        return page("Upload failed", card_msg("Your CV could not be uploaded. Please try again."))
+        return page(
+            "Upload failed",
+            card_msg("Your CV could not be uploaded. Please try again.")
+        )
 
-    cert_path, cert_name = None, None
+    cert_path, cert_name = save_management_application_file(
+        certificate,
+        full_name,
+        role_applied,
+        "Matric_Certificate_Transcript"
+    )
 
-    if certificate and certificate.filename:
-        if not is_valid_application_file(certificate.filename):
-            conn.close()
-            return page("Invalid document", card_msg("Certificate must be PDF, DOC, DOCX, PNG, JPG, or JPEG."))
+    if not cert_path:
+        # Do not leave an orphaned CV behind when the required
+        # Matric Results upload fails.
+        try:
+            if cv_path and os.path.exists(cv_path):
+                os.remove(cv_path)
+        except OSError:
+            pass
 
-        cert_path, cert_name = save_management_application_file(certificate, full_name, role_applied, "Certificate")
+        conn.close()
+
+        return page(
+            "Upload failed",
+            card_msg(
+                "Your Matric Certificate could not be uploaded. Please try again."
+            )
+        )
 
     cur.execute("""
         INSERT INTO management_applications(
