@@ -1738,6 +1738,29 @@ def init_db():
         updated_at TEXT
     );
     """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS admission_group_link_checks(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        admission_coordinator_id INTEGER NOT NULL,
+        group_id INTEGER NOT NULL,
+        invite_link_snapshot TEXT NOT NULL,
+        checked_at TEXT NOT NULL,
+        UNIQUE(admission_coordinator_id, group_id),
+        FOREIGN KEY(admission_coordinator_id) REFERENCES admission_coordinators(id) ON DELETE CASCADE,
+        FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_admission_group_checks_coordinator
+        ON admission_group_link_checks(admission_coordinator_id, checked_at)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_admission_group_checks_group
+        ON admission_group_link_checks(group_id)
+    """)
     
     cur.execute("""
     CREATE TABLE IF NOT EXISTS one_on_one_managers(
@@ -70597,7 +70620,7 @@ def admission_nav():
         <a class="btn secondary" href="{url_for('admission_students')}">Students</a>
         <a class="btn secondary" href="{url_for('admission_parents_notifications')}">Parents Info</a>
         <a class="btn secondary" href="{url_for('admission_followups')}">Follow-Ups</a>
-        <a class="btn secondary" href="{url_for('admission_groups')}">Groups</a>
+        <a class="btn secondary" href="{url_for('admission_groups')}">Group Links</a>
         <a class="btn secondary" href="{url_for('admission_sessions')}">Sessions</a>
         <a class="btn secondary" href="{url_for('admission_inbox')}">Inbox</a>
         <a class="btn secondary" href="{url_for('admission_discounts')}">Discount Codes</a>
@@ -73129,113 +73152,444 @@ def admission_students():
     
 @app.get('/admission/groups')
 def admission_groups():
-
     r = require_admission_coordinator()
     if r:
         return r
 
-    month = get_admin_active_month()
+    admission_id = int(session.get("admission_coordinator_id"))
+    q = request.args.get("q", "").strip()
+    grade_filter = request.args.get("grade", "").strip().upper()
+    review_filter = request.args.get("review", "ALL").strip().upper()
+    if review_filter not in ("ALL", "CHECKED", "UNCHECKED", "MISSING"):
+        review_filter = "ALL"
 
-    page_num = max(1, int(request.args.get("page", 1)))
-    limit = 15
-    offset = (page_num - 1) * limit
+    try:
+        page_num = max(1, int(request.args.get("page", 1)))
+    except Exception:
+        page_num = 1
 
     conn = get_db()
     cur = conn.cursor()
-
     cur.execute("""
-        SELECT COUNT(*) AS c
-        FROM groups g
-        JOIN subjects sub ON sub.id = g.subject_id
-        WHERE (g.month = ? OR UPPER(g.month) = 'ALL')
-          AND g.is_visible = 1
-    """, (month,))
-
-    total = cur.fetchone()["c"] or 0
-    total_pages = max(1, (total + limit - 1) // limit)
+        SELECT id, name, grade
+        FROM subjects
+        ORDER BY
+            CASE grade
+                WHEN 'G8' THEN 8 WHEN 'G9' THEN 9 WHEN 'G10' THEN 10
+                WHEN 'G11' THEN 11 WHEN 'G12' THEN 12 WHEN 'G13' THEN 13
+                ELSE 99
+            END,
+            name
+    """)
+    subjects = cur.fetchall()
 
     cur.execute("""
         SELECT
-            g.*,
-            sub.name AS subject_name,
-            sub.grade AS subject_grade
+            g.id,
+            g.subject_id,
+            g.invite_link,
+            g.is_visible,
+            g.created_at,
+            c.checked_at,
+            CASE
+                WHEN c.id IS NOT NULL
+                 AND c.invite_link_snapshot = g.invite_link
+                THEN 1 ELSE 0
+            END AS is_checked
         FROM groups g
-        JOIN subjects sub ON sub.id = g.subject_id
-        WHERE (g.month = ? OR UPPER(g.month) = 'ALL')
-          AND g.is_visible = 1
-        ORDER BY
-            CASE WHEN UPPER(g.month) = 'ALL' THEN 0 ELSE 1 END,
-            CAST(REPLACE(sub.grade,'G','') AS INTEGER),
-            sub.name
-        LIMIT ? OFFSET ?
-    """, (month, limit, offset))
-
-    rows = cur.fetchall()
+        LEFT JOIN admission_group_link_checks c
+          ON c.group_id=g.id
+         AND c.admission_coordinator_id=?
+        WHERE UPPER(g.month)='ALL'
+    """, (admission_id,))
+    group_rows = cur.fetchall()
     conn.close()
 
-    trs = ""
+    group_map = {int(row["subject_id"]): row for row in group_rows}
+    all_items = []
+    for subject in subjects:
+        group = group_map.get(int(subject["id"]))
+        checked = bool(group) and int(group["is_checked"] or 0) == 1
+        all_items.append((subject, group, checked))
 
-    for g in rows:
-        visible = "Visible" if g["is_visible"] == 1 else "Hidden"
+    total_subjects = len(all_items)
+    total_links = sum(1 for _, group, _ in all_items if group)
+    total_checked = sum(1 for _, _, checked in all_items if checked)
+    total_to_check = sum(1 for _, group, checked in all_items if group and not checked)
+    total_missing = sum(1 for _, group, _ in all_items if not group)
 
-        if str(g["month"]).upper() == "ALL":
-            group_type = "Permanent"
+    filtered = []
+    q_lower = q.lower()
+    for subject, group, checked in all_items:
+        if grade_filter and str(subject["grade"] or "").upper() != grade_filter:
+            continue
+
+        if q_lower:
+            haystack = " ".join([
+                str(subject["name"] or ""),
+                str(subject["grade"] or ""),
+                str(group["invite_link"] if group else "")
+            ]).lower()
+            if q_lower not in haystack:
+                continue
+
+        if review_filter == "CHECKED" and not checked:
+            continue
+        if review_filter == "UNCHECKED" and (not group or checked):
+            continue
+        if review_filter == "MISSING" and group:
+            continue
+
+        filtered.append((subject, group, checked))
+
+    limit = 25
+    total_filtered = len(filtered)
+    total_pages = max(1, (total_filtered + limit - 1) // limit)
+    page_num = min(page_num, total_pages)
+    offset = (page_num - 1) * limit
+    page_items = filtered[offset:offset + limit]
+
+    grades = []
+    for subject in subjects:
+        g = str(subject["grade"] or "").strip().upper()
+        if g and g not in grades:
+            grades.append(g)
+
+    grade_options = '<option value="">All Grades</option>'
+    for g in grades:
+        selected = "selected" if grade_filter == g else ""
+        grade_options += f"<option value='{escape(g, quote=True)}' {selected}>{escape(grade_label(g))}</option>"
+
+    review_options = ""
+    for value, label in (("ALL","All"),("CHECKED","Checked"),("UNCHECKED","To Check"),("MISSING","Missing Link")):
+        selected = "selected" if review_filter == value else ""
+        review_options += f"<option value='{value}' {selected}>{label}</option>"
+
+    subject_options = ''.join(
+        f"<option value='{s['id']}'>{escape(grade_label(s['grade']))} — {escape(s['name'])}</option>"
+        for s in subjects
+    )
+
+    def list_url(target_page):
+        return url_for(
+            "admission_groups",
+            q=q,
+            grade=grade_filter,
+            review=review_filter,
+            page=target_page
+        )
+
+    return_to = list_url(page_num)
+    rows = ""
+
+    for subject, group, checked in page_items:
+        if group:
+            gid = int(group["id"])
+            row_class = "admission-group-checked" if checked else "admission-group-unchecked"
+            check_chip = (
+                "<span class='chip active admission-review-chip'>Checked</span>"
+                if checked
+                else "<span class='chip pending admission-review-chip'>To Check</span>"
+            )
+            visibility = (
+                "<span class='chip active'>Shown</span>"
+                if int(group["is_visible"] or 0) == 1
+                else "<span class='chip lapsed'>Hidden</span>"
+            )
+            rows += f"""
+            <tr id='admission-group-row-{gid}' class='{row_class}'>
+                <td><strong>{escape(grade_label(subject['grade']))}</strong><div class='mini'>{escape(subject['name'])}</div></td>
+                <td>
+                    <a class='btn mini success'
+                       target='_blank'
+                       rel='noopener noreferrer'
+                       href='{url_for('admission_group_open', gid=gid)}'
+                       onclick='markAdmissionGroupChecked({gid})'>Open WhatsApp</a>
+                </td>
+                <td>{check_chip}</td>
+                <td>{visibility}</td>
+                <td>
+                    <a class='btn mini'
+                       href='{url_for('admission_group_edit', gid=gid, return_to=return_to)}'>Edit</a>
+                </td>
+            </tr>
+            """
         else:
-            group_type = pretty_month_label(g["month"])
+            rows += f"""
+            <tr class='admission-group-missing'>
+                <td><strong>{escape(grade_label(subject['grade']))}</strong><div class='mini'>{escape(subject['name'])}</div></td>
+                <td><span class='mini muted'>Not set</span></td>
+                <td><span class='chip lapsed'>Missing</span></td>
+                <td>—</td>
+                <td>
+                    <button type='button' class='btn mini'
+                            onclick='selectAdmissionGroupSubject({int(subject['id'])})'>Add Link</button>
+                </td>
+            </tr>
+            """
 
-        invite = "—"
+    if not rows:
+        rows = "<tr><td colspan='5'><div class='empty'>No group links match the selected filters.</div></td></tr>"
 
-        if g["invite_link"]:
-            invite = f"<a target='_blank' href='{escape(g['invite_link'])}'>Open Group</a>"
-
-        trs += f"""
-        <tr>
-            <td>{grade_label(g['subject_grade'])}</td>
-            <td>{escape(g['subject_name'])}</td>
-            <td>{escape(group_type)}</td>
-            <td>{invite}</td>
-            <td><span class="chip">{visible}</span></td>
-            <td>{escape((g['created_at'] or '')[:16].replace('T',' '))}</td>
-        </tr>
-        """
+    pagination = ""
+    if total_pages > 1:
+        links = []
+        if page_num > 1:
+            links.append(f"<a class='links' href='{escape(list_url(1), quote=True)}'>« First</a>")
+            links.append(f"<a class='links' href='{escape(list_url(page_num-1), quote=True)}'>‹ Prev</a>")
+        links.append(f"<span class='chip'>Page {page_num} of {total_pages}</span>")
+        if page_num < total_pages:
+            links.append(f"<a class='links' href='{escape(list_url(page_num+1), quote=True)}'>Next ›</a>")
+            links.append(f"<a class='links' href='{escape(list_url(total_pages), quote=True)}'>Last »</a>")
+        pagination = f"<div class='toolbar' style='margin-top:12px'>{''.join(links)}</div>"
 
     body = f"""
     {admission_nav()}
 
-    <section class="card">
+    <style>
+        .admission-group-stats{{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:10px;margin:14px 0}}
+        .admission-group-stat{{border:1px solid var(--border);border-radius:14px;padding:12px;background:#fff}}
+        .admission-group-stat strong{{display:block;font-size:22px}}
+        .admission-group-stat span{{font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted)}}
+        .admission-group-add-grid{{display:grid;grid-template-columns:minmax(220px,1fr) minmax(280px,2fr) auto;gap:10px;align-items:end}}
+        .admission-group-add-grid select,.admission-group-add-grid input{{width:100%;margin:0}}
+        .admission-group-checked td{{background:#ecfdf3 !important}}
+        .admission-group-unchecked td{{background:#fff8e6 !important}}
+        .admission-group-missing td{{background:#f8fafc !important}}
+        .admission-group-checked td:first-child{{box-shadow:inset 4px 0 0 #22c55e}}
+        .admission-group-unchecked td:first-child{{box-shadow:inset 4px 0 0 #f59e0b}}
+        .admission-group-missing td:first-child{{box-shadow:inset 4px 0 0 #94a3b8}}
+        .admission-group-table{{min-width:820px}}
+        @media(max-width:760px){{.admission-group-add-grid{{grid-template-columns:1fr}}.admission-group-add-grid .btn{{width:100%}}}}
+    </style>
+
+    <section class='card'>
         <h1>Group Links</h1>
 
-        <p class="muted">
-            View visible EBTA group links. Creating, editing and deleting groups are restricted.
-        </p>
+        <div class='admission-group-stats'>
+            <div class='admission-group-stat'><strong>{total_subjects}</strong><span>Subjects</span></div>
+            <div class='admission-group-stat'><strong>{total_links}</strong><span>Links Set</span></div>
+            <div class='admission-group-stat'><strong>{total_checked}</strong><span>Checked</span></div>
+            <div class='admission-group-stat'><strong>{total_to_check}</strong><span>To Check</span></div>
+            <div class='admission-group-stat'><strong>{total_missing}</strong><span>Missing</span></div>
+        </div>
 
-        {pagination_controls("/admission/groups", page_num, total_pages)}
+        <form method='post' action='{url_for('admission_groups_save')}' style='margin-bottom:16px'>
+            <input type='hidden' name='return_to' value='{escape(return_to, quote=True)}'>
+            <div class='admission-group-add-grid'>
+                <div><label>Subject</label><select id='admission-group-subject' name='subject_id' required>{subject_options}</select></div>
+                <div><label>WhatsApp Group Link</label><input name='link' placeholder='https://chat.whatsapp.com/...' required></div>
+                <button class='btn success'>Save Link</button>
+            </div>
+        </form>
 
-        <div class="scroll-x">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Grade</th>
-                        <th>Subject</th>
-                        <th>Group Type / Month</th>
-                        <th>Group Link</th>
-                        <th>Visibility</th>
-                        <th>Created</th>
-                    </tr>
-                </thead>
+        <form method='get' class='toolbar' style='align-items:end;margin-bottom:12px'>
+            <div><label>Search</label><input name='q' value='{escape(q, quote=True)}' placeholder='Subject or link'></div>
+            <div><label>Grade</label><select name='grade'>{grade_options}</select></div>
+            <div><label>Check Status</label><select name='review'>{review_options}</select></div>
+            <button class='btn mini success'>Filter</button>
+            <a class='btn mini secondary' href='{url_for('admission_groups')}'>Clear</a>
+        </form>
 
-                <tbody>
-                    {trs or "<tr><td colspan='6'>No visible group links found.</td></tr>"}
-                </tbody>
+        <div class='mini muted' style='margin-bottom:8px'>Showing {len(page_items)} of {total_filtered}</div>
+        {pagination}
+
+        <div class='scroll-x'>
+            <table class='admission-group-table'>
+                <thead><tr><th>Subject</th><th>Group Link</th><th>Check</th><th>Visibility</th><th>Actions</th></tr></thead>
+                <tbody>{rows}</tbody>
             </table>
         </div>
 
-        {pagination_controls("/admission/groups", page_num, total_pages)}
+        {pagination}
     </section>
+
+    <script>
+        function markAdmissionGroupChecked(groupId) {{
+            const row=document.getElementById('admission-group-row-'+groupId);
+            if(!row) return;
+            row.classList.remove('admission-group-unchecked');
+            row.classList.add('admission-group-checked');
+            const chip=row.querySelector('.admission-review-chip');
+            if(chip){{chip.className='chip active admission-review-chip';chip.textContent='Checked';}}
+        }}
+        function selectAdmissionGroupSubject(subjectId) {{
+            const select=document.getElementById('admission-group-subject');
+            if(!select) return;
+            select.value=String(subjectId);
+            select.scrollIntoView({{behavior:'smooth',block:'center'}});
+            select.focus();
+        }}
+    </script>
     """
 
-    return page("Admission Groups", body)
+    return page("Admission Group Links", body)
     
+
+
+def admission_group_safe_return_to(value):
+    value = str(value or "").strip()
+    if value == "/admission/groups" or value.startswith("/admission/groups?"):
+        return value
+    return url_for("admission_groups")
+
+
+def admission_group_link_is_valid(value):
+    value = str(value or "").strip().lower()
+    return value.startswith("https://chat.whatsapp.com/") or value.startswith("http://chat.whatsapp.com/")
+
+
+@app.post('/admission/groups/save')
+def admission_groups_save():
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    return_to = admission_group_safe_return_to(request.form.get("return_to", ""))
+    link = request.form.get("link", "").strip()
+    try:
+        subject_id = int(request.form.get("subject_id", "").strip())
+    except Exception:
+        return page("Invalid Subject", card_msg("Please select a valid subject."))
+
+    if not admission_group_link_is_valid(link):
+        return page("Invalid Group Link", f"""
+        {admission_nav()}
+        <section class='card'>
+            <h1>Invalid Group Link</h1>
+            <p>Please enter a WhatsApp group invite link beginning with <strong>https://chat.whatsapp.com/</strong>.</p>
+            <a class='btn secondary' href='{escape(return_to, quote=True)}'>Back to Group Links</a>
+        </section>
+        """)
+
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT id FROM subjects WHERE id=? LIMIT 1", (subject_id,))
+    if not cur.fetchone():
+        conn.close()
+        return page("Subject Not Found", card_msg("The selected subject could not be found."))
+
+    cur.execute("SELECT id FROM groups WHERE subject_id=? AND UPPER(month)='ALL' LIMIT 1", (subject_id,))
+    existing = cur.fetchone()
+    now = now_utc_iso()
+
+    if existing:
+        cur.execute("UPDATE groups SET invite_link=?, created_at=? WHERE id=?", (link, now, existing['id']))
+    else:
+        cur.execute("""
+            INSERT INTO groups(subject_id, month, invite_link, created_at, is_visible)
+            VALUES(?, 'ALL', ?, ?, 1)
+        """, (subject_id, link, now))
+
+    conn.commit(); conn.close()
+    return redirect(return_to)
+
+
+@app.get('/admission/groups/<int:gid>/open')
+def admission_group_open(gid):
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    admission_id = int(session.get("admission_coordinator_id"))
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT id, invite_link FROM groups WHERE id=? AND UPPER(month)='ALL' LIMIT 1", (gid,))
+    group = cur.fetchone()
+    if not group:
+        conn.close()
+        return redirect(url_for("admission_groups"))
+
+    invite_link = str(group["invite_link"] or "").strip()
+    if not admission_group_link_is_valid(invite_link):
+        conn.close()
+        return page("Invalid Group Link", f"""
+        {admission_nav()}
+        <section class='card'>
+            <h1>Invalid Group Link</h1>
+            <p>The saved WhatsApp group link is not valid.</p>
+            <a class='btn secondary' href='{url_for('admission_groups')}'>Back to Group Links</a>
+        </section>
+        """)
+
+    cur.execute("""
+        INSERT INTO admission_group_link_checks(admission_coordinator_id, group_id, invite_link_snapshot, checked_at)
+        VALUES(?,?,?,?)
+        ON CONFLICT(admission_coordinator_id, group_id)
+        DO UPDATE SET invite_link_snapshot=excluded.invite_link_snapshot, checked_at=excluded.checked_at
+    """, (admission_id, gid, invite_link, now_utc_iso()))
+    conn.commit(); conn.close()
+    return redirect(invite_link)
+
+
+@app.get('/admission/groups/edit/<int:gid>')
+def admission_group_edit(gid):
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    return_to = admission_group_safe_return_to(request.args.get("return_to", ""))
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""
+        SELECT g.id, g.invite_link, g.is_visible, s.name AS subject_name, s.grade
+        FROM groups g JOIN subjects s ON s.id=g.subject_id
+        WHERE g.id=? AND UPPER(g.month)='ALL' LIMIT 1
+    """, (gid,))
+    group = cur.fetchone(); conn.close()
+    if not group:
+        return redirect(return_to)
+
+    body = f"""
+    {admission_nav()}
+    <section class='card'>
+        <h1>Edit Group Link</h1>
+        <form method='post' action='{url_for('admission_group_edit_post', gid=gid)}'>
+            <input type='hidden' name='return_to' value='{escape(return_to, quote=True)}'>
+            <label>Subject</label>
+            <input value='{escape(grade_label(group['grade']) + ' — ' + group['subject_name'], quote=True)}' disabled>
+            <label style='margin-top:10px'>WhatsApp Group Link</label>
+            <input name='invite_link' value='{escape(group['invite_link'] or '', quote=True)}' required>
+            <label style='margin-top:12px;display:flex;gap:8px;align-items:center'>
+                <input type='checkbox' name='is_visible' {'checked' if int(group['is_visible'] or 0)==1 else ''}>
+                Visible to students
+            </label>
+            <div class='toolbar' style='margin-top:14px'>
+                <button class='btn success'>Save Changes</button>
+                <a class='btn secondary' href='{escape(return_to, quote=True)}'>Cancel</a>
+            </div>
+        </form>
+    </section>
+    """
+    return page("Edit Group Link", body)
+
+
+@app.post('/admission/groups/edit/<int:gid>')
+def admission_group_edit_post(gid):
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    return_to = admission_group_safe_return_to(request.form.get("return_to", ""))
+    invite_link = request.form.get("invite_link", "").strip()
+    is_visible = 1 if request.form.get("is_visible") else 0
+
+    if not admission_group_link_is_valid(invite_link):
+        return page("Invalid Group Link", f"""
+        {admission_nav()}
+        <section class='card'>
+            <h1>Invalid Group Link</h1>
+            <p>Please enter a WhatsApp group invite link beginning with <strong>https://chat.whatsapp.com/</strong>.</p>
+            <a class='btn secondary' href='{escape(return_to, quote=True)}'>Back to Group Links</a>
+        </section>
+        """)
+
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""
+        UPDATE groups
+        SET invite_link=?, is_visible=?, created_at=?
+        WHERE id=? AND UPPER(month)='ALL'
+    """, (invite_link, is_visible, now_utc_iso(), gid))
+    conn.commit(); conn.close()
+    return redirect(return_to)
+
 
 @app.get('/admission/sessions')
 def admission_sessions():
