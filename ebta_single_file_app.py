@@ -41809,8 +41809,6 @@ def admin_sessions():
                 {"<span class='chip active'>Shown</span>" if shown else "<span class='chip lapsed'>Hidden</span>"}
             </td>
             <td style="white-space:nowrap">
-                <a class="links" href="{url_for('session_qr', id=row['id'])}">QR</a>
-                ·
                 <form method="post" action="{url_for('admin_session_toggle', sid=row['id'])}" style="display:inline">
                     <button class="btn mini secondary">{"Hide" if shown else "Show"}</button>
                 </form>
@@ -42137,93 +42135,7 @@ def admin_session_update(sid):
     return redirect(url_for("admin_sessions"))
 
 
-# --- Session QR (uses PNG endpoint) ---
 
-@app.get('/session/<int:id>/qr')
-@require_high_admin
-def session_qr(id: int):
-    r = require_admin()
-    if r:
-        return r
-
-    conn = get_db()
-    cur = conn.cursor()
-
-    sync_subject_session_templates(conn, template_id=id)
-
-    cur.execute("""
-        SELECT sst.id, sst.subject_id, s.name AS subject_name, s.grade
-        FROM subject_session_templates sst
-        JOIN subjects s ON s.id=sst.subject_id
-        WHERE sst.id=?
-        LIMIT 1
-    """, (id,))
-    template = cur.fetchone()
-
-    if not template:
-        conn.close()
-        return page("Not found", card_msg("Subject session not found."))
-
-    cur.execute("""
-        SELECT
-            se.id AS session_id,
-            t.id AS tutor_id,
-            t.full_name AS tutor_name,
-            t.phone AS tutor_phone
-        FROM sessions se
-        JOIN tutors t ON t.id=se.tutor_id
-        JOIN tutor_subjects ts
-          ON ts.tutor_id=t.id
-         AND ts.subject_id=se.subject_id
-        WHERE se.session_template_id=?
-          AND COALESCE(t.is_active,1)=1
-          AND t.deleted_at IS NULL
-        ORDER BY t.full_name
-    """, (id,))
-    linked_sessions = cur.fetchall()
-
-    conn.commit()
-    conn.close()
-
-    today = datetime.date.today().strftime("%Y-%m-%d")
-    cards = ""
-
-    for row in linked_sessions:
-        payload = {"session_id": row["session_id"], "date": today}
-        code = b64url_encode(str(payload).encode("utf-8"))
-        attend_url = url_for("attend_get", _external=True) + "?" + urlencode({"code": code})
-        qr_src = url_for("qr_png") + "?" + urlencode({"text": attend_url})
-
-        cards += f"""
-        <div class="card soft" style="text-align:center;margin-bottom:12px">
-            <h2>{escape(row['tutor_name'])}</h2>
-            <div class="mini muted">{escape(row['tutor_phone'] or '')}</div>
-            <img alt="QR code" src="{escape(qr_src, quote=True)}" width="256" height="256"
-                 style="margin:14px auto;display:block;border-radius:8px;border:1px solid var(--border);background:#fff">
-            <a class="links" target="_blank" href="{escape(attend_url, quote=True)}">
-                Open check-in link
-            </a>
-        </div>
-        """
-
-    if not cards:
-        cards = """
-        <div class="card soft" style="border-left:5px solid #f59e0b">
-            <strong>No tutor assigned yet.</strong>
-        </div>
-        """
-
-    body = f"""
-    {admin_nav()}
-    <section class="card">
-        <h1>Session Attendance QR</h1>
-        <p class="muted">
-            {escape(grade_label(template['grade']))} — {escape(template['subject_name'])} ({escape(today)})
-        </p>
-        {cards}
-    </section>
-    """
-    return page("Session QR", body)
     
 @app.post('/admin/sessions/delete/<int:sid>')
 @require_high_admin
