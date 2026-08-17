@@ -698,6 +698,15 @@ def now_utc_iso():
     return (datetime.datetime.utcnow() + datetime.timedelta(hours=2)).replace(tzinfo=tz).isoformat()
 
 
+def portal_today_date():
+    """Current South African calendar date used for learner assignment availability."""
+    try:
+        return datetime.datetime.now(ZoneInfo("Africa/Johannesburg")).date()
+    except Exception:
+        tz = datetime.timezone(datetime.timedelta(hours=2))
+        return datetime.datetime.now(tz).date()
+
+
 def format_chat_datetime(value):
     """
     Formats message timestamps nicely for chat screens.
@@ -2336,6 +2345,7 @@ def init_db():
     ensure_column(conn, "students", "guardian_name", "TEXT")
     ensure_column(conn, "materials", "is_assignment", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "materials", "due_date", "TEXT")
+    ensure_column(conn, "materials", "open_date", "TEXT")
     ensure_column(conn, "materials", "max_points", "INTEGER NOT NULL DEFAULT 100")
     ensure_column(conn, "students", "province", "TEXT")
     ensure_column(conn, "students", "school", "TEXT")
@@ -18955,6 +18965,9 @@ def student_home():
             or is_current_month
         )
     )
+
+    student_today = portal_today_date()
+    student_today_iso = student_today.isoformat()
     
     # ===== ASSIGNMENTS PREVIEW (DASHBOARD SUMMARY) =====
 
@@ -18968,7 +18981,8 @@ def student_home():
             WHERE is_assignment = 1
             AND subject_id IN ({','.join('?'*len(active_sub_ids))})
             AND month = ?
-        """, (*active_sub_ids, month))
+            AND (open_date IS NULL OR TRIM(open_date)='' OR open_date <= ?)
+        """, (*active_sub_ids, month, student_today_iso))
 
         row = cur.fetchone()
         total_assignments = row["total"] if row else 0
@@ -19283,8 +19297,9 @@ def student_home():
             WHERE m.is_assignment = 1
             AND m.subject_id IN ({','.join('?'*len(active_sub_ids))})
             AND m.month = ?
+            AND (m.open_date IS NULL OR TRIM(m.open_date)='' OR m.open_date <= ?)
             ORDER BY m.created_at DESC
-        """, (*active_sub_ids, month))
+        """, (*active_sub_ids, month, student_today_iso))
 
         assignments = cur.fetchall()
 
@@ -19307,12 +19322,15 @@ def student_home():
                 file_link = f"<a class='btn mini' target='_blank' href='/student/material/{a['id']}/open'>Download</a>"
 
             # submission section
-            now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))
-            # Use selected month as reference instead of real date
-            year, month_num = map(int, month.split('-'))
-            today = datetime.date(year, month_num, 1)
-            
             can_resubmit = True
+
+            if a['due_date']:
+                try:
+                    due_value = datetime.datetime.strptime(a['due_date'], "%Y-%m-%d").date()
+                    if student_today > due_value:
+                        can_resubmit = False
+                except Exception:
+                    pass
 
             if sub:
                 status = f"<span class='chip active'>Submitted</span>"
@@ -19359,41 +19377,45 @@ def student_home():
                     action = status + "<div class='mini muted'>Submission closed</div>"
 
             else:
-                action = f"""
-                <form method='post'
-                      action='/student/submit/{a["id"]}'
-                      enctype='multipart/form-data'>
+                if can_resubmit:
+                    action = f"""
+                    <form method='post'
+                          action='/student/submit/{a["id"]}'
+                          enctype='multipart/form-data'>
 
-                    <div class="assignment-upload-row">
+                        <div class="assignment-upload-row">
 
-                        <input type='file'
-                               name='file'
-                               accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
-                               multiple
-                               style="max-width:120px;font-size:12px">
+                            <input type='file'
+                                   name='file'
+                                   accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                                   multiple
+                                   style="max-width:120px;font-size:12px">
 
-                        <input type='file'
-                               name='file'
-                               accept="image/*"
-                               capture="environment"
-                               title="Take photo"
-                               style="max-width:120px;font-size:12px">
+                            <input type='file'
+                                   name='file'
+                                   accept="image/*"
+                                   capture="environment"
+                                   title="Take photo"
+                                   style="max-width:120px;font-size:12px">
 
-                        <button class='btn success mini'>
-                            Submit
-                        </button>
+                            <button class='btn success mini'>
+                                Submit
+                            </button>
 
-                    </div>
+                        </div>
 
-                    <div class="mini muted">Upload one or more files, or take one photo</div>
-                </form>
-                """
+                        <div class="mini muted">Upload one or more files, or take one photo</div>
+                    </form>
+                    """
+                else:
+                    action = "<span class='mini muted'>⛔ Submission closed</span>"
 
             rows.append(f"""
             <tr>
                 <td>{grade_label(a['grade'])} — {a['subject_name']}</td>
                 <td>{a['title']}</td>
                 <td>{file_link}</td>
+                <td>{a['open_date'] or 'Immediately'}</td>
                 <td>{a['due_date'] or '—'}</td>
                 <td>{action}</td>
             </tr>
@@ -19410,6 +19432,7 @@ def student_home():
                             <th>Subject</th>
                             <th>Title</th>
                             <th>File</th>
+                            <th>Open Date</th>
                             <th>Due Date</th>
                             <th>Action</th>
                         </tr>
@@ -20230,7 +20253,7 @@ def student_submit(mid):
 
     # Get assignment and validate it
     cur.execute("""
-        SELECT id, subject_id, month, due_date, is_assignment, kind
+        SELECT id, subject_id, month, open_date, due_date, is_assignment, kind
         FROM materials
         WHERE id=?
     """, (mid,))
@@ -20264,12 +20287,22 @@ def student_submit(mid):
             f"You were not enrolled for this subject in {pretty_month_label(mat['month'])}."
         ))
 
+    # Check open date
+    if mat["open_date"]:
+        try:
+            open_value = datetime.datetime.strptime(mat["open_date"], "%Y-%m-%d").date()
+            if portal_today_date() < open_value:
+                conn.close()
+                return page("Not Open Yet", card_msg("This assignment is not open yet."))
+        except Exception:
+            pass
+
     # Check due date
     due_date = mat["due_date"]
 
     if due_date:
         try:
-            today = datetime.date.today()
+            today = portal_today_date()
             due = datetime.datetime.strptime(due_date, "%Y-%m-%d").date()
 
             if today > due:
@@ -20341,6 +20374,7 @@ def student_open_material(mid):
 
     conn = get_db()
     cur = conn.cursor()
+    student_today_iso = portal_today_date().isoformat()
 
     cur.execute("""
         SELECT m.*
@@ -20350,8 +20384,14 @@ def student_open_material(mid):
           AND e.student_id = ?
           AND e.status = 'ACTIVE'
           AND substr(e.month,1,7) = substr(m.month,1,7)
+          AND (
+                (COALESCE(m.is_assignment,0)=0 AND COALESCE(m.kind,'')!='assignment')
+                OR m.open_date IS NULL
+                OR TRIM(m.open_date)=''
+                OR m.open_date <= ?
+          )
         LIMIT 1
-    """, (mid, sid))
+    """, (mid, sid, student_today_iso))
 
     material = cur.fetchone()
     conn.close()
@@ -20382,6 +20422,7 @@ def student_materials():
 
     conn = get_db()
     cur = conn.cursor()
+    student_today_iso = portal_today_date().isoformat()
 
     materials_html = f"""
     <div class='empty' style='padding:16px'>
@@ -20396,6 +20437,12 @@ def student_materials():
         JOIN subjects sub ON sub.id=m.subject_id
         JOIN tutors t ON t.id=m.tutor_id
         WHERE substr(m.month,1,7) = ?
+          AND (
+                (COALESCE(m.is_assignment,0)=0 AND COALESCE(m.kind,'')!='assignment')
+                OR m.open_date IS NULL
+                OR TRIM(m.open_date)=''
+                OR m.open_date <= ?
+          )
           AND (
                 (
                     COALESCE(m.delivery_mode, 'GROUP') IN ('GROUP','BOTH')
@@ -20420,7 +20467,7 @@ def student_materials():
                 )
           )
         ORDER BY sub.grade, sub.name, m.created_at DESC
-    """, (month, sid, month, sid))
+    """, (month, student_today_iso, sid, month, sid))
 
     mats = cur.fetchall()
 
@@ -20723,6 +20770,8 @@ def student_assignments():
     active_sub_ids = [str(r['subject_id']) for r in cur.fetchall()]
 
     assignments_html = "<div class='empty'>No assignments yet.</div>"
+    student_today = portal_today_date()
+    student_today_iso = student_today.isoformat()
 
     if active_sub_ids:
 
@@ -20733,8 +20782,9 @@ def student_assignments():
             WHERE m.is_assignment = 1
             AND m.subject_id IN ({','.join('?'*len(active_sub_ids))})
             AND m.month = ?
+            AND (m.open_date IS NULL OR TRIM(m.open_date)='' OR m.open_date <= ?)
             ORDER BY m.created_at DESC
-        """, (*active_sub_ids, month))
+        """, (*active_sub_ids, month, student_today_iso))
 
         assignments = cur.fetchall()
 
@@ -20755,11 +20805,12 @@ def student_assignments():
             can_submit = True
 
             if a['due_date']:
-                today = datetime.date.today()
-                due = datetime.datetime.strptime(a['due_date'], "%Y-%m-%d").date()
-
-                if today > due:
-                    can_submit = False
+                try:
+                    due = datetime.datetime.strptime(a['due_date'], "%Y-%m-%d").date()
+                    if student_today > due:
+                        can_submit = False
+                except Exception:
+                    pass
 
             # download button
             file_link = "—"
@@ -20920,6 +20971,7 @@ def student_assignments():
                 <td data-label="Subject">{grade_label(a['grade'])} — {a['subject_name']}</td>
                 <td data-label="Title">{a['title']}</td>
                 <td data-label="File">{file_link}</td>
+                <td data-label="Open Date">{a['open_date'] or 'Immediately'}</td>
                 <td data-label="Due Date">{a['due_date'] or '—'}</td>
                 <td data-label="Action">{action}</td>
             </tr>
@@ -20939,6 +20991,7 @@ def student_assignments():
                             <th>Subject</th>
                             <th>Title</th>
                             <th>File</th>
+                            <th>Open Date</th>
                             <th>Due Date</th>
                             <th>Action</th>
                         </tr>
@@ -21606,7 +21659,7 @@ def student_submit_assignment(mid:int):
 
     # Get assignment
     cur.execute("""
-        SELECT id, subject_id, month, due_date,
+        SELECT id, subject_id, month, open_date, due_date,
                is_assignment, kind
         FROM materials
         WHERE id=?
@@ -21639,15 +21692,22 @@ def student_submit_assignment(mid:int):
             f"You were not enrolled for this subject in {pretty_month_label(assignment_month)}."
         ))
 
+    # Check open date
+    if m["open_date"]:
+        try:
+            open_value = datetime.datetime.strptime(m["open_date"], "%Y-%m-%d").date()
+            if portal_today_date() < open_value:
+                conn.close()
+                return page("Not Open Yet", card_msg("This assignment is not open yet."))
+        except Exception:
+            pass
+
     # Check due date
     if m["due_date"]:
         try:
-            end = datetime.datetime.fromisoformat(
-                m["due_date"] + "T23:59:59+00:00"
-            )
-            now_dt = datetime.datetime.now(datetime.timezone.utc)
+            due = datetime.datetime.strptime(m["due_date"], "%Y-%m-%d").date()
 
-            if now_dt > end:
+            if portal_today_date() > due:
                 conn.close()
                 return page("Closed", card_msg("Submission window has closed."))
 
@@ -22158,7 +22218,8 @@ def student_progress_data(student_id, month):
         WHERE m.subject_id IN ({placeholders})
           AND m.month LIKE ?
           AND (m.is_assignment=1 OR m.kind='assignment')
-    """, (*active_subject_ids, month + "%"))
+          AND (m.open_date IS NULL OR TRIM(m.open_date)='' OR m.open_date <= ?)
+    """, (*active_subject_ids, month + "%", today_iso))
 
     total_assignments = cur.fetchone()["c"] or 0
 
@@ -22169,7 +22230,8 @@ def student_progress_data(student_id, month):
         WHERE m.subject_id IN ({placeholders})
           AND m.month LIKE ?
           AND (m.is_assignment=1 OR m.kind='assignment')
-    """, (student_id, *active_subject_ids, month + "%"))
+          AND (m.open_date IS NULL OR TRIM(m.open_date)='' OR m.open_date <= ?)
+    """, (student_id, *active_subject_ids, month + "%", today_iso))
 
     completed_assignments = cur.fetchone()["c"] or 0
     pending_assignments = max(0, total_assignments - completed_assignments)
@@ -22180,6 +22242,7 @@ def student_progress_data(student_id, month):
         WHERE m.subject_id IN ({placeholders})
           AND m.month LIKE ?
           AND (m.is_assignment=1 OR m.kind='assignment')
+          AND (m.open_date IS NULL OR TRIM(m.open_date)='' OR m.open_date <= ?)
           AND m.due_date IS NOT NULL
           AND m.due_date >= ?
           AND m.due_date <= ?
@@ -22189,7 +22252,7 @@ def student_progress_data(student_id, month):
               WHERE sub.material_id=m.id
                 AND sub.student_id=?
           )
-    """, (*active_subject_ids, month + "%", today_iso, next_7_iso, student_id))
+    """, (*active_subject_ids, month + "%", today_iso, today_iso, next_7_iso, student_id))
 
     due_soon = cur.fetchone()["c"] or 0
 
@@ -22199,6 +22262,7 @@ def student_progress_data(student_id, month):
         WHERE m.subject_id IN ({placeholders})
           AND m.month LIKE ?
           AND (m.is_assignment=1 OR m.kind='assignment')
+          AND (m.open_date IS NULL OR TRIM(m.open_date)='' OR m.open_date <= ?)
           AND m.due_date IS NOT NULL
           AND m.due_date < ?
           AND NOT EXISTS (
@@ -22207,7 +22271,7 @@ def student_progress_data(student_id, month):
               WHERE sub.material_id=m.id
                 AND sub.student_id=?
           )
-    """, (*active_subject_ids, month + "%", today_iso, student_id))
+    """, (*active_subject_ids, month + "%", today_iso, today_iso, student_id))
 
     overdue = cur.fetchone()["c"] or 0
 
@@ -22301,7 +22365,8 @@ def student_progress_data(student_id, month):
             WHERE subject_id=?
               AND month LIKE ?
               AND (is_assignment=1 OR kind='assignment')
-        """, (subject_id, month + "%"))
+              AND (open_date IS NULL OR TRIM(open_date)='' OR open_date <= ?)
+        """, (subject_id, month + "%", today_iso))
 
         sub_total_assignments = cur.fetchone()["c"] or 0
 
@@ -22312,7 +22377,8 @@ def student_progress_data(student_id, month):
             WHERE m.subject_id=?
               AND m.month LIKE ?
               AND (m.is_assignment=1 OR m.kind='assignment')
-        """, (student_id, subject_id, month + "%"))
+              AND (m.open_date IS NULL OR TRIM(m.open_date)='' OR m.open_date <= ?)
+        """, (student_id, subject_id, month + "%", today_iso))
 
         sub_completed_assignments = cur.fetchone()["c"] or 0
         sub_assignment_rate = percent_value(sub_completed_assignments, sub_total_assignments)
@@ -23422,6 +23488,7 @@ def tutor_student_view():
             SELECT m.id, m.title, m.kind, m.month, m.created_at,
                    m.file_path, m.youtube_url,
                    COALESCE(m.is_assignment,0) AS is_assignment,
+                   m.open_date,
                    m.due_date,
                    s.name AS subject_name,
                    s.grade,
@@ -23481,7 +23548,12 @@ def tutor_student_view():
 
     conn.close()
 
-    assignment_rows = [m for m in material_rows if (m["is_assignment"] == 1 or m["kind"] == "assignment")]
+    preview_today_iso = portal_today_date().isoformat()
+    assignment_rows = [
+        m for m in material_rows
+        if (m["is_assignment"] == 1 or m["kind"] == "assignment")
+        and (not m["open_date"] or str(m["open_date"]).strip() <= preview_today_iso)
+    ]
     learning_material_rows = [m for m in material_rows if not (m["is_assignment"] == 1 or m["kind"] == "assignment")]
 
     def safe(value):
@@ -23561,6 +23633,7 @@ def tutor_student_view():
 
     assignments_html = ""
     for a in assignment_rows:
+        opens = a["open_date"] or "Immediately"
         due = a["due_date"] or "—"
         assignments_html += f"""
         <div class='card soft assignment-student-card'>
@@ -23568,7 +23641,7 @@ def tutor_student_view():
                 <div>
                     <h3>📝 {safe(a['title'])}</h3>
                     <div class='mini muted'>{escape(grade_label(a['grade']))} — {safe(a['subject_name'])}</div>
-                    <div class='mini muted'>Due date: {safe(due)}</div>
+                    <div class='mini muted'>Open date: {safe(opens)} · Due date: {safe(due)}</div>
                 </div>
                 <div>{material_open_button(a, 'Open Assignment')}</div>
             </div>
@@ -24917,7 +24990,14 @@ def tutor_home():
                 </label>
 
                 <div class="grid"
-                     style="grid-template-columns:1fr 1fr;gap:10px">
+                     style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">
+
+                    <div>
+                        <label class="mini muted">Open date</label>
+                        <input name='open_date'
+                               type="date"
+                               style="width:100%">
+                    </div>
 
                     <div>
                         <label class="mini muted">Due date</label>
@@ -24936,6 +25016,10 @@ def tutor_home():
                                style="width:100%">
                     </div>
 
+                </div>
+
+                <div class="mini muted" style="margin-top:8px">
+                    Learners will see the assignment from the open date. Submissions close after the due date.
                 </div>
 
             </div>
@@ -25092,7 +25176,7 @@ def tutor_home():
    
     # Assignments you posted (manage submissions)
     cur.execute("""
-        SELECT m.id, m.title, m.due_date, m.max_points,
+        SELECT m.id, m.title, m.open_date, m.due_date, m.max_points,
                s.name AS subject_name, s.grade
         FROM materials m 
         JOIN subjects s ON s.id=m.subject_id
@@ -25102,7 +25186,7 @@ def tutor_home():
         ORDER BY m.created_at DESC
     """,(tid, month + "%"))
     asg=cur.fetchall()
-    asg_rows="".join([f"<tr><td>{grade_label(a['grade'])} — {a['subject_name']}</td><td>{a['title']}</td><td>Due: {a['due_date'] or '—'}</td><td>Total: {a['max_points'] or 100}</td><td><a class='links' href='{url_for('tutor_assignment_manage', mid=a['id'])}'>Manage</a></td></tr>" for a in asg]) or "<tr><td colspan='5'><div class='empty'>No assignments yet.</div></td></tr>"
+    asg_rows="".join([f"<tr><td>{grade_label(a['grade'])} — {a['subject_name']}</td><td>{a['title']}</td><td>Opens: {a['open_date'] or 'Immediately'}<br><span class='mini muted'>Due: {a['due_date'] or '—'}</span></td><td>Total: {a['max_points'] or 100}</td><td><a class='links' href='{url_for('tutor_assignment_manage', mid=a['id'])}'>Manage</a></td></tr>" for a in asg]) or "<tr><td colspan='5'><div class='empty'>No assignments yet.</div></td></tr>"
 
     # Students overview per subject (attendance + avg mark) + simple "message a student" picker
     stu_sections = []
@@ -27125,7 +27209,21 @@ def tutor_upload():
     files = request.files.getlist('file')
 
     is_assignment = 1 if request.form.get('is_assignment') == 'on' else 0
+    open_date = request.form.get('open_date', '').strip() or None
     due = request.form.get('due', '').strip() or None
+
+    if not is_assignment:
+        open_date = None
+
+    if is_assignment and open_date and due:
+        try:
+            open_value = datetime.datetime.strptime(open_date, "%Y-%m-%d").date()
+            due_value = datetime.datetime.strptime(due, "%Y-%m-%d").date()
+        except Exception:
+            return page("Error", card_msg("Please enter valid assignment dates."))
+
+        if open_value > due_value:
+            return page("Error", card_msg("The assignment open date cannot be after the due date."))
 
     max_points = request.form.get('max_points', '').strip()
 
@@ -27211,11 +27309,12 @@ def tutor_upload():
             youtube_url,
             created_at,
             is_assignment,
+            open_date,
             due_date,
             max_points,
             delivery_mode
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         subject_id,
         tid,
@@ -27226,6 +27325,7 @@ def tutor_upload():
         youtube if youtube else None,
         now,
         is_assignment,
+        open_date,
         due,
         max_points,
         delivery_mode
@@ -27544,6 +27644,7 @@ def tutor_assignment_manage(mid: int):
 
             <p class='muted'>
                 {grade_label(m['grade'])} — {m['subject_name']}
+                • Opens: {m['open_date'] or 'Immediately'}
                 • Due: {m['due_date'] or '—'}
                 • Total: {total}
             </p>
@@ -27555,7 +27656,14 @@ def tutor_assignment_manage(mid: int):
                       style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
 
                     <div>
-                        <label class="mini muted">Extend due date</label>
+                        <label class="mini muted">Open date</label>
+                        <input type="date"
+                               name="open_date"
+                               value="{m['open_date'] or ''}">
+                    </div>
+
+                    <div>
+                        <label class="mini muted">Due date</label>
                         <input type="date"
                                name="due_date"
                                value="{m['due_date'] or ''}"
@@ -27563,7 +27671,7 @@ def tutor_assignment_manage(mid: int):
                     </div>
 
                     <button class="btn success mini">
-                        Update Due Date
+                        Update Availability
                     </button>
                 </form>
             </div>
@@ -27633,41 +27741,46 @@ def tutor_extend_due_date(mid:int):
         return r
 
     tid = is_tutor()
-
+    open_date = request.form.get("open_date", "").strip() or None
     new_due = request.form.get("due_date", "").strip()
 
     if not new_due:
         return page("Error", card_msg("Due date required."))
 
+    try:
+        due_value = datetime.datetime.strptime(new_due, "%Y-%m-%d").date()
+        open_value = datetime.datetime.strptime(open_date, "%Y-%m-%d").date() if open_date else None
+    except Exception:
+        return page("Error", card_msg("Please enter valid assignment dates."))
+
+    if open_value and open_value > due_value:
+        return page("Error", card_msg("The assignment open date cannot be after the due date."))
+
     conn = get_db()
     cur = conn.cursor()
 
-    # security check — tutor owns assignment
     cur.execute("""
         SELECT id
         FROM materials
-        WHERE id=? AND tutor_id=?
+        WHERE id=?
+          AND tutor_id=?
+          AND (is_assignment=1 OR kind='assignment')
     """, (mid, tid))
 
     if not cur.fetchone():
         conn.close()
         return page("Error", card_msg("Assignment not found."))
 
-    # update due date
     cur.execute("""
         UPDATE materials
-        SET due_date=?
+        SET open_date=?, due_date=?
         WHERE id=?
-    """, (new_due, mid))
+    """, (open_date, new_due, mid))
 
     conn.commit()
     conn.close()
 
-    return redirect(url_for(
-        'tutor_assignment_manage',
-        mid=mid,
-        saved=1
-    ))
+    return redirect(url_for('tutor_assignment_manage', mid=mid, saved=1))
 
 
 @app.post('/tutor/assignment/<int:mid>/grade/<int:sid>')
