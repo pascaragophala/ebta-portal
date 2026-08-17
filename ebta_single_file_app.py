@@ -48233,7 +48233,12 @@ def manager_tutor_rankings():
                 </div>
             </td>
             <td style="width:180px">
-                <select name="rank_{int(tutor['id'])}" required>
+                <select
+                    class="tutor-rank-select"
+                    name="rank_{int(tutor['id'])}"
+                    data-tutor-id="{int(tutor['id'])}"
+                    onchange="syncTutorRankingPositions()"
+                    required>
                     {rank_options}
                 </select>
             </td>
@@ -48301,6 +48306,53 @@ def manager_tutor_rankings():
             {submit_html}
         </form>
     </section>
+
+    <script>
+        function syncTutorRankingPositions() {{
+            const selects = Array.from(
+                document.querySelectorAll(
+                    '.tutor-rank-select'
+                )
+            );
+
+            const selectedRanks = new Set(
+                selects
+                    .map(function(select) {{
+                        return select.value;
+                    }})
+                    .filter(function(value) {{
+                        return value !== '';
+                    }})
+            );
+
+            selects.forEach(function(select) {{
+                const ownRank = select.value;
+
+                Array.from(
+                    select.options
+                ).forEach(function(option) {{
+                    if (!option.value) {{
+                        option.disabled = false;
+                        return;
+                    }}
+
+                    option.disabled = (
+                        selectedRanks.has(
+                            option.value
+                        )
+                        && option.value !== ownRank
+                    );
+                }});
+            }});
+        }}
+
+        document.addEventListener(
+            'DOMContentLoaded',
+            function() {{
+                syncTutorRankingPositions();
+            }}
+        );
+    </script>
     """
 
     return page("Monday Tutor Rankings", body)
