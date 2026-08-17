@@ -1202,7 +1202,7 @@ def init_db():
 
         created_at TEXT,
         
-        manager_rating INTEGER
+        manager_rating REAL
     );
     """)
     
@@ -2407,7 +2407,7 @@ def init_db():
     ensure_column(conn, "followups", "updated_by", "TEXT")
     ensure_column(conn, "followups", "updated_at", "TEXT")
     ensure_column(conn, "tutor_weekly_tracker", "manager_id", "INTEGER")
-    ensure_column(conn, "tutor_weekly_tracker", "manager_rating", "INTEGER")
+    ensure_column(conn, "tutor_weekly_tracker", "manager_rating", "REAL")
 
     ensure_column(conn, "students", "profile_picture_path", "TEXT")
     ensure_column(conn, "students", "profile_picture_uploaded_at", "TEXT")
@@ -47481,14 +47481,18 @@ def manager_tracker_edit():
 
     <br>
     
-    <label>Manager Rating (1–5)</label>
+    <label>Manager Rating (1.0–5.0)</label>
     <select name="manager_rating">
     <option value="">Not rated</option>
-    <option value="1" {"selected" if s and s["manager_rating"] == 1 else ""}>1</option>
-    <option value="2" {"selected" if s and s["manager_rating"] == 2 else ""}>2</option>
-    <option value="3" {"selected" if s and s["manager_rating"] == 3 else ""}>3</option>
-    <option value="4" {"selected" if s and s["manager_rating"] == 4 else ""}>4</option>
-    <option value="5" {"selected" if s and s["manager_rating"] == 5 else ""}>5</option>
+    <option value="1.0" {"selected" if s and s["manager_rating"] is not None and float(s["manager_rating"]) == 1.0 else ""}>1.0</option>
+    <option value="1.5" {"selected" if s and s["manager_rating"] is not None and float(s["manager_rating"]) == 1.5 else ""}>1.5</option>
+    <option value="2.0" {"selected" if s and s["manager_rating"] is not None and float(s["manager_rating"]) == 2.0 else ""}>2.0</option>
+    <option value="2.5" {"selected" if s and s["manager_rating"] is not None and float(s["manager_rating"]) == 2.5 else ""}>2.5</option>
+    <option value="3.0" {"selected" if s and s["manager_rating"] is not None and float(s["manager_rating"]) == 3.0 else ""}>3.0</option>
+    <option value="3.5" {"selected" if s and s["manager_rating"] is not None and float(s["manager_rating"]) == 3.5 else ""}>3.5</option>
+    <option value="4.0" {"selected" if s and s["manager_rating"] is not None and float(s["manager_rating"]) == 4.0 else ""}>4.0</option>
+    <option value="4.5" {"selected" if s and s["manager_rating"] is not None and float(s["manager_rating"]) == 4.5 else ""}>4.5</option>
+    <option value="5.0" {"selected" if s and s["manager_rating"] is not None and float(s["manager_rating"]) == 5.0 else ""}>5.0</option>
     </select>
     
     <button class="btn success">
@@ -47509,6 +47513,43 @@ def manager_tracker_save():
     r = require_manager()
     if r:
         return r
+
+    manager_rating_raw = request.form.get(
+        "manager_rating",
+        ""
+    ).strip()
+
+    manager_rating = None
+
+    if manager_rating_raw:
+        try:
+            manager_rating = float(
+                manager_rating_raw
+            )
+        except Exception:
+            return page(
+                "Invalid Rating",
+                card_msg(
+                    "Manager Rating must be between 1.0 and 5.0 in 0.5 increments."
+                )
+            )
+
+        allowed_manager_ratings = {
+            1.0, 1.5,
+            2.0, 2.5,
+            3.0, 3.5,
+            4.0, 4.5,
+            5.0
+        }
+
+        if manager_rating not in allowed_manager_ratings:
+            return page(
+                "Invalid Rating",
+                card_msg(
+                    "Manager Rating must be 1.0, 1.5, 2.0, 2.5, 3.0, "
+                    "3.5, 4.0, 4.5 or 5.0."
+                )
+            )
 
     conn = get_db()
     cur = conn.cursor()
@@ -47552,7 +47593,7 @@ def manager_tracker_save():
         request.form.get("topic_covered"),
         request.form.get("manager_comments"),
         session.get("manager_id"),
-        request.form.get("manager_rating"),
+        manager_rating,
         now_utc_iso()
     ))
 
