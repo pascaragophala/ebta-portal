@@ -1260,6 +1260,39 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_tutor_manager_ratings_month
         ON tutor_manager_ratings(month)
     """)
+
+    # Weekly ranking of tutors by their assigned Tutor Manager.
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS tutor_weekly_rankings(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        manager_id INTEGER NOT NULL,
+        tutor_id INTEGER NOT NULL,
+        month TEXT NOT NULL,
+        week_no INTEGER NOT NULL,
+        rank_position INTEGER NOT NULL,
+        total_ranked INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        UNIQUE(manager_id, tutor_id, month, week_no),
+        FOREIGN KEY(manager_id) REFERENCES tutor_managers(id) ON DELETE CASCADE,
+        FOREIGN KEY(tutor_id) REFERENCES tutors(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tutor_weekly_rankings_month_week
+        ON tutor_weekly_rankings(month, week_no)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tutor_weekly_rankings_tutor
+        ON tutor_weekly_rankings(tutor_id, month)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tutor_weekly_rankings_manager
+        ON tutor_weekly_rankings(manager_id, month, week_no)
+    """)
     
     cur.execute("""
     CREATE TABLE IF NOT EXISTS academic_quality_managers(
@@ -28431,6 +28464,36 @@ def tutor_work_band(rate):
     return "lapsed", "High Risk"
 
 
+def tutor_weekly_rank_score(rank_position, total_ranked):
+    try:
+        rank_position = int(rank_position)
+        total_ranked = int(total_ranked)
+    except Exception:
+        return None
+
+    if rank_position < 1 or total_ranked < 1 or rank_position > total_ranked:
+        return None
+
+    if total_ranked == 1:
+        return 100.0
+
+    return round(((total_ranked - rank_position) * 100.0) / (total_ranked - 1), 1)
+
+
+def tutor_rank_ordinal(value):
+    try:
+        n = int(value)
+    except Exception:
+        return str(value or "")
+
+    if 10 <= (n % 100) <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+
+    return f"{n}{suffix}"
+
+
 def tutor_work_progress_data(tutor_id, month):
     """
     Builds tutor work progress data for one month.
@@ -28594,6 +28657,67 @@ def tutor_work_progress_data(tutor_id, month):
     avg_manager_rating = tracker["avg_rating"] or None
 
     tracker_completion_rate = percent_value(tracker_logs, assigned_sessions)
+
+    # Tutor Manager weekly ranking (Week 1-4)
+    cur.execute("""
+        SELECT
+            COUNT(*) AS ranking_entries,
+            COUNT(DISTINCT week_no) AS ranked_weeks,
+            ROUND(AVG(rank_position), 2) AS avg_rank_position,
+            MIN(rank_position) AS best_rank_position
+        FROM tutor_weekly_rankings
+        WHERE tutor_id=? AND month=?
+    """, (tutor_id, month))
+
+    ranking_summary = cur.fetchone()
+    weekly_ranking_entries = int(ranking_summary["ranking_entries"] or 0) if ranking_summary else 0
+    weekly_ranked_weeks = int(ranking_summary["ranked_weeks"] or 0) if ranking_summary else 0
+    avg_weekly_rank = (
+        float(ranking_summary["avg_rank_position"])
+        if ranking_summary and ranking_summary["avg_rank_position"] is not None
+        else None
+    )
+    best_weekly_rank = (
+        int(ranking_summary["best_rank_position"])
+        if ranking_summary and ranking_summary["best_rank_position"] is not None
+        else None
+    )
+
+    cur.execute("""
+        SELECT
+            r.rank_position, r.total_ranked, r.week_no,
+            r.updated_at, r.created_at,
+            tm.full_name AS manager_name
+        FROM tutor_weekly_rankings r
+        LEFT JOIN tutor_managers tm ON tm.id=r.manager_id
+        WHERE r.tutor_id=? AND r.month=?
+        ORDER BY r.week_no DESC, COALESCE(r.updated_at, r.created_at) DESC, r.id DESC
+    """, (tutor_id, month))
+
+    ranking_history_rows = cur.fetchall()
+    ranking_scores = []
+
+    for ranking_row in ranking_history_rows:
+        score = tutor_weekly_rank_score(ranking_row["rank_position"], ranking_row["total_ranked"])
+        if score is not None:
+            ranking_scores.append(score)
+
+    avg_weekly_rank_score = (
+        round(sum(ranking_scores) / len(ranking_scores), 1)
+        if ranking_scores else None
+    )
+
+    latest_weekly_rank = None
+    latest_weekly_rank_total = None
+    latest_weekly_rank_week = None
+    latest_weekly_rank_manager = None
+
+    if ranking_history_rows:
+        latest_ranking = ranking_history_rows[0]
+        latest_weekly_rank = int(latest_ranking["rank_position"])
+        latest_weekly_rank_total = int(latest_ranking["total_ranked"])
+        latest_weekly_rank_week = int(latest_ranking["week_no"])
+        latest_weekly_rank_manager = latest_ranking["manager_name"]
 
     # Messages sent to students and admin
     cur.execute("""
@@ -28829,6 +28953,15 @@ def tutor_work_progress_data(tutor_id, month):
         "tracker_extra_resources": tracker_extra_resources,
         "tracker_completion_rate": tracker_completion_rate,
         "avg_manager_rating": avg_manager_rating,
+        "weekly_ranking_entries": weekly_ranking_entries,
+        "weekly_ranked_weeks": weekly_ranked_weeks,
+        "avg_weekly_rank": avg_weekly_rank,
+        "best_weekly_rank": best_weekly_rank,
+        "avg_weekly_rank_score": avg_weekly_rank_score,
+        "latest_weekly_rank": latest_weekly_rank,
+        "latest_weekly_rank_total": latest_weekly_rank_total,
+        "latest_weekly_rank_week": latest_weekly_rank_week,
+        "latest_weekly_rank_manager": latest_weekly_rank_manager,
         "messages_sent": messages_sent,
         "portal_seconds": portal_seconds,
         "portal_minutes": portal_minutes,
@@ -47123,6 +47256,28 @@ def manager_dashboard():
             </a>
         </div>
 
+        <div class="card soft" style="
+            margin:0 0 12px;
+            padding:13px 14px;
+            border-left:5px solid #f59e0b;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            flex-wrap:wrap;
+        ">
+            <div>
+                <strong>Monday Tutor Rankings</strong>
+                <div class="mini muted" style="margin-top:3px">
+                    Rank your tutors for Week 1, Week 2, Week 3 or Week 4.
+                </div>
+            </div>
+
+            <a class="btn mini" href="/manager/tutor-rankings?month={month}">
+                Open Rankings
+            </a>
+        </div>
+
         <div class="tm-top-stats">
 
             <div class="tm-stat">
@@ -47925,6 +48080,10 @@ def manager_nav():
             Weekly Tracker
         </a>
 
+        <a class="btn mini" href="/manager/tutor-rankings">
+            Monday Tutor Rankings
+        </a>
+
         <a class="btn mini" href="/manager/tracker/history">
             Session History
         </a>
@@ -47961,6 +48120,318 @@ def manager_nav():
     """
     
     
+def manager_ranking_default_week(month):
+    try:
+        now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))
+    except Exception:
+        now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=2)))
+
+    if str(month or "") == now.strftime("%Y-%m"):
+        return min(4, max(1, ((now.day - 1) // 7) + 1))
+
+    return 1
+
+
+def manager_ranking_valid_month(value):
+    try:
+        datetime.datetime.strptime(str(value or ""), "%Y-%m")
+        return True
+    except Exception:
+        return False
+
+
+@app.get('/manager/tutor-rankings')
+def manager_tutor_rankings():
+    r = require_manager()
+    if r:
+        return r
+
+    manager_id = int(session.get("manager_id"))
+    month = request.args.get("month", "").strip() or get_setting("current_month")
+
+    if not manager_ranking_valid_month(month):
+        month = get_setting("current_month")
+
+    week_raw = request.args.get("week", "").strip()
+
+    try:
+        week_no = int(week_raw)
+    except Exception:
+        week_no = manager_ranking_default_week(month)
+
+    if week_no not in (1, 2, 3, 4):
+        week_no = 1
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            t.id,
+            t.full_name,
+            t.phone,
+            GROUP_CONCAT(DISTINCT (s.grade || ' - ' || s.name)) AS subjects
+        FROM manager_tutors mt
+        JOIN tutors t ON t.id=mt.tutor_id
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        LEFT JOIN subjects s ON s.id=ts.subject_id
+        WHERE mt.manager_id=?
+          AND COALESCE(t.is_active,1)=1
+          AND t.deleted_at IS NULL
+        GROUP BY t.id
+        ORDER BY t.full_name
+    """, (manager_id,))
+
+    tutors = cur.fetchall()
+
+    cur.execute("""
+        SELECT tutor_id, rank_position, total_ranked, updated_at, created_at
+        FROM tutor_weekly_rankings
+        WHERE manager_id=? AND month=? AND week_no=?
+        ORDER BY rank_position
+    """, (manager_id, month, week_no))
+
+    saved_rows = cur.fetchall()
+    conn.close()
+
+    saved_map = {int(row["tutor_id"]): row for row in saved_rows}
+    tutor_count = len(tutors)
+
+    week_options = ""
+    for value in range(1, 5):
+        selected = "selected" if value == week_no else ""
+        week_options += f"<option value='{value}' {selected}>Week {value}</option>"
+
+    rows = ""
+
+    for tutor in tutors:
+        saved = saved_map.get(int(tutor["id"]))
+        saved_rank = int(saved["rank_position"]) if saved else None
+
+        rank_options = "<option value=''>Select rank</option>"
+        for position in range(1, tutor_count + 1):
+            selected = "selected" if saved_rank == position else ""
+            rank_options += (
+                f"<option value='{position}' {selected}>"
+                f"{tutor_rank_ordinal(position)}</option>"
+            )
+
+        saved_chip = ""
+        if saved_rank is not None:
+            saved_chip = (
+                "<span class='chip active'>"
+                + escape(tutor_rank_ordinal(saved_rank))
+                + "</span>"
+            )
+
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(tutor['full_name'] or '')}</strong>
+                <div class="mini muted">
+                    {escape(tutor['subjects'] or 'No subject assigned')}
+                </div>
+            </td>
+            <td style="width:180px">
+                <select name="rank_{int(tutor['id'])}" required>
+                    {rank_options}
+                </select>
+            </td>
+            <td>{saved_chip or "<span class='chip'>Not saved</span>"}</td>
+        </tr>
+        """
+
+    saved_complete = bool(tutor_count and len(saved_map) == tutor_count)
+    saved_note = ""
+
+    if request.args.get("saved") == "1":
+        saved_note = """
+        <div class="card soft" style="border-left:5px solid #22c55e;margin-bottom:12px">
+            Ranking saved.
+        </div>
+        """
+    elif saved_complete:
+        saved_note = """
+        <div class="mini muted" style="margin-bottom:10px">
+            Rankings are already saved for this week. You can update them and submit again.
+        </div>
+        """
+
+    submit_html = ""
+    if tutor_count:
+        submit_html = """
+        <div style="margin-top:14px">
+            <button class="btn success">Submit Ranking</button>
+        </div>
+        """
+
+    body = f"""
+    {manager_nav()}
+    <section class="card">
+        <h1>Monday Tutor Rankings</h1>
+
+        <form method="get" class="toolbar" style="align-items:end;margin:12px 0">
+            <div>
+                <label>Month</label>
+                <input type="month" name="month" value="{escape(month)}" required>
+            </div>
+            <div>
+                <label>Week</label>
+                <select name="week">{week_options}</select>
+            </div>
+            <button class="btn mini">View</button>
+        </form>
+
+        {saved_note}
+
+        <form method="post" action="{url_for('manager_tutor_rankings_save')}">
+            <input type="hidden" name="month" value="{escape(month)}">
+            <input type="hidden" name="week" value="{week_no}">
+
+            <div class="card soft" style="border-left:5px solid #f59e0b;margin-bottom:12px">
+                <strong>{escape(pretty_month_label(month))} · Week {week_no}</strong>
+            </div>
+
+            <div class="scroll-x">
+                <table>
+                    <thead><tr><th>Tutor</th><th>Rank</th><th>Saved</th></tr></thead>
+                    <tbody>{rows or "<tr><td colspan='3'>No active tutors assigned to you.</td></tr>"}</tbody>
+                </table>
+            </div>
+            {submit_html}
+        </form>
+    </section>
+    """
+
+    return page("Monday Tutor Rankings", body)
+
+
+@app.post('/manager/tutor-rankings')
+def manager_tutor_rankings_save():
+    r = require_manager()
+    if r:
+        return r
+
+    manager_id = int(session.get("manager_id"))
+    month = request.form.get("month", "").strip()
+    week_raw = request.form.get("week", "").strip()
+
+    if not manager_ranking_valid_month(month):
+        return page("Invalid Month", card_msg("Please select a valid month."))
+
+    try:
+        week_no = int(week_raw)
+    except Exception:
+        week_no = 0
+
+    if week_no not in (1, 2, 3, 4):
+        return page("Invalid Week", card_msg("Please select Week 1, Week 2, Week 3 or Week 4."))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT t.id, t.full_name
+        FROM manager_tutors mt
+        JOIN tutors t ON t.id=mt.tutor_id
+        WHERE mt.manager_id=?
+          AND COALESCE(t.is_active,1)=1
+          AND t.deleted_at IS NULL
+        ORDER BY t.full_name
+    """, (manager_id,))
+
+    tutors = cur.fetchall()
+
+    if not tutors:
+        conn.close()
+        return redirect(url_for("manager_tutor_rankings", month=month, week=week_no))
+
+    tutor_count = len(tutors)
+    ranking_rows = []
+    used_positions = set()
+
+    for tutor in tutors:
+        tutor_id = int(tutor["id"])
+        raw_rank = request.form.get(f"rank_{tutor_id}", "").strip()
+
+        try:
+            rank_position = int(raw_rank)
+        except Exception:
+            conn.close()
+            return page(
+                "Ranking Required",
+                f"""
+                {manager_nav()}
+                <section class="card">
+                    <h1>Ranking Required</h1>
+                    <p>Please rank every tutor before submitting.</p>
+                    <a class="btn" href="{url_for('manager_tutor_rankings', month=month, week=week_no)}">Back to Rankings</a>
+                </section>
+                """
+            )
+
+        if not (1 <= rank_position <= tutor_count):
+            conn.close()
+            return page("Invalid Ranking", card_msg("One or more ranking positions are invalid."))
+
+        if rank_position in used_positions:
+            conn.close()
+            return page(
+                "Duplicate Ranking",
+                f"""
+                {manager_nav()}
+                <section class="card">
+                    <h1>Duplicate Ranking</h1>
+                    <p>Each tutor must have a different ranking position.</p>
+                    <a class="btn" href="{url_for('manager_tutor_rankings', month=month, week=week_no)}">Back to Rankings</a>
+                </section>
+                """
+            )
+
+        used_positions.add(rank_position)
+        ranking_rows.append((tutor_id, rank_position))
+
+    now = now_utc_iso()
+    current_tutor_ids = [tutor_id for tutor_id, _ in ranking_rows]
+    placeholders = ",".join("?" for _ in current_tutor_ids)
+
+    cur.execute(
+        f"""
+        DELETE FROM tutor_weekly_rankings
+        WHERE manager_id=? AND month=? AND week_no=?
+          AND tutor_id NOT IN ({placeholders})
+        """,
+        [manager_id, month, week_no] + current_tutor_ids
+    )
+
+    for tutor_id, rank_position in ranking_rows:
+        cur.execute("""
+            INSERT INTO tutor_weekly_rankings(
+                manager_id, tutor_id, month, week_no,
+                rank_position, total_ranked, created_at, updated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(manager_id, tutor_id, month, week_no)
+            DO UPDATE SET
+                rank_position=excluded.rank_position,
+                total_ranked=excluded.total_ranked,
+                updated_at=excluded.updated_at
+        """, (
+            manager_id, tutor_id, month, week_no,
+            rank_position, tutor_count, now, now
+        ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for(
+        "manager_tutor_rankings",
+        month=month,
+        week=week_no,
+        saved=1
+    ))
+
+
 @app.get('/manager/session-links')
 def manager_session_links():
     r = require_manager()
@@ -84413,6 +84884,7 @@ def cao_nav():
             "Teaching Activity",
             [
                 cao_link("Tutor Performance", "cao_tutor_performance", "cao_performance_enabled", icon="📊"),
+                cao_link("Weekly Tutor Rankings", "cao_tutor_rankings", "cao_performance_enabled", icon="🏆"),
                 cao_link("Classes & Sessions", "cao_sessions", "cao_attendance_enabled", icon="📅"),
                 cao_link("Materials", "cao_materials", "cao_materials_enabled", icon="📚"),
                 cao_link("Assignments", "cao_assignments", "cao_assignments_enabled", icon="📝"),
@@ -87004,6 +87476,144 @@ def cao_aqm_team():
     return page("CAO AQM Team", body)
     
     
+@app.get('/cao/tutor-rankings')
+def cao_tutor_rankings():
+    r = require_cao_permission("cao_performance_enabled", "weekly tutor rankings")
+    if r:
+        return r
+
+    month = request.args.get("month", "").strip() or cao_selected_month()
+    week_raw = request.args.get("week", "").strip()
+    q = request.args.get("q", "").strip()
+
+    try:
+        week_no = int(week_raw) if week_raw else None
+    except Exception:
+        week_no = None
+
+    if week_no not in (None, 1, 2, 3, 4):
+        week_no = None
+
+    conn = get_db()
+    cur = conn.cursor()
+    where = ["r.month=?"]
+    params = [month]
+
+    if week_no is not None:
+        where.append("r.week_no=?")
+        params.append(week_no)
+
+    if q:
+        search = "%" + q + "%"
+        where.append("""
+            (t.full_name LIKE ? OR tm.full_name LIKE ? OR s.name LIKE ? OR s.grade LIKE ?)
+        """)
+        params.extend([search, search, search, search])
+
+    cur.execute(f"""
+        SELECT
+            r.id, r.manager_id, r.tutor_id, r.month, r.week_no,
+            r.rank_position, r.total_ranked, r.created_at, r.updated_at,
+            t.full_name AS tutor_name,
+            tm.full_name AS manager_name,
+            GROUP_CONCAT(DISTINCT (s.grade || ' - ' || s.name)) AS subjects
+        FROM tutor_weekly_rankings r
+        JOIN tutors t ON t.id=r.tutor_id
+        JOIN tutor_managers tm ON tm.id=r.manager_id
+        LEFT JOIN tutor_subjects ts ON ts.tutor_id=t.id
+        LEFT JOIN subjects s ON s.id=ts.subject_id
+        WHERE {' AND '.join(where)}
+        GROUP BY r.id
+        ORDER BY r.week_no DESC, tm.full_name, r.rank_position, t.full_name
+    """, params)
+
+    rankings = cur.fetchall()
+    conn.close()
+
+    manager_ids = {int(row["manager_id"]) for row in rankings}
+    tutor_ids = {int(row["tutor_id"]) for row in rankings}
+    ranking_sets = {(int(row["manager_id"]), int(row["week_no"])) for row in rankings}
+
+    scores = []
+    for row in rankings:
+        score = tutor_weekly_rank_score(row["rank_position"], row["total_ranked"])
+        if score is not None:
+            scores.append(score)
+
+    avg_score = round(sum(scores) / len(scores), 1) if scores else 0
+    rows = ""
+
+    for row in rankings:
+        score = tutor_weekly_rank_score(row["rank_position"], row["total_ranked"])
+        rank_text = f"#{row['rank_position']} of {row['total_ranked']}"
+        score_text = f"{score}%" if score is not None else "—"
+
+        rows += f"""
+        <tr>
+            <td><span class="chip">Week {int(row['week_no'])}</span></td>
+            <td><strong>{escape(row['manager_name'] or '')}</strong></td>
+            <td>
+                <strong>{escape(row['tutor_name'] or '')}</strong>
+                <div class="mini muted">{escape(row['subjects'] or 'No subject assigned')}</div>
+            </td>
+            <td><span class="chip active">{escape(rank_text)}</span></td>
+            <td>{escape(score_text)}</td>
+            <td>{escape(str(row["updated_at"] or row["created_at"] or "")[:16].replace("T", " "))}</td>
+        </tr>
+        """
+
+    week_options = "<option value=''>All Weeks</option>"
+    for value in range(1, 5):
+        selected = "selected" if week_no == value else ""
+        week_options += f"<option value='{value}' {selected}>Week {value}</option>"
+
+    body = f"""
+    {cao_nav()}
+    <section class="card">
+        <h1>Weekly Tutor Rankings</h1>
+
+        <form method="get" class="toolbar" style="align-items:end">
+            <div>
+                <label>Month</label>
+                <input type="month" name="month" value="{escape(month)}">
+            </div>
+            <div>
+                <label>Week</label>
+                <select name="week">{week_options}</select>
+            </div>
+            <div>
+                <label>Search</label>
+                <input name="q" value="{escape(q, quote=True)}" placeholder="Tutor, manager, subject or grade">
+            </div>
+            <button class="btn mini">View</button>
+            <a class="btn mini secondary" href="{url_for('cao_tutor_rankings')}?month={escape(month, quote=True)}">Clear</a>
+        </form>
+
+        <div class="stats" style="margin-top:14px">
+            {stat("Ranking Entries", len(rankings))}
+            {stat("Ranking Sets", len(ranking_sets))}
+            {stat("Tutor Managers", len(manager_ids))}
+            {stat("Tutors Ranked", len(tutor_ids))}
+            {stat("Average Ranking Score", f"{avg_score}%")}
+        </div>
+
+        <div class="scroll-x" style="margin-top:14px">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Week</th><th>Tutor Manager</th><th>Tutor</th>
+                        <th>Rank</th><th>Ranking Score</th><th>Updated</th>
+                    </tr>
+                </thead>
+                <tbody>{rows or "<tr><td colspan='6'>No weekly tutor rankings found for this selection.</td></tr>"}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page("Weekly Tutor Rankings", body)
+
+
 @app.get('/cao/tutor-performance')
 def cao_tutor_performance():
 
@@ -87126,6 +87736,14 @@ def cao_tutor_performance():
             "tracker_logs": progress["tracker_logs"],
             "tracker_completion_rate": progress["tracker_completion_rate"],
             "avg_manager_rating": progress["avg_manager_rating"],
+            "weekly_ranking_entries": progress["weekly_ranking_entries"],
+            "weekly_ranked_weeks": progress["weekly_ranked_weeks"],
+            "avg_weekly_rank": progress["avg_weekly_rank"],
+            "avg_weekly_rank_score": progress["avg_weekly_rank_score"],
+            "latest_weekly_rank": progress["latest_weekly_rank"],
+            "latest_weekly_rank_total": progress["latest_weekly_rank_total"],
+            "latest_weekly_rank_week": progress["latest_weekly_rank_week"],
+            "latest_weekly_rank_manager": progress["latest_weekly_rank_manager"],
             "messages_sent": progress["messages_sent"],
             "portal_hours_label": progress["portal_hours_label"],
             "high_risk_subjects": risk_subjects,
@@ -87158,6 +87776,18 @@ def cao_tutor_performance():
     avg_marking_rate = round(sum([x["marking_rate"] for x in tutor_data]) / len(tutor_data)) if tutor_data else 0
     avg_tracker_rate = round(sum([min(100, x["tracker_completion_rate"]) for x in tutor_data]) / len(tutor_data)) if tutor_data else 0
 
+    ranked_tutors = [x for x in tutor_data if x["weekly_ranking_entries"] > 0]
+    ranked_tutor_count = len(ranked_tutors)
+    ranking_score_values = [
+        float(x["avg_weekly_rank_score"])
+        for x in ranked_tutors
+        if x["avg_weekly_rank_score"] is not None
+    ]
+    avg_weekly_ranking_score = (
+        round(sum(ranking_score_values) / len(ranking_score_values))
+        if ranking_score_values else 0
+    )
+
     total_uploads = sum([x["total_uploads"] for x in tutor_data])
     total_recordings = sum([x["recordings_uploaded"] for x in tutor_data])
     total_assignments = sum([x["assignments_uploaded"] for x in tutor_data])
@@ -87188,6 +87818,15 @@ def cao_tutor_performance():
         recommendations = ", ".join(t["recommendations"][:3]) or "On track"
 
         avg_rating = t["avg_manager_rating"] if t["avg_manager_rating"] is not None else "—"
+
+        if t["latest_weekly_rank"] is not None:
+            weekly_rank_html = f"""
+            <span class="chip active">#{t['latest_weekly_rank']} of {t['latest_weekly_rank_total']}</span>
+            <div class="mini muted">Week {t['latest_weekly_rank_week']} · {t['weekly_ranked_weeks']} week(s) ranked</div>
+            <div class="mini muted">Ranking score: {t['avg_weekly_rank_score'] if t['avg_weekly_rank_score'] is not None else '—'}%</div>
+            """
+        else:
+            weekly_rank_html = "<span class='chip'>Not ranked</span>"
 
         rows += f"""
         <tr>
@@ -87235,6 +87874,8 @@ def cao_tutor_performance():
                 {escape(str(avg_rating))}
                 <div class="mini muted">Manager rating</div>
             </td>
+
+            <td>{weekly_rank_html}</td>
 
             <td>
                 {escape(t['portal_hours_label'])}
@@ -87285,8 +87926,8 @@ def cao_tutor_performance():
             "values": [total_uploads, total_recordings, total_assignments, total_views, total_tracker_logs]
         },
         "qualityAreas": {
-            "labels": ["Overall Progress", "Attendance Logs", "Marking Rate", "Tracker Completion"],
-            "values": [avg_progress, avg_attendance_logs, avg_marking_rate, avg_tracker_rate]
+            "labels": ["Overall Progress", "Attendance Logs", "Marking Rate", "Tracker Completion", "Manager Ranking"],
+            "values": [avg_progress, avg_attendance_logs, avg_marking_rate, avg_tracker_rate, avg_weekly_ranking_score]
         },
         "subjectRisks": {
             "labels": subject_risk_labels,
@@ -87312,7 +87953,7 @@ def cao_tutor_performance():
         <p class="muted">
             This view uses the upgraded tutor work progress data: LMS materials, recordings,
             assignments, learner engagement, marking progress, attendance logs, tracker logs,
-            manager ratings, portal activity and risk subjects.
+            manager ratings, weekly tutor rankings, portal activity and risk subjects.
         </p>
 
         <form method="get" class="toolbar">
@@ -87353,6 +87994,8 @@ def cao_tutor_performance():
             {stat("Attendance Logs", f"{avg_attendance_logs}%")}
             {stat("Marking Rate", f"{avg_marking_rate}%")}
             {stat("Tracker Completion", f"{avg_tracker_rate}%")}
+            {stat("Tutors Ranked", ranked_tutor_count)}
+            {stat("Manager Ranking Score", f"{avg_weekly_ranking_score}%")}
             {stat("On Track", on_track_count)}
             {stat("Needs Attention", attention_count)}
             {stat("High Risk", high_risk_count)}
@@ -87441,13 +88084,14 @@ def cao_tutor_performance():
                             <th>Attendance Logs</th>
                             <th>Tracker Logs</th>
                             <th>Avg Rating</th>
+                            <th>Weekly Ranking</th>
                             <th>Portal Activity</th>
                             <th>Risk / Improvement</th>
                         </tr>
                     </thead>
 
                     <tbody>
-                        {rows or "<tr><td colspan='10'>No tutor performance records found.</td></tr>"}
+                        {rows or "<tr><td colspan='11'>No tutor performance records found.</td></tr>"}
                     </tbody>
                 </table>
             </div>
@@ -87742,6 +88386,14 @@ def cao_tutor_performance_export():
             "Tracker Logs": progress["tracker_logs"],
             "Tracker Completion Rate %": progress["tracker_completion_rate"],
             "Average Manager Rating": progress["avg_manager_rating"] if progress["avg_manager_rating"] is not None else "",
+            "Weekly Ranking Entries": progress["weekly_ranking_entries"],
+            "Weeks Ranked": progress["weekly_ranked_weeks"],
+            "Average Weekly Rank": progress["avg_weekly_rank"] if progress["avg_weekly_rank"] is not None else "",
+            "Manager Ranking Score %": progress["avg_weekly_rank_score"] if progress["avg_weekly_rank_score"] is not None else "",
+            "Latest Weekly Rank": (
+                f"#{progress['latest_weekly_rank']} of {progress['latest_weekly_rank_total']} (Week {progress['latest_weekly_rank_week']})"
+                if progress["latest_weekly_rank"] is not None else ""
+            ),
             "Messages Sent": progress["messages_sent"],
             "Portal Activity": progress["portal_hours_label"],
             "High Risk Subjects": ", ".join(risk_subjects) if risk_subjects else "None",
@@ -87759,14 +88411,14 @@ def cao_tutor_performance_export():
     ws.title = "Tutor Work Progress"
 
     title = f"Detailed Tutor Work Progress - {month}"
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=26)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=31)
     ws.cell(row=1, column=1).value = title
     ws.cell(row=1, column=1).font = Font(size=14, bold=True, color="FFFFFF")
     ws.cell(row=1, column=1).fill = PatternFill("solid", fgColor="1B5E20")
     ws.cell(row=1, column=1).alignment = Alignment(horizontal="center")
 
     filter_text = f"Filters: Search={q or 'All'} | Grade={grade or 'All'} | Subject={subject_id or 'All'} | Progress={progress_filter or 'All'}"
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=26)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=31)
     ws.cell(row=2, column=1).value = filter_text
     ws.cell(row=2, column=1).font = Font(italic=True, color="64748B")
     ws.cell(row=2, column=1).alignment = Alignment(horizontal="center")
@@ -87793,6 +88445,11 @@ def cao_tutor_performance_export():
         "Tracker Logs",
         "Tracker Completion Rate %",
         "Average Manager Rating",
+        "Weekly Ranking Entries",
+        "Weeks Ranked",
+        "Average Weekly Rank",
+        "Manager Ranking Score %",
+        "Latest Weekly Rank",
         "Messages Sent",
         "Portal Activity",
         "High Risk Subjects",
@@ -87853,11 +88510,16 @@ def cao_tutor_performance_export():
         19: 16,
         20: 22,
         21: 22,
-        22: 16,
-        23: 18,
-        24: 36,
-        25: 36,
-        26: 45
+        22: 18,
+        23: 16,
+        24: 20,
+        25: 22,
+        26: 24,
+        27: 16,
+        28: 18,
+        29: 36,
+        30: 36,
+        31: 45
     }
 
     for col_index, width in column_widths.items():
