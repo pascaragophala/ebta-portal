@@ -52759,6 +52759,13 @@ def aqm_tutor_work_snapshot(month, limit=12):
         tutor_items.append({
             "id": tutor["id"],
             "full_name": tutor["full_name"],
+            "subjects": [
+                {
+                    "grade": sub["grade"],
+                    "subject_name": sub["subject_name"]
+                }
+                for sub in progress["assigned_subjects"]
+            ],
             "overall_rate": progress["overall_rate"],
             "status": status,
             "status_class": status_class,
@@ -53056,10 +53063,28 @@ def aqm_dashboard():
     tutor_rows = ""
 
     for tutor in tutor_snapshot["items"]:
+        tutor_subjects_html = "".join([
+            f"""
+            <span class="chip"
+                  style="display:inline-block;margin:2px 4px 2px 0;white-space:nowrap">
+                {escape(grade_label(sub["grade"]))}
+                — {escape(sub["subject_name"])}
+            </span>
+            """
+            for sub in tutor.get("subjects", [])
+        ])
+
+        if not tutor_subjects_html:
+            tutor_subjects_html = "<span class='mini muted'>No subject assigned</span>"
+
         tutor_rows += f"""
         <tr>
             <td>
                 <strong>{escape(tutor["full_name"] or "—")}</strong>
+            </td>
+
+            <td style="min-width:220px">
+                {tutor_subjects_html}
             </td>
 
             <td>
@@ -53262,6 +53287,7 @@ def aqm_dashboard():
                         <thead>
                             <tr>
                                 <th>Tutor</th>
+                                <th>Subjects</th>
                                 <th>Status</th>
                                 <th>Uploads</th>
                                 <th>Recordings</th>
@@ -53276,7 +53302,7 @@ def aqm_dashboard():
                         </thead>
 
                         <tbody>
-                            {tutor_rows or "<tr><td colspan='11'>No tutor work progress found for this month.</td></tr>"}
+                            {tutor_rows or "<tr><td colspan='12'>No tutor work progress found for this month.</td></tr>"}
                         </tbody>
                     </table>
                 </div>
@@ -58692,6 +58718,32 @@ def aqm_tutors():
     """, (month, month, month, month))
 
     all_records = cur.fetchall()
+
+    cur.execute("""
+        SELECT
+            ts.tutor_id,
+            s.grade,
+            s.name AS subject_name
+        FROM tutor_subjects ts
+        JOIN subjects s
+          ON s.id=ts.subject_id
+        ORDER BY
+            ts.tutor_id,
+            CAST(REPLACE(s.grade,'G','') AS INTEGER),
+            s.name
+    """)
+
+    subject_map = {}
+
+    for sub in cur.fetchall():
+        subject_map.setdefault(
+            int(sub["tutor_id"]),
+            []
+        ).append({
+            "grade": sub["grade"],
+            "subject_name": sub["subject_name"]
+        })
+
     conn.close()
 
     total_records = len(all_records)
@@ -58710,6 +58762,23 @@ def aqm_tutors():
     rows = ""
 
     for x in records:
+        tutor_subjects_html = "".join([
+            f"""
+            <span class="chip"
+                  style="display:inline-block;margin:2px 4px 2px 0;white-space:nowrap">
+                {escape(grade_label(sub["grade"]))}
+                — {escape(sub["subject_name"])}
+            </span>
+            """
+            for sub in subject_map.get(
+                int(x["id"]),
+                []
+            )
+        ])
+
+        if not tutor_subjects_html:
+            tutor_subjects_html = "<span class='mini muted'>No subject assigned</span>"
+
         reports_count = x["reports_count"] or 0
         sessions_held = x["sessions_held"] or 0
         recordings_posted = x["recordings_posted"] or 0
@@ -58736,7 +58805,12 @@ def aqm_tutors():
 
         rows += f"""
         <tr>
-            <td>{escape(x['full_name'] or '—')}</td>
+            <td>
+                <strong>{escape(x['full_name'] or '—')}</strong>
+            </td>
+            <td style="min-width:240px">
+                {tutor_subjects_html}
+            </td>
             <td>{reports_count}</td>
             <td>{sessions_held}</td>
             <td>{recording_chip}</td>
@@ -58802,6 +58876,7 @@ def aqm_tutors():
                 <thead>
                     <tr>
                         <th>Tutor</th>
+                        <th>Subjects</th>
                         <th>Tracker Reports</th>
                         <th>Sessions Held</th>
                         <th>Recordings Posted</th>
@@ -58814,7 +58889,7 @@ def aqm_tutors():
                 </thead>
 
                 <tbody>
-                    {rows or '<tr><td colspan="9">No tutor quality data found for this month.</td></tr>'}
+                    {rows or '<tr><td colspan="10">No tutor quality data found for this month.</td></tr>'}
                 </tbody>
             </table>
         </div>
