@@ -12064,6 +12064,13 @@ EBTA_UNIFIED_UI_CSS = """
         flex:0 0 auto;
     }
 
+    /* AQM navigation should scroll naturally with the page. */
+    body.role-aqm.ebta-unified-ui .ebta-role-nav {
+        position:relative;
+        top:auto;
+        z-index:auto;
+    }
+
     body.ebta-unified-ui .admin-nav .btn,
     body.ebta-unified-ui .ebta-role-nav .btn {
         min-height:38px;
