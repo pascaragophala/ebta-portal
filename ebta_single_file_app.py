@@ -56204,6 +56204,66 @@ def aqm_students_info():
 
     students = cur.fetchall()
 
+    current_student_month = (
+        get_setting(
+            "current_month"
+        )
+        or datetime.date.today().strftime("%Y-%m")
+    )
+
+    student_subject_map = {}
+
+    student_ids = [
+        int(st["id"])
+        for st in students
+    ]
+
+    if student_ids:
+        placeholders = ",".join(
+            "?"
+            for _ in student_ids
+        )
+
+        cur.execute(
+            f"""
+            SELECT
+                e.student_id,
+                s.grade,
+                s.name AS subject_name
+            FROM enrollments e
+            JOIN subjects s
+              ON s.id=e.subject_id
+            WHERE e.student_id IN ({placeholders})
+              AND substr(e.month,1,7)=?
+              AND e.status='ACTIVE'
+            GROUP BY
+                e.student_id,
+                s.id
+            ORDER BY
+                e.student_id,
+                CAST(
+                    REPLACE(
+                        s.grade,
+                        'G',
+                        ''
+                    ) AS INTEGER
+                ),
+                s.name
+            """,
+            student_ids + [
+                current_student_month
+            ]
+        )
+
+        for sub in cur.fetchall():
+            student_subject_map.setdefault(
+                int(sub["student_id"]),
+                []
+            ).append({
+                "grade": sub["grade"],
+                "subject_name": sub["subject_name"]
+            })
+
     student_rows = ""
     
     pagination_params = {
@@ -56257,6 +56317,31 @@ def aqm_students_info():
         """
 
     for st in students:
+
+        subject_chips = "".join([
+            f"""
+            <span class="chip"
+                  style="
+                      display:inline-block;
+                      margin:2px 4px 2px 0;
+                      white-space:nowrap;
+                  ">
+                {escape(grade_label(sub["grade"]))}
+                — {escape(sub["subject_name"])}
+            </span>
+            """
+            for sub in student_subject_map.get(
+                int(st["id"]),
+                []
+            )
+        ])
+
+        if not subject_chips:
+            subject_chips = """
+            <span class="mini muted">
+                No active subjects
+            </span>
+            """
 
         profile_html = ""
 
@@ -56334,6 +56419,10 @@ def aqm_students_info():
                 </div>
             </td>
 
+            <td style="min-width:260px">
+                {subject_chips}
+            </td>
+
             <td style="min-width:170px">
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
                     <a class="btn mini success"
@@ -56384,6 +56473,13 @@ def aqm_students_info():
 
         if st:
 
+            selected_month = (
+                get_setting(
+                    "current_month"
+                )
+                or datetime.date.today().strftime("%Y-%m")
+            )
+
             cur.execute("""
                 SELECT
                     e.id,
@@ -56419,6 +56515,178 @@ def aqm_students_info():
                     <td>{escape(e["payment_ref"] or "—")}</td>
                     <td>{escape(e["coupon_code"] or "—")}</td>
                     <td>R{e["coupon_discount_amount"] or 0}</td>
+                </tr>
+                """
+
+            cur.execute("""
+                SELECT
+                    e.subject_id,
+                    e.month,
+                    e.status,
+                    s.name AS subject_name,
+                    s.grade AS subject_grade,
+
+                    GROUP_CONCAT(
+                        DISTINCT CASE
+                            WHEN COALESCE(t.is_active,1)=1
+                             AND t.deleted_at IS NULL
+                            THEN t.full_name
+                        END
+                    ) AS tutor_names,
+
+                    GROUP_CONCAT(
+                        DISTINCT CASE
+                            WHEN COALESCE(t.is_active,1)=1
+                             AND t.deleted_at IS NULL
+                            THEN COALESCE(ts.delivery_mode,'GROUP')
+                        END
+                    ) AS delivery_modes,
+
+                    GROUP_CONCAT(
+                        DISTINCT CASE
+                            WHEN COALESCE(t.is_active,1)=1
+                             AND t.deleted_at IS NULL
+                            THEN tm.full_name
+                        END
+                    ) AS manager_names
+
+                FROM enrollments e
+
+                JOIN subjects s
+                  ON s.id=e.subject_id
+
+                LEFT JOIN tutor_subjects ts
+                  ON ts.subject_id=e.subject_id
+
+                LEFT JOIN tutors t
+                  ON t.id=ts.tutor_id
+
+                LEFT JOIN manager_tutors mt
+                  ON mt.tutor_id=t.id
+
+                LEFT JOIN tutor_managers tm
+                  ON tm.id=mt.manager_id
+
+                WHERE e.student_id=?
+                  AND substr(e.month,1,7)=?
+                  AND e.status IN ('ACTIVE','PENDING')
+
+                GROUP BY
+                    e.id,
+                    e.subject_id,
+                    e.month,
+                    e.status,
+                    s.id
+
+                ORDER BY
+                    CASE e.status
+                        WHEN 'ACTIVE' THEN 0
+                        WHEN 'PENDING' THEN 1
+                        ELSE 2
+                    END,
+                    CAST(
+                        REPLACE(
+                            s.grade,
+                            'G',
+                            ''
+                        ) AS INTEGER
+                    ),
+                    s.name
+            """, (
+                selected_id,
+                selected_month
+            ))
+
+            current_subject_details = cur.fetchall()
+
+            current_subject_rows = ""
+
+            for item in current_subject_details:
+                raw_modes = [
+                    mode.strip().upper()
+                    for mode in str(
+                        item["delivery_modes"]
+                        or ""
+                    ).split(",")
+                    if mode.strip()
+                ]
+
+                mode_labels = []
+
+                for mode in raw_modes:
+                    label = {
+                        "GROUP": "Group",
+                        "ONE_ON_ONE": "One-on-One",
+                        "BOTH": "Group & One-on-One"
+                    }.get(
+                        mode,
+                        mode.title()
+                    )
+
+                    if label not in mode_labels:
+                        mode_labels.append(
+                            label
+                        )
+
+                delivery_display = (
+                    ", ".join(
+                        mode_labels
+                    )
+                    if mode_labels
+                    else "—"
+                )
+
+                tutor_display = (
+                    item["tutor_names"]
+                    or "No tutor assigned"
+                )
+
+                manager_display = (
+                    item["manager_names"]
+                    or "No Tutor Manager assigned"
+                )
+
+                status_value = str(
+                    item["status"]
+                    or ""
+                ).upper()
+
+                status_class = (
+                    "active"
+                    if status_value == "ACTIVE"
+                    else "pending"
+                )
+
+                current_subject_rows += f"""
+                <tr>
+                    <td>
+                        <strong>
+                            {escape(grade_label(item["subject_grade"] or ""))}
+                            — {escape(item["subject_name"] or "—")}
+                        </strong>
+                    </td>
+
+                    <td>
+                        <span class="chip {status_class}">
+                            {escape(item["status"] or "—")}
+                        </span>
+
+                        <div class="mini muted">
+                            {escape(item["month"] or "—")}
+                        </div>
+                    </td>
+
+                    <td>
+                        {escape(tutor_display)}
+                    </td>
+
+                    <td>
+                        {escape(delivery_display)}
+                    </td>
+
+                    <td>
+                        {escape(manager_display)}
+                    </td>
                 </tr>
                 """
 
@@ -56558,6 +56826,52 @@ def aqm_students_info():
                     </div>
                 </div>
 
+                <div class="card"
+                     style="
+                         margin-top:14px;
+                         border-left:5px solid #1b5e20;
+                     ">
+
+                    <div style="
+                        display:flex;
+                        justify-content:space-between;
+                        align-items:center;
+                        gap:10px;
+                        flex-wrap:wrap;
+                        margin-bottom:10px;
+                    ">
+                        <h3 style="margin:0">
+                            Current Subjects & Tutor Team
+                        </h3>
+
+                        <span class="chip">
+                            {escape(pretty_month_label(selected_month))}
+                        </span>
+                    </div>
+
+                    <div class="scroll-x">
+                        <table style="min-width:900px">
+                            <thead>
+                                <tr>
+                                    <th>Grade / Subject</th>
+                                    <th>Enrollment</th>
+                                    <th>Tutor(s)</th>
+                                    <th>Delivery</th>
+                                    <th>Tutor Manager</th>
+                                </tr>
+                            </thead>
+
+                            <tbody>
+                                {
+                                    current_subject_rows
+                                    or
+                                    "<tr><td colspan='5'>No active or pending subjects found for the current month.</td></tr>"
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <div class="card" style="margin-top:14px">
                     <h3>Enrollment History</h3>
 
@@ -56663,12 +56977,13 @@ def aqm_students_info():
                             <th>Contact</th>
                             <th>Guardian</th>
                             <th>School / Province</th>
+                            <th>Subjects</th>
                             <th>Action</th>
                         </tr>
                     </thead>
 
                     <tbody>
-                        {student_rows or "<tr><td colspan='6'>No students found.</td></tr>"}
+                        {student_rows or "<tr><td colspan='7'>No students found.</td></tr>"}
                     </tbody>
                 </table>
             </div>
