@@ -56077,6 +56077,35 @@ def aqm_students_info():
     province_filter = request.args.get("province", "").strip()
     selected_id = request.args.get("student_id", "").strip()
 
+    month = (
+        request.args.get(
+            "month",
+            ""
+        ).strip()
+        or get_setting(
+            "current_month"
+        )
+        or datetime.date.today().strftime(
+            "%Y-%m"
+        )
+    )
+
+    # Keep the page on a valid YYYY-MM value.
+    try:
+        datetime.datetime.strptime(
+            month,
+            "%Y-%m"
+        )
+    except Exception:
+        month = (
+            get_setting(
+                "current_month"
+            )
+            or datetime.date.today().strftime(
+                "%Y-%m"
+            )
+        )
+
     try:
         page_num = int(request.args.get("page", 1))
     except Exception:
@@ -56133,8 +56162,19 @@ def aqm_students_info():
 
     # ================= STUDENTS LIST =================
 
-    where = ["1=1"]
-    params = []
+    where = [
+        """
+        EXISTS (
+            SELECT 1
+            FROM enrollments month_enrollment
+            WHERE month_enrollment.student_id=students.id
+              AND substr(month_enrollment.month,1,7)=?
+        )
+        """
+    ]
+    params = [
+        month
+    ]
 
     if q:
         search = f"%{q}%"
@@ -56204,13 +56244,6 @@ def aqm_students_info():
 
     students = cur.fetchall()
 
-    current_student_month = (
-        get_setting(
-            "current_month"
-        )
-        or datetime.date.today().strftime("%Y-%m")
-    )
-
     student_subject_map = {}
 
     student_ids = [
@@ -56251,7 +56284,7 @@ def aqm_students_info():
                 s.name
             """,
             student_ids + [
-                current_student_month
+                month
             ]
         )
 
@@ -56267,6 +56300,7 @@ def aqm_students_info():
     student_rows = ""
     
     pagination_params = {
+        "month": month,
         "q": q,
         "grade": grade_filter,
         "province": province_filter
@@ -56318,6 +56352,21 @@ def aqm_students_info():
 
     for st in students:
 
+        student_detail_url = (
+            url_for(
+                "aqm_students_info"
+            )
+            + "?"
+            + urlencode({
+                "month": month,
+                "q": q,
+                "grade": grade_filter,
+                "province": province_filter,
+                "page": page_num,
+                "student_id": st["id"]
+            })
+        )
+
         subject_chips = "".join([
             f"""
             <span class="chip"
@@ -56339,7 +56388,7 @@ def aqm_students_info():
         if not subject_chips:
             subject_chips = """
             <span class="mini muted">
-                No active subjects
+                No active subjects for this month
             </span>
             """
 
@@ -56426,7 +56475,7 @@ def aqm_students_info():
             <td style="min-width:170px">
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
                     <a class="btn mini success"
-                       href="/aqm/students-info?student_id={st['id']}">
+                       href="{escape(student_detail_url, quote=True)}">
                         View Full Info
                     </a>
 
@@ -56473,12 +56522,7 @@ def aqm_students_info():
 
         if st:
 
-            selected_month = (
-                get_setting(
-                    "current_month"
-                )
-                or datetime.date.today().strftime("%Y-%m")
-            )
+            selected_month = month
 
             cur.execute("""
                 SELECT
@@ -56841,7 +56885,7 @@ def aqm_students_info():
                         margin-bottom:10px;
                     ">
                         <h3 style="margin:0">
-                            Current Subjects & Tutor Team
+                            Subjects & Tutor Team
                         </h3>
 
                         <span class="chip">
@@ -56936,6 +56980,20 @@ def aqm_students_info():
 
         <form method="get" class="toolbar" style="margin-bottom:14px">
             <input type="hidden" name="page" value="1">
+
+            {
+                f'<input type="hidden" name="student_id" value="{escape(selected_id, quote=True)}">'
+                if selected_id
+                else ''
+            }
+
+            <div>
+                <label>Month</label>
+                <input type="month"
+                       name="month"
+                       value="{escape(month, quote=True)}">
+            </div>
+
             <input name="q"
                    value="{escape(q)}"
                    placeholder="Search name, phone, guardian, email, school, province or referral code">
@@ -56952,7 +57010,8 @@ def aqm_students_info():
                 Search
             </button>
 
-            <a class="btn mini secondary" href="/aqm/students-info">
+            <a class="btn mini secondary"
+               href="/aqm/students-info?month={escape(month, quote=True)}">
                 Clear
             </a>
         </form>
@@ -56960,9 +57019,21 @@ def aqm_students_info():
         {selected_student_html}
 
         <div class="card soft">
-            <h2>All Students</h2>
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                gap:10px;
+                flex-wrap:wrap;
+            ">
+                <h2 style="margin:0">All Students</h2>
 
-            <div class="mini muted" style="margin-bottom:8px">
+                <span class="chip">
+                    {escape(pretty_month_label(month))}
+                </span>
+            </div>
+
+            <div class="mini muted" style="margin:8px 0">
                 PINs are hidden.
             </div>
 
