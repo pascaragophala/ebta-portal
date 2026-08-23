@@ -48195,10 +48195,24 @@ def manager_tutor_rankings():
         return r
 
     manager_id = int(session.get("manager_id"))
-    month = request.args.get("month", "").strip() or get_setting("current_month")
+
+    month = (
+        request.args.get(
+            "month",
+            ""
+        )
+        or ""
+    ).strip()
+
+    if not month:
+        month = get_active_month(
+            "manager"
+        )
 
     if not manager_ranking_valid_month(month):
-        month = get_setting("current_month")
+        month = get_active_month(
+            "manager"
+        )
 
     week_raw = request.args.get("week", "").strip()
 
@@ -49325,7 +49339,7 @@ def manager_whatsapp_groups():
         return r
 
     manager_id = session.get("manager_id")
-    month = request.args.get("month") or get_setting("current_month")
+    month = manager_get_month()
 
     conn = get_db()
     cur = conn.cursor()
@@ -49829,10 +49843,30 @@ def require_manager():
         
 def manager_get_month():
     """
-    Returns the selected manager month.
-    Falls back to the current EBTA month.
+    Returns the Tutor Manager selected month.
+    If no month is selected, use the real current South African calendar month.
     """
-    return request.args.get("month") or get_setting("current_month")
+    selected_month = (
+        request.args.get(
+            "month",
+            ""
+        )
+        or ""
+    ).strip()
+
+    if selected_month:
+        try:
+            datetime.datetime.strptime(
+                selected_month,
+                "%Y-%m"
+            )
+            return selected_month
+        except Exception:
+            pass
+
+    return get_active_month(
+        "manager"
+    )
 
 
 def manager_month_selector(month, action_url):
@@ -51953,8 +51987,14 @@ def manager_view_tutor(tid):
         
     # ===================== MONTH SELECTOR =====================
 
-    system_month = get_setting('current_month')
-    year = int(system_month.split('-')[0])
+    try:
+        year = int(
+            str(month).split(
+                "-"
+            )[0]
+        )
+    except Exception:
+        year = portal_today_date().year
 
     all_months = all_months_for_year(year)
 
