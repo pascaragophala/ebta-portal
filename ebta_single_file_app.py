@@ -81073,6 +81073,7 @@ def coo_nav():
                 coo_link("Tasks from CEO", "coo_operations_tasks", fallback="/coo/tasks", icon="✅"),
                 coo_link("Enrollments", "coo_enrollments", "coo_enrollments_enabled", icon="📝"),
                 coo_link("All Students", "coo_students", "coo_enrollments_enabled", icon="🎓"),
+                coo_link("Recordings", "coo_recordings", icon="🎥"),
                 coo_link("Follow-Ups", "coo_followups", "coo_duty_admin_enabled", icon="📌"),
             ]
         ),
@@ -81419,6 +81420,805 @@ def coo_logout():
     return redirect(url_for("coo_login"))
     
     
+@app.get('/coo/recordings')
+def coo_recordings():
+    r = require_coo()
+    if r:
+        return r
+
+    month = request.args.get(
+        "month",
+        ""
+    ).strip()
+
+    source_filter = request.args.get(
+        "type",
+        ""
+    ).strip().upper()
+
+    q = request.args.get(
+        "q",
+        ""
+    ).strip()
+
+    grade_filter = request.args.get(
+        "grade",
+        ""
+    ).strip()
+
+    subject_filter = request.args.get(
+        "subject",
+        ""
+    ).strip()
+
+    tutor_filter = request.args.get(
+        "tutor",
+        ""
+    ).strip()
+
+    if source_filter not in (
+        "",
+        "GROUP",
+        "ONE_ON_ONE",
+        "TRACKER"
+    ):
+        source_filter = ""
+
+    if month:
+        try:
+            datetime.datetime.strptime(
+                month,
+                "%Y-%m"
+            )
+        except Exception:
+            month = ""
+
+    try:
+        page_num = int(
+            request.args.get(
+                "page",
+                1
+            )
+        )
+    except Exception:
+        page_num = 1
+
+    page_num = max(
+        1,
+        page_num
+    )
+
+    per_page = 25
+    offset = (
+        page_num - 1
+    ) * per_page
+
+    recording_cte = """
+    WITH recording_rows AS (
+
+        SELECT
+            'GROUP' AS source_type,
+            'material-' || m.id AS record_key,
+            substr(m.month,1,7) AS month,
+            substr(COALESCE(m.created_at,''),1,10) AS event_date,
+            COALESCE(t.full_name,'Tutor') AS tutor_name,
+            COALESCE(s.grade,'') AS grade,
+            COALESCE(s.name,'') AS subject_name,
+            COALESCE(m.title,'Session Recording') AS title,
+            TRIM(m.youtube_url) AS recording_url,
+            '' AS learner_name,
+            COALESCE(m.created_at,'') AS sort_date
+        FROM materials m
+        JOIN tutors t
+          ON t.id=m.tutor_id
+        JOIN subjects s
+          ON s.id=m.subject_id
+        WHERE m.youtube_url IS NOT NULL
+          AND TRIM(m.youtube_url) <> ''
+
+        UNION ALL
+
+        SELECT
+            'ONE_ON_ONE' AS source_type,
+            'one-on-one-' || b.id AS record_key,
+            substr(
+                COALESCE(
+                    NULLIF(TRIM(b.scheduled_date),''),
+                    b.created_at
+                ),
+                1,
+                7
+            ) AS month,
+            substr(
+                COALESCE(
+                    NULLIF(TRIM(b.scheduled_date),''),
+                    b.created_at
+                ),
+                1,
+                10
+            ) AS event_date,
+            COALESCE(t.full_name,'Unassigned Tutor') AS tutor_name,
+            COALESCE(NULLIF(TRIM(b.grade),''),s.grade,'') AS grade,
+            COALESCE(NULLIF(TRIM(b.subject),''),s.name,'') AS subject_name,
+            'One-on-One Session ' || COALESCE(b.session_number,1) AS title,
+            TRIM(b.recording_link) AS recording_url,
+            COALESCE(st.full_name,'') AS learner_name,
+            COALESCE(
+                NULLIF(TRIM(b.scheduled_date),''),
+                b.updated_at,
+                b.created_at,
+                ''
+            ) AS sort_date
+        FROM one_on_one_bookings b
+        LEFT JOIN tutors t
+          ON t.id=b.tutor_id
+        LEFT JOIN students st
+          ON st.id=b.student_id
+        LEFT JOIN subjects s
+          ON s.id=b.subject_id
+        WHERE b.recording_link IS NOT NULL
+          AND TRIM(b.recording_link) <> ''
+
+        UNION ALL
+
+        SELECT
+            'TRACKER' AS source_type,
+            'tracker-' || tw.id AS record_key,
+            substr(
+                COALESCE(
+                    NULLIF(TRIM(tw.session_date),''),
+                    tw.created_at
+                ),
+                1,
+                7
+            ) AS month,
+            substr(
+                COALESCE(
+                    NULLIF(TRIM(tw.session_date),''),
+                    tw.created_at
+                ),
+                1,
+                10
+            ) AS event_date,
+            COALESCE(t.full_name,'Tutor') AS tutor_name,
+            COALESCE(tw.grade,'') AS grade,
+            COALESCE(tw.subject,'') AS subject_name,
+            COALESCE(
+                NULLIF(TRIM(tw.topic_covered),''),
+                'Session Recording'
+            ) AS title,
+            TRIM(tw.recording_link) AS recording_url,
+            '' AS learner_name,
+            COALESCE(
+                NULLIF(TRIM(tw.session_date),''),
+                tw.created_at,
+                ''
+            ) AS sort_date
+        FROM tutor_weekly_tracker tw
+        JOIN tutors t
+          ON t.id=tw.tutor_id
+        WHERE tw.recording_link IS NOT NULL
+          AND TRIM(tw.recording_link) <> ''
+          AND (
+                LOWER(TRIM(tw.recording_link)) LIKE 'http://%'
+                OR LOWER(TRIM(tw.recording_link)) LIKE 'https://%'
+              )
+          AND NOT EXISTS (
+                SELECT 1
+                FROM materials duplicate_material
+                WHERE duplicate_material.tutor_id=tw.tutor_id
+                  AND duplicate_material.youtube_url IS NOT NULL
+                  AND TRIM(duplicate_material.youtube_url)=TRIM(tw.recording_link)
+          )
+    )
+    """
+
+    where = []
+    params = []
+
+    if month:
+        where.append(
+            "rr.month=?"
+        )
+        params.append(
+            month
+        )
+
+    if source_filter:
+        where.append(
+            "rr.source_type=?"
+        )
+        params.append(
+            source_filter
+        )
+
+    if grade_filter:
+        where.append(
+            "rr.grade=?"
+        )
+        params.append(
+            grade_filter
+        )
+
+    if subject_filter:
+        where.append(
+            "rr.subject_name=?"
+        )
+        params.append(
+            subject_filter
+        )
+
+    if tutor_filter:
+        where.append(
+            "rr.tutor_name=?"
+        )
+        params.append(
+            tutor_filter
+        )
+
+    if q:
+        search = f"%{q.lower()}%"
+        where.append("""
+            LOWER(
+                COALESCE(rr.tutor_name,'') || ' ' ||
+                COALESCE(rr.learner_name,'') || ' ' ||
+                COALESCE(rr.grade,'') || ' ' ||
+                COALESCE(rr.subject_name,'') || ' ' ||
+                COALESCE(rr.title,'') || ' ' ||
+                COALESCE(rr.recording_url,'')
+            ) LIKE ?
+        """)
+        params.append(
+            search
+        )
+
+    where_sql = (
+        "WHERE "
+        + " AND ".join(
+            where
+        )
+        if where
+        else ""
+    )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        recording_cte
+        + """
+        SELECT DISTINCT rr.grade
+        FROM recording_rows rr
+        WHERE TRIM(COALESCE(rr.grade,'')) <> ''
+        ORDER BY
+            CAST(
+                REPLACE(
+                    UPPER(rr.grade),
+                    'G',
+                    ''
+                ) AS INTEGER
+            ),
+            rr.grade
+        """
+    )
+
+    grade_choices = [
+        row["grade"]
+        for row in cur.fetchall()
+        if row["grade"]
+    ]
+
+    cur.execute(
+        recording_cte
+        + """
+        SELECT DISTINCT rr.subject_name
+        FROM recording_rows rr
+        WHERE TRIM(COALESCE(rr.subject_name,'')) <> ''
+        ORDER BY rr.subject_name COLLATE NOCASE
+        """
+    )
+
+    subject_choices = [
+        row["subject_name"]
+        for row in cur.fetchall()
+        if row["subject_name"]
+    ]
+
+    cur.execute(
+        recording_cte
+        + """
+        SELECT DISTINCT rr.tutor_name
+        FROM recording_rows rr
+        WHERE TRIM(COALESCE(rr.tutor_name,'')) <> ''
+        ORDER BY rr.tutor_name COLLATE NOCASE
+        """
+    )
+
+    tutor_choices = [
+        row["tutor_name"]
+        for row in cur.fetchall()
+        if row["tutor_name"]
+    ]
+
+    cur.execute(
+        recording_cte
+        + f"""
+        SELECT COUNT(*) AS c
+        FROM recording_rows rr
+        {where_sql}
+        """,
+        params
+    )
+
+    total_records = int(
+        cur.fetchone()["c"]
+        or 0
+    )
+
+    total_pages = max(
+        1,
+        (
+            total_records
+            + per_page
+            - 1
+        ) // per_page
+    )
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (
+            page_num - 1
+        ) * per_page
+
+    cur.execute(
+        recording_cte
+        + f"""
+        SELECT
+            rr.source_type,
+            COUNT(*) AS c
+        FROM recording_rows rr
+        {where_sql}
+        GROUP BY rr.source_type
+        """,
+        params
+    )
+
+    source_counts = {
+        row["source_type"]: int(
+            row["c"]
+            or 0
+        )
+        for row in cur.fetchall()
+    }
+
+    data_params = list(
+        params
+    )
+    data_params.extend([
+        per_page,
+        offset
+    ])
+
+    cur.execute(
+        recording_cte
+        + f"""
+        SELECT
+            rr.*
+        FROM recording_rows rr
+        {where_sql}
+        ORDER BY
+            rr.sort_date DESC,
+            rr.record_key DESC
+        LIMIT ? OFFSET ?
+        """,
+        data_params
+    )
+
+    rows = cur.fetchall()
+    conn.close()
+
+    def source_chip(source_type):
+        if source_type == "GROUP":
+            return (
+                "<span class='chip active'>"
+                "Group Class"
+                "</span>"
+            )
+
+        if source_type == "ONE_ON_ONE":
+            return (
+                "<span class='chip pending'>"
+                "One-on-One"
+                "</span>"
+            )
+
+        return (
+            "<span class='chip'>"
+            "Tracker"
+            "</span>"
+        )
+
+    table_rows = ""
+
+    for row in rows:
+        recording_url = str(
+            row["recording_url"]
+            or ""
+        ).strip()
+
+        is_web_link = (
+            recording_url.lower().startswith(
+                "https://"
+            )
+            or recording_url.lower().startswith(
+                "http://"
+            )
+        )
+
+        if is_web_link:
+            link_actions = f"""
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <a class="btn mini success"
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   href="{escape(recording_url, quote=True)}">
+                    Open Recording
+                </a>
+
+                <button type="button"
+                        class="btn mini secondary coo-copy-recording"
+                        data-link="{escape(recording_url, quote=True)}"
+                        onclick="copyCooRecordingLink(this)">
+                    Copy Link
+                </button>
+            </div>
+            """
+        else:
+            link_actions = (
+                "<span class='chip lapsed'>"
+                "Invalid Link"
+                "</span>"
+            )
+
+        learner_html = ""
+
+        if row["learner_name"]:
+            learner_html = f"""
+            <div class="mini muted">
+                Learner: {escape(row['learner_name'])}
+            </div>
+            """
+
+        subject_bits = []
+
+        if row["grade"]:
+            subject_bits.append(
+                grade_label(
+                    row["grade"]
+                )
+            )
+
+        if row["subject_name"]:
+            subject_bits.append(
+                str(
+                    row["subject_name"]
+                )
+            )
+
+        subject_display = (
+            " — ".join(
+                subject_bits
+            )
+            or "—"
+        )
+
+        link_preview = (
+            recording_url
+            if len(recording_url) <= 70
+            else recording_url[:67] + "..."
+        )
+
+        table_rows += f"""
+        <tr>
+            <td>
+                {source_chip(row['source_type'])}
+            </td>
+
+            <td>
+                <strong>
+                    {escape(row['title'] or 'Session Recording')}
+                </strong>
+                {learner_html}
+            </td>
+
+            <td>
+                <strong>
+                    {escape(row['tutor_name'] or '—')}
+                </strong>
+            </td>
+
+            <td>
+                {escape(subject_display)}
+            </td>
+
+            <td>
+                {escape(row['event_date'] or '—')}
+                <div class="mini muted">
+                    {escape(pretty_month_label(row['month'])) if row['month'] else '—'}
+                </div>
+            </td>
+
+            <td style="min-width:260px;max-width:360px">
+                <div class="mini"
+                     title="{escape(recording_url, quote=True)}"
+                     style="word-break:break-all">
+                    {escape(link_preview or '—')}
+                </div>
+            </td>
+
+            <td>
+                {link_actions}
+            </td>
+        </tr>
+        """
+
+    type_options = ""
+
+    for value, label in (
+        ("", "All Recording Types"),
+        ("GROUP", "Group Class"),
+        ("ONE_ON_ONE", "One-on-One"),
+        ("TRACKER", "Tracker Links"),
+    ):
+        selected = (
+            "selected"
+            if source_filter == value
+            else ""
+        )
+
+        type_options += (
+            f"<option value='{value}' {selected}>"
+            f"{label}"
+            f"</option>"
+        )
+
+    grade_options = (
+        '<option value="">All Grades</option>'
+        + "".join([
+            f'<option value="{escape(value, quote=True)}" '
+            f'{"selected" if grade_filter == value else ""}>'
+            f'{escape(grade_label(value))}'
+            f'</option>'
+            for value in grade_choices
+        ])
+    )
+
+    subject_options = (
+        '<option value="">All Subjects</option>'
+        + "".join([
+            f'<option value="{escape(value, quote=True)}" '
+            f'{"selected" if subject_filter == value else ""}>'
+            f'{escape(value)}'
+            f'</option>'
+            for value in subject_choices
+        ])
+    )
+
+    tutor_options = (
+        '<option value="">All Tutors</option>'
+        + "".join([
+            f'<option value="{escape(value, quote=True)}" '
+            f'{"selected" if tutor_filter == value else ""}>'
+            f'{escape(value)}'
+            f'</option>'
+            for value in tutor_choices
+        ])
+    )
+
+    filter_params = {
+        "month": month,
+        "type": source_filter,
+        "grade": grade_filter,
+        "subject": subject_filter,
+        "tutor": tutor_filter,
+        "q": q
+    }
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Recordings</h1>
+
+        <div class="stats" style="margin-top:12px">
+            {stat("Recordings", total_records)}
+            {stat("Group Class", source_counts.get("GROUP", 0))}
+            {stat("One-on-One", source_counts.get("ONE_ON_ONE", 0))}
+            {stat("Tracker Links", source_counts.get("TRACKER", 0))}
+        </div>
+
+        <form method="get"
+              class="toolbar"
+              style="align-items:end;margin-top:14px">
+
+            <div>
+                <label>Month</label>
+                <input type="month"
+                       name="month"
+                       value="{escape(month, quote=True)}">
+            </div>
+
+            <div>
+                <label>Type</label>
+                <select name="type">
+                    {type_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Grade</label>
+                <select name="grade">
+                    {grade_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Subject</label>
+                <select name="subject">
+                    {subject_options}
+                </select>
+            </div>
+
+            <div>
+                <label>Tutor</label>
+                <select name="tutor">
+                    {tutor_options}
+                </select>
+            </div>
+
+            <div style="min-width:240px">
+                <label>Search</label>
+                <input name="q"
+                       value="{escape(q, quote=True)}"
+                       placeholder="Tutor, learner, subject or title">
+            </div>
+
+            <button class="btn mini success">
+                Filter
+            </button>
+
+            <a class="btn mini secondary"
+               href="{url_for('coo_recordings')}">
+                All Recordings
+            </a>
+        </form>
+
+        <div class="mini muted"
+             style="margin:10px 0">
+            Showing {len(rows)} of {total_records}
+        </div>
+
+        {pagination_controls(
+            "/coo/recordings",
+            page_num,
+            total_pages,
+            filter_params
+        )}
+
+        <div class="scroll-x">
+            <table style="min-width:1180px">
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Recording</th>
+                        <th>Tutor</th>
+                        <th>Grade / Subject</th>
+                        <th>Date</th>
+                        <th>Link</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {
+                        table_rows
+                        or
+                        "<tr><td colspan='7'>No recordings found.</td></tr>"
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls(
+            "/coo/recordings",
+            page_num,
+            total_pages,
+            filter_params
+        )}
+    </section>
+
+    <script>
+        function copyCooRecordingLink(button) {{
+            const link = button.getAttribute(
+                'data-link'
+            ) || '';
+
+            if (!link) {{
+                return;
+            }}
+
+            const originalText = button.textContent;
+
+            function showCopied() {{
+                button.textContent = 'Copied';
+                button.disabled = true;
+
+                window.setTimeout(function() {{
+                    button.textContent = originalText;
+                    button.disabled = false;
+                }}, 1200);
+            }}
+
+            function fallbackCopy() {{
+                const area = document.createElement(
+                    'textarea'
+                );
+
+                area.value = link;
+                area.setAttribute(
+                    'readonly',
+                    ''
+                );
+                area.style.position = 'fixed';
+                area.style.opacity = '0';
+
+                document.body.appendChild(
+                    area
+                );
+
+                area.select();
+
+                try {{
+                    document.execCommand(
+                        'copy'
+                    );
+                    showCopied();
+                }} catch (error) {{
+                    window.prompt(
+                        'Copy recording link:',
+                        link
+                    );
+                }}
+
+                document.body.removeChild(
+                    area
+                );
+            }}
+
+            if (
+                navigator.clipboard
+                && window.isSecureContext
+            ) {{
+                navigator.clipboard.writeText(
+                    link
+                ).then(
+                    showCopied
+                ).catch(
+                    fallbackCopy
+                );
+            }} else {{
+                fallbackCopy();
+            }}
+        }}
+    </script>
+    """
+
+    return page(
+        "COO Recordings",
+        body
+    )
+
+
 @app.get('/coo')
 def coo_dashboard():
 
