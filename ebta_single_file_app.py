@@ -10845,6 +10845,9 @@ switch(hash){
     case '#status':
     el = document.getElementById('status-banner') || findCardByHeadingText(['status']);
     break;
+    case '#ratings-feedback':
+    el = document.getElementById('ratings-feedback') || findCardByHeadingText(['ratings & feedback']);
+    break;
     case '#students':
     case '#tutors':
     case '#subjects':
@@ -10945,6 +10948,8 @@ switch(hash){
     el = findCardByHeadingText(['messages','inbox','direct messages']); break;
     case '#status':
     el = document.getElementById('status-banner') || findCardByHeadingText(['status']); break;
+    case '#ratings-feedback':
+    el = document.getElementById('ratings-feedback') || findCardByHeadingText(['ratings & feedback']); break;
     case '#enrollments':
     el = document.getElementById('enrollments') || findCardByHeadingText(['manage enrollments','enrollments']); break;
     case '#students':
@@ -12953,9 +12958,21 @@ def page(title, body_html, extra_head="", extra_js=""):
             cur.execute("SELECT COUNT(*) FROM direct_messages WHERE to_role='student' AND to_id=? AND is_read=0", (sid,))
             unread = cur.fetchone()[0] or 0
             role_title, user_name = "Student", session.get('student_name','Student')
+
             links = [
                 ("🏠 Dashboard", url_for('student_home')),
                 ("📊 Academic Progress", url_for('student_academic_progress')),
+            ]
+
+            if rating_window_open(month) and int(active_subjects or 0) > 0:
+                links.append(
+                    (
+                        "⭐ Ratings & Feedback",
+                        url_for('student_home') + "#ratings-feedback"
+                    )
+                )
+
+            links.extend([
                 ("👤 My Profile", url_for('student_profile_page')),
                 ("✅ Status", "#status"),
                 ("📝 Assignments", url_for('student_assignments')),
@@ -12968,7 +12985,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("🤝 My 1-on-1 Requests", url_for('one_on_one_my_requests')),
                 ("🎓 My 1-on-1 Sessions", url_for('one_on_one_my_sessions')),
                 ("🚪 Logout", url_for('student_logout'))
-            ]
+            ])
             stats_grid = f"""
             <div class='stats-mini'>
             <div class='s'><div class='k'>{active_subjects}</div><div class='t'>Active subjects</div></div>
@@ -20076,7 +20093,9 @@ def student_home():
             """)
 
         rate_card = f"""
-        <div class='card'>
+        <div class='card'
+             id='ratings-feedback'
+             style='scroll-margin-top:100px'>
             <h2>Ratings & Feedback for {pretty_month_label(month)}</h2>
 
             <p class='muted mini'>
