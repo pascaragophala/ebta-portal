@@ -81092,6 +81092,7 @@ def coo_nav():
                 coo_link("Tasks from CEO", "coo_operations_tasks", fallback="/coo/tasks", icon="✅"),
                 coo_link("Enrollments", "coo_enrollments", "coo_enrollments_enabled", icon="📝"),
                 coo_link("All Students", "coo_students", "coo_enrollments_enabled", icon="🎓"),
+                coo_link("Ratings & Feedback", "coo_student_ratings_feedback", icon="⭐"),
                 coo_link("Recordings", "coo_recordings", icon="🎥"),
                 coo_link("Follow-Ups", "coo_followups", "coo_duty_admin_enabled", icon="📌"),
             ]
@@ -83368,6 +83369,289 @@ def coo_status_chip(status):
         cls = ""
 
     return f"<span class='chip {cls}'>{escape(status)}</span>"
+
+
+# ---------------- COO STUDENT RATINGS & FEEDBACK ----------------
+
+@app.get('/coo/ratings-feedback')
+def coo_student_ratings_feedback():
+    r = require_coo()
+    if r:
+        return r
+
+    month = request.args.get("month", "").strip() or coo_selected_month()
+    q = request.args.get("q", "").strip()
+    rating_filter = request.args.get("rating", "").strip()
+
+    try:
+        datetime.datetime.strptime(month, "%Y-%m")
+    except Exception:
+        month = coo_selected_month()
+
+    if rating_filter not in ("", "1", "2", "3", "4", "5"):
+        rating_filter = ""
+
+    page_num = coo_page_num()
+    per_page = 20
+    offset = (page_num - 1) * per_page
+
+    where = ["ser.month=?"]
+    params = [month]
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                st.full_name LIKE ?
+                OR st.grade LIKE ?
+                OR COALESCE(ser.review,'') LIKE ?
+            )
+        """)
+        params.extend([search, search, search])
+
+    if rating_filter:
+        where.append("ser.overall_rating=?")
+        params.append(int(rating_filter))
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            COUNT(*) AS total_reviews,
+            ROUND(AVG(overall_rating), 1) AS avg_rating,
+            SUM(CASE WHEN overall_rating=5 THEN 1 ELSE 0 END) AS five_star_count,
+            SUM(
+                CASE
+                    WHEN review IS NOT NULL AND TRIM(review) <> ''
+                    THEN 1 ELSE 0
+                END
+            ) AS written_reviews
+        FROM student_ebta_reviews
+        WHERE month=?
+    """, (month,))
+    summary = cur.fetchone()
+
+    total_month_reviews = int(summary["total_reviews"] or 0)
+    average_rating = summary["avg_rating"]
+    five_star_count = int(summary["five_star_count"] or 0)
+    written_reviews = int(summary["written_reviews"] or 0)
+
+    cur.execute("""
+        SELECT overall_rating, COUNT(*) AS c
+        FROM student_ebta_reviews
+        WHERE month=?
+          AND overall_rating IS NOT NULL
+        GROUP BY overall_rating
+        ORDER BY overall_rating DESC
+    """, (month,))
+    rating_distribution = {
+        int(row["overall_rating"]): int(row["c"] or 0)
+        for row in cur.fetchall()
+    }
+
+    cur.execute(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM student_ebta_reviews ser
+        JOIN students st ON st.id=ser.student_id
+        {where_sql}
+        """,
+        params
+    )
+    filtered_total = int(cur.fetchone()["c"] or 0)
+
+    total_pages = max(1, (filtered_total + per_page - 1) // per_page)
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+
+    data_params = list(params) + [per_page, offset]
+
+    cur.execute(
+        f"""
+        SELECT
+            ser.id,
+            ser.student_id,
+            ser.month,
+            ser.overall_rating,
+            ser.review,
+            ser.created_at,
+            ser.updated_at,
+            st.full_name AS student_name,
+            st.grade AS student_grade
+        FROM student_ebta_reviews ser
+        JOIN students st ON st.id=ser.student_id
+        {where_sql}
+        ORDER BY
+            COALESCE(ser.updated_at, ser.created_at) DESC,
+            ser.id DESC
+        LIMIT ? OFFSET ?
+        """,
+        data_params
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    def coo_feedback_rating_chip(value):
+        if value in (None, ""):
+            return "<span class='chip'>Not rated</span>"
+
+        try:
+            numeric = float(value)
+        except Exception:
+            return "<span class='chip'>" + escape(str(value)) + "</span>"
+
+        if numeric >= 4:
+            cls = "active"
+        elif numeric >= 3:
+            cls = "pending"
+        else:
+            cls = "lapsed"
+
+        clean_value = (
+            str(int(numeric))
+            if numeric.is_integer()
+            else str(round(numeric, 1))
+        )
+        return f"<span class='chip {cls}'>{clean_value}/5</span>"
+
+    table_rows = ""
+    for row in rows:
+        date_value = str(
+            row["updated_at"] or row["created_at"] or ""
+        )[:16].replace("T", " ")
+
+        table_rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(row['student_name'] or '—')}</strong>
+                <div class="mini muted">
+                    {escape(grade_label(row['student_grade']))}
+                </div>
+            </td>
+            <td>{coo_feedback_rating_chip(row['overall_rating'])}</td>
+            <td style="min-width:360px">{escape(row['review'] or '—')}</td>
+            <td>{escape(date_value or '—')}</td>
+        </tr>
+        """
+
+    rating_options = (
+        '<option value="">All Ratings</option>'
+        + "".join([
+            f'<option value="{rating}" '
+            f'{"selected" if rating_filter == str(rating) else ""}>'
+            f'{rating} / 5</option>'
+            for rating in range(5, 0, -1)
+        ])
+    )
+
+    distribution_html = "".join([
+        f"""
+        <div class="card soft"
+             style="padding:12px;text-align:center;min-width:110px">
+            <div style="font-size:20px;font-weight:900;color:#1b5e20">
+                {rating_distribution.get(star, 0)}
+            </div>
+            <div class="mini muted">{star} ★</div>
+        </div>
+        """
+        for star in range(5, 0, -1)
+    ])
+
+    avg_text = f"{average_rating}/5" if average_rating is not None else "—"
+
+    filter_params = {
+        "month": month,
+        "q": q,
+        "rating": rating_filter
+    }
+
+    body = f"""
+    {coo_nav()}
+
+    <section class="card">
+        <h1>Student Ratings & Feedback</h1>
+
+        <form method="get" class="toolbar" style="align-items:end;margin-top:12px">
+            <div>
+                <label>Month</label>
+                <input type="month" name="month" value="{escape(month, quote=True)}">
+            </div>
+
+            <div>
+                <label>Overall Rating</label>
+                <select name="rating">
+                    {rating_options}
+                </select>
+            </div>
+
+            <div style="min-width:260px">
+                <label>Search</label>
+                <input name="q"
+                       value="{escape(q, quote=True)}"
+                       placeholder="Student, grade or review">
+            </div>
+
+            <button class="btn mini success">View</button>
+
+            <a class="btn mini secondary"
+               href="{url_for('coo_student_ratings_feedback')}?month={escape(month, quote=True)}">
+                Clear
+            </a>
+        </form>
+
+        <div class="stats" style="margin-top:14px">
+            {stat("Student Reviews", total_month_reviews)}
+            {stat("Average EBTA Rating", avg_text)}
+            {stat("5-Star Ratings", five_star_count)}
+            {stat("Written Reviews", written_reviews)}
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0">
+            {distribution_html}
+        </div>
+
+        <div class="mini muted" style="margin-bottom:10px">
+            Showing {len(rows)} of {filtered_total} matching review(s)
+            for {escape(pretty_month_label(month))}.
+        </div>
+
+        {pagination_controls(
+            "/coo/ratings-feedback",
+            page_num,
+            total_pages,
+            filter_params
+        )}
+
+        <div class="scroll-x">
+            <table style="min-width:900px">
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Overall EBTA Rating</th>
+                        <th>General Review</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {table_rows or "<tr><td colspan='4'>No student ratings or reviews found for this selection.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination_controls(
+            "/coo/ratings-feedback",
+            page_num,
+            total_pages,
+            filter_params
+        )}
+    </section>
+    """
+
+    return page("Student Ratings & Feedback", body)
 
 
 # ---------------- COO ENROLLMENTS ----------------
