@@ -2506,6 +2506,8 @@ def init_db():
     ensure_column(conn, "discount_coupons", "sms_sent_by_role", "TEXT")
     ensure_column(conn, "discount_coupons", "sms_sent_by_id", "INTEGER")
     ensure_column(conn, "discount_coupons", "sms_last_error", "TEXT")
+    ensure_column(conn, "discount_coupons", "discount_category", "TEXT")
+    ensure_column(conn, "discount_coupons", "discount_scope_months", "INTEGER NOT NULL DEFAULT 0")
     
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_tracker
@@ -4960,6 +4962,60 @@ def fee_for_grade(g):
     return 200
 
 
+
+# Discount percentages supported by the enrollment engine.
+# 100% remains available for existing referral reward codes.
+SUPPORTED_DISCOUNT_PERCENTAGES = {10, 20, 30, 50, 100}
+
+
+# Admission Coordinator award discounts.
+# Every award discount below applies to ONE subject for ONE month.
+ADMISSION_AWARD_DISCOUNT_RULES = {
+    "SUBJECT_TOP_1": {
+        "label": "Subject Top Achiever — 1st Position",
+        "percent": 10,
+        "benefit": "10% off one subject for 1 month",
+        "allowed_grades": None,
+    },
+    "MOST_ENGAGING_STUDENT": {
+        "label": "Most Engaging Student",
+        "percent": 10,
+        "benefit": "10% off one subject for 1 month",
+        "allowed_grades": None,
+    },
+    "OVERALL_TOP_1": {
+        "label": "Overall Top Achiever — 1st Position",
+        "percent": 50,
+        "benefit": "50% off one subject for 1 month",
+        "allowed_grades": {"G8", "G9", "G10", "G11", "G12"},
+    },
+    "OVERALL_TOP_2": {
+        "label": "Overall Top Achiever — 2nd Position",
+        "percent": 30,
+        "benefit": "30% off one subject for 1 month",
+        "allowed_grades": {"G8", "G9", "G10", "G11", "G12"},
+    },
+    "OVERALL_TOP_3": {
+        "label": "Overall Top Achiever — 3rd Position",
+        "percent": 20,
+        "benefit": "20% off one subject for 1 month",
+        "allowed_grades": {"G8", "G9", "G10", "G11", "G12"},
+    },
+    "OVERALL_TOP_4_PLUS_G12": {
+        "label": "Overall Top Achiever — 4th+ (Grade 12 Only)",
+        "percent": 10,
+        "benefit": "10% off one subject for 1 month",
+        "allowed_grades": {"G12"},
+    },
+    "MOST_ENGAGING_PARENT": {
+        "label": "Most Engaging Parent",
+        "percent": 10,
+        "benefit": "10% off one subject for 1 month",
+        "allowed_grades": None,
+    },
+}
+
+
 def generate_short_code(prefix="EBTA", size=6):
     """
     Generates a short readable code.
@@ -5293,9 +5349,10 @@ def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", studen
     Rules:
     - Each selected subject uses its own grade fee.
     - Bulk discount still applies when 3+ subjects are selected.
-    - A valid 50% or 100% discount coupon applies to ONE selected subject per month.
+    - A valid discount coupon applies to ONE selected subject.
+    - Award discount coupons can be limited to ONE month even during a multi-month enrollment.
+    - Existing referral reward coupons keep their existing scope.
     - Referral-only codes do not reduce the total.
-    - Final amount is multiplied by the number of months selected.
     """
 
     month_count = normalize_enrollment_month_count(month_count)
@@ -5317,6 +5374,7 @@ def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", studen
         "total_due": 0,
         "discounted_subject_fee": 0,
         "discount_percent": 0,
+        "coupon_discount_months": 0,
         "coupon_result": {
             "valid": True,
             "message": "",
@@ -5400,6 +5458,21 @@ def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", studen
 
         result["monthly_coupon_discount"] = int(coupon_result.get("discount_amount", 0) or 0)
 
+        coupon_scope_months = int(
+            coupon_result.get("discount_scope_months", 0)
+            or 0
+        )
+
+        if result["monthly_coupon_discount"] > 0:
+            if coupon_scope_months > 0:
+                result["coupon_discount_months"] = min(
+                    month_count,
+                    coupon_scope_months
+                )
+            else:
+                # Legacy/referral reward discount behavior remains unchanged.
+                result["coupon_discount_months"] = month_count
+
         # Work out visible discount percent for the front page.
         cur.execute("""
             SELECT discount_percent
@@ -5425,9 +5498,24 @@ def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", studen
 
     result["subtotal"] = monthly_subtotal * month_count
     result["bulk_discount"] = result["monthly_bulk_discount"] * month_count
-    result["coupon_discount"] = result["monthly_coupon_discount"] * month_count
-    result["total_discount"] = monthly_total_discount * month_count
-    result["total_due"] = monthly_total_due * month_count
+
+    result["coupon_discount"] = (
+        result["monthly_coupon_discount"]
+        * result["coupon_discount_months"]
+    )
+
+    result["total_discount"] = (
+        result["bulk_discount"]
+        + result["coupon_discount"]
+    )
+
+    if result["total_discount"] > result["subtotal"]:
+        result["total_discount"] = result["subtotal"]
+
+    result["total_due"] = (
+        result["subtotal"]
+        - result["total_discount"]
+    )
 
     return result
     
@@ -5480,10 +5568,10 @@ def preview_discount_code_for_subjects(conn, code, subject_ids, subtotal):
 
     discount_percent = int(coupon["discount_percent"] or 0)
 
-    if discount_percent not in [50, 100]:
+    if discount_percent not in SUPPORTED_DISCOUNT_PERCENTAGES:
         return {
             "valid": False,
-            "message": "Only 50% and 100% discount codes are supported.",
+            "message": "This discount percentage is not supported.",
             "code_type": "INVALID",
             "discount_amount": 0,
             "coupon_id": None,
@@ -5529,11 +5617,20 @@ def preview_discount_code_for_subjects(conn, code, subject_ids, subtotal):
 
     discount_amount = int(round(discount_base * (discount_percent / 100)))
 
+    scope_months = int(coupon["discount_scope_months"] or 0)
+
+    scope_text = (
+        " for 1 month"
+        if scope_months == 1
+        else ""
+    )
+
     return {
         "valid": True,
-        "message": f"{discount_percent}% discount applied to one selected subject.",
+        "message": f"{discount_percent}% discount applied to one selected subject{scope_text}.",
         "code_type": coupon["source"] or "MANUAL",
         "discount_amount": discount_amount,
+        "discount_scope_months": scope_months,
         "coupon_id": coupon["id"],
         "referral_owner_id": None,
         "tutor_referrer_id": None
@@ -5598,7 +5695,7 @@ def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subt
 
         discount_percent = int(coupon["discount_percent"] or 0)
 
-        if discount_percent not in [50, 100]:
+        if discount_percent not in SUPPORTED_DISCOUNT_PERCENTAGES:
             return {
                 "valid": False,
                 "message": "Invalid discount percentage on this code.",
@@ -5648,11 +5745,20 @@ def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subt
 
         discount_amount = int(round(discount_base * (discount_percent / 100)))
 
+        scope_months = int(coupon["discount_scope_months"] or 0)
+
+        scope_text = (
+            " to one selected subject for 1 month"
+            if scope_months == 1
+            else " to one selected subject"
+        )
+
         return {
             "valid": True,
-            "message": f"{discount_percent}% discount applied.",
+            "message": f"{discount_percent}% discount applied{scope_text}.",
             "code_type": coupon["source"] or "MANUAL",
             "discount_amount": discount_amount,
+            "discount_scope_months": scope_months,
             "coupon_id": coupon["id"],
             "referral_owner_id": None,
             "tutor_referrer_id": None
@@ -16946,6 +17052,7 @@ function showPopup(message, type='info', timeout=4000){
             const subtotal = Number(data.subtotal || 0);
             const bulkDiscount = Number(data.bulk_discount || 0);
             const couponDiscount = Number(data.coupon_discount || 0);
+            const couponDiscountMonths = Number(data.coupon_discount_months || 0);
             const totalDiscount = Number(data.total_discount || 0);
             const totalDue = Number(data.total_due || 0);
             const monthlyDue = Number(data.monthly_total_due || (monthCount ? Math.round(totalDue / monthCount) : totalDue) || 0);
@@ -16982,9 +17089,15 @@ function showPopup(message, type='info', timeout=4000){
             let couponLine = "";
 
             if (couponDiscount > 0) {
+                const couponScopeText = (
+                    couponDiscountMonths === 1 && monthCount > 1
+                    ? "Discount code applied for 1 month only"
+                    : "Discount code applied for selected period"
+                );
+
                 couponLine = `
                     <div style="color:#1b5e20; margin-top:4px;">
-                        Discount code applied for selected period:
+                        ${couponScopeText}:
                         <strong>-R${couponDiscount}</strong>
                     </div>
                 `;
@@ -17022,7 +17135,12 @@ function showPopup(message, type='info', timeout=4000){
                     Subjects selected: <strong>${selectedCount}</strong><br>
                     Months selected: <strong>${monthCount}</strong><br>
                     Monthly subtotal: <strong>R${monthlySubtotal}</strong><br>
-                    Monthly amount after discounts: <strong>R${monthlyDue}</strong>
+                    ${
+                        couponDiscountMonths === 1 && monthCount > 1
+                        ? "First month amount after discounts"
+                        : "Monthly amount after discounts"
+                    }:
+                    <strong>R${monthlyDue}</strong>
                     ${bulkLine}
                     ${couponLine}
 
@@ -17815,7 +17933,8 @@ def register_discount_preview():
         "coupon_discount": breakdown["coupon_discount"],
         "total_discount": breakdown["total_discount"],
         "total_due": breakdown["total_due"],
-        "discount_percent": breakdown["discount_percent"]
+        "discount_percent": breakdown["discount_percent"],
+        "coupon_discount_months": breakdown.get("coupon_discount_months", 0)
     }
 
 
@@ -18051,7 +18170,7 @@ def register():
     coupon_result = fee_breakdown["coupon_result"]
 
     # The entered amount must match the final calculated total.
-    # If a valid 50% or 100% code is used, total_due is already reduced.
+    # If a valid discount code is used, total_due is already reduced.
     if amount_paid != total_due:
         conn.close()
         return page(
@@ -33981,6 +34100,8 @@ def admin_enrollments():
                 coupon_type_label = "Referral Reward"
             elif coupon_type_label == "MANUAL":
                 coupon_type_label = "Manual Discount"
+            elif coupon_type_label == "AWARD":
+                coupon_type_label = "Award Discount"
 
             coupon_html = f"""
             <div>
@@ -75819,6 +75940,8 @@ def admission_enrollments():
                 coupon_type_label = "Referral Reward"
             elif coupon_type_label == "MANUAL":
                 coupon_type_label = "Manual Discount"
+            elif coupon_type_label == "AWARD":
+                coupon_type_label = "Award Discount"
 
             coupon_html = f"""
             <div class="admission-code-block">
@@ -79062,6 +79185,8 @@ def admission_discounts():
                 OR dc.status LIKE ?
                 OR dc.applies_to LIKE ?
                 OR CAST(dc.discount_percent AS TEXT) LIKE ?
+                OR IFNULL(dc.discount_category, '') LIKE ?
+                OR IFNULL(dc.notes, '') LIKE ?
 
                 OR s.full_name LIKE ?
                 OR owner.full_name LIKE ?
@@ -79095,6 +79220,7 @@ def admission_discounts():
 
         coupon_params += [
             search, search, search, search, search,
+            search, search,
             search, search,
             search, search,
             search, search,
@@ -79161,21 +79287,56 @@ def admission_discounts():
     student_options = "".join(
         f"""
         <option value="{escape(s['full_name'])} - {grade_label(s['grade'])} - {escape(s['phone_whatsapp'] or '')}"
-                data-id="{s['id']}">
+                data-id="{s['id']}"
+                data-grade="{escape(s['grade'], quote=True)}">
         </option>
         """
         for s in form_students
     )
 
     subject_options = """
-    <option value="">All selected subjects</option>
+    <option value="">Select one subject</option>
     """ + "".join(
         f"""
-        <option value="{sub['id']}">
+        <option value="{sub['id']}"
+                data-grade="{escape(sub['grade'], quote=True)}">
             {grade_label(sub['grade'])} - {escape(sub['name'])}
         </option>
         """
         for sub in subjects
+    )
+
+    award_type_options = "".join(
+        f"""
+        <option value="{escape(rule_key, quote=True)}"
+                data-percent="{int(rule['percent'])}"
+                data-benefit="{escape(rule['benefit'], quote=True)}">
+            {escape(rule['label'])} — {int(rule['percent'])}%
+        </option>
+        """
+        for rule_key, rule in ADMISSION_AWARD_DISCOUNT_RULES.items()
+    )
+
+    policy_cards = "".join(
+        f"""
+        <div class="card soft"
+             style="padding:11px;border-left:4px solid #1b5e20">
+            <strong>{escape(rule['label'])}</strong>
+            <div class="mini muted" style="margin-top:4px">
+                {escape(rule['benefit'])}
+                {
+                    " · Grades 8–12 only"
+                    if rule_key in {"OVERALL_TOP_1", "OVERALL_TOP_2", "OVERALL_TOP_3"}
+                    else (
+                        " · Grade 12 only"
+                        if rule_key == "OVERALL_TOP_4_PLUS_G12"
+                        else ""
+                    )
+                }
+            </div>
+        </div>
+        """
+        for rule_key, rule in ADMISSION_AWARD_DISCOUNT_RULES.items()
     )
 
     create_form = ""
@@ -79192,12 +79353,17 @@ def admission_discounts():
     else:
         create_form = f"""
         <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
-            <h2>Create Student Discount Code</h2>
+            <h2>Create Award Discount Code</h2>
+
+            <div class="grid"
+                 style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;margin:12px 0">
+                {policy_cards}
+            </div>
 
             <form method="post"
                   action="{url_for('admission_discount_create')}"
                   class="grid"
-                  style="grid-template-columns:1fr 1fr 1fr;gap:10px">
+                  style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
 
                 <div>
                     <label>Student</label>
@@ -79211,41 +79377,58 @@ def admission_discounts():
                            name="student_id"
                            id="student_discount_id">
 
+                    <input type="hidden"
+                           id="student_discount_grade">
+
                     <datalist id="student_discount_list">
                         {student_options}
                     </datalist>
 
                     <div class="mini muted">
-                        Start typing to find the learner, then select the correct option.
+                        Start typing and select the correct learner.
                     </div>
                 </div>
 
                 <div>
-                    <label>Discount</label>
-                    <select name="discount_percent" required>
-                        <option value="50">50% Discount</option>
-                        <option value="100">100% Discount</option>
+                    <label>Award / Discount Type</label>
+
+                    <select name="award_type"
+                            id="award_discount_type"
+                            required>
+                        <option value="">Select award type</option>
+                        {award_type_options}
                     </select>
+
+                    <div id="award_discount_benefit"
+                         class="mini muted"
+                         style="margin-top:5px">
+                        Select the learner's award category.
+                    </div>
                 </div>
 
                 <div>
-                    <label>Applies To</label>
-                    <select name="subject_id">
+                    <label>Subject Receiving Discount</label>
+
+                    <select name="subject_id"
+                            id="discount_subject_id"
+                            required>
                         {subject_options}
                     </select>
+
                     <div class="mini muted">
-                        Leave blank if discount applies to all selected subjects.
+                        The discount is for one subject and one month only.
                     </div>
                 </div>
 
                 <div style="grid-column:1/-1">
                     <label>Notes Optional</label>
-                    <input name="notes" placeholder="Reason for discount or approval note">
+                    <input name="notes"
+                           placeholder="Optional award note">
                 </div>
 
                 <div style="grid-column:1/-1">
                     <button class="btn success">
-                        Generate Discount Code
+                        Generate Award Discount Code
                     </button>
                 </div>
 
@@ -79381,7 +79564,10 @@ def admission_discounts():
 
             <td>{applies_to}</td>
 
-            <td>{escape(c['source'])}</td>
+            <td>
+                <strong>{escape(c['discount_category'] or c['source'])}</strong>
+                <div class="mini muted">{escape(c['source'])}</div>
+            </td>
 
             <td>
                 <span class="chip {status_class}">
@@ -79482,7 +79668,7 @@ def admission_discounts():
         <h1>Discount Codes</h1>
 
         <p class="muted">
-            Manage manually generated student discount codes and referral reward discount codes.
+            Manage student award discount codes and referral reward discount codes.
         </p>
         
         <div class="mini muted" style="margin-bottom:10px">
@@ -79541,7 +79727,7 @@ def admission_discounts():
                             <th>Student</th>
                             <th>Discount</th>
                             <th>Applies To</th>
-                            <th>Source</th>
+                            <th>Category</th>
                             <th>Status</th>
                             <th>Usage</th>
                             <th>SMS Status</th>
@@ -79568,15 +79754,69 @@ def admission_discounts():
                     return;
                 }}
 
+                const gradeInput = document.getElementById("student_discount_grade");
+                const subjectSelect = document.getElementById("discount_subject_id");
+                const awardSelect = document.getElementById("award_discount_type");
+                const benefitBox = document.getElementById("award_discount_benefit");
+
+                function filterDiscountSubjects() {{
+                    const studentGrade = gradeInput ? gradeInput.value : "";
+
+                    if (!subjectSelect) {{
+                        return;
+                    }}
+
+                    Array.from(subjectSelect.options).forEach(function (option, index) {{
+                        if (index === 0) {{
+                            option.hidden = false;
+                            return;
+                        }}
+
+                        const matches = !studentGrade || option.dataset.grade === studentGrade;
+                        option.hidden = !matches;
+                    }});
+
+                    if (
+                        subjectSelect.value
+                        && subjectSelect.selectedOptions.length
+                        && subjectSelect.selectedOptions[0].hidden
+                    ) {{
+                        subjectSelect.value = "";
+                    }}
+                }}
+
                 searchInput.addEventListener("input", function () {{
                     hiddenInput.value = "";
+
+                    if (gradeInput) {{
+                        gradeInput.value = "";
+                    }}
 
                     options.forEach(function (option) {{
                         if (option.value === searchInput.value) {{
                             hiddenInput.value = option.dataset.id || "";
+
+                            if (gradeInput) {{
+                                gradeInput.value = option.dataset.grade || "";
+                            }}
                         }}
                     }});
+
+                    filterDiscountSubjects();
                 }});
+
+                if (awardSelect && benefitBox) {{
+                    awardSelect.addEventListener("change", function () {{
+                        const option = awardSelect.selectedOptions[0];
+
+                        if (!option || !option.value) {{
+                            benefitBox.textContent = "Select the learner's award category.";
+                            return;
+                        }}
+
+                        benefitBox.textContent = option.dataset.benefit || "";
+                    }});
+                }}
 
                 const form = searchInput.closest("form");
 
@@ -79586,9 +79826,24 @@ def admission_discounts():
                             event.preventDefault();
                             alert("Please select a learner from the search list before generating a discount code.");
                             searchInput.focus();
+                            return;
+                        }}
+
+                        if (!awardSelect || !awardSelect.value) {{
+                            event.preventDefault();
+                            alert("Please select the award or discount type.");
+                            return;
+                        }}
+
+                        if (!subjectSelect || !subjectSelect.value) {{
+                            event.preventDefault();
+                            alert("Please select the subject that will receive the discount.");
+                            return;
                         }}
                     }});
                 }}
+
+                filterDiscountSubjects();
             }});
         </script>
         
@@ -79606,41 +79861,165 @@ def admission_discount_create():
         return r
 
     if get_setting("discounts_locked", "1") == "1":
-        return page("Locked", card_msg("Discount creation is currently locked by high admin."))
+        return page(
+            "Locked",
+            card_msg(
+                "Discount creation is currently locked by high admin."
+            )
+        )
 
-    student_id = request.form.get("student_id")
-    discount_percent = request.form.get("discount_percent")
-    subject_id = request.form.get("subject_id", "").strip()
-    notes = request.form.get("notes", "").strip()
+    student_id = request.form.get(
+        "student_id",
+        ""
+    ).strip()
+
+    award_type = request.form.get(
+        "award_type",
+        ""
+    ).strip().upper()
+
+    subject_id = request.form.get(
+        "subject_id",
+        ""
+    ).strip()
+
+    notes = request.form.get(
+        "notes",
+        ""
+    ).strip()
+
+    rule = ADMISSION_AWARD_DISCOUNT_RULES.get(
+        award_type
+    )
+
+    if not rule:
+        return page(
+            "Invalid Award Type",
+            card_msg(
+                "Please select a valid award discount type."
+            )
+        )
 
     try:
-        discount_percent = int(discount_percent)
-    except:
-        return page("Invalid", card_msg("Invalid discount percentage."))
+        student_id_value = int(student_id)
+        subject_id_value = int(subject_id)
+    except Exception:
+        return page(
+            "Invalid Selection",
+            card_msg(
+                "Please select a learner and one subject."
+            )
+        )
 
-    if discount_percent not in [50, 100]:
-        return page("Invalid", card_msg("Discount must be 50% or 100%."))
-
-    applies_to = "SUBJECT" if subject_id else "ALL"
-    subject_id_value = int(subject_id) if subject_id else None
+    discount_percent = int(rule["percent"])
 
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("SELECT id FROM students WHERE id=?", (student_id,))
+    cur.execute("""
+        SELECT
+            id,
+            full_name,
+            grade,
+            phone_whatsapp
+        FROM students
+        WHERE id=?
+        LIMIT 1
+    """, (student_id_value,))
+
     student = cur.fetchone()
 
     if not student:
         conn.close()
-        return page("Invalid", card_msg("Student not found."))
+        return page(
+            "Invalid Learner",
+            card_msg("Student not found.")
+        )
+
+    cur.execute("""
+        SELECT
+            id,
+            name,
+            grade
+        FROM subjects
+        WHERE id=?
+        LIMIT 1
+    """, (subject_id_value,))
+
+    subject = cur.fetchone()
+
+    if not subject:
+        conn.close()
+        return page(
+            "Invalid Subject",
+            card_msg(
+                "The selected subject could not be found."
+            )
+        )
+
+    student_grade = str(
+        student["grade"] or ""
+    ).strip().upper()
+
+    subject_grade = str(
+        subject["grade"] or ""
+    ).strip().upper()
+
+    if student_grade != subject_grade:
+        conn.close()
+        return page(
+            "Grade Mismatch",
+            card_msg(
+                "The selected subject must be from the learner's grade."
+            )
+        )
+
+    allowed_grades = rule.get("allowed_grades")
+
+    if allowed_grades and student_grade not in allowed_grades:
+        conn.close()
+
+        if award_type == "OVERALL_TOP_4_PLUS_G12":
+            message = (
+                "The 4th position or lower Overall Top Achiever "
+                "10% discount is available to Grade 12 learners only."
+            )
+        else:
+            message = (
+                "This Overall Top Achiever discount is available "
+                "to Grade 8–12 learners only."
+            )
+
+        return page(
+            "Award Rule Does Not Match",
+            card_msg(message)
+        )
 
     while True:
-        code = generate_short_code(f"D{discount_percent}", 6)
+        code = generate_short_code(
+            f"AW{discount_percent}",
+            6
+        )
 
-        cur.execute("SELECT id FROM discount_coupons WHERE code=?", (code,))
+        cur.execute("""
+            SELECT id
+            FROM discount_coupons
+            WHERE code=?
+            LIMIT 1
+        """, (code,))
 
         if not cur.fetchone():
             break
+
+    category_label = str(rule["label"])
+    benefit_text = str(rule["benefit"])
+
+    stored_notes = (
+        f"{category_label} · {benefit_text}"
+    )
+
+    if notes:
+        stored_notes += f" · {notes}"
 
     cur.execute("""
         INSERT INTO discount_coupons(
@@ -79657,49 +80036,82 @@ def admission_discount_create():
             created_by_role,
             created_by_id,
             created_at,
-            notes
+            notes,
+            discount_category,
+            discount_scope_months
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         code,
-        student_id,
+        student_id_value,
         None,
         discount_percent,
-        applies_to,
+        "SUBJECT",
         subject_id_value,
-        "MANUAL",
+        "AWARD",
         "ACTIVE",
         1,
         0,
         "admission",
         session.get("admission_coordinator_id"),
         now_utc_iso(),
-        notes
+        stored_notes,
+        category_label,
+        1
     ))
 
     conn.commit()
     conn.close()
 
     return page(
-        "Discount Code Created",
+        "Award Discount Code Created",
         f"""
         {admission_nav()}
 
         <section class="card">
-            <h1>Discount Code Created</h1>
+            <h1>Award Discount Code Created</h1>
 
-            <p>
-                <b>Code:</b>
-                <span class="chip" style="font-size:20px;padding:10px 14px;letter-spacing:1px">
-                    {escape(code)}
-                </span>
-            </p>
+            <div class="card soft"
+                 style="border-left:5px solid #1b5e20">
+                <p>
+                    <strong>Learner:</strong>
+                    {escape(student['full_name'])}
+                </p>
+
+                <p>
+                    <strong>Award:</strong>
+                    {escape(category_label)}
+                </p>
+
+                <p>
+                    <strong>Benefit:</strong>
+                    {escape(benefit_text)}
+                </p>
+
+                <p>
+                    <strong>Subject:</strong>
+                    {escape(grade_label(subject['grade']))}
+                    — {escape(subject['name'])}
+                </p>
+
+                <p>
+                    <strong>Code:</strong>
+                    <span class="chip"
+                          style="font-size:20px;padding:10px 14px;letter-spacing:1px">
+                        {escape(code)}
+                    </span>
+                </p>
+            </div>
 
             <p class="muted">
-                Share this code privately with the learner. They can use it during enrollment.
+                The learner can use this code once during enrollment.
+                The award discount will reduce one selected subject for one month.
             </p>
 
-            <a class="btn" href="{url_for('admission_discounts')}">Back to Discounts</a>
+            <a class="btn"
+               href="{url_for('admission_discounts')}">
+                Back to Discounts
+            </a>
         </section>
         """
     )
@@ -79721,11 +80133,15 @@ def admission_discount_sms(coupon_id):
             dc.code,
             dc.discount_percent,
             dc.applies_to,
+            dc.discount_category,
+            dc.discount_scope_months,
             dc.sms_sent,
             s.full_name,
-            s.phone_whatsapp
+            s.phone_whatsapp,
+            sub.name AS subject_name
         FROM discount_coupons dc
         JOIN students s ON s.id = dc.target_student_id
+        LEFT JOIN subjects sub ON sub.id = dc.subject_id
         WHERE dc.id=?
           AND dc.status='ACTIVE'
         LIMIT 1
@@ -79748,7 +80164,10 @@ def admission_discount_sms(coupon_id):
         row["full_name"],
         row["discount_percent"],
         row["code"],
-        row["applies_to"]
+        row["applies_to"],
+        row["discount_category"] or "",
+        row["subject_name"] or "",
+        row["discount_scope_months"] or 0
     )
 
     try:
@@ -79804,10 +80223,14 @@ def admission_discount_sms_all():
             dc.code,
             dc.discount_percent,
             dc.applies_to,
+            dc.discount_category,
+            dc.discount_scope_months,
             s.full_name,
-            s.phone_whatsapp
+            s.phone_whatsapp,
+            sub.name AS subject_name
         FROM discount_coupons dc
         JOIN students s ON s.id = dc.target_student_id
+        LEFT JOIN subjects sub ON sub.id = dc.subject_id
         WHERE dc.status='ACTIVE'
           AND dc.used_count < dc.max_uses
           AND COALESCE(dc.sms_sent, 0) = 0
@@ -79826,7 +80249,10 @@ def admission_discount_sms_all():
             row["full_name"],
             row["discount_percent"],
             row["code"],
-            row["applies_to"]
+            row["applies_to"],
+            row["discount_category"] or "",
+            row["subject_name"] or "",
+            row["discount_scope_months"] or 0
         )
 
         try:
@@ -80234,19 +80660,52 @@ def admission_referrals():
     return page("Admission Referrals", body)    
     
     
-def build_discount_sms_body(full_name, discount, code, applies_to="ALL"):
-    first_name = (full_name or "Learner").split()[0]
+def build_discount_sms_body(
+    full_name,
+    discount,
+    code,
+    applies_to="ALL",
+    category="",
+    subject_name="",
+    discount_scope_months=0
+):
+    first_name = (
+        full_name
+        or "Learner"
+    ).split()[0]
 
-    if applies_to == "SUBJECT":
-        applies_text = "This discount applies to the selected subject linked to the code."
+    category_text = (
+        f" for {category}"
+        if category
+        else ""
+    )
+
+    if subject_name:
+        applies_text = (
+            f"It applies to {subject_name}."
+        )
+    elif applies_to == "SUBJECT":
+        applies_text = (
+            "It applies to the subject linked to the code."
+        )
     else:
-        applies_text = "This discount applies to one selected subject only."
+        applies_text = (
+            "It applies to one selected subject only."
+        )
+
+    scope_text = (
+        " The discount covers one month only."
+        if int(discount_scope_months or 0) == 1
+        else ""
+    )
 
     return (
-        f"EBTA: Hi {first_name}, your {discount}% discount code is {code}. "
-        f"When enrolling on the EBTA Portal, enter this code in the Coupon / Referral Code section. "
-        f"{applies_text} This code can only be used once."
-    )    
+        f"EBTA: Hi {first_name}, you received a {discount}% discount"
+        f"{category_text}. Your code is {code}. "
+        f"When enrolling on the EBTA Portal, enter this code in the "
+        f"Coupon / Referral Code section. {applies_text}"
+        f"{scope_text} This code can only be used once."
+    )
     
     
 @app.get('/admin/parents-notifications')
