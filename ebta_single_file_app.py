@@ -213,6 +213,9 @@ CEO_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 ONE_ON_ONE_DIR = UPLOADS_DIR / "one_on_one"
 ONE_ON_ONE_DIR.mkdir(parents=True, exist_ok=True)
 
+AQM_CERTIFICATES_DIR = UPLOADS_DIR / "aqm_certificates"
+AQM_CERTIFICATES_DIR.mkdir(parents=True, exist_ok=True)
+
 # Proof-of-payment files selected on mobile are uploaded here immediately.
 # The final enrolment submission then consumes the server-side staged copy,
 # avoiding Android/Chrome ERR_UPLOAD_FILE_CHANGED errors.
@@ -1429,6 +1432,60 @@ def init_db():
     """)
     
     
+    # ================= AQM CERTIFICATE DISTRIBUTION =================
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS aqm_certificate_batches(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        aqm_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        award_term TEXT,
+        award_year TEXT,
+        source_file_name TEXT,
+        source_file_path TEXT,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(aqm_id) REFERENCES academic_quality_managers(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS aqm_certificate_recipients(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        batch_id INTEGER NOT NULL,
+        source_name TEXT NOT NULL,
+        source_grade TEXT,
+        source_names_json TEXT,
+        student_id INTEGER,
+        suggested_student_id INTEGER,
+        match_status TEXT NOT NULL DEFAULT 'UNMATCHED',
+        match_score REAL,
+        awards_json TEXT NOT NULL,
+        sent_status TEXT NOT NULL DEFAULT 'NOT_SENT',
+        sent_to TEXT,
+        sent_at TEXT,
+        sent_by_aqm_id INTEGER,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        FOREIGN KEY(batch_id) REFERENCES aqm_certificate_batches(id) ON DELETE CASCADE,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE SET NULL,
+        FOREIGN KEY(suggested_student_id) REFERENCES students(id) ON DELETE SET NULL,
+        FOREIGN KEY(sent_by_aqm_id) REFERENCES academic_quality_managers(id) ON DELETE SET NULL
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_aqm_certificate_recipients_batch
+        ON aqm_certificate_recipients(batch_id)
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_aqm_certificate_recipients_student
+        ON aqm_certificate_recipients(student_id)
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_aqm_certificate_recipients_sent
+        ON aqm_certificate_recipients(batch_id, sent_status)
+    """)
+
     cur.execute("""
     CREATE TABLE IF NOT EXISTS tutor_applications(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52298,28 +52355,120 @@ def require_aqm():
         
 
 def aqm_nav():
-    return """
-    <div class="toolbar">
-        <a class="btn mini" href="/aqm/dashboard">Dashboard</a>
-        <a class="btn mini" href="/aqm/workspace">Workspace</a>
-        <a class="btn mini" href="/aqm/students-info">Students Info</a>
-        <a class="btn mini" href="/aqm/learners">Learner Performance</a>
-        <a class="btn mini" href="/aqm/reports">Student Reports</a>
-        <a class="btn mini" href="/aqm/manual-marks">Manual Marks</a>
-        <a class="btn mini" href="/aqm/attendance">Attendance Trends</a>
-        <a class="btn mini" href="/aqm/assignments">Assignment Completion</a>
-        <a class="btn mini" href="/aqm/tutors">Tutor Work Progress</a>
-        <a class="btn mini" href="/aqm/assessment-analysis">Assessment Analysis</a>
-        <a class="btn mini" href="/aqm/learning-games-analytics">Game Analytics</a>
-        <a class="btn mini" href="/aqm/one-on-one">One-on-One Sessions</a>
-        <a class="btn mini" href="/aqm/one-on-one/session-notes">Session Notes</a>
-        <a class="btn mini" href="/aqm/one-on-one/tutor-assignment">Tutor Assignment</a>
-        <a class="btn mini" href="/aqm/tasks">Tasks from CEO</a>
-        <a class="btn mini" href="/aqm/ratings">Student Ratings</a>
-        <a class="btn mini" href="/aqm/awards">Awards</a>
-        <a class="btn mini" href="/aqm/parent-reports">Parent Reports</a>
-        <a class="btn mini danger" href="/aqm/logout">Logout</a>
-    </div>
+    aqm_name = session.get("aqm_name", "Academic Quality Manager")
+    current_path = request.path or ""
+
+    def aqm_link(label, path, icon=""):
+        active = current_path == path or (
+            path != "/aqm/dashboard"
+            and current_path.startswith(path.rstrip("/") + "/")
+        )
+        active_class = " active" if active else ""
+        return f"""
+        <a class="aqm-office-link{active_class}" href="{path}">
+            <span class="aqm-office-link-icon">{icon}</span>
+            <span>{escape(label)}</span>
+        </a>
+        """
+
+    sections = [
+        ("Overview", [
+            ("Dashboard", "/aqm/dashboard", "🏠"),
+            ("Workspace", "/aqm/workspace", "🗂️"),
+            ("Tasks from CEO", "/aqm/tasks", "✅"),
+        ]),
+        ("Learners & Reports", [
+            ("Students Info", "/aqm/students-info", "🎓"),
+            ("Learner Performance", "/aqm/learners", "📊"),
+            ("Student Reports", "/aqm/reports", "📄"),
+            ("Parent Reports", "/aqm/parent-reports", "💬"),
+        ]),
+        ("Academic Monitoring", [
+            ("Manual Marks", "/aqm/manual-marks", "✍️"),
+            ("Attendance Trends", "/aqm/attendance", "📈"),
+            ("Assignment Completion", "/aqm/assignments", "📝"),
+            ("Assessment Analysis", "/aqm/assessment-analysis", "🧪"),
+            ("Game Analytics", "/aqm/learning-games-analytics", "🎮"),
+            ("Student Ratings", "/aqm/ratings", "⭐"),
+        ]),
+        ("Tutors & Sessions", [
+            ("Tutor Work Progress", "/aqm/tutors", "🧑‍🏫"),
+            ("One-on-One Sessions", "/aqm/one-on-one", "👤"),
+            ("Session Notes", "/aqm/one-on-one/session-notes", "🗒️"),
+            ("Tutor Assignment", "/aqm/one-on-one/tutor-assignment", "🔗"),
+        ]),
+        ("Awards & Certificates", [
+            ("Awards", "/aqm/awards", "🏆"),
+            ("Certificate Distribution", "/aqm/certificates", "🎖️"),
+        ]),
+    ]
+
+    section_html = ""
+    for title, items in sections:
+        contains_current = any(
+            current_path == path or current_path.startswith(path.rstrip("/") + "/")
+            for _, path, _ in items
+        )
+        open_attr = " open" if contains_current else ""
+        links_html = "".join(aqm_link(label, path, icon) for label, path, icon in items)
+        section_html += f"""
+        <details class="aqm-office-section"{open_attr}>
+            <summary>{escape(title)}</summary>
+            <div class="aqm-office-links">{links_html}</div>
+        </details>
+        """
+
+    return f"""
+    <style>
+        .aqm-office-nav {{
+            position:relative !important; top:auto !important; z-index:auto !important;
+            margin:14px 0 18px; border-radius:22px; overflow:hidden;
+            border:1px solid rgba(27,94,32,.18); background:#fff;
+            box-shadow:0 12px 30px rgba(15,23,42,.09);
+        }}
+        .aqm-office-nav-head {{
+            display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap:wrap;
+            padding:17px 18px; color:#fff;
+            background:linear-gradient(135deg,#0f3d1e 0%,#1b5e20 52%,#2e7d32 100%);
+        }}
+        .aqm-office-nav-title strong {{display:block;color:#fff;font-size:18px;line-height:1.2;}}
+        .aqm-office-nav-title span {{display:block;margin-top:4px;color:rgba(255,255,255,.84);font-size:12px;}}
+        .aqm-office-nav-actions {{display:flex;gap:7px;flex-wrap:wrap;}}
+        .aqm-office-nav-actions a {{text-decoration:none;border-radius:999px;padding:8px 12px;font-size:12px;font-weight:900;}}
+        .aqm-office-home {{color:#14532d;background:#fff;}}
+        .aqm-office-logout {{color:#fff;background:rgba(127,29,29,.45);border:1px solid rgba(255,255,255,.24);}}
+        .aqm-office-grid {{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;padding:12px;background:#f8fafc;}}
+        .aqm-office-section {{background:#fff;border:1px solid #dce7df;border-radius:14px;overflow:hidden;}}
+        .aqm-office-section summary {{cursor:pointer;list-style:none;padding:11px 13px;display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:900;color:#17351f;background:#fff;}}
+        .aqm-office-section summary::-webkit-details-marker {{display:none;}}
+        .aqm-office-section summary::after {{content:"Open";flex:0 0 auto;border-radius:999px;padding:3px 8px;font-size:10px;color:#166534;background:#edf7ef;border:1px solid #cde4d2;}}
+        .aqm-office-section[open] summary {{background:#f4faf5;}}
+        .aqm-office-section[open] summary::after {{content:"Close";}}
+        .aqm-office-links {{display:flex;flex-wrap:wrap;gap:7px;padding:0 11px 11px;}}
+        .aqm-office-link {{display:inline-flex;align-items:center;gap:6px;text-decoration:none;padding:8px 10px;border-radius:999px;color:#166534;background:#fff;border:1px solid rgba(27,94,32,.22);box-shadow:0 2px 7px rgba(15,23,42,.04);font-size:12px;font-weight:800;transition:.15s ease;}}
+        .aqm-office-link:hover,.aqm-office-link.active {{color:#fff;background:#1b5e20;border-color:#1b5e20;transform:translateY(-1px);}}
+        .aqm-office-link-icon {{font-size:13px;}}
+        @media(max-width:760px) {{
+            .aqm-office-grid {{grid-template-columns:1fr;}}
+            .aqm-office-nav-head {{align-items:stretch;}}
+            .aqm-office-nav-actions {{width:100%;}}
+            .aqm-office-nav-actions a {{flex:1;text-align:center;}}
+            .aqm-office-link {{width:100%;border-radius:12px;}}
+        }}
+    </style>
+    <section class="aqm-office-nav">
+        <div class="aqm-office-nav-head">
+            <div class="aqm-office-nav-title">
+                <strong>AQM Academic Office</strong>
+                <span>{escape(aqm_name)}</span>
+            </div>
+            <div class="aqm-office-nav-actions">
+                <a class="aqm-office-home" href="/aqm/dashboard">Dashboard</a>
+                <a class="aqm-office-logout" href="/aqm/logout">Logout</a>
+            </div>
+        </div>
+        <div class="aqm-office-grid">{section_html}</div>
+    </section>
     """
 
 
@@ -59353,6 +59502,202 @@ def aqm_tutors():
     return page("Tutor Quality", body)
     
     
+
+
+def aqm_certificate_normalize_name(value):
+    import re
+    value = str(value or "").strip().lower().replace("’", "'")
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return " ".join(value.split())
+
+
+def aqm_certificate_normalize_grade(value):
+    import re
+    match = re.search(r"(8|9|10|11|12|13)", str(value or "").strip())
+    return "G" + match.group(1) if match else ""
+
+
+def aqm_certificate_subject_label(value):
+    raw = str(value or "").strip()
+    key = " ".join(raw.lower().replace(".", "").split())
+    aliases = {
+        "engl hl":"English HL", "english hl":"English HL",
+        "engl fal":"English FAL", "english fal":"English FAL",
+        "afr fal":"Afrikaans FAL", "afrikaans fal":"Afrikaans FAL",
+        "math":"Mathematics", "mathematics":"Mathematics",
+        "math lit":"Mathematical Literacy", "mathematical literacy":"Mathematical Literacy",
+        "ems":"EMS", "ns":"Natural Sciences", "natural sciences":"Natural Sciences",
+        "physics":"Physical Sciences", "physical sciences":"Physical Sciences",
+        "life scie":"Life Sciences", "life sciences":"Life Sciences",
+        "accounting":"Accounting", "geo":"Geography", "geography":"Geography",
+        "bus studies":"Business Studies", "business studies":"Business Studies",
+        "economics":"Economics"
+    }
+    return aliases.get(key, raw)
+
+
+def aqm_certificate_rank_suffix(rank):
+    try: rank=int(rank)
+    except Exception: return str(rank or "")
+    if 10 <= rank % 100 <= 20: suffix="th"
+    else: suffix={1:"st",2:"nd",3:"rd"}.get(rank%10,"th")
+    return f"{rank}{suffix}"
+
+
+def aqm_certificate_numeric(value):
+    if isinstance(value,bool): return None
+    if isinstance(value,(int,float)):
+        try: return float(value)
+        except Exception: return None
+    raw=str(value or "").strip()
+    if not raw or raw.lower() in {"n/a","na","none","-"}: return None
+    try: return float(raw.replace("%",""))
+    except Exception: return None
+
+
+def aqm_certificate_parse_excel(file_bytes):
+    try:
+        from openpyxl import load_workbook
+    except Exception as exc:
+        raise RuntimeError("The Excel reader is not available on the server.") from exc
+
+    workbook=load_workbook(io.BytesIO(file_bytes),data_only=True,read_only=True)
+    lookup={str(ws.title).strip().lower():ws for ws in workbook.worksheets}
+    subject_sheet=lookup.get("top achievers per subject")
+    grade_sheet=lookup.get("top achievers per grade")
+    if subject_sheet is None and grade_sheet is None:
+        raise ValueError("The workbook must contain 'Top achievers per subject' or 'Top achievers per grade'.")
+
+    recipients={}
+    def add_award(name,grade,award):
+        name=str(name or "").strip(); grade=aqm_certificate_normalize_grade(grade)
+        if not name or not grade: return
+        norm=aqm_certificate_normalize_name(name)
+        if not norm: return
+        key=(norm,grade)
+        if key not in recipients:
+            recipients[key]={"source_name":name,"source_grade":grade,"source_names":[name],"awards":[]}
+        if name not in recipients[key]["source_names"]: recipients[key]["source_names"].append(name)
+        award_key=json.dumps(award,sort_keys=True)
+        if not any(json.dumps(x,sort_keys=True)==award_key for x in recipients[key]["awards"]):
+            recipients[key]["awards"].append(award)
+
+    if grade_sheet is not None:
+        current_grade=""; rank=0
+        for row in grade_sheet.iter_rows(values_only=True):
+            a=row[0] if len(row)>0 else None; b=row[1] if len(row)>1 else None
+            a_text=str(a or "").strip(); grade_candidate=aqm_certificate_normalize_grade(a_text)
+            if grade_candidate and "grade" in a_text.lower() and b in (None,""):
+                current_grade=grade_candidate; rank=0; continue
+            if a_text.lower().startswith("name"): continue
+            score=aqm_certificate_numeric(b)
+            if current_grade and a_text and score is not None:
+                rank+=1
+                add_award(a_text,current_grade,{"type":"GRADE","subject":"","rank":rank,"score":score})
+
+    if subject_sheet is not None:
+        current_grade=""; left_subject=""; right_subject=""; left_rank=0; right_rank=0
+        for row in subject_sheet.iter_rows(values_only=True):
+            vals=list(row)+[None]*5
+            a,b,d,e=vals[0],vals[1],vals[3],vals[4]
+            a_text=str(a or "").strip(); grade_candidate=aqm_certificate_normalize_grade(a_text)
+            if grade_candidate and "grade" in a_text.lower() and b in (None,""):
+                current_grade=grade_candidate; left_subject=right_subject=""; left_rank=right_rank=0; continue
+            if a_text.lower()=="learner":
+                left_subject=aqm_certificate_subject_label(b); left_rank=0
+                if str(d or "").strip().lower()=="learner":
+                    right_subject=aqm_certificate_subject_label(e); right_rank=0
+                else:
+                    right_subject=""; right_rank=0
+                continue
+            if not current_grade: continue
+            left_score=aqm_certificate_numeric(b)
+            if left_subject and a_text and left_score is not None:
+                left_rank+=1
+                add_award(a_text,current_grade,{"type":"SUBJECT","subject":left_subject,"rank":left_rank,"score":left_score})
+            d_text=str(d or "").strip(); right_score=aqm_certificate_numeric(e)
+            if right_subject and d_text and right_score is not None:
+                right_rank+=1
+                add_award(d_text,current_grade,{"type":"SUBJECT","subject":right_subject,"rank":right_rank,"score":right_score})
+
+    parsed=list(recipients.values())
+    if not parsed:
+        raise ValueError("No certificate recipients with numeric results were found in the top-achiever sheets.")
+    return parsed
+
+
+def aqm_certificate_award_label(award,grade=""):
+    award_type=str(award.get("type","") or "").upper(); rank=aqm_certificate_rank_suffix(award.get("rank")); score=award.get("score")
+    try: score_text=f"{float(score):.1f}".rstrip("0").rstrip(".")+"%"
+    except Exception: score_text=""
+    if award_type=="GRADE": label=f"{rank} Overall in {grade_label(grade)}"
+    else: label=f"{rank} in {award.get('subject') or 'Subject'}"
+    if score_text: label+=f" ({score_text})"
+    return label
+
+
+def aqm_certificate_message(student_name,grade,awards,award_term,award_year):
+    first_name=str(student_name or "Learner").strip().split()[0]
+    award_lines="\n".join("• "+aqm_certificate_award_label(a,grade) for a in awards)
+    term_text=" ".join([str(award_term or "").strip(),str(award_year or "").strip()]).strip()
+    recognition=(f"You have been recognised for the following achievement(s) for {term_text}:" if term_text else "You have been recognised for the following achievement(s):")
+    certificate_word="certificate" if len(awards)==1 else "certificates"
+    return f"""Good day {first_name} 😊
+
+Congratulations on your achievement with Early Bird Testimony Academy! 🎉🏆
+
+{recognition}
+{award_lines}
+
+Please find your {certificate_word} attached. We are proud of your hard work and commitment, and we encourage you to continue giving your best.
+
+Congratulations once again! 🌟
+
+Kind regards,
+Early Bird Testimony Academy
+Academic Quality Team"""
+
+
+def aqm_certificate_match_rows(parsed_recipients,conn):
+    from difflib import SequenceMatcher
+    cur=conn.cursor()
+    cur.execute("""SELECT id,full_name,grade,phone_whatsapp,guardian_name,guardian_phone FROM students ORDER BY full_name""")
+    students=[dict(r) for r in cur.fetchall()]; by_grade={}
+    for s in students:
+        g=aqm_certificate_normalize_grade(s.get("grade")); s["_norm_name"]=aqm_certificate_normalize_name(s.get("full_name")); s["_grade"]=g; by_grade.setdefault(g,[]).append(s)
+    rows=[]
+    for item in parsed_recipients:
+        norm=aqm_certificate_normalize_name(item["source_name"]); candidates=by_grade.get(item["source_grade"],[])
+        exact=[s for s in candidates if s["_norm_name"]==norm]
+        student_id=None; suggested=None; status="UNMATCHED"; score=0.0
+        if len(exact)==1:
+            student_id=exact[0]["id"]; suggested=student_id; status="MATCHED"; score=100.0
+        else:
+            scored=sorted([(SequenceMatcher(None,norm,s["_norm_name"]).ratio()*100.0,s) for s in candidates],key=lambda p:p[0],reverse=True)
+            if scored:
+                best_score,best_student=scored[0]; second=scored[1][0] if len(scored)>1 else 0
+                suggested=best_student["id"]; score=round(best_score,1)
+                if best_score>=94 and best_score-second>=4: student_id=best_student["id"]; status="MATCHED"
+                elif best_score>=80: status="POSSIBLE"
+        rows.append({**item,"student_id":student_id,"suggested_student_id":suggested,"match_status":status,"match_score":score})
+
+    merged={}
+    for item in rows:
+        if item["match_status"]=="MATCHED" and item["student_id"]: key=("STUDENT",int(item["student_id"]))
+        else: key=("SOURCE",aqm_certificate_normalize_name(item["source_name"]),item["source_grade"])
+        if key not in merged:
+            merged[key]={**item,"source_names":list(item.get("source_names",[])),"awards":list(item.get("awards",[]))}; continue
+        target=merged[key]
+        for n in item.get("source_names",[]):
+            if n not in target["source_names"]: target["source_names"].append(n)
+        keys={json.dumps(a,sort_keys=True) for a in target["awards"]}
+        for a in item.get("awards",[]):
+            k=json.dumps(a,sort_keys=True)
+            if k not in keys: target["awards"].append(a); keys.add(k)
+        target["match_score"]=max(float(target.get("match_score") or 0),float(item.get("match_score") or 0))
+    return list(merged.values())
+
+
 @app.get('/aqm/awards')
 def aqm_awards():
     r = require_aqm()
@@ -59567,6 +59912,265 @@ def aqm_awards():
     """
 
     return page("Awards", body)
+
+
+
+
+@app.get('/aqm/certificates')
+def aqm_certificates():
+    r=require_aqm()
+    if r: return r
+    q=request.args.get("q","").strip(); status_filter=request.args.get("status","").strip().upper(); grade_filter=request.args.get("grade","").strip().upper()
+    try: batch_id=int(request.args.get("batch_id","0") or 0)
+    except Exception: batch_id=0
+    try: page_num=max(1,int(request.args.get("page",1)))
+    except Exception: page_num=1
+    if status_filter not in {"","MATCHED","NEEDS_REVIEW","SENT","NOT_SENT"}: status_filter=""
+    if grade_filter and grade_filter not in {"G8","G9","G10","G11","G12","G13"}: grade_filter=""
+
+    conn=get_db(); cur=conn.cursor(); cur.execute("SELECT * FROM aqm_certificate_batches ORDER BY created_at DESC,id DESC"); batches=cur.fetchall()
+    if not batch_id and batches: batch_id=int(batches[0]["id"])
+    current_batch=None
+    if batch_id:
+        cur.execute("SELECT * FROM aqm_certificate_batches WHERE id=? LIMIT 1",(batch_id,)); current_batch=cur.fetchone()
+
+    batch_options=""
+    for b in batches:
+        selected="selected" if int(b["id"])==batch_id else ""
+        label=b["title"] or ((b["award_term"] or "")+" "+(b["award_year"] or "")).strip() or f"Batch {b['id']}"
+        batch_options+=f"<option value='{int(b['id'])}' {selected}>{escape(label)}</option>"
+
+    upload_card=f"""
+    <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+        <h2>Upload Certificate Recipient Workbook</h2>
+        <form method="post" action="{url_for('aqm_certificate_upload')}" enctype="multipart/form-data" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end">
+            <div><label>Term</label><select name="award_term" required><option value="Term 1">Term 1</option><option value="Term 2" selected>Term 2</option><option value="Term 3">Term 3</option><option value="Awards">Awards</option></select></div>
+            <div><label>Year</label><input type="number" name="award_year" min="2020" max="2100" value="{portal_today_date().year}" required></div>
+            <div><label>Batch Name</label><input name="title" placeholder="e.g. Term 2 Certificates 2026"></div>
+            <div><label>Excel Workbook</label><input type="file" name="certificate_file" accept=".xlsx,.xlsm" required></div>
+            <button class="btn success">Upload & Match Learners</button>
+        </form>
+    </div>"""
+
+    if not current_batch:
+        conn.close()
+        return page("Certificate Distribution",f"""{aqm_nav()}<section class="card"><h1>Certificate Distribution</h1>{upload_card}<div class="card soft">No certificate batch has been uploaded yet.</div></section>""")
+
+    cur.execute("""
+        SELECT r.*,st.full_name AS student_name,st.phone_whatsapp,st.guardian_name,st.guardian_phone,st.grade AS portal_grade,st.school,suggested.full_name AS suggested_name
+        FROM aqm_certificate_recipients r
+        LEFT JOIN students st ON st.id=r.student_id
+        LEFT JOIN students suggested ON suggested.id=r.suggested_student_id
+        WHERE r.batch_id=?
+        ORDER BY CASE WHEN r.sent_status='NOT_SENT' THEN 0 ELSE 1 END,CASE r.match_status WHEN 'MATCHED' THEN 0 WHEN 'POSSIBLE' THEN 1 ELSE 2 END,r.source_grade,COALESCE(st.full_name,r.source_name)
+    """,(batch_id,))
+    all_rows=[dict(r) for r in cur.fetchall()]
+    total_recipients=len(all_rows); matched_count=sum(1 for x in all_rows if x["match_status"]=="MATCHED" and x["student_id"]); needs_review_count=total_recipients-matched_count; sent_count=sum(1 for x in all_rows if x["sent_status"]=="SENT"); remaining_count=total_recipients-sent_count
+
+    q_lower=q.lower(); filtered=[]
+    for row in all_rows:
+        try: awards=json.loads(row["awards_json"] or "[]")
+        except Exception: awards=[]
+        row["_awards"]=awards
+        award_text=" ".join(aqm_certificate_award_label(a,row["source_grade"]) for a in awards)
+        haystack=" ".join([str(row.get("student_name") or ""),str(row.get("source_name") or ""),str(row.get("phone_whatsapp") or ""),str(row.get("guardian_phone") or ""),str(row.get("source_grade") or ""),award_text]).lower()
+        if q_lower and q_lower not in haystack: continue
+        if grade_filter and (row["source_grade"] or "").upper()!=grade_filter: continue
+        if status_filter=="MATCHED" and not (row["match_status"]=="MATCHED" and row["student_id"]): continue
+        if status_filter=="NEEDS_REVIEW" and row["match_status"]=="MATCHED" and row["student_id"]: continue
+        if status_filter=="SENT" and row["sent_status"]!="SENT": continue
+        if status_filter=="NOT_SENT" and row["sent_status"]=="SENT": continue
+        filtered.append(row)
+
+    per_page=20; total_filtered=len(filtered); total_pages=max(1,(total_filtered+per_page-1)//per_page); page_num=min(page_num,total_pages); start=(page_num-1)*per_page; page_rows=filtered[start:start+per_page]
+    cur.execute("SELECT id,full_name,grade,phone_whatsapp FROM students ORDER BY grade,full_name")
+    students_by_grade={}
+    for s in cur.fetchall(): students_by_grade.setdefault(aqm_certificate_normalize_grade(s["grade"]),[]).append(dict(s))
+    conn.close()
+
+    def page_url(n):
+        params={"batch_id":batch_id,"q":q,"status":status_filter,"grade":grade_filter,"page":n}; params={k:v for k,v in params.items() if str(v)!=""}
+        return url_for("aqm_certificates")+"?"+urlencode(params)
+    prev_link=f'<a class="btn mini secondary" href="{escape(page_url(page_num-1),quote=True)}">← Previous</a>' if page_num>1 else ""
+    next_link=f'<a class="btn mini secondary" href="{escape(page_url(page_num+1),quote=True)}">Next →</a>' if page_num<total_pages else ""
+    pagination_html=f'<div class="toolbar" style="justify-content:space-between;align-items:center;margin:10px 0"><div class="toolbar">{prev_link}<span class="chip">Page {page_num} of {total_pages}</span>{next_link}</div><div class="mini muted">Showing {len(page_rows)} of {total_filtered}</div></div>'
+
+    status_options='<option value="">All Statuses</option>'
+    for value,label in (("MATCHED","Matched"),("NEEDS_REVIEW","Needs Match"),("NOT_SENT","Not Sent"),("SENT","Sent")):
+        status_options+=f'<option value="{value}" {"selected" if status_filter==value else ""}>{label}</option>'
+    grade_options='<option value="">All Grades</option>'
+    for g in ("G8","G9","G10","G11","G12","G13"):
+        grade_options+=f'<option value="{g}" {"selected" if grade_filter==g else ""}>{escape(grade_label(g))}</option>'
+
+    batch_select=f'<form method="get" class="toolbar" style="align-items:end;margin-bottom:12px"><div style="min-width:260px"><label>Certificate Batch</label><select name="batch_id" onchange="this.form.submit()">{batch_options}</select></div></form>'
+    table_rows=""; all_student_numbers=[]; all_guardian_numbers=[]; remaining_student_numbers=[]
+    for br in all_rows:
+        if br["match_status"]=="MATCHED" and br["student_id"]:
+            sp=str(br.get("phone_whatsapp") or "").strip(); gp=str(br.get("guardian_phone") or "").strip()
+            if sp: all_student_numbers.append(sp); remaining_student_numbers.append(sp) if br["sent_status"]!="SENT" else None
+            if gp: all_guardian_numbers.append(gp)
+    all_student_numbers=list(dict.fromkeys(all_student_numbers)); all_guardian_numbers=list(dict.fromkeys(all_guardian_numbers)); remaining_student_numbers=list(dict.fromkeys(remaining_student_numbers))
+
+    from difflib import SequenceMatcher
+    for row in page_rows:
+        awards=row["_awards"]
+        award_html="".join(f'<div class="mini" style="margin:3px 0;padding:5px 8px;border-radius:9px;background:#f7faf7;border:1px solid #dce9df">{escape(aqm_certificate_award_label(a,row["source_grade"]))}</div>' for a in awards) or "—"
+        is_matched=row["match_status"]=="MATCHED" and row["student_id"]
+        if is_matched: match_html=f'<span class="chip active">Matched</span><div class="mini muted">{escape(str(row["match_score"] or 100))}%</div>'
+        elif row["match_status"]=="POSSIBLE": match_html=f'<span class="chip pending">Possible Match</span><div class="mini muted">{escape(row["suggested_name"] or "Review learner")} · {escape(str(row["match_score"] or 0))}%</div>'
+        else: match_html='<span class="chip lapsed">Needs Match</span>'
+        manual_match_html=""
+        if not is_matched:
+            source_norm=aqm_certificate_normalize_name(row["source_name"]); candidates=list(students_by_grade.get(row["source_grade"],[])); candidates.sort(key=lambda s:SequenceMatcher(None,source_norm,aqm_certificate_normalize_name(s["full_name"])).ratio(),reverse=True); candidates=candidates[:15]
+            opts='<option value="">Choose learner</option>'
+            for s in candidates:
+                sel="selected" if row["suggested_student_id"] and int(row["suggested_student_id"])==int(s["id"]) else ""
+                opts+=f'<option value="{int(s["id"])}" {sel}>{escape(s["full_name"])} · {escape(s["phone_whatsapp"] or "No phone")}</option>'
+            manual_match_html=f'<details style="margin-top:7px"><summary class="mini" style="cursor:pointer;color:#166534;font-weight:800">Match learner</summary><form method="post" action="{url_for("aqm_certificate_match_recipient",recipient_id=row["id"])}" style="margin-top:7px"><input type="hidden" name="batch_id" value="{batch_id}"><select name="student_id" required>{opts}</select><button class="btn mini success" style="margin-top:6px">Save Match</button></form></details>'
+
+        student_display=row["student_name"] or row["source_name"] or "—"
+        try: source_names=json.loads(row["source_names_json"] or "[]")
+        except Exception: source_names=[]
+        source_names=[str(x).strip() for x in source_names if str(x).strip()]
+        source_alias=f'<div class="mini muted">Workbook names: {escape(" / ".join(source_names))}</div>' if len(source_names)>1 else ""
+        contact_html="—"; actions_html=""
+        if is_matched:
+            student_phone=str(row["phone_whatsapp"] or "").strip(); guardian_phone=str(row["guardian_phone"] or "").strip()
+            message=aqm_certificate_message(row["student_name"],row["portal_grade"] or row["source_grade"],awards,current_batch["award_term"],current_batch["award_year"]); message_id=f'certificate-message-{int(row["id"])}'
+            student_wa=clean_phone_for_whatsapp(student_phone); guardian_wa=clean_phone_for_whatsapp(guardian_phone)
+            student_link="https://wa.me/"+student_wa+"?"+urlencode({"text":message}) if student_wa else ""; guardian_link="https://wa.me/"+guardian_wa+"?"+urlencode({"text":message}) if guardian_wa else ""
+            contact_html=f'<div><strong>Student:</strong> {escape(student_phone or "—")}</div><div class="mini muted" style="margin-top:4px">Guardian: {escape(guardian_phone or "—")}</div><div class="mini muted">{escape(row["guardian_name"] or "")}</div>'
+            sent_html=(f'<span class="chip active">Sent</span><div class="mini muted">{escape(str(row["sent_at"] or "")[:16].replace("T"," "))}</div><form method="post" action="{url_for("aqm_certificate_mark_unsent",recipient_id=row["id"])}" style="margin-top:6px"><input type="hidden" name="batch_id" value="{batch_id}"><button class="btn mini secondary">Mark Not Sent</button></form>' if row["sent_status"]=="SENT" else f'<span class="chip pending">Not Sent</span><form method="post" action="{url_for("aqm_certificate_mark_sent",recipient_id=row["id"])}" style="margin-top:6px"><input type="hidden" name="batch_id" value="{batch_id}"><select name="sent_target"><option value="student">Student</option><option value="guardian">Guardian</option></select><button class="btn mini success" style="margin-top:6px">Mark Sent</button></form>')
+            parts=[f'<button type="button" class="btn mini secondary" onclick="previewCertificateMessage(\'{message_id}\')">Preview Message</button>',f'<button type="button" class="btn mini secondary" onclick="copyCertificateMessage(\'{message_id}\',this)">Copy Message</button>']
+            if student_phone: parts.append(f'<button type="button" class="btn mini secondary" data-copy="{escape(student_phone,quote=True)}" onclick="copyCertificateText(this.dataset.copy,this)">Copy Student No.</button>')
+            if guardian_phone: parts.append(f'<button type="button" class="btn mini secondary" data-copy="{escape(guardian_phone,quote=True)}" onclick="copyCertificateText(this.dataset.copy,this)">Copy Guardian No.</button>')
+            if student_link: parts.append(f'<a class="btn mini success" target="_blank" rel="noopener" href="{escape(student_link,quote=True)}">WhatsApp Student</a>')
+            if guardian_link: parts.append(f'<a class="btn mini success" target="_blank" rel="noopener" href="{escape(guardian_link,quote=True)}">WhatsApp Guardian</a>')
+            actions_html=f'<textarea id="{message_id}" style="display:none">{escape(message)}</textarea><div style="display:flex;gap:6px;flex-wrap:wrap">{"".join(parts)}</div><div style="margin-top:8px">{sent_html}</div>'
+        row_class="aqm-certificate-sent-row" if row["sent_status"]=="SENT" else ""
+        table_rows+=f'<tr class="{row_class}"><td style="min-width:220px"><strong>{escape(student_display)}</strong><div class="mini muted">{escape(grade_label(row["portal_grade"] or row["source_grade"]))}</div>{source_alias}</td><td style="min-width:250px">{award_html}</td><td style="min-width:170px">{match_html}{manual_match_html}</td><td style="min-width:210px">{contact_html}</td><td style="min-width:310px">{actions_html or "Match the learner first."}</td></tr>'
+
+    batch_label=current_batch["title"] or ((current_batch["award_term"] or "")+" "+(current_batch["award_year"] or "")).strip() or f"Batch {batch_id}"
+    body=f"""
+    {aqm_nav()}
+    <style>
+        .aqm-certificate-sent-row td {{background:#ecfdf3 !important;}}
+        .aqm-certificate-copy-tools {{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0;}}
+        .aqm-certificate-preview {{display:none;white-space:pre-wrap;padding:14px;border-radius:14px;background:#f8fafc;border:1px solid #dbe4ef;margin:12px 0;max-height:360px;overflow:auto;}}
+    </style>
+    <section class="card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap"><div><h1 style="margin-bottom:4px">Certificate Distribution</h1><div class="mini muted">{escape(batch_label)}</div></div><a class="btn mini secondary" href="{url_for('aqm_certificate_contacts_csv',batch_id=batch_id)}">Download Contact List</a></div>
+        {upload_card}{batch_select}
+        <div class="stats">{stat("Recipients",total_recipients)}{stat("Matched",matched_count)}{stat("Needs Match",needs_review_count)}{stat("Sent",sent_count)}{stat("Still To Send",remaining_count)}</div>
+        <div class="aqm-certificate-copy-tools">
+            <button type="button" class="btn mini secondary" data-numbers='{escape(json.dumps(all_student_numbers),quote=True)}' onclick="copyCertificateList(JSON.parse(this.dataset.numbers))">Copy All Student Numbers</button>
+            <button type="button" class="btn mini secondary" data-numbers='{escape(json.dumps(all_guardian_numbers),quote=True)}' onclick="copyCertificateList(JSON.parse(this.dataset.numbers))">Copy All Guardian Numbers</button>
+            <button type="button" class="btn mini success" data-numbers='{escape(json.dumps(remaining_student_numbers),quote=True)}' onclick="copyCertificateList(JSON.parse(this.dataset.numbers))">Copy Numbers Still To Send</button>
+        </div>
+        <div id="certificateMessagePreview" class="aqm-certificate-preview"></div>
+        <form method="get" class="toolbar" style="align-items:end;margin:12px 0"><input type="hidden" name="batch_id" value="{batch_id}"><div><label>Grade</label><select name="grade">{grade_options}</select></div><div><label>Status</label><select name="status">{status_options}</select></div><div style="min-width:260px"><label>Search</label><input name="q" value="{escape(q,quote=True)}" placeholder="Learner, phone or achievement"></div><button class="btn mini success">Filter</button><a class="btn mini secondary" href="{url_for('aqm_certificates')}?batch_id={batch_id}">Clear</a></form>
+        {pagination_html}
+        <div class="scroll-x"><table style="min-width:1180px"><thead><tr><th>Learner</th><th>Certificate Achievement(s)</th><th>Portal Match</th><th>Contact Numbers</th><th>Send Certificate</th></tr></thead><tbody>{table_rows or "<tr><td colspan='5'>No certificate recipients found for these filters.</td></tr>"}</tbody></table></div>
+        {pagination_html}
+    </section>
+    <script>
+    function copyCertificateText(text,button){{if(!text)return;const original=button?button.textContent:"";const copied=function(){{if(button){{button.textContent="Copied";setTimeout(function(){{button.textContent=original;}},1200);}}}};if(navigator.clipboard&&window.isSecureContext){{navigator.clipboard.writeText(text).then(copied);}}else{{const area=document.createElement("textarea");area.value=text;area.style.position="fixed";area.style.opacity="0";document.body.appendChild(area);area.select();document.execCommand("copy");document.body.removeChild(area);copied();}}}}
+    function copyCertificateList(numbers){{const clean=(Array.isArray(numbers)?numbers:[]).filter(Boolean);if(!clean.length){{alert("There are no numbers available for this list.");return;}}copyCertificateText(clean.join("\\n"),null);alert(clean.length+" number(s) copied.");}}
+    function previewCertificateMessage(id){{const source=document.getElementById(id),preview=document.getElementById("certificateMessagePreview");if(!source||!preview)return;preview.textContent=source.value;preview.style.display="block";preview.scrollIntoView({{behavior:"smooth",block:"center"}});}}
+    function copyCertificateMessage(id,button){{const source=document.getElementById(id);if(source)copyCertificateText(source.value,button);}}
+    </script>
+    """
+    return page("Certificate Distribution",body)
+
+
+@app.post('/aqm/certificates/upload')
+def aqm_certificate_upload():
+    r=require_aqm()
+    if r: return r
+    aqm_id=int(session["aqm_id"]); upload=request.files.get("certificate_file"); award_term=request.form.get("award_term","").strip(); award_year=request.form.get("award_year","").strip(); title=request.form.get("title","").strip()
+    if not upload or not upload.filename: return page("No Excel File",card_msg("Please choose the certificate recipient workbook."))
+    ext=Path(upload.filename).suffix.lower()
+    if ext not in {".xlsx",".xlsm"}: return page("Invalid Excel File",card_msg("Please upload an XLSX or XLSM workbook."))
+    if not award_term: return page("Missing Term",card_msg("Please select the certificate term."))
+    if not award_year.isdigit(): return page("Invalid Year",card_msg("Please enter a valid certificate year."))
+    file_bytes=upload.read()
+    try: parsed=aqm_certificate_parse_excel(file_bytes)
+    except Exception as exc: return page("Certificate Import Failed",card_msg(escape(str(exc))))
+    conn=get_db()
+    try:
+        matched=aqm_certificate_match_rows(parsed,conn); cur=conn.cursor(); safe_original=secure_name(upload.filename); stored_name=f"AQM_CERT_{aqm_id}_{int(time.time())}_{safe_original}"; stored_path=AQM_CERTIFICATES_DIR/stored_name; stored_path.write_bytes(file_bytes)
+        if not title: title=f"{award_term} Certificates {award_year}"
+        now=now_utc_iso(); cur.execute("""INSERT INTO aqm_certificate_batches(aqm_id,title,award_term,award_year,source_file_name,source_file_path,status,created_at) VALUES(?,?,?,?,?,?,?,?)""",(aqm_id,title,award_term,award_year,upload.filename,str(stored_path),"ACTIVE",now)); batch_id=int(cur.lastrowid)
+        for item in matched:
+            cur.execute("""INSERT INTO aqm_certificate_recipients(batch_id,source_name,source_grade,source_names_json,student_id,suggested_student_id,match_status,match_score,awards_json,sent_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",(batch_id,item["source_name"],item["source_grade"],json.dumps(item.get("source_names",[]),ensure_ascii=False),item.get("student_id"),item.get("suggested_student_id"),item.get("match_status") or "UNMATCHED",item.get("match_score") or 0,json.dumps(item.get("awards",[]),ensure_ascii=False),"NOT_SENT",now,now))
+        conn.commit()
+    except Exception:
+        conn.rollback(); conn.close(); raise
+    conn.close(); return redirect(url_for("aqm_certificates",batch_id=batch_id))
+
+
+@app.post('/aqm/certificates/recipient/<int:recipient_id>/match')
+def aqm_certificate_match_recipient(recipient_id):
+    r=require_aqm()
+    if r:return r
+    batch_id=request.form.get("batch_id","").strip(); raw=request.form.get("student_id","").strip()
+    try: student_id=int(raw)
+    except Exception:return page("Invalid Learner",card_msg("Please choose a learner from the portal."))
+    conn=get_db();cur=conn.cursor();cur.execute("SELECT * FROM aqm_certificate_recipients WHERE id=? LIMIT 1",(recipient_id,));recipient=cur.fetchone();cur.execute("SELECT id,full_name,grade FROM students WHERE id=? LIMIT 1",(student_id,));student=cur.fetchone()
+    if not recipient or not student: conn.close();return page("Not Found",card_msg("The certificate recipient or learner could not be found."))
+    if aqm_certificate_normalize_grade(recipient["source_grade"])!=aqm_certificate_normalize_grade(student["grade"]): conn.close();return page("Grade Does Not Match",card_msg("Please choose a learner from the same grade as the workbook recipient."))
+    cur.execute("SELECT * FROM aqm_certificate_recipients WHERE batch_id=? AND student_id=? AND id<>? ORDER BY id LIMIT 1",(recipient["batch_id"],student_id,recipient_id));existing=cur.fetchone();now=now_utc_iso()
+    if existing:
+        try: ea=json.loads(existing["awards_json"] or "[]")
+        except Exception: ea=[]
+        try: ia=json.loads(recipient["awards_json"] or "[]")
+        except Exception: ia=[]
+        keys={json.dumps(a,sort_keys=True) for a in ea}
+        for a in ia:
+            k=json.dumps(a,sort_keys=True)
+            if k not in keys: ea.append(a);keys.add(k)
+        try: names=json.loads(existing["source_names_json"] or "[]")
+        except Exception:names=[]
+        try: incoming=json.loads(recipient["source_names_json"] or "[]")
+        except Exception:incoming=[]
+        for n in incoming+[recipient["source_name"]]:
+            if n and n not in names:names.append(n)
+        cur.execute("UPDATE aqm_certificate_recipients SET awards_json=?,source_names_json=?,updated_at=? WHERE id=?",(json.dumps(ea,ensure_ascii=False),json.dumps(names,ensure_ascii=False),now,existing["id"]));cur.execute("DELETE FROM aqm_certificate_recipients WHERE id=?",(recipient_id,))
+    else:
+        cur.execute("UPDATE aqm_certificate_recipients SET student_id=?,suggested_student_id=?,match_status='MATCHED',match_score=100,updated_at=? WHERE id=?",(student_id,student_id,now,recipient_id))
+    conn.commit();conn.close();return redirect(url_for("aqm_certificates",batch_id=int(batch_id or recipient["batch_id"])))
+
+
+@app.post('/aqm/certificates/recipient/<int:recipient_id>/mark-sent')
+def aqm_certificate_mark_sent(recipient_id):
+    r=require_aqm()
+    if r:return r
+    aqm_id=int(session["aqm_id"]);batch_id=request.form.get("batch_id","").strip();target=request.form.get("sent_target","student").strip().lower();conn=get_db();cur=conn.cursor();cur.execute("""SELECT r.batch_id,r.student_id,st.phone_whatsapp,st.guardian_phone FROM aqm_certificate_recipients r LEFT JOIN students st ON st.id=r.student_id WHERE r.id=? LIMIT 1""",(recipient_id,));row=cur.fetchone()
+    if not row or not row["student_id"]:conn.close();return page("Learner Not Matched",card_msg("Match this certificate recipient to a portal learner first."))
+    sent_to=(row["guardian_phone"] or row["phone_whatsapp"]) if target=="guardian" else (row["phone_whatsapp"] or row["guardian_phone"]);now=now_utc_iso();cur.execute("UPDATE aqm_certificate_recipients SET sent_status='SENT',sent_to=?,sent_at=?,sent_by_aqm_id=?,updated_at=? WHERE id=?",(sent_to,now,aqm_id,now,recipient_id));conn.commit();conn.close();return redirect(url_for("aqm_certificates",batch_id=int(batch_id or row["batch_id"])))
+
+
+@app.post('/aqm/certificates/recipient/<int:recipient_id>/mark-unsent')
+def aqm_certificate_mark_unsent(recipient_id):
+    r=require_aqm()
+    if r:return r
+    batch_id=request.form.get("batch_id","").strip();conn=get_db();cur=conn.cursor();cur.execute("SELECT batch_id FROM aqm_certificate_recipients WHERE id=? LIMIT 1",(recipient_id,));row=cur.fetchone()
+    if not row:conn.close();return redirect(url_for("aqm_certificates"))
+    cur.execute("UPDATE aqm_certificate_recipients SET sent_status='NOT_SENT',sent_to=NULL,sent_at=NULL,sent_by_aqm_id=NULL,updated_at=? WHERE id=?",(now_utc_iso(),recipient_id));conn.commit();conn.close();return redirect(url_for("aqm_certificates",batch_id=int(batch_id or row["batch_id"])))
+
+
+@app.get('/aqm/certificates/<int:batch_id>/contacts.csv')
+def aqm_certificate_contacts_csv(batch_id):
+    r=require_aqm()
+    if r:return r
+    import csv
+    conn=get_db();cur=conn.cursor();cur.execute("""SELECT b.title,b.award_term,b.award_year,r.source_name,r.source_grade,r.match_status,r.awards_json,r.sent_status,r.sent_at,st.full_name AS student_name,st.phone_whatsapp,st.guardian_name,st.guardian_phone,st.grade AS portal_grade,st.school FROM aqm_certificate_recipients r JOIN aqm_certificate_batches b ON b.id=r.batch_id LEFT JOIN students st ON st.id=r.student_id WHERE r.batch_id=? ORDER BY r.source_grade,COALESCE(st.full_name,r.source_name)""",(batch_id,));rows=cur.fetchall();conn.close();output=io.StringIO();writer=csv.writer(output);writer.writerow(["Learner","Grade","Student WhatsApp","Guardian Name","Guardian WhatsApp","School","Achievement(s)","Match Status","Certificate Sent","Sent At"])
+    for row in rows:
+        try:awards=json.loads(row["awards_json"] or "[]")
+        except Exception:awards=[]
+        award_text="; ".join(aqm_certificate_award_label(a,row["portal_grade"] or row["source_grade"]) for a in awards)
+        writer.writerow([row["student_name"] or row["source_name"] or "",grade_label(row["portal_grade"] or row["source_grade"]),row["phone_whatsapp"] or "",row["guardian_name"] or "",row["guardian_phone"] or "",row["school"] or "",award_text,row["match_status"] or "",row["sent_status"] or "",row["sent_at"] or ""])
+    data=output.getvalue().encode("utf-8-sig");output.close();return send_file(io.BytesIO(data),mimetype="text/csv",as_attachment=True,download_name=f"EBTA_Certificate_Contacts_{batch_id}.csv")
 
 
 @app.get('/aqm/download-report/<int:rid>')
