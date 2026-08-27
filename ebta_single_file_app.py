@@ -11011,6 +11011,9 @@ switch(hash){
     case '#ratings-feedback':
     el = document.getElementById('ratings-feedback') || findCardByHeadingText(['ratings & feedback']);
     break;
+    case '#discounts-rewards':
+    el = document.getElementById('discounts-rewards') || findCardByHeadingText(['discounts & rewards']);
+    break;
     case '#students':
     case '#tutors':
     case '#subjects':
@@ -11113,6 +11116,8 @@ switch(hash){
     el = document.getElementById('status-banner') || findCardByHeadingText(['status']); break;
     case '#ratings-feedback':
     el = document.getElementById('ratings-feedback') || findCardByHeadingText(['ratings & feedback']); break;
+    case '#discounts-rewards':
+    el = document.getElementById('discounts-rewards') || findCardByHeadingText(['discounts & rewards']); break;
     case '#enrollments':
     el = document.getElementById('enrollments') || findCardByHeadingText(['manage enrollments','enrollments']); break;
     case '#students':
@@ -13134,6 +13139,13 @@ def page(title, body_html, extra_head="", extra_js=""):
                         url_for('student_home') + "#ratings-feedback"
                     )
                 )
+
+            links.append(
+                (
+                    "🎁 Discounts & Rewards",
+                    url_for('student_home') + "#discounts-rewards"
+                )
+            )
 
             links.extend([
                 ("👤 My Profile", url_for('student_profile_page')),
@@ -19942,6 +19954,9 @@ def student_home():
             dc.created_at,
             dc.source,
             dc.applies_to,
+            dc.discount_category,
+            dc.discount_scope_months,
+            dc.notes,
             sub.name AS subject_name,
             sub.grade AS subject_grade
         FROM discount_coupons dc
@@ -19949,15 +19964,15 @@ def student_home():
         WHERE dc.target_student_id=?
           AND dc.status='ACTIVE'
           AND dc.used_count < dc.max_uses
-          AND dc.source IN ('MANUAL', 'REFERRAL_REWARD')
         ORDER BY
             CASE
-                WHEN dc.source='MANUAL' THEN 1
-                WHEN dc.source='REFERRAL_REWARD' THEN 2
-                ELSE 3
+                WHEN dc.source='AWARD' THEN 1
+                WHEN dc.source='MANUAL' THEN 2
+                WHEN dc.source='REFERRAL_REWARD' THEN 3
+                ELSE 4
             END,
             dc.created_at DESC
-        LIMIT 10
+        LIMIT 20
     """, (sid,))
 
     reward_codes = cur.fetchall()
@@ -19971,22 +19986,56 @@ def student_home():
         if rc["status"] != "ACTIVE":
             reward_status_class = "lapsed"
 
-        if rc["source"] == "MANUAL":
-            discount_title = "Admission Discount Code"
-            discount_note = "This discount was issued to you by EBTA Admissions. Use it when enrolling."
+        discount_category = str(
+            rc["discount_category"]
+            or ""
+        ).strip()
+
+        if rc["source"] == "AWARD":
+            discount_title = (
+                discount_category
+                or "Award Discount"
+            )
+            discount_note = (
+                "You received this EBTA award discount. "
+                "Use the code when enrolling."
+            )
+        elif rc["source"] == "MANUAL":
+            discount_title = "Admission Discount"
+            discount_note = (
+                "This discount was issued to you by EBTA Admissions. "
+                "Use the code when enrolling."
+            )
         elif rc["source"] == "REFERRAL_REWARD":
-            discount_title = "Referral Reward Code"
-            discount_note = "Use this code when enrolling to receive your referral reward."
+            discount_title = "Referral Reward"
+            discount_note = (
+                "Use this code when enrolling to receive your referral reward."
+            )
         else:
-            discount_title = "Discount Code"
+            discount_title = (
+                discount_category
+                or "EBTA Discount"
+            )
             discount_note = "Use this code when enrolling."
 
         if rc["applies_to"] == "SUBJECT" and rc["subject_name"]:
-            applies_to = f"{grade_label(rc['subject_grade'])} - {escape(rc['subject_name'])}"
-        elif rc["applies_to"] == "ANY_SUBJECT":
-            applies_to = "Any one selected subject"
+            applies_to = (
+                f"{grade_label(rc['subject_grade'])} "
+                f"- {escape(rc['subject_name'])}"
+            )
         else:
-            applies_to = "All selected subjects"
+            applies_to = "Any one selected subject"
+
+        scope_months = int(
+            rc["discount_scope_months"]
+            or 0
+        )
+
+        scope_text = (
+            "1 month only"
+            if scope_months == 1
+            else "Valid for this code's permitted use"
+        )
 
         reward_html += f"""
         <div class="card soft" style="padding:10px;margin-top:8px;border-left:4px solid #1b5e20">
@@ -20008,7 +20057,8 @@ def student_home():
 
                     <div class="mini muted" style="margin-top:5px">
                         Discount: <b>{rc['discount_percent']}%</b><br>
-                        Applies to: <b>{applies_to}</b>
+                        Applies to: <b>{applies_to}</b><br>
+                        Benefit period: <b>{scope_text}</b>
                     </div>
                 </div>
 
@@ -20019,9 +20069,17 @@ def student_home():
                     justify-content:flex-end;
                     flex-wrap:wrap;
                 ">
-                    <span class="chip" style="font-size:15px;letter-spacing:1px">
+                    <span class="chip"
+                          style="font-size:15px;letter-spacing:1px">
                         {escape(rc['code'])}
                     </span>
+
+                    <button type="button"
+                            class="btn mini secondary"
+                            data-discount-code="{escape(rc['code'], quote=True)}"
+                            onclick="copyStudentDiscountCode(this)">
+                        Copy Code
+                    </button>
 
                     <span class="chip {reward_status_class}">
                         {escape(rc['status'])}
@@ -20050,9 +20108,24 @@ def student_home():
     referral_total_count = referral_row["referral_total_count"] if referral_row else 0
 
     referral_section = f"""
-    <div class="card soft" style="border-left:5px solid #f59e0b;margin-bottom:14px">
+    <div class="card soft"
+         id="discounts-rewards"
+         style="
+             border-left:5px solid #f59e0b;
+             margin-bottom:14px;
+             scroll-margin-top:100px;
+         ">
 
-        <h2>My Referral Code</h2>
+        <h2>Discounts & Rewards</h2>
+
+        <div class="card soft"
+             style="
+                 margin:10px 0 14px;
+                 border-left:4px solid #1b5e20;
+             ">
+            <h3 style="margin-top:0">
+                My Referral Code
+            </h3>
 
         <p class="muted">
             Share this code with new EBTA learners. Referral points are only awarded
@@ -20096,12 +20169,70 @@ def student_home():
         <div class="mini muted" style="margin-bottom:10px">
             At 3 referral points, you can receive a 50% discount reward.
             At 5 referral points, you can receive a 100% discount reward.
-            Any discount code issued by EBTA Admissions will also appear below.
         </div>
 
-        <h3 style="margin-top:12px">My Available Discount Codes</h3>
+        </div>
+
+        <h3 style="margin-top:12px">
+            My Available Discount Codes
+        </h3>
+
+        <div class="mini muted"
+             style="margin-bottom:8px">
+            Any active discount or award code assigned to you will appear here.
+            Use the code in the Coupon / Referral Code field when enrolling.
+        </div>
 
         {reward_html}
+
+        <script>
+            function copyStudentDiscountCode(button) {{
+                const code = (
+                    button.getAttribute(
+                        "data-discount-code"
+                    )
+                    || ""
+                );
+
+                if (!code) {{
+                    return;
+                }}
+
+                const originalText = button.textContent;
+
+                function copied() {{
+                    button.textContent = "Copied";
+
+                    window.setTimeout(
+                        function() {{
+                            button.textContent = originalText;
+                        }},
+                        1200
+                    );
+                }}
+
+                if (
+                    navigator.clipboard
+                    && window.isSecureContext
+                ) {{
+                    navigator.clipboard.writeText(
+                        code
+                    ).then(
+                        copied
+                    ).catch(function() {{
+                        window.prompt(
+                            "Copy discount code:",
+                            code
+                        );
+                    }});
+                }} else {{
+                    window.prompt(
+                        "Copy discount code:",
+                        code
+                    );
+                }}
+            }}
+        </script>
 
     </div>
     """
