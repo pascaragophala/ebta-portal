@@ -4033,8 +4033,15 @@ def init_db():
         )    
 
 
-    # --- REMOVE UNWANTED SUBJECTS (SAFE CLEANUP) ---
-    # (Currently disabled – kept for future use)
+    # --- REMOVE RETIRED / UNWANTED SUBJECTS ---
+    #
+    # IMPORTANT:
+    # These subjects are being removed completely from EBTA's current
+    # subject register. Related records that block the deletion are removed
+    # in foreign-key-safe order before the subject row itself is deleted.
+    #
+    # The operation is idempotent: once a subject is gone, future starts
+    # simply skip it.
 
     subjects_to_remove = [
         ("Geography", "G11"),
@@ -4048,43 +4055,126 @@ def init_db():
 
     for name, grade in subjects_to_remove:
 
-        # Remove related enrollments
         cur.execute("""
+            SELECT id
+            FROM subjects
+            WHERE name=?
+              AND grade=?
+        """, (
+            name,
+            grade
+        ))
+
+        subject_ids = [
+            int(row["id"])
+            for row in cur.fetchall()
+        ]
+
+        if not subject_ids:
+            continue
+
+        placeholders = ",".join(
+            "?"
+            for _ in subject_ids
+        )
+
+        # --------------------------------------------------------
+        # 1. Payments block enrollment deletion because the legacy
+        #    payments FK does not use ON DELETE CASCADE.
+        # --------------------------------------------------------
+        cur.execute(
+            f"""
+            DELETE FROM payments
+            WHERE enrollment_id IN (
+                SELECT id
+                FROM enrollments
+                WHERE subject_id IN ({placeholders})
+            )
+            """,
+            subject_ids
+        )
+
+        # enrollment_files use ON DELETE CASCADE, so deleting the
+        # enrollment now safely removes those files' DB records too.
+        cur.execute(
+            f"""
             DELETE FROM enrollments
-            WHERE subject_id IN (
-                SELECT id FROM subjects WHERE name=? AND grade=?
-            )
-        """, (name, grade))
+            WHERE subject_id IN ({placeholders})
+            """,
+            subject_ids
+        )
 
-        # Remove tutor-subject mappings
-        cur.execute("""
-            DELETE FROM tutor_subjects
-            WHERE subject_id IN (
-                SELECT id FROM subjects WHERE name=? AND grade=?
+        # --------------------------------------------------------
+        # 2. Attendance blocks session deletion because the legacy
+        #    attendance.session_id FK does not use ON DELETE CASCADE.
+        # --------------------------------------------------------
+        cur.execute(
+            f"""
+            DELETE FROM attendance
+            WHERE session_id IN (
+                SELECT id
+                FROM sessions
+                WHERE subject_id IN ({placeholders})
             )
-        """, (name, grade))
+            """,
+            subject_ids
+        )
 
-        # Remove groups
-        cur.execute("""
-            DELETE FROM groups
-            WHERE subject_id IN (
-                SELECT id FROM subjects WHERE name=? AND grade=?
-            )
-        """, (name, grade))
-
-        # Remove sessions
-        cur.execute("""
+        # attendance_sessions use ON DELETE CASCADE from sessions.
+        cur.execute(
+            f"""
             DELETE FROM sessions
-            WHERE subject_id IN (
-                SELECT id FROM subjects WHERE name=? AND grade=?
-            )
-        """, (name, grade))
+            WHERE subject_id IN ({placeholders})
+            """,
+            subject_ids
+        )
 
-        # Finally remove the subject itself
-        cur.execute("""
+        # --------------------------------------------------------
+        # 3. Materials directly reference subjects without
+        #    ON DELETE CASCADE. Their submissions/material views do
+        #    cascade from the material record.
+        # --------------------------------------------------------
+        cur.execute(
+            f"""
+            DELETE FROM materials
+            WHERE subject_id IN ({placeholders})
+            """,
+            subject_ids
+        )
+
+        # --------------------------------------------------------
+        # 4. Other legacy direct subject references.
+        # --------------------------------------------------------
+        cur.execute(
+            f"""
+            DELETE FROM groups
+            WHERE subject_id IN ({placeholders})
+            """,
+            subject_ids
+        )
+
+        cur.execute(
+            f"""
+            DELETE FROM tutor_subjects
+            WHERE subject_id IN ({placeholders})
+            """,
+            subject_ids
+        )
+
+        # --------------------------------------------------------
+        # 5. Finally delete the subject itself.
+        #
+        # Modern related tables use ON DELETE CASCADE or SET NULL,
+        # including ratings, assessments, games, Google Drive links,
+        # one-on-one records and discount subject links.
+        # --------------------------------------------------------
+        cur.execute(
+            f"""
             DELETE FROM subjects
-            WHERE name=? AND grade=?
-        """, (name, grade))
+            WHERE id IN ({placeholders})
+            """,
+            subject_ids
+        )
 
 
     # ================= ONE-ON-ONE PROGRAMME =================
