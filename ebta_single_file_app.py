@@ -4312,6 +4312,8 @@ def init_db():
 
     ensure_column(conn, "admin_cost_months", "source_summary_json", "TEXT")
     ensure_column(conn, "admin_cost_months", "source_bank_summary_json", "TEXT")
+    ensure_column(conn, "admin_cost_months", "source_summary_notes_json", "TEXT")
+    ensure_column(conn, "admin_cost_months", "source_staffing_summary_json", "TEXT")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS admin_cost_columns(
@@ -4375,20 +4377,24 @@ def init_db():
     cost_column_seed = [
         ('SUBSCRIPTIONS', 'service', 'Service', 'TEXT', 10, 1),
         ('SUBSCRIPTIONS', 'purpose', 'Purpose', 'TEXT', 20, 1),
-        ('SUBSCRIPTIONS', 'cost_display', 'Cost', 'TEXT', 30, 1),
+        ('SUBSCRIPTIONS', 'cost_display', 'Cost / Source Value', 'TEXT', 30, 1),
         ('SUBSCRIPTIONS', 'billing_cycle', 'Billing Cycle', 'TEXT', 40, 1),
-        ('SUBSCRIPTIONS', 'monthly_cost', 'Monthly Cost', 'CURRENCY', 50, 1),
-        ('SUBSCRIPTIONS', 'yearly_cost', 'Yearly Cost', 'CURRENCY', 60, 1),
+        ('SUBSCRIPTIONS', 'monthly_cost', 'Monthly Cost (R)', 'CURRENCY', 50, 1),
+        ('SUBSCRIPTIONS', 'yearly_cost', 'Yearly Cost (R)', 'CURRENCY', 60, 1),
 
         ('TUTORS', 'grade', 'Grade', 'TEXT', 10, 1),
         ('TUTORS', 'subject', 'Subject', 'TEXT', 20, 1),
         ('TUTORS', 'tutor', 'Tutor', 'TEXT', 30, 1),
-        ('TUTORS', 'tutor_manager', 'Tutor Manager', 'TEXT', 40, 1),
-        ('TUTORS', 'contact', 'Contact', 'TEXT', 50, 1),
-        ('TUTORS', 'bank', 'Bank', 'TEXT', 60, 1),
-        ('TUTORS', 'account_no', 'Account No.', 'TEXT', 70, 1),
-        ('TUTORS', 'monthly_cost', 'Pay', 'CURRENCY', 80, 1),
-        ('TUTORS', 'status', 'Status', 'TEXT', 90, 1),
+        ('TUTORS', 'contact', 'Contact', 'TEXT', 40, 1),
+        ('TUTORS', 'email', 'Email', 'EMAIL', 50, 1),
+        ('TUTORS', 'institution', 'Institution', 'TEXT', 60, 1),
+        ('TUTORS', 'qualification', 'Qualification', 'TEXT', 70, 1),
+        ('TUTORS', 'year', 'Year', 'TEXT', 80, 1),
+        ('TUTORS', 'tutor_manager', 'Tutor Manager', 'TEXT', 90, 1),
+        ('TUTORS', 'bank', 'Bank', 'TEXT', 100, 1),
+        ('TUTORS', 'account_no', 'Account No.', 'TEXT', 110, 1),
+        ('TUTORS', 'monthly_cost', 'Monthly Pay (R)', 'CURRENCY', 120, 1),
+        ('TUTORS', 'status', 'Status', 'TEXT', 130, 1),
 
         ('TUTOR_MANAGERS', 'full_name', 'Full Name', 'TEXT', 10, 1),
         ('TUTOR_MANAGERS', 'department_area', 'Department / Area', 'TEXT', 20, 1),
@@ -4397,7 +4403,12 @@ def init_db():
         ('TUTOR_MANAGERS', 'bank', 'Bank', 'TEXT', 50, 1),
         ('TUTOR_MANAGERS', 'account_no', 'Account No.', 'TEXT', 60, 1),
         ('TUTOR_MANAGERS', 'institution_year', 'Institution / Year', 'TEXT', 70, 1),
-        ('TUTOR_MANAGERS', 'monthly_cost', 'Pay', 'CURRENCY', 80, 1),
+        ('TUTOR_MANAGERS', 'monthly_cost', 'Monthly Pay (R)', 'CURRENCY', 80, 1),
+
+        ('TM_WORKLOAD', 'tutor_manager', 'Tutor Manager', 'TEXT', 10, 1),
+        ('TM_WORKLOAD', 'subject_allocations', 'Subject Allocations', 'NUMBER', 20, 1),
+        ('TM_WORKLOAD', 'grades_covered', 'Grades Covered', 'TEXT', 30, 1),
+        ('TM_WORKLOAD', 'current_subjects', 'Current Subjects', 'TEXT', 40, 1),
 
         ('OPERATIONAL_TEAM', 'full_name', 'Full Name', 'TEXT', 10, 1),
         ('OPERATIONAL_TEAM', 'department_area', 'Department / Area', 'TEXT', 20, 1),
@@ -4406,29 +4417,63 @@ def init_db():
         ('OPERATIONAL_TEAM', 'bank', 'Bank', 'TEXT', 50, 1),
         ('OPERATIONAL_TEAM', 'account_no', 'Account No.', 'TEXT', 60, 1),
         ('OPERATIONAL_TEAM', 'institution_year', 'Institution / Year', 'TEXT', 70, 1),
-        ('OPERATIONAL_TEAM', 'monthly_cost', 'Pay', 'CURRENCY', 80, 1),
+        ('OPERATIONAL_TEAM', 'monthly_cost', 'Monthly Pay (R)', 'CURRENCY', 80, 1),
+
+        ('BANKING_SUMMARY', 'bank', 'Bank / Payment Institution', 'TEXT', 10, 1),
+        ('BANKING_SUMMARY', 'payroll_entries', 'Payroll Entries', 'NUMBER', 20, 1),
+        ('BANKING_SUMMARY', 'monthly_cost', 'Monthly Payroll (R)', 'CURRENCY', 30, 1),
 
         ('OTHER_COSTS', 'description', 'Description', 'TEXT', 10, 1),
         ('OTHER_COSTS', 'category', 'Category', 'TEXT', 20, 1),
         ('OTHER_COSTS', 'supplier_payee', 'Supplier / Payee', 'TEXT', 30, 1),
         ('OTHER_COSTS', 'billing_cycle', 'Billing Cycle', 'TEXT', 40, 1),
-        ('OTHER_COSTS', 'monthly_cost', 'Monthly Cost', 'CURRENCY', 50, 1),
-        ('OTHER_COSTS', 'yearly_cost', 'Yearly Cost', 'CURRENCY', 60, 1),
+        ('OTHER_COSTS', 'monthly_cost', 'Monthly Cost (R)', 'CURRENCY', 50, 1),
+        ('OTHER_COSTS', 'yearly_cost', 'Yearly Cost (R)', 'CURRENCY', 60, 1),
         ('OTHER_COSTS', 'status', 'Status', 'TEXT', 70, 1),
         ('OTHER_COSTS', 'notes', 'Notes', 'TEXT', 80, 1),
     ]
 
-    for section_key, column_key, label, data_type, display_order, is_system in cost_column_seed:
+    for (
+        section_key,
+        column_key,
+        label,
+        data_type,
+        display_order,
+        is_system
+    ) in cost_column_seed:
+
         cur.execute("""
-            INSERT OR IGNORE INTO admin_cost_columns(
-                section_key, column_key, label, data_type,
-                display_order, is_system, is_visible,
-                created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?)
+            INSERT INTO admin_cost_columns(
+                section_key,
+                column_key,
+                label,
+                data_type,
+                display_order,
+                is_system,
+                is_visible,
+                created_at,
+                updated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?)
+
+            ON CONFLICT(section_key, column_key)
+            DO UPDATE SET
+                label=excluded.label,
+                data_type=excluded.data_type,
+                display_order=excluded.display_order,
+                is_system=1,
+                is_visible=1,
+                updated_at=excluded.updated_at
         """, (
-            section_key, column_key, label, data_type,
-            display_order, is_system, 1,
-            now_utc_iso(), now_utc_iso()
+            section_key,
+            column_key,
+            label,
+            data_type,
+            display_order,
+            is_system,
+            1,
+            now_utc_iso(),
+            now_utc_iso()
         ))
 
     # Remove the old built-in July 2026 records from databases that ran
@@ -42295,7 +42340,9 @@ ADMIN_COST_SECTIONS = {
     'SUBSCRIPTIONS': 'Subscriptions',
     'TUTORS': 'Tutors',
     'TUTOR_MANAGERS': 'Tutor Managers',
+    'TM_WORKLOAD': 'TM Workload',
     'OPERATIONAL_TEAM': 'Operational Team',
+    'BANKING_SUMMARY': 'Banking Summary',
     'OTHER_COSTS': 'Other Costs',
 }
 
@@ -42353,36 +42400,78 @@ def admin_cost_slug(label):
 
 def admin_cost_header_key(label):
     label_clean = str(label or '').strip()
+
     known = {
         'service': 'service',
         'purpose': 'purpose',
+
         'cost': 'cost_display',
+        'cost / source value': 'cost_display',
+        'cost/source value': 'cost_display',
+
         'billing cycle': 'billing_cycle',
+
         'monthly cost': 'monthly_cost',
+        'monthly cost (r)': 'monthly_cost',
+        'monthly cost r': 'monthly_cost',
+
         'yearly cost': 'yearly_cost',
+        'yearly cost (r)': 'yearly_cost',
+        'yearly cost r': 'yearly_cost',
+
         'grade': 'grade',
         'subject': 'subject',
         'tutor': 'tutor',
         'tutor manager': 'tutor_manager',
+
         'contact': 'contact',
+        'email': 'email',
+        'institution': 'institution',
+        'qualification': 'qualification',
+        'year': 'year',
+
         'bank': 'bank',
+        'bank / payment institution': 'bank',
+        'bank/payment institution': 'bank',
+
         'account no.': 'account_no',
         'account no': 'account_no',
+
         'pay': 'monthly_cost',
+        'monthly pay': 'monthly_cost',
+        'monthly pay (r)': 'monthly_cost',
+        'monthly pay r': 'monthly_cost',
+
+        'monthly payroll': 'monthly_cost',
+        'monthly payroll (r)': 'monthly_cost',
+        'monthly payroll r': 'monthly_cost',
+
+        'payroll entries': 'payroll_entries',
+
         'status': 'status',
+
         'full name': 'full_name',
         'department / area': 'department_area',
         'department/area': 'department_area',
-        'email': 'email',
+
         'institution / year': 'institution_year',
         'institution/year': 'institution_year',
+
+        'subject allocations': 'subject_allocations',
+        'grades covered': 'grades_covered',
+        'current subjects': 'current_subjects',
+
         'description': 'description',
         'category': 'category',
         'supplier / payee': 'supplier_payee',
         'supplier/payee': 'supplier_payee',
         'notes': 'notes',
     }
-    return known.get(label_clean.lower(), admin_cost_slug(label_clean))
+
+    return known.get(
+        label_clean.lower(),
+        admin_cost_slug(label_clean)
+    )
 
 
 def admin_cost_columns(cur, section_key):
@@ -42449,6 +42538,7 @@ def admin_cost_ensure_column(cur, section_key, column_key, label,
 
 def admin_cost_summary(conn, cost_month):
     cur = conn.cursor()
+
     totals = {}
     counts = {}
 
@@ -42459,78 +42549,193 @@ def admin_cost_summary(conn, cost_month):
                 COALESCE(SUM(monthly_cost), 0) AS monthly_total,
                 COALESCE(SUM(yearly_cost), 0) AS yearly_total
             FROM admin_cost_records
-            WHERE cost_month=? AND section_key=?
-        """, (cost_month, section_key))
+            WHERE cost_month=?
+              AND section_key=?
+        """, (
+            cost_month,
+            section_key
+        ))
+
         row = cur.fetchone()
+
         totals[section_key] = {
             'monthly': float(row['monthly_total'] or 0),
             'yearly': float(row['yearly_total'] or 0),
         }
+
         counts[section_key] = int(row['row_count'] or 0)
 
     tutor_cost = totals['TUTORS']['monthly']
     tutor_manager_cost = totals['TUTOR_MANAGERS']['monthly']
     operational_cost = totals['OPERATIONAL_TEAM']['monthly']
+
     management_cost = tutor_manager_cost + operational_cost
     payroll = tutor_cost + management_cost
+
     subscriptions_monthly = totals['SUBSCRIPTIONS']['monthly']
     subscriptions_yearly = totals['SUBSCRIPTIONS']['yearly']
+
     other_monthly = totals['OTHER_COSTS']['monthly']
     other_yearly = totals['OTHER_COSTS']['yearly']
-    monthly_cash = payroll + subscriptions_monthly + other_monthly
-    yearly_total = subscriptions_yearly + other_yearly
-    effective_monthly = monthly_cash + (yearly_total / 12.0)
+
+    monthly_cash = (
+        payroll
+        + subscriptions_monthly
+        + other_monthly
+    )
+
+    yearly_total = (
+        subscriptions_yearly
+        + other_yearly
+    )
+
+    effective_monthly = (
+        monthly_cash
+        + (
+            yearly_total
+            / 12.0
+        )
+    )
 
     cur.execute("""
         SELECT *
         FROM admin_cost_months
         WHERE cost_month=?
-    """, (cost_month,))
+    """, (
+        cost_month,
+    ))
+
     month_meta = cur.fetchone()
 
     bank_summary = {}
+
     cur.execute("""
-        SELECT row_data, monthly_cost
+        SELECT
+            row_data,
+            monthly_cost
         FROM admin_cost_records
         WHERE cost_month=?
-          AND section_key IN ('TUTORS','TUTOR_MANAGERS','OPERATIONAL_TEAM')
-    """, (cost_month,))
+          AND section_key IN (
+              'TUTORS',
+              'TUTOR_MANAGERS',
+              'OPERATIONAL_TEAM'
+          )
+    """, (
+        cost_month,
+    ))
 
     for record in cur.fetchall():
         data = admin_cost_json(record['row_data'])
-        bank = str(data.get('bank') or 'Not captured').strip() or 'Not captured'
-        entry = bank_summary.setdefault(bank, {'members': 0, 'payroll': 0.0})
+
+        bank = str(
+            data.get('bank')
+            or 'Not captured'
+        ).strip() or 'Not captured'
+
+        entry = bank_summary.setdefault(
+            bank,
+            {
+                'members': 0,
+                'payroll': 0.0
+            }
+        )
+
         entry['members'] += 1
-        entry['payroll'] += float(record['monthly_cost'] or 0)
+        entry['payroll'] += float(
+            record['monthly_cost']
+            or 0
+        )
+
+    cur.execute("""
+        SELECT row_data
+        FROM admin_cost_records
+        WHERE cost_month=?
+          AND section_key='TUTORS'
+    """, (
+        cost_month,
+    ))
+
+    unique_tutor_names = set()
+
+    for record in cur.fetchall():
+        data = admin_cost_json(record['row_data'])
+
+        tutor_name = str(
+            data.get('tutor')
+            or ''
+        ).strip()
+
+        if tutor_name:
+            unique_tutor_names.add(
+                tutor_name.casefold()
+            )
+
+    staffing_summary = {
+        'Subject allocations': counts.get('TUTORS', 0),
+        'Unique tutors': len(unique_tutor_names),
+        'Tutor Managers': counts.get('TUTOR_MANAGERS', 0),
+        'Operational team members': counts.get('OPERATIONAL_TEAM', 0),
+    }
 
     source_summary = admin_cost_json(
-        month_meta['source_summary_json'] if month_meta else None
+        month_meta['source_summary_json']
+        if month_meta
+        else None
     )
+
     source_bank_summary = admin_cost_json(
-        month_meta['source_bank_summary_json'] if month_meta else None
+        month_meta['source_bank_summary_json']
+        if month_meta
+        else None
+    )
+
+    source_summary_notes = admin_cost_json(
+        month_meta['source_summary_notes_json']
+        if month_meta
+        else None
+    )
+
+    source_staffing_summary = admin_cost_json(
+        month_meta['source_staffing_summary_json']
+        if month_meta
+        else None
     )
 
     return {
         'totals': totals,
         'counts': counts,
+
         'tutor_cost': tutor_cost,
         'tutor_manager_cost': tutor_manager_cost,
         'operational_cost': operational_cost,
         'management_cost': management_cost,
         'payroll': payroll,
+
         'subscriptions_monthly': subscriptions_monthly,
         'subscriptions_yearly': subscriptions_yearly,
+
         'other_monthly': other_monthly,
         'other_yearly': other_yearly,
+
         'monthly_cash': monthly_cash,
         'yearly_total': yearly_total,
         'effective_monthly': effective_monthly,
+
+        'staffing_summary': staffing_summary,
+
         'bank_summary': sorted(
             bank_summary.items(),
-            key=lambda item: (-item[1]['payroll'], item[0].lower())
+            key=lambda item: (
+                -item[1]['payroll'],
+                item[0].lower()
+            )
         ),
+
         'source_summary': source_summary,
+        'source_summary_notes': source_summary_notes,
+        'source_staffing_summary': source_staffing_summary,
         'source_bank_summary': source_bank_summary,
+
         'month_meta': month_meta,
     }
 
@@ -42748,9 +42953,18 @@ def admin_cost_centre():
     month_notes = meta['notes'] if meta else ''
 
     import_rows_html = ''.join(
-        f"<tr><td>{escape(item['file_name'] or 'Excel file')}</td><td>{escape(pretty_month_label(item['cost_month']))}</td><td>{escape(item['import_mode'])}</td><td>{item['imported_rows']}</td><td>{escape((item['imported_at'] or '')[:16].replace('T',' '))}</td></tr>"
+        f"""
+        <tr>
+            <td>{escape(item['file_name'] or 'Excel file')}</td>
+            <td>{escape(pretty_month_label(item['cost_month']))}</td>
+            <td>{escape(item['import_mode'])}</td>
+            <td>{escape(item['imported_sections'] or '—')}</td>
+            <td>{item['imported_rows']}</td>
+            <td>{escape((item['imported_at'] or '')[:16].replace('T',' '))}</td>
+        </tr>
+        """
         for item in recent_imports
-    ) or "<tr><td colspan='5'>No Excel files uploaded yet.</td></tr>"
+    ) or "<tr><td colspan='6'>No Excel files uploaded yet.</td></tr>"
 
     portal_summary_map = {
         'Tutor Monthly Cost': summary['tutor_cost'],
@@ -42769,12 +42983,22 @@ def admin_cost_centre():
         source_amount = float(source_amount or 0)
         variance = portal_amount - source_amount
         variance_class = 'active' if abs(variance) < 0.01 else 'pending'
+        source_note = summary['source_summary_notes'].get(
+            label,
+            ''
+        )
+
         reconciliation_rows += f"""
         <tr>
             <td>{escape(label)}</td>
             <td>{admin_cost_format_money(source_amount)}</td>
             <td>{admin_cost_format_money(portal_amount)}</td>
-            <td><span class='chip {variance_class}'>{admin_cost_format_money(variance)}</span></td>
+            <td>
+                <span class='chip {variance_class}'>
+                    {admin_cost_format_money(variance)}
+                </span>
+            </td>
+            <td>{escape(source_note or '—')}</td>
         </tr>
         """
 
@@ -42796,6 +43020,71 @@ def admin_cost_centre():
             <td>{admin_cost_format_money(portal_values.get('payroll', 0))}</td>
         </tr>
         """
+
+    staffing_reconciliation_rows = ''
+
+    for label, source_value in summary['source_staffing_summary'].items():
+        portal_value = int(
+            summary['staffing_summary'].get(
+                label,
+                0
+            )
+            or 0
+        )
+
+        try:
+            source_value_int = int(
+                float(source_value)
+            )
+        except Exception:
+            source_value_int = 0
+
+        difference = (
+            portal_value
+            - source_value_int
+        )
+
+        difference_class = (
+            'active'
+            if difference == 0
+            else 'pending'
+        )
+
+        staffing_reconciliation_rows += f"""
+        <tr>
+            <td>{escape(label)}</td>
+            <td>{source_value_int}</td>
+            <td>{portal_value}</td>
+            <td>
+                <span class='chip {difference_class}'>
+                    {difference:+d}
+                </span>
+            </td>
+        </tr>
+        """
+
+    if selected_section == 'TM_WORKLOAD':
+        section_metric_html = (
+            f"<span class='chip active'>"
+            f"{len(records)} Tutor Manager workload record(s)"
+            f"</span>"
+        )
+
+    elif selected_section == 'BANKING_SUMMARY':
+        section_metric_html = (
+            f"<span class='chip active'>"
+            f"Payroll total: "
+            f"{admin_cost_format_money(summary['totals'][selected_section]['monthly'])}"
+            f"</span>"
+        )
+
+    else:
+        section_metric_html = (
+            f"<span class='chip active'>"
+            f"Monthly total: "
+            f"{admin_cost_format_money(summary['totals'][selected_section]['monthly'])}"
+            f"</span>"
+        )
 
     body = f"""
     {admin_nav()}
@@ -42947,7 +43236,7 @@ def admin_cost_centre():
             <div>
                 <h1>EBTA Cost Centre</h1>
                 <p style='margin:0;color:#dff3e5'>
-                    Manage EBTA salaries, subscriptions, banking details and other costs.
+                    Manage payroll, tutor details, subscriptions, Tutor Manager workload, banking information and other costs.
                 </p>
             </div>
             <div class='cost-toolbar'>
@@ -42957,12 +43246,16 @@ def admin_cost_centre():
 
         <div class='cost-summary-grid'>
             <div class='cost-summary-box'><span>Tutor Monthly Cost</span><strong>{admin_cost_format_money(summary['tutor_cost'])}</strong></div>
-            <div class='cost-summary-box'><span>Management Monthly Cost</span><strong>{admin_cost_format_money(summary['management_cost'])}</strong></div>
+            <div class='cost-summary-box'><span>Tutor Manager Cost</span><strong>{admin_cost_format_money(summary['tutor_manager_cost'])}</strong></div>
+            <div class='cost-summary-box'><span>Operational Team Cost</span><strong>{admin_cost_format_money(summary['operational_cost'])}</strong></div>
+            <div class='cost-summary-box'><span>Total Management Cost</span><strong>{admin_cost_format_money(summary['management_cost'])}</strong></div>
             <div class='cost-summary-box'><span>Total Monthly Payroll</span><strong>{admin_cost_format_money(summary['payroll'])}</strong></div>
             <div class='cost-summary-box'><span>Monthly Subscriptions</span><strong>{admin_cost_format_money(summary['subscriptions_monthly'])}</strong></div>
             <div class='cost-summary-box'><span>Yearly Costs</span><strong>{admin_cost_format_money(summary['yearly_total'])}</strong></div>
             <div class='cost-summary-box'><span>Monthly Cash Requirement</span><strong>{admin_cost_format_money(summary['monthly_cash'])}</strong></div>
             <div class='cost-summary-box'><span>Effective Monthly Cost</span><strong>{admin_cost_format_money(summary['effective_monthly'])}</strong></div>
+            <div class='cost-summary-box'><span>Subject Allocations</span><strong>{summary['staffing_summary']['Subject allocations']}</strong></div>
+            <div class='cost-summary-box'><span>Unique Tutors</span><strong>{summary['staffing_summary']['Unique tutors']}</strong></div>
         </div>
     </section>
 
@@ -42975,7 +43268,7 @@ def admin_cost_centre():
             <input type='hidden' name='section' value='{escape(selected_section, quote=True)}'>
             <div style='flex:1;min-width:220px'>
                 <label>Search selected table</label>
-                <input name='q' value='{escape(search, quote=True)}' placeholder='Search names, subjects, bank or status'>
+                <input name='q' value='{escape(search, quote=True)}' placeholder='Search the selected cost table'>
             </div>
             <button class='btn'>Apply</button>
         </form>
@@ -42992,7 +43285,7 @@ def admin_cost_centre():
                     <h2>{escape(ADMIN_COST_SECTIONS[selected_section])}</h2>
                     <div class='mini muted'>{len(records)} record(s) for {escape(pretty_month_label(cost_month))}</div>
                 </div>
-                <span class='chip active'>Monthly total: {admin_cost_format_money(summary['totals'][selected_section]['monthly'])}</span>
+                {section_metric_html}
             </div>
 
             <details class='card soft' style='margin-bottom:12px'>
@@ -43022,8 +43315,8 @@ def admin_cost_centre():
             <section class='card soft'>
                 <h2>Upload Excel</h2>
                 <p class='mini muted'>
-                    Upload the EBTA cost sheet. The information will be added to the tables,
-                    including any extra columns in the file.
+                    Upload the EBTA cost workbook. The newer Overview, TM Workload and Banking Summary
+                    sheets are supported together with the existing cost tables and any extra columns.
                 </p>
                 <form method='post'
                       action='{url_for('admin_cost_import')}'
@@ -43108,12 +43401,45 @@ def admin_cost_centre():
             </p>
             <div class='scroll-x'>
                 <table>
-                    <thead><tr><th>Cost Area</th><th>Excel Total</th><th>Current Total</th><th>Difference</th></tr></thead>
+                    <thead>
+                        <tr>
+                            <th>Cost Area</th>
+                            <th>Excel Total</th>
+                            <th>Current Total</th>
+                            <th>Difference</th>
+                            <th>Workbook Note</th>
+                        </tr>
+                    </thead>
                     <tbody>{reconciliation_rows}</tbody>
                 </table>
             </div>
         </section>
         """ if reconciliation_rows else ""
+    }
+
+    {
+        f"""
+        <section class='card' style='border-left:5px solid #1b5e20'>
+            <h2>Academic Staffing Snapshot Check</h2>
+
+            <div class='scroll-x'>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Metric</th>
+                            <th>Workbook</th>
+                            <th>Current Portal</th>
+                            <th>Difference</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>{staffing_reconciliation_rows}</tbody>
+                </table>
+            </div>
+        </section>
+        """
+        if staffing_reconciliation_rows
+        else ""
     }
 
     {
@@ -43144,7 +43470,16 @@ def admin_cost_centre():
         <h2>Recent Excel Uploads</h2>
         <div class='scroll-x'>
             <table>
-                <thead><tr><th>File</th><th>Month</th><th>Mode</th><th>Rows</th><th>Imported</th></tr></thead>
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Month</th>
+                        <th>Mode</th>
+                        <th>Sections</th>
+                        <th>Rows</th>
+                        <th>Imported</th>
+                    </tr>
+                </thead>
                 <tbody>{import_rows_html}</tbody>
             </table>
         </div>
@@ -43405,116 +43740,605 @@ def admin_cost_month_update():
 
 @app.post('/admin/cost-centre/import')
 @require_high_admin
+@app.post('/admin/cost-centre/import')
+@require_high_admin
 def admin_cost_import():
     r = require_admin()
     if r:
         return r
 
     upload = request.files.get('cost_file')
-    cost_month = admin_cost_valid_month(request.form.get('cost_month'))
-    import_mode = request.form.get('import_mode', 'REPLACE').strip().upper()
+    cost_month = admin_cost_valid_month(
+        request.form.get('cost_month')
+    )
+
+    import_mode = request.form.get(
+        'import_mode',
+        'REPLACE'
+    ).strip().upper()
 
     if not cost_month:
-        return page('Invalid Month', card_msg('Please select a valid import month.'))
-    if import_mode not in {'REPLACE','APPEND'}:
+        return page(
+            'Invalid Month',
+            card_msg(
+                'Please select a valid import month.'
+            )
+        )
+
+    if import_mode not in {
+        'REPLACE',
+        'APPEND'
+    }:
         import_mode = 'REPLACE'
+
     if not upload or not upload.filename:
-        return page('No Excel File', card_msg('Please choose an Excel file.'))
-    extension = Path(upload.filename).suffix.lower()
-    if extension not in {'.xlsx','.xlsm'}:
-        return page('Invalid Excel File', card_msg('Please upload an XLSX or XLSM file.'))
+        return page(
+            'No Excel File',
+            card_msg(
+                'Please choose an Excel file.'
+            )
+        )
+
+    extension = Path(
+        upload.filename
+    ).suffix.lower()
+
+    if extension not in {
+        '.xlsx',
+        '.xlsm'
+    }:
+        return page(
+            'Invalid Excel File',
+            card_msg(
+                'Please upload an XLSX or XLSM file.'
+            )
+        )
 
     try:
         from openpyxl import load_workbook
-        workbook = load_workbook(io.BytesIO(upload.read()), data_only=True, read_only=True)
+
+        workbook = load_workbook(
+            io.BytesIO(
+                upload.read()
+            ),
+            data_only=True,
+            read_only=True
+        )
+
     except Exception as exc:
-        return page('Excel Import Failed', card_msg(f'The Excel file could not be opened: {escape(str(exc))}'))
+        return page(
+            'Excel Import Failed',
+            card_msg(
+                f'The Excel file could not be opened: '
+                f'{escape(str(exc))}'
+            )
+        )
 
     source_summary = {}
+    source_summary_notes = {}
+    source_staffing_summary = {}
     source_bank_summary = {}
-    summary_sheet = next(
-        (ws for ws in workbook.worksheets if str(ws.title).strip().lower() == 'summary'),
+
+    overview_sheet = next(
+        (
+            ws
+            for ws in workbook.worksheets
+            if str(ws.title).strip().lower()
+            in {
+                'overview',
+                'summary'
+            }
+        ),
         None
     )
-    if summary_sheet:
-        for row_number in range(1, summary_sheet.max_row + 1):
-            first = str(summary_sheet.cell(row_number, 1).value or '').strip()
-            second = summary_sheet.cell(row_number, 2).value
-            third = summary_sheet.cell(row_number, 3).value
-            if first == 'Cost Area':
+
+    if overview_sheet:
+        max_rows = int(
+            overview_sheet.max_row
+            or 0
+        )
+
+        max_columns = int(
+            overview_sheet.max_column
+            or 0
+        )
+
+        # Cost summary and notes can appear anywhere across the sheet.
+        for row_number in range(
+            1,
+            max_rows + 1
+        ):
+            for start_col in range(
+                1,
+                max_columns + 1
+            ):
+                heading = str(
+                    overview_sheet.cell(
+                        row_number,
+                        start_col
+                    ).value
+                    or ''
+                ).strip()
+
+                if heading.lower() != 'cost area':
+                    continue
+
                 scan_row = row_number + 1
-                while scan_row <= summary_sheet.max_row:
-                    label = str(summary_sheet.cell(scan_row, 1).value or '').strip()
-                    amount = summary_sheet.cell(scan_row, 2).value
+
+                while scan_row <= max_rows:
+                    label = str(
+                        overview_sheet.cell(
+                            scan_row,
+                            start_col
+                        ).value
+                        or ''
+                    ).strip()
+
                     if not label:
                         break
-                    source_summary[label] = admin_cost_money(amount)
-                    scan_row += 1
-            if first == 'Bank' and str(second or '').strip() == 'Team Members':
-                scan_row = row_number + 1
-                while scan_row <= summary_sheet.max_row:
-                    bank = str(summary_sheet.cell(scan_row, 1).value or '').strip()
-                    if not bank:
+
+                    if label.lower() in {
+                        'cost component',
+                        'item'
+                    }:
                         break
-                    source_bank_summary[bank] = {
-                        'members': int(admin_cost_money(summary_sheet.cell(scan_row, 2).value)),
-                        'payroll': admin_cost_money(summary_sheet.cell(scan_row, 3).value),
-                    }
+
+                    amount = overview_sheet.cell(
+                        scan_row,
+                        start_col + 1
+                    ).value
+
+                    note = (
+                        overview_sheet.cell(
+                            scan_row,
+                            start_col + 2
+                        ).value
+                        if (
+                            start_col + 2
+                            <= max_columns
+                        )
+                        else None
+                    )
+
+                    source_summary[
+                        label
+                    ] = admin_cost_money(
+                        amount
+                    )
+
+                    if note not in (
+                        None,
+                        ''
+                    ):
+                        source_summary_notes[
+                            label
+                        ] = str(note).strip()
+
                     scan_row += 1
+
+                break
+
+        # Academic staffing snapshot.
+        for row_number in range(
+            1,
+            max_rows + 1
+        ):
+            for start_col in range(
+                1,
+                max_columns
+            ):
+                first = str(
+                    overview_sheet.cell(
+                        row_number,
+                        start_col
+                    ).value
+                    or ''
+                ).strip()
+
+                second = str(
+                    overview_sheet.cell(
+                        row_number,
+                        start_col + 1
+                    ).value
+                    or ''
+                ).strip()
+
+                if (
+                    first.lower() == 'metric'
+                    and second.lower()
+                    in {
+                        'current position',
+                        'position',
+                        'current'
+                    }
+                ):
+                    scan_row = row_number + 1
+
+                    while scan_row <= max_rows:
+                        metric = str(
+                            overview_sheet.cell(
+                                scan_row,
+                                start_col
+                            ).value
+                            or ''
+                        ).strip()
+
+                        if not metric:
+                            break
+
+                        source_staffing_summary[
+                            metric
+                        ] = int(
+                            admin_cost_money(
+                                overview_sheet.cell(
+                                    scan_row,
+                                    start_col + 1
+                                ).value
+                            )
+                        )
+
+                        scan_row += 1
+
+                    break
+
+        # Older workbooks sometimes placed bank totals beside Summary.
+        for row_number in range(
+            1,
+            max_rows + 1
+        ):
+            for start_col in range(
+                1,
+                max_columns
+            ):
+                first = str(
+                    overview_sheet.cell(
+                        row_number,
+                        start_col
+                    ).value
+                    or ''
+                ).strip()
+
+                second = str(
+                    overview_sheet.cell(
+                        row_number,
+                        start_col + 1
+                    ).value
+                    or ''
+                ).strip()
+
+                if (
+                    first.lower()
+                    in {
+                        'bank',
+                        'bank / payment institution',
+                        'bank/payment institution'
+                    }
+                    and second.lower()
+                    in {
+                        'team members',
+                        'payroll entries'
+                    }
+                ):
+                    scan_row = row_number + 1
+
+                    while scan_row <= max_rows:
+                        bank = str(
+                            overview_sheet.cell(
+                                scan_row,
+                                start_col
+                            ).value
+                            or ''
+                        ).strip()
+
+                        if (
+                            not bank
+                            or bank.upper() == 'TOTAL'
+                        ):
+                            break
+
+                        source_bank_summary[
+                            bank
+                        ] = {
+                            'members': int(
+                                admin_cost_money(
+                                    overview_sheet.cell(
+                                        scan_row,
+                                        start_col + 1
+                                    ).value
+                                )
+                            ),
+                            'payroll': admin_cost_money(
+                                overview_sheet.cell(
+                                    scan_row,
+                                    start_col + 2
+                                ).value
+                            )
+                            if (
+                                start_col + 2
+                                <= max_columns
+                            )
+                            else 0,
+                        }
+
+                        scan_row += 1
+
+                    break
+
+    # Dedicated new Banking Summary sheet takes priority.
+    banking_sheet = next(
+        (
+            ws
+            for ws in workbook.worksheets
+            if str(ws.title).strip().lower()
+            == 'banking summary'
+        ),
+        None
+    )
+
+    if banking_sheet:
+        header_row = None
+
+        for row_number in range(
+            1,
+            min(
+                int(banking_sheet.max_row or 0),
+                25
+            ) + 1
+        ):
+            first = str(
+                banking_sheet.cell(
+                    row_number,
+                    1
+                ).value
+                or ''
+            ).strip().lower()
+
+            if first in {
+                'bank / payment institution',
+                'bank/payment institution',
+                'bank'
+            }:
+                header_row = row_number
+                break
+
+        if header_row:
+            parsed_banks = {}
+
+            for row_number in range(
+                header_row + 1,
+                int(banking_sheet.max_row or 0) + 1
+            ):
+                bank = str(
+                    banking_sheet.cell(
+                        row_number,
+                        1
+                    ).value
+                    or ''
+                ).strip()
+
+                if (
+                    not bank
+                    or bank.upper() == 'TOTAL'
+                ):
+                    continue
+
+                parsed_banks[
+                    bank
+                ] = {
+                    'members': int(
+                        admin_cost_money(
+                            banking_sheet.cell(
+                                row_number,
+                                2
+                            ).value
+                        )
+                    ),
+                    'payroll': admin_cost_money(
+                        banking_sheet.cell(
+                            row_number,
+                            3
+                        ).value
+                    ),
+                }
+
+            if parsed_banks:
+                source_bank_summary = parsed_banks
 
     sheet_map = {
         'subscriptions': 'SUBSCRIPTIONS',
         'tutors': 'TUTORS',
         'tutor managers': 'TUTOR_MANAGERS',
+        'tm workload': 'TM_WORKLOAD',
         'operational team': 'OPERATIONAL_TEAM',
+        'banking summary': 'BANKING_SUMMARY',
         'other costs': 'OTHER_COSTS',
+    }
+
+    header_first_keys = {
+        'service',
+        'grade',
+        'full_name',
+        'description',
+        'tutor_manager',
+        'bank',
+    }
+
+    numeric_keys = {
+        'subject_allocations',
+        'payroll_entries',
+    }
+
+    currency_keys = {
+        'monthly_cost',
+        'yearly_cost',
     }
 
     conn = get_db()
     cur = conn.cursor()
-    admin_cost_ensure_month(cur, cost_month)
+
+    admin_cost_ensure_month(
+        cur,
+        cost_month
+    )
+
     parsed_sections = {}
 
     for worksheet in workbook.worksheets:
-        section_key = sheet_map.get(str(worksheet.title).strip().lower())
+        section_key = sheet_map.get(
+            str(worksheet.title).strip().lower()
+        )
+
         if not section_key:
             continue
 
+        max_rows = int(
+            worksheet.max_row
+            or 0
+        )
+
+        max_columns = int(
+            worksheet.max_column
+            or 0
+        )
+
         header_row_number = None
         headers = []
-        for row_number in range(1, min(worksheet.max_row, 20) + 1):
-            values = [worksheet.cell(row_number, col).value for col in range(1, worksheet.max_column + 1)]
-            nonempty = [str(value).strip() for value in values if value not in (None, '')]
+
+        for row_number in range(
+            1,
+            min(
+                max_rows,
+                25
+            ) + 1
+        ):
+            values = [
+                worksheet.cell(
+                    row_number,
+                    col
+                ).value
+                for col in range(
+                    1,
+                    max_columns + 1
+                )
+            ]
+
+            nonempty = [
+                str(value).strip()
+                for value in values
+                if value not in (
+                    None,
+                    ''
+                )
+            ]
+
             if not nonempty:
                 continue
-            first = nonempty[0].lower()
-            if first in {'service','grade','full name','description'}:
+
+            first_key = admin_cost_header_key(
+                nonempty[0]
+            )
+
+            if first_key in header_first_keys:
                 header_row_number = row_number
-                headers = [str(value).strip() if value not in (None, '') else '' for value in values]
+
+                headers = [
+                    (
+                        str(value).strip()
+                        if value not in (
+                            None,
+                            ''
+                        )
+                        else ''
+                    )
+                    for value in values
+                ]
+
                 break
 
         if not header_row_number:
             continue
 
         column_map = []
-        for position, label in enumerate(headers, start=1):
+
+        for position, label in enumerate(
+            headers,
+            start=1
+        ):
             if not label:
                 continue
-            key = admin_cost_header_key(label)
-            data_type = 'CURRENCY' if key in {'monthly_cost','yearly_cost'} else 'TEXT'
-            if key == 'email':
+
+            key = admin_cost_header_key(
+                label
+            )
+
+            if key in currency_keys:
+                data_type = 'CURRENCY'
+            elif key in numeric_keys:
+                data_type = 'NUMBER'
+            elif key == 'email':
                 data_type = 'EMAIL'
-            admin_cost_ensure_column(cur, section_key, key, label, data_type, 1 if key in {'monthly_cost','yearly_cost'} else 0)
-            column_map.append((position, key, label))
+            else:
+                data_type = 'TEXT'
+
+            admin_cost_ensure_column(
+                cur,
+                section_key,
+                key,
+                label,
+                data_type,
+                1
+                if key in (
+                    currency_keys
+                    | numeric_keys
+                )
+                else 0
+            )
+
+            column_map.append(
+                (
+                    position,
+                    key,
+                    label
+                )
+            )
 
         section_rows = []
-        for row_number in range(header_row_number + 1, worksheet.max_row + 1):
-            values = [worksheet.cell(row_number, col).value for col in range(1, worksheet.max_column + 1)]
-            if all(value in (None, '') for value in values):
+
+        for row_number in range(
+            header_row_number + 1,
+            max_rows + 1
+        ):
+            values = [
+                worksheet.cell(
+                    row_number,
+                    col
+                ).value
+                for col in range(
+                    1,
+                    max_columns + 1
+                )
+            ]
+
+            if all(
+                value in (
+                    None,
+                    ''
+                )
+                for value in values
+            ):
                 continue
 
-            first_value = str(values[0] or '').strip().upper()
-            if 'TOTAL' in first_value or 'SUBTOTAL' in first_value:
+            first_value = str(
+                values[0]
+                or ''
+            ).strip().upper()
+
+            # Do not import workbook total/formula rows as actual staff records.
+            if (
+                'TOTAL' in first_value
+                or 'SUBTOTAL' in first_value
+                or first_value.startswith('CALCULATED')
+            ):
                 continue
 
             row_data = {}
@@ -43523,100 +44347,281 @@ def admin_cost_import():
             has_content = False
 
             for position, key, label in column_map:
-                value = values[position - 1] if position - 1 < len(values) else None
-                if value not in (None, ''):
+                value = (
+                    values[position - 1]
+                    if (
+                        position - 1
+                        < len(values)
+                    )
+                    else None
+                )
+
+                if value not in (
+                    None,
+                    ''
+                ):
                     has_content = True
 
                 if key == 'monthly_cost':
-                    monthly_cost = admin_cost_money(value)
-                    continue
-                if key == 'yearly_cost':
-                    yearly_cost = admin_cost_money(value)
+                    monthly_cost = admin_cost_money(
+                        value
+                    )
                     continue
 
-                if key == 'contact' and isinstance(value, (int, float)):
-                    value_text = str(int(value))
-                    if len(value_text) == 9:
-                        value_text = '0' + value_text
+                if key == 'yearly_cost':
+                    yearly_cost = admin_cost_money(
+                        value
+                    )
+                    continue
+
+                if key in numeric_keys:
+                    row_data[
+                        key
+                    ] = admin_cost_money(
+                        value
+                    )
+                    continue
+
+                if (
+                    key
+                    in {
+                        'contact',
+                        'account_no'
+                    }
+                    and isinstance(
+                        value,
+                        (int, float)
+                    )
+                ):
+                    try:
+                        if float(value).is_integer():
+                            value_text = str(
+                                int(value)
+                            )
+                        else:
+                            value_text = str(value)
+                    except Exception:
+                        value_text = str(value)
+
+                    if (
+                        key == 'contact'
+                        and len(value_text) == 9
+                    ):
+                        value_text = (
+                            '0'
+                            + value_text
+                        )
+
                     value = value_text
+
                 elif value is None:
                     value = ''
-                elif isinstance(value, datetime.datetime):
-                    value = value.date().isoformat()
-                elif isinstance(value, datetime.date):
-                    value = value.isoformat()
+
+                elif isinstance(
+                    value,
+                    datetime.datetime
+                ):
+                    value = (
+                        value.date().isoformat()
+                    )
+
+                elif isinstance(
+                    value,
+                    datetime.date
+                ):
+                    value = (
+                        value.isoformat()
+                    )
+
                 else:
                     value = str(value)
 
                 row_data[key] = value
 
             if has_content:
-                section_rows.append((row_data, monthly_cost, yearly_cost))
+                section_rows.append(
+                    (
+                        row_data,
+                        monthly_cost,
+                        yearly_cost
+                    )
+                )
 
         if section_rows:
-            parsed_sections[section_key] = section_rows
+            parsed_sections[
+                section_key
+            ] = section_rows
 
     if not parsed_sections:
         conn.close()
-        return page('No Cost Tables Found', card_msg('The Excel file does not contain the expected cost sheets: Subscriptions, Tutors, Tutor Managers or Operational Team.'))
+
+        return page(
+            'No Cost Tables Found',
+            card_msg(
+                'The Excel file does not contain the expected EBTA cost sheets.'
+            )
+        )
 
     if import_mode == 'REPLACE':
         for section_key in parsed_sections:
-            cur.execute("DELETE FROM admin_cost_records WHERE cost_month=? AND section_key=?", (cost_month, section_key))
+            cur.execute("""
+                DELETE FROM admin_cost_records
+                WHERE cost_month=?
+                  AND section_key=?
+            """, (
+                cost_month,
+                section_key
+            ))
 
     imported_rows = 0
-    for section_key, section_rows in parsed_sections.items():
-        cur.execute("SELECT COALESCE(MAX(display_order),0) AS max_order FROM admin_cost_records WHERE cost_month=? AND section_key=?", (cost_month, section_key))
-        start_order = int(cur.fetchone()['max_order'] or 0)
 
-        for offset, (row_data, monthly_cost, yearly_cost) in enumerate(section_rows, start=1):
+    for section_key, section_rows in parsed_sections.items():
+        cur.execute("""
+            SELECT
+                COALESCE(
+                    MAX(display_order),
+                    0
+                ) AS max_order
+            FROM admin_cost_records
+            WHERE cost_month=?
+              AND section_key=?
+        """, (
+            cost_month,
+            section_key
+        ))
+
+        start_order = int(
+            cur.fetchone()['max_order']
+            or 0
+        )
+
+        for offset, (
+            row_data,
+            monthly_cost,
+            yearly_cost
+        ) in enumerate(
+            section_rows,
+            start=1
+        ):
             cur.execute("""
                 INSERT INTO admin_cost_records(
-                    cost_month, section_key, row_data,
-                    monthly_cost, yearly_cost, display_order,
-                    source, created_at, updated_at
-                ) VALUES(?,?,?,?,?,?,?,?,?)
+                    cost_month,
+                    section_key,
+                    row_data,
+                    monthly_cost,
+                    yearly_cost,
+                    display_order,
+                    source,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?,?,?,?,?,?,?,?,?)
             """, (
-                cost_month, section_key,
-                json.dumps(row_data, ensure_ascii=False),
-                monthly_cost, yearly_cost, start_order + offset,
-                Path(upload.filename).name, now_utc_iso(), now_utc_iso()
+                cost_month,
+                section_key,
+                json.dumps(
+                    row_data,
+                    ensure_ascii=False
+                ),
+                monthly_cost,
+                yearly_cost,
+                start_order + offset,
+                Path(upload.filename).name,
+                now_utc_iso(),
+                now_utc_iso()
             ))
+
             imported_rows += 1
 
-    if source_summary or source_bank_summary:
-        cur.execute("""
-            UPDATE admin_cost_months
-            SET source_summary_json=?, source_bank_summary_json=?, updated_at=?
-            WHERE cost_month=?
-        """, (
-            json.dumps(source_summary, ensure_ascii=False) if source_summary else None,
-            json.dumps(source_bank_summary, ensure_ascii=False) if source_bank_summary else None,
-            now_utc_iso(),
-            cost_month
-        ))
+    cur.execute("""
+        UPDATE admin_cost_months
+        SET
+            source_summary_json=?,
+            source_summary_notes_json=?,
+            source_staffing_summary_json=?,
+            source_bank_summary_json=?,
+            updated_at=?
+        WHERE cost_month=?
+    """, (
+        (
+            json.dumps(
+                source_summary,
+                ensure_ascii=False
+            )
+            if source_summary
+            else None
+        ),
+        (
+            json.dumps(
+                source_summary_notes,
+                ensure_ascii=False
+            )
+            if source_summary_notes
+            else None
+        ),
+        (
+            json.dumps(
+                source_staffing_summary,
+                ensure_ascii=False
+            )
+            if source_staffing_summary
+            else None
+        ),
+        (
+            json.dumps(
+                source_bank_summary,
+                ensure_ascii=False
+            )
+            if source_bank_summary
+            else None
+        ),
+        now_utc_iso(),
+        cost_month
+    ))
 
     cur.execute("""
         INSERT INTO admin_cost_imports(
-            file_name, cost_month, import_mode, imported_sections,
-            imported_rows, imported_by, imported_at
-        ) VALUES(?,?,?,?,?,?,?)
+            file_name,
+            cost_month,
+            import_mode,
+            imported_sections,
+            imported_rows,
+            imported_by,
+            imported_at
+        )
+        VALUES(?,?,?,?,?,?,?)
     """, (
         Path(upload.filename).name,
         cost_month,
         import_mode,
-        ', '.join(ADMIN_COST_SECTIONS[key] for key in parsed_sections),
+        ', '.join(
+            ADMIN_COST_SECTIONS[key]
+            for key in parsed_sections
+        ),
         imported_rows,
-        session.get('admin_username') or 'High Admin',
+        session.get('admin_username')
+        or 'High Admin',
         now_utc_iso()
     ))
+
     conn.commit()
     conn.close()
 
-    first_section = next(iter(parsed_sections))
-    return redirect(url_for('admin_cost_centre', month=cost_month, section=first_section))
+    first_section = next(
+        iter(parsed_sections)
+    )
+
+    return redirect(
+        url_for(
+            'admin_cost_centre',
+            month=cost_month,
+            section=first_section
+        )
+    )
 
 
+@app.get('/admin/cost-centre/export')
+@require_high_admin
 @app.get('/admin/cost-centre/export')
 @require_high_admin
 def admin_cost_export():
@@ -43624,21 +44629,46 @@ def admin_cost_export():
     if r:
         return r
 
-    cost_month = admin_cost_valid_month(request.args.get('month'))
+    cost_month = admin_cost_valid_month(
+        request.args.get('month')
+    )
+
     if not cost_month:
-        return page('Invalid Month', card_msg('Please select a valid export month.'))
+        return page(
+            'Invalid Month',
+            card_msg(
+                'Please select a valid export month.'
+            )
+        )
 
     conn = get_db()
     cur = conn.cursor()
-    summary = admin_cost_summary(conn, cost_month)
+
+    summary = admin_cost_summary(
+        conn,
+        cost_month
+    )
 
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.styles import (
+            Font,
+            Alignment,
+            PatternFill,
+            Border,
+            Side
+        )
         from openpyxl.utils import get_column_letter
+
     except Exception:
         conn.close()
-        return page('Excel Export Unavailable', card_msg('The Excel export library is not available on the server.'))
+
+        return page(
+            'Excel Export Unavailable',
+            card_msg(
+                'The Excel export library is not available on the server.'
+            )
+        )
 
     wb = Workbook()
     wb.remove(wb.active)
@@ -43646,179 +44676,608 @@ def admin_cost_export():
     dark_green = '0D4024'
     green = '1B6F3B'
     light_green = 'EAF6ED'
-    gold = 'E3AD24'
     white = 'FFFFFF'
-    grey = '64748B'
-    thin = Side(style='thin', color='D7E7DC')
-    money_format = 'R#,##0.00;[Red](R#,##0.00);-'
 
-    summary_ws = wb.create_sheet('Summary')
-    summary_ws.sheet_view.showGridLines = False
-    summary_ws.merge_cells('A1:E1')
-    summary_ws['A1'] = 'Early Bird Testimony Academy (EBTA)'
-    summary_ws.merge_cells('A2:E2')
-    title = summary['month_meta']['report_title'] if summary['month_meta'] else ''
-    summary_ws['A2'] = title or f'{pretty_month_label(cost_month).upper()} SUBSCRIPTIONS AND OPERATIONAL COSTS SUMMARY'
-    for cell in ('A1','A2'):
-        summary_ws[cell].fill = PatternFill('solid', fgColor=dark_green)
-        summary_ws[cell].font = Font(color=white, bold=True, size=14 if cell == 'A1' else 12)
-        summary_ws[cell].alignment = Alignment(horizontal='center')
-
-    portal_summary_export = {
-        'Tutor Monthly Cost': summary['tutor_cost'],
-        'Tutor Manager Monthly Cost': summary['tutor_manager_cost'],
-        'Operational Team Monthly Cost': summary['operational_cost'],
-        'Total Management Monthly Cost': summary['management_cost'],
-        'Total Monthly Payroll': summary['payroll'],
-        'Monthly Subscriptions': summary['subscriptions_monthly'],
-        'Yearly Subscriptions': summary['subscriptions_yearly'],
-        'Other Monthly Costs': summary['other_monthly'],
-        'Other Yearly Costs': summary['other_yearly'],
-        'Total Monthly Cash Requirement': summary['monthly_cash'],
-        'Effective Monthly Cost': summary['effective_monthly'],
-    }
-    summary_notes = {
-        'Tutor Monthly Cost': f"{summary['counts']['TUTORS']} tutor cost records across {int(summary['month_meta']['planned_tutor_slots'] or 0) if summary['month_meta'] else 0} subject slots; {int(summary['month_meta']['vacant_tutor_slots'] or 0) if summary['month_meta'] else 0} vacant slots.",
-        'Tutor Manager Monthly Cost': f"{summary['counts']['TUTOR_MANAGERS']} Tutor Managers.",
-        'Operational Team Monthly Cost': f"{summary['counts']['OPERATIONAL_TEAM']} operational team members.",
-        'Total Management Monthly Cost': 'Operational Team + Tutor Managers.',
-        'Total Monthly Payroll': 'Tutors + management.',
-        'Monthly Subscriptions': 'Monthly digital services.',
-        'Yearly Subscriptions': 'Domains and annual services.',
-        'Other Monthly Costs': 'Additional monthly costs captured on the portal.',
-        'Other Yearly Costs': 'Additional yearly costs captured on the portal.',
-        'Total Monthly Cash Requirement': 'Payroll + monthly subscriptions + other monthly costs.',
-        'Effective Monthly Cost': 'Includes yearly costs averaged over 12 months.',
-    }
-    summary_rows = [('Cost Area','Current Total','Excel Total','Difference','Notes')]
-    for label, portal_amount in portal_summary_export.items():
-        source_amount = summary['source_summary'].get(label, '')
-        variance = portal_amount - float(source_amount or 0) if source_amount != '' else ''
-        summary_rows.append((label, portal_amount, source_amount, variance, summary_notes.get(label, '')))
-    for row_index, row_values in enumerate(summary_rows, start=4):
-        for col_index, value in enumerate(row_values, start=1):
-            cell = summary_ws.cell(row_index, col_index, value)
-            cell.border = Border(bottom=thin)
-            cell.alignment = Alignment(vertical='top', wrap_text=True)
-            if row_index == 4:
-                cell.fill = PatternFill('solid', fgColor=green)
-                cell.font = Font(color=white, bold=True)
-            elif col_index in (2,3,4):
-                cell.number_format = money_format
-
-    bank_start = 4 + len(summary_rows) + 2
-    for col, value in enumerate(('Bank','Current Members','Current Payroll','Excel Members','Excel Payroll'), start=1):
-        cell = summary_ws.cell(bank_start, col, value)
-        cell.fill = PatternFill('solid', fgColor=green)
-        cell.font = Font(color=white, bold=True)
-    calculated_bank_export = dict(summary['bank_summary'])
-    all_export_banks = sorted(
-        set(calculated_bank_export) | set(summary['source_bank_summary']),
-        key=lambda name: name.lower()
+    thin = Side(
+        style='thin',
+        color='D7E7DC'
     )
-    for offset, bank in enumerate(all_export_banks, start=1):
-        portal_values = calculated_bank_export.get(bank, {})
-        source_values = summary['source_bank_summary'].get(bank, {})
-        summary_ws.cell(bank_start + offset, 1, bank)
-        summary_ws.cell(bank_start + offset, 2, int(portal_values.get('members', 0) or 0))
-        summary_ws.cell(bank_start + offset, 3, float(portal_values.get('payroll', 0) or 0)).number_format = money_format
-        summary_ws.cell(bank_start + offset, 4, int(source_values.get('members', 0) or 0))
-        summary_ws.cell(bank_start + offset, 5, float(source_values.get('payroll', 0) or 0)).number_format = money_format
 
-    note_row = bank_start + len(all_export_banks) + 3
-    summary_ws.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=5)
-    summary_ws.cell(note_row, 1, summary['month_meta']['notes'] if summary['month_meta'] else 'CONFIDENTIAL - INTERNAL FINANCIAL AND BANKING INFORMATION')
-    summary_ws.cell(note_row, 1).font = Font(color='9B1C1C', bold=True)
-    summary_ws.cell(note_row, 1).alignment = Alignment(horizontal='center')
-    summary_ws.column_dimensions['A'].width = 35
-    summary_ws.column_dimensions['B'].width = 20
-    summary_ws.column_dimensions['C'].width = 20
-    summary_ws.column_dimensions['D'].width = 20
-    summary_ws.column_dimensions['E'].width = 58
-    summary_ws.freeze_panes = 'A4'
+    money_format = (
+        'R#,##0.00;'
+        '[Red](R#,##0.00);'
+        '-'
+    )
 
-    export_sheet_names = {
-        'SUBSCRIPTIONS': 'Subscriptions',
-        'TUTORS': 'Tutors',
-        'TUTOR_MANAGERS': 'Tutor Managers',
-        'OPERATIONAL_TEAM': 'Operational Team',
-        'OTHER_COSTS': 'Other Costs',
+    subtitle = (
+        f"Early Bird Testimony Academy | "
+        f"{pretty_month_label(cost_month)} | "
+        f"Confidential Internal CAO Working File"
+    )
+
+    # ---------------- Overview ----------------
+    overview = wb.create_sheet('Overview')
+    overview.sheet_view.showGridLines = False
+
+    overview.merge_cells('A1:F1')
+    overview['A1'] = 'EBTA CAO CONSOLIDATED OVERVIEW'
+
+    overview.merge_cells('A2:F2')
+    overview['A2'] = subtitle
+
+    for cell_ref in ('A1', 'A2'):
+        overview[cell_ref].fill = PatternFill(
+            'solid',
+            fgColor=dark_green
+        )
+
+        overview[cell_ref].font = Font(
+            color=white,
+            bold=True,
+            size=14 if cell_ref == 'A1' else 11
+        )
+
+        overview[cell_ref].alignment = Alignment(
+            horizontal='center'
+        )
+
+    overview.merge_cells('A4:C4')
+    overview['A4'] = (
+        'Executive Cost Summary | '
+        'Current Portal Position'
+    )
+
+    overview['A4'].font = Font(
+        bold=True,
+        color=dark_green,
+        size=12
+    )
+
+    overview['A5'] = 'Cost Area'
+    overview['B5'] = 'Current Calculated (R)'
+    overview['C5'] = 'Notes'
+
+    for cell in overview[5][:3]:
+        cell.fill = PatternFill(
+            'solid',
+            fgColor=green
+        )
+        cell.font = Font(
+            color=white,
+            bold=True
+        )
+
+    cost_rows = [
+        (
+            'Tutor Monthly Cost',
+            summary['tutor_cost'],
+            'Detailed current tutor pay lines'
+        ),
+        (
+            'Tutor Manager Monthly Cost',
+            summary['tutor_manager_cost'],
+            'Detailed Tutor Manager pay lines'
+        ),
+        (
+            'Operational Team Monthly Cost',
+            summary['operational_cost'],
+            'Detailed operational pay lines'
+        ),
+        (
+            'Total Management Monthly Cost',
+            summary['management_cost'],
+            'Tutor Managers + operational team'
+        ),
+        (
+            'Total Monthly Payroll',
+            summary['payroll'],
+            'Tutors + management'
+        ),
+        (
+            'Monthly Subscriptions',
+            summary['subscriptions_monthly'],
+            'Itemised monthly subscriptions'
+        ),
+        (
+            'Yearly Subscriptions',
+            summary['yearly_total'],
+            'Annual subscriptions and yearly costs'
+        ),
+        (
+            'Total Monthly Cash Requirement',
+            summary['monthly_cash'],
+            'Payroll + monthly subscriptions + other monthly costs'
+        ),
+        (
+            'Effective Monthly Cost',
+            summary['effective_monthly'],
+            'Includes yearly costs / 12'
+        ),
+    ]
+
+    for row_index, (
+        label,
+        amount,
+        note
+    ) in enumerate(
+        cost_rows,
+        start=6
+    ):
+        overview.cell(row_index, 1, label)
+        overview.cell(
+            row_index,
+            2,
+            float(amount or 0)
+        ).number_format = money_format
+        overview.cell(row_index, 3, note)
+
+    overview['E5'] = 'Current Academic Staffing Snapshot'
+    overview['E5'].fill = PatternFill(
+        'solid',
+        fgColor=green
+    )
+    overview['E5'].font = Font(
+        color=white,
+        bold=True
+    )
+
+    overview['E6'] = 'Metric'
+    overview['F6'] = 'Current Position'
+
+    for cell_ref in ('E6', 'F6'):
+        overview[cell_ref].fill = PatternFill(
+            'solid',
+            fgColor=light_green
+        )
+        overview[cell_ref].font = Font(
+            color=dark_green,
+            bold=True
+        )
+
+    staffing_rows = [
+        (
+            'Subject allocations',
+            summary['staffing_summary']['Subject allocations']
+        ),
+        (
+            'Unique tutors',
+            summary['staffing_summary']['Unique tutors']
+        ),
+        (
+            'Tutor Managers',
+            summary['staffing_summary']['Tutor Managers']
+        ),
+        (
+            'Operational team members',
+            summary['staffing_summary']['Operational team members']
+        ),
+    ]
+
+    for row_index, (
+        label,
+        value
+    ) in enumerate(
+        staffing_rows,
+        start=7
+    ):
+        overview.cell(row_index, 5, label)
+        overview.cell(row_index, 6, int(value or 0))
+
+    overview['E12'] = 'Workbook Navigation'
+    overview['E12'].fill = PatternFill(
+        'solid',
+        fgColor=green
+    )
+    overview['E12'].font = Font(
+        color=white,
+        bold=True
+    )
+
+    overview['E13'] = 'Sheet'
+    overview['F13'] = 'Purpose'
+
+    navigation_rows = [
+        (
+            'Subscriptions',
+            'Digital services and recurring costs'
+        ),
+        (
+            'Tutors',
+            'Tutor register, academic details, banking and pay'
+        ),
+        (
+            'Tutor Managers',
+            'Tutor Manager details and monthly stipend'
+        ),
+        (
+            'TM Workload',
+            'Current Tutor Manager subject allocation workload'
+        ),
+        (
+            'Operational Team',
+            'Operational management details and pay'
+        ),
+        (
+            'Banking Summary',
+            'Payroll by bank / payment institution'
+        ),
+    ]
+
+    for row_index, (
+        label,
+        purpose
+    ) in enumerate(
+        navigation_rows,
+        start=14
+    ):
+        overview.cell(row_index, 5, label)
+        overview.cell(row_index, 6, purpose)
+
+    for column, width in {
+        'A': 34,
+        'B': 22,
+        'C': 48,
+        'D': 4,
+        'E': 30,
+        'F': 42,
+    }.items():
+        overview.column_dimensions[column].width = width
+
+    overview.freeze_panes = 'A5'
+
+    sheet_names = {
+        'SUBSCRIPTIONS': (
+            'Subscriptions',
+            'ACTIVE SUBSCRIPTIONS & DIGITAL SERVICES'
+        ),
+        'TUTORS': (
+            'Tutors',
+            'CURRENT TUTOR REGISTER, BANKING & MONTHLY COSTS'
+        ),
+        'TUTOR_MANAGERS': (
+            'Tutor Managers',
+            'TUTOR MANAGER COSTS & DETAILS'
+        ),
+        'TM_WORKLOAD': (
+            'TM Workload',
+            'CURRENT TUTOR MANAGER WORKLOAD SUMMARY'
+        ),
+        'OPERATIONAL_TEAM': (
+            'Operational Team',
+            'OPERATIONAL MANAGEMENT TEAM COSTS & DETAILS'
+        ),
+        'BANKING_SUMMARY': (
+            'Banking Summary',
+            'BANKING VERIFICATION SUMMARY'
+        ),
+        'OTHER_COSTS': (
+            'Other Costs',
+            'OTHER COSTS'
+        ),
     }
 
-    for section_key, sheet_name in export_sheet_names.items():
-        columns = admin_cost_columns(cur, section_key)
-        cur.execute("SELECT * FROM admin_cost_records WHERE cost_month=? AND section_key=? ORDER BY display_order,id", (cost_month, section_key))
+    for section_key, (
+        sheet_name,
+        sheet_title
+    ) in sheet_names.items():
+
+        columns = admin_cost_columns(
+            cur,
+            section_key
+        )
+
+        cur.execute("""
+            SELECT *
+            FROM admin_cost_records
+            WHERE cost_month=?
+              AND section_key=?
+            ORDER BY
+                display_order,
+                id
+        """, (
+            cost_month,
+            section_key
+        ))
+
         records = cur.fetchall()
 
-        ws = wb.create_sheet(sheet_name)
+        if (
+            section_key == 'OTHER_COSTS'
+            and not records
+        ):
+            continue
+
+        ws = wb.create_sheet(
+            sheet_name
+        )
+
         ws.sheet_view.showGridLines = False
-        end_col = max(1, len(columns))
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=end_col)
-        ws.cell(1,1, f"EBTA {ADMIN_COST_SECTIONS[section_key]} Costs and Details")
-        ws.cell(1,1).fill = PatternFill('solid', fgColor=dark_green)
-        ws.cell(1,1).font = Font(color=white, bold=True, size=14)
-        ws.cell(1,1).alignment = Alignment(horizontal='center')
-        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=end_col)
-        ws.cell(2,1, pretty_month_label(cost_month))
-        ws.cell(2,1).fill = PatternFill('solid', fgColor=light_green)
-        ws.cell(2,1).font = Font(color=dark_green, bold=True)
-        ws.cell(2,1).alignment = Alignment(horizontal='center')
 
-        for col_index, column in enumerate(columns, start=1):
-            cell = ws.cell(4, col_index, column['label'])
-            cell.fill = PatternFill('solid', fgColor=green)
-            cell.font = Font(color=white, bold=True)
-            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        end_col = max(
+            1,
+            len(columns)
+        )
 
-        for row_index, record in enumerate(records, start=5):
-            data = admin_cost_json(record['row_data'])
-            for col_index, column in enumerate(columns, start=1):
+        ws.merge_cells(
+            start_row=1,
+            start_column=1,
+            end_row=1,
+            end_column=end_col
+        )
+
+        ws.cell(
+            1,
+            1,
+            sheet_title
+        )
+
+        ws.cell(1, 1).fill = PatternFill(
+            'solid',
+            fgColor=dark_green
+        )
+
+        ws.cell(1, 1).font = Font(
+            color=white,
+            bold=True,
+            size=14
+        )
+
+        ws.cell(1, 1).alignment = Alignment(
+            horizontal='center'
+        )
+
+        ws.merge_cells(
+            start_row=2,
+            start_column=1,
+            end_row=2,
+            end_column=end_col
+        )
+
+        ws.cell(
+            2,
+            1,
+            subtitle
+        )
+
+        ws.cell(2, 1).fill = PatternFill(
+            'solid',
+            fgColor=light_green
+        )
+
+        ws.cell(2, 1).font = Font(
+            color=dark_green,
+            bold=True
+        )
+
+        ws.cell(2, 1).alignment = Alignment(
+            horizontal='center'
+        )
+
+        for col_index, column in enumerate(
+            columns,
+            start=1
+        ):
+            cell = ws.cell(
+                4,
+                col_index,
+                column['label']
+            )
+
+            cell.fill = PatternFill(
+                'solid',
+                fgColor=green
+            )
+
+            cell.font = Font(
+                color=white,
+                bold=True
+            )
+
+            cell.alignment = Alignment(
+                horizontal='center',
+                vertical='center',
+                wrap_text=True
+            )
+
+        for row_index, record in enumerate(
+            records,
+            start=5
+        ):
+            data = admin_cost_json(
+                record['row_data']
+            )
+
+            for col_index, column in enumerate(
+                columns,
+                start=1
+            ):
                 key = column['column_key']
+
                 if key == 'monthly_cost':
-                    value = float(record['monthly_cost'] or 0)
+                    value = float(
+                        record['monthly_cost']
+                        or 0
+                    )
+
                 elif key == 'yearly_cost':
-                    value = float(record['yearly_cost'] or 0)
+                    value = float(
+                        record['yearly_cost']
+                        or 0
+                    )
+
                 else:
-                    value = data.get(key, '')
-                cell = ws.cell(row_index, col_index, value)
-                cell.border = Border(bottom=thin)
-                cell.alignment = Alignment(vertical='top', wrap_text=True)
-                if str(column['data_type']).upper() == 'CURRENCY' or key in {'monthly_cost','yearly_cost'}:
+                    value = data.get(
+                        key,
+                        ''
+                    )
+
+                cell = ws.cell(
+                    row_index,
+                    col_index,
+                    value
+                )
+
+                cell.border = Border(
+                    bottom=thin
+                )
+
+                cell.alignment = Alignment(
+                    vertical='top',
+                    wrap_text=True
+                )
+
+                if (
+                    str(
+                        column['data_type']
+                    ).upper()
+                    == 'CURRENCY'
+                    or key in {
+                        'monthly_cost',
+                        'yearly_cost'
+                    }
+                ):
                     cell.number_format = money_format
 
         total_row = 5 + len(records)
-        ws.cell(total_row, 1, f"{ADMIN_COST_SECTIONS[section_key].upper()} TOTAL")
-        ws.cell(total_row, 1).font = Font(bold=True, color=dark_green)
-        for col_index, column in enumerate(columns, start=1):
-            if column['column_key'] in {'monthly_cost','yearly_cost'}:
-                letter = get_column_letter(col_index)
+
+        monetary_columns = [
+            (
+                col_index,
+                column
+            )
+            for col_index, column in enumerate(
+                columns,
+                start=1
+            )
+            if column['column_key']
+            in {
+                'monthly_cost',
+                'yearly_cost'
+            }
+        ]
+
+        if monetary_columns:
+            ws.cell(
+                total_row,
+                1,
+                (
+                    f"CALCULATED CURRENT "
+                    f"{ADMIN_COST_SECTIONS[section_key].upper()} TOTAL"
+                )
+            )
+
+            ws.cell(
+                total_row,
+                1
+            ).font = Font(
+                bold=True,
+                color=dark_green
+            )
+
+            for col_index, column in monetary_columns:
+                letter = get_column_letter(
+                    col_index
+                )
+
                 if records:
-                    ws.cell(total_row, col_index, f"=SUM({letter}5:{letter}{total_row-1})")
+                    ws.cell(
+                        total_row,
+                        col_index,
+                        (
+                            f"=SUM("
+                            f"{letter}5:"
+                            f"{letter}{total_row-1}"
+                            f")"
+                        )
+                    )
                 else:
-                    ws.cell(total_row, col_index, 0)
-                ws.cell(total_row, col_index).number_format = money_format
-                ws.cell(total_row, col_index).font = Font(bold=True)
+                    ws.cell(
+                        total_row,
+                        col_index,
+                        0
+                    )
+
+                ws.cell(
+                    total_row,
+                    col_index
+                ).number_format = money_format
+
+                ws.cell(
+                    total_row,
+                    col_index
+                ).font = Font(
+                    bold=True
+                )
 
         ws.freeze_panes = 'A5'
-        ws.auto_filter.ref = f"A4:{get_column_letter(end_col)}{max(4,total_row-1)}"
-        for col_index, column in enumerate(columns, start=1):
-            label = str(column['label'])
+
+        if records:
+            ws.auto_filter.ref = (
+                f"A4:"
+                f"{get_column_letter(end_col)}"
+                f"{4 + len(records)}"
+            )
+
+        for col_index, column in enumerate(
+            columns,
+            start=1
+        ):
+            label = str(
+                column['label']
+            ).lower()
+
             width = 18
-            if any(term in label.lower() for term in ('purpose','department','institution','description','notes')):
+
+            if any(
+                term in label
+                for term in (
+                    'purpose',
+                    'department',
+                    'institution',
+                    'qualification',
+                    'description',
+                    'notes',
+                    'grades covered',
+                    'current subjects'
+                )
+            ):
                 width = 34
-            elif any(term in label.lower() for term in ('name','tutor','subject','service','email')):
+
+            elif any(
+                term in label
+                for term in (
+                    'name',
+                    'tutor',
+                    'subject',
+                    'service',
+                    'email'
+                )
+            ):
                 width = 24
-            ws.column_dimensions[get_column_letter(col_index)].width = width
+
+            ws.column_dimensions[
+                get_column_letter(
+                    col_index
+                )
+            ].width = width
 
     conn.close()
+
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
+
     return send_file(
         output,
         as_attachment=True,
-        download_name=f"EBTA_Cost_Centre_{cost_month.replace('-', '_')}.xlsx",
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        download_name=(
+            f"EBTA_Cost_Centre_"
+            f"{cost_month.replace('-', '_')}.xlsx"
+        ),
+        mimetype=(
+            'application/vnd.openxmlformats-'
+            'officedocument.spreadsheetml.sheet'
+        )
     )
 
 
