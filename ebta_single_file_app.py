@@ -4375,6 +4375,7 @@ def init_db():
     """)
 
     cost_column_seed = [
+        # Subscriptions
         ('SUBSCRIPTIONS', 'service', 'Service', 'TEXT', 10, 1),
         ('SUBSCRIPTIONS', 'purpose', 'Purpose', 'TEXT', 20, 1),
         ('SUBSCRIPTIONS', 'cost_display', 'Cost / Source Value', 'TEXT', 30, 1),
@@ -4382,6 +4383,7 @@ def init_db():
         ('SUBSCRIPTIONS', 'monthly_cost', 'Monthly Cost (R)', 'CURRENCY', 50, 1),
         ('SUBSCRIPTIONS', 'yearly_cost', 'Yearly Cost (R)', 'CURRENCY', 60, 1),
 
+        # Current Tutor Register, Banking & Monthly Costs
         ('TUTORS', 'grade', 'Grade', 'TEXT', 10, 1),
         ('TUTORS', 'subject', 'Subject', 'TEXT', 20, 1),
         ('TUTORS', 'tutor', 'Tutor', 'TEXT', 30, 1),
@@ -4394,8 +4396,8 @@ def init_db():
         ('TUTORS', 'bank', 'Bank', 'TEXT', 100, 1),
         ('TUTORS', 'account_no', 'Account No.', 'TEXT', 110, 1),
         ('TUTORS', 'monthly_cost', 'Monthly Pay (R)', 'CURRENCY', 120, 1),
-        ('TUTORS', 'status', 'Status', 'TEXT', 130, 1),
 
+        # Tutor Managers
         ('TUTOR_MANAGERS', 'full_name', 'Full Name', 'TEXT', 10, 1),
         ('TUTOR_MANAGERS', 'department_area', 'Department / Area', 'TEXT', 20, 1),
         ('TUTOR_MANAGERS', 'contact', 'Contact', 'TEXT', 30, 1),
@@ -4405,11 +4407,13 @@ def init_db():
         ('TUTOR_MANAGERS', 'institution_year', 'Institution / Year', 'TEXT', 70, 1),
         ('TUTOR_MANAGERS', 'monthly_cost', 'Monthly Pay (R)', 'CURRENCY', 80, 1),
 
+        # Tutor Manager Workload
         ('TM_WORKLOAD', 'tutor_manager', 'Tutor Manager', 'TEXT', 10, 1),
         ('TM_WORKLOAD', 'subject_allocations', 'Subject Allocations', 'NUMBER', 20, 1),
         ('TM_WORKLOAD', 'grades_covered', 'Grades Covered', 'TEXT', 30, 1),
         ('TM_WORKLOAD', 'current_subjects', 'Current Subjects', 'TEXT', 40, 1),
 
+        # Operational Management Team
         ('OPERATIONAL_TEAM', 'full_name', 'Full Name', 'TEXT', 10, 1),
         ('OPERATIONAL_TEAM', 'department_area', 'Department / Area', 'TEXT', 20, 1),
         ('OPERATIONAL_TEAM', 'contact', 'Contact', 'TEXT', 30, 1),
@@ -4419,10 +4423,12 @@ def init_db():
         ('OPERATIONAL_TEAM', 'institution_year', 'Institution / Year', 'TEXT', 70, 1),
         ('OPERATIONAL_TEAM', 'monthly_cost', 'Monthly Pay (R)', 'CURRENCY', 80, 1),
 
+        # Banking Verification Summary
         ('BANKING_SUMMARY', 'bank', 'Bank / Payment Institution', 'TEXT', 10, 1),
         ('BANKING_SUMMARY', 'payroll_entries', 'Payroll Entries', 'NUMBER', 20, 1),
         ('BANKING_SUMMARY', 'monthly_cost', 'Monthly Payroll (R)', 'CURRENCY', 30, 1),
 
+        # Existing flexible section retained.
         ('OTHER_COSTS', 'description', 'Description', 'TEXT', 10, 1),
         ('OTHER_COSTS', 'category', 'Category', 'TEXT', 20, 1),
         ('OTHER_COSTS', 'supplier_payee', 'Supplier / Payee', 'TEXT', 30, 1),
@@ -4441,7 +4447,6 @@ def init_db():
         display_order,
         is_system
     ) in cost_column_seed:
-
         cur.execute("""
             INSERT INTO admin_cost_columns(
                 section_key,
@@ -4475,6 +4480,19 @@ def init_db():
             now_utc_iso(),
             now_utc_iso()
         ))
+
+    # The old cost centre had Tutor Status as a built-in field.
+    # It is not part of this August tutor register.
+    cur.execute("""
+        UPDATE admin_cost_columns
+        SET is_visible=0,
+            updated_at=?
+        WHERE section_key='TUTORS'
+          AND column_key='status'
+          AND is_system=1
+    """, (
+        now_utc_iso(),
+    ))
 
     # Remove the old built-in July 2026 records from databases that ran
     # a previous version. A real Excel upload is kept when import history exists.
@@ -42402,65 +42420,60 @@ def admin_cost_header_key(label):
     label_clean = str(label or '').strip()
 
     known = {
+        # Subscriptions
         'service': 'service',
         'purpose': 'purpose',
-
         'cost': 'cost_display',
         'cost / source value': 'cost_display',
         'cost/source value': 'cost_display',
-
         'billing cycle': 'billing_cycle',
-
         'monthly cost': 'monthly_cost',
         'monthly cost (r)': 'monthly_cost',
         'monthly cost r': 'monthly_cost',
-
         'yearly cost': 'yearly_cost',
         'yearly cost (r)': 'yearly_cost',
         'yearly cost r': 'yearly_cost',
 
+        # Tutors
         'grade': 'grade',
         'subject': 'subject',
         'tutor': 'tutor',
-        'tutor manager': 'tutor_manager',
-
         'contact': 'contact',
         'email': 'email',
         'institution': 'institution',
         'qualification': 'qualification',
         'year': 'year',
-
+        'tutor manager': 'tutor_manager',
         'bank': 'bank',
         'bank / payment institution': 'bank',
         'bank/payment institution': 'bank',
-
         'account no.': 'account_no',
         'account no': 'account_no',
-
-        'pay': 'monthly_cost',
         'monthly pay': 'monthly_cost',
         'monthly pay (r)': 'monthly_cost',
         'monthly pay r': 'monthly_cost',
-
-        'monthly payroll': 'monthly_cost',
-        'monthly payroll (r)': 'monthly_cost',
-        'monthly payroll r': 'monthly_cost',
-
-        'payroll entries': 'payroll_entries',
-
+        'pay': 'monthly_cost',
         'status': 'status',
 
+        # Tutor Managers / Operational Team
         'full name': 'full_name',
         'department / area': 'department_area',
         'department/area': 'department_area',
-
         'institution / year': 'institution_year',
         'institution/year': 'institution_year',
 
+        # TM Workload
         'subject allocations': 'subject_allocations',
         'grades covered': 'grades_covered',
         'current subjects': 'current_subjects',
 
+        # Banking Summary
+        'payroll entries': 'payroll_entries',
+        'monthly payroll': 'monthly_cost',
+        'monthly payroll (r)': 'monthly_cost',
+        'monthly payroll r': 'monthly_cost',
+
+        # Other Costs
         'description': 'description',
         'category': 'category',
         'supplier / payee': 'supplier_payee',
@@ -42559,18 +42572,34 @@ def admin_cost_summary(conn, cost_month):
         row = cur.fetchone()
 
         totals[section_key] = {
-            'monthly': float(row['monthly_total'] or 0),
-            'yearly': float(row['yearly_total'] or 0),
+            'monthly': float(
+                row['monthly_total']
+                or 0
+            ),
+            'yearly': float(
+                row['yearly_total']
+                or 0
+            ),
         }
 
-        counts[section_key] = int(row['row_count'] or 0)
+        counts[section_key] = int(
+            row['row_count']
+            or 0
+        )
 
     tutor_cost = totals['TUTORS']['monthly']
     tutor_manager_cost = totals['TUTOR_MANAGERS']['monthly']
     operational_cost = totals['OPERATIONAL_TEAM']['monthly']
 
-    management_cost = tutor_manager_cost + operational_cost
-    payroll = tutor_cost + management_cost
+    management_cost = (
+        tutor_manager_cost
+        + operational_cost
+    )
+
+    payroll = (
+        tutor_cost
+        + management_cost
+    )
 
     subscriptions_monthly = totals['SUBSCRIPTIONS']['monthly']
     subscriptions_yearly = totals['SUBSCRIPTIONS']['yearly']
@@ -42607,6 +42636,8 @@ def admin_cost_summary(conn, cost_month):
 
     month_meta = cur.fetchone()
 
+    # Payroll-by-bank calculation deliberately uses payroll entries,
+    # matching the attached Banking Summary.
     bank_summary = {}
 
     cur.execute("""
@@ -42625,7 +42656,9 @@ def admin_cost_summary(conn, cost_month):
     ))
 
     for record in cur.fetchall():
-        data = admin_cost_json(record['row_data'])
+        data = admin_cost_json(
+            record['row_data']
+        )
 
         bank = str(
             data.get('bank')
@@ -42635,17 +42668,19 @@ def admin_cost_summary(conn, cost_month):
         entry = bank_summary.setdefault(
             bank,
             {
-                'members': 0,
+                'entries': 0,
                 'payroll': 0.0
             }
         )
 
-        entry['members'] += 1
+        entry['entries'] += 1
+
         entry['payroll'] += float(
             record['monthly_cost']
             or 0
         )
 
+    # Academic staffing snapshot.
     cur.execute("""
         SELECT row_data
         FROM admin_cost_records
@@ -42655,10 +42690,12 @@ def admin_cost_summary(conn, cost_month):
         cost_month,
     ))
 
-    unique_tutor_names = set()
+    unique_tutors = set()
 
     for record in cur.fetchall():
-        data = admin_cost_json(record['row_data'])
+        data = admin_cost_json(
+            record['row_data']
+        )
 
         tutor_name = str(
             data.get('tutor')
@@ -42666,25 +42703,30 @@ def admin_cost_summary(conn, cost_month):
         ).strip()
 
         if tutor_name:
-            unique_tutor_names.add(
+            unique_tutors.add(
                 tutor_name.casefold()
             )
 
     staffing_summary = {
-        'Subject allocations': counts.get('TUTORS', 0),
-        'Unique tutors': len(unique_tutor_names),
-        'Tutor Managers': counts.get('TUTOR_MANAGERS', 0),
-        'Operational team members': counts.get('OPERATIONAL_TEAM', 0),
+        'Subject allocations': counts.get(
+            'TUTORS',
+            0
+        ),
+        'Unique tutors': len(
+            unique_tutors
+        ),
+        'Tutor Managers': counts.get(
+            'TUTOR_MANAGERS',
+            0
+        ),
+        'Operational team members': counts.get(
+            'OPERATIONAL_TEAM',
+            0
+        ),
     }
 
     source_summary = admin_cost_json(
         month_meta['source_summary_json']
-        if month_meta
-        else None
-    )
-
-    source_bank_summary = admin_cost_json(
-        month_meta['source_bank_summary_json']
         if month_meta
         else None
     )
@@ -42697,6 +42739,12 @@ def admin_cost_summary(conn, cost_month):
 
     source_staffing_summary = admin_cost_json(
         month_meta['source_staffing_summary_json']
+        if month_meta
+        else None
+    )
+
+    source_bank_summary = admin_cost_json(
+        month_meta['source_bank_summary_json']
         if month_meta
         else None
     )
@@ -42942,7 +42990,7 @@ def admin_cost_centre():
     ) or "<div class='mini muted'>No custom columns added to this section.</div>"
 
     bank_rows = ''.join(
-        f"<tr><td>{escape(bank)}</td><td>{values['members']}</td><td>{admin_cost_format_money(values['payroll'])}</td></tr>"
+        f"<tr><td>{escape(bank)}</td><td>{values['entries']}</td><td>{admin_cost_format_money(values['payroll'])}</td></tr>"
         for bank, values in summary['bank_summary']
     ) or "<tr><td colspan='3'>No banking records for this month.</td></tr>"
 
@@ -42983,7 +43031,9 @@ def admin_cost_centre():
         source_amount = float(source_amount or 0)
         variance = portal_amount - source_amount
         variance_class = 'active' if abs(variance) < 0.01 else 'pending'
-        source_note = summary['source_summary_notes'].get(
+        workbook_note = summary[
+            'source_summary_notes'
+        ].get(
             label,
             ''
         )
@@ -42993,12 +43043,8 @@ def admin_cost_centre():
             <td>{escape(label)}</td>
             <td>{admin_cost_format_money(source_amount)}</td>
             <td>{admin_cost_format_money(portal_amount)}</td>
-            <td>
-                <span class='chip {variance_class}'>
-                    {admin_cost_format_money(variance)}
-                </span>
-            </td>
-            <td>{escape(source_note or '—')}</td>
+            <td><span class='chip {variance_class}'>{admin_cost_format_money(variance)}</span></td>
+            <td>{escape(workbook_note or '—')}</td>
         </tr>
         """
 
@@ -43014,35 +43060,34 @@ def admin_cost_centre():
         source_bank_rows += f"""
         <tr>
             <td>{escape(bank)}</td>
-            <td>{int(source_values.get('members', 0) or 0)}</td>
+            <td>{int(source_values.get('entries', source_values.get('members', 0)) or 0)}</td>
             <td>{admin_cost_format_money(source_values.get('payroll', 0))}</td>
-            <td>{int(portal_values.get('members', 0) or 0)}</td>
+            <td>{int(portal_values.get('entries', portal_values.get('members', 0)) or 0)}</td>
             <td>{admin_cost_format_money(portal_values.get('payroll', 0))}</td>
         </tr>
         """
 
     staffing_reconciliation_rows = ''
 
-    for label, source_value in summary['source_staffing_summary'].items():
+    for metric, workbook_value in summary['source_staffing_summary'].items():
         portal_value = int(
             summary['staffing_summary'].get(
-                label,
+                metric,
                 0
             )
             or 0
         )
 
         try:
-            source_value_int = int(
-                float(source_value)
+            workbook_value = int(
+                float(
+                    workbook_value
+                )
             )
         except Exception:
-            source_value_int = 0
+            workbook_value = 0
 
-        difference = (
-            portal_value
-            - source_value_int
-        )
+        difference = portal_value - workbook_value
 
         difference_class = (
             'active'
@@ -43052,8 +43097,8 @@ def admin_cost_centre():
 
         staffing_reconciliation_rows += f"""
         <tr>
-            <td>{escape(label)}</td>
-            <td>{source_value_int}</td>
+            <td>{escape(metric)}</td>
+            <td>{workbook_value}</td>
             <td>{portal_value}</td>
             <td>
                 <span class='chip {difference_class}'>
@@ -43073,7 +43118,7 @@ def admin_cost_centre():
     elif selected_section == 'BANKING_SUMMARY':
         section_metric_html = (
             f"<span class='chip active'>"
-            f"Payroll total: "
+            f"Payroll: "
             f"{admin_cost_format_money(summary['totals'][selected_section]['monthly'])}"
             f"</span>"
         )
@@ -43236,7 +43281,7 @@ def admin_cost_centre():
             <div>
                 <h1>EBTA Cost Centre</h1>
                 <p style='margin:0;color:#dff3e5'>
-                    Manage payroll, tutor details, subscriptions, Tutor Manager workload, banking information and other costs.
+                    Manage the EBTA monthly cost workbook, tutor register, Tutor Manager workload, banking summary and operating costs.
                 </p>
             </div>
             <div class='cost-toolbar'>
@@ -43246,16 +43291,18 @@ def admin_cost_centre():
 
         <div class='cost-summary-grid'>
             <div class='cost-summary-box'><span>Tutor Monthly Cost</span><strong>{admin_cost_format_money(summary['tutor_cost'])}</strong></div>
-            <div class='cost-summary-box'><span>Tutor Manager Cost</span><strong>{admin_cost_format_money(summary['tutor_manager_cost'])}</strong></div>
-            <div class='cost-summary-box'><span>Operational Team Cost</span><strong>{admin_cost_format_money(summary['operational_cost'])}</strong></div>
-            <div class='cost-summary-box'><span>Total Management Cost</span><strong>{admin_cost_format_money(summary['management_cost'])}</strong></div>
+            <div class='cost-summary-box'><span>Tutor Manager Monthly Cost</span><strong>{admin_cost_format_money(summary['tutor_manager_cost'])}</strong></div>
+            <div class='cost-summary-box'><span>Operational Team Monthly Cost</span><strong>{admin_cost_format_money(summary['operational_cost'])}</strong></div>
+            <div class='cost-summary-box'><span>Total Management Monthly Cost</span><strong>{admin_cost_format_money(summary['management_cost'])}</strong></div>
             <div class='cost-summary-box'><span>Total Monthly Payroll</span><strong>{admin_cost_format_money(summary['payroll'])}</strong></div>
             <div class='cost-summary-box'><span>Monthly Subscriptions</span><strong>{admin_cost_format_money(summary['subscriptions_monthly'])}</strong></div>
-            <div class='cost-summary-box'><span>Yearly Costs</span><strong>{admin_cost_format_money(summary['yearly_total'])}</strong></div>
-            <div class='cost-summary-box'><span>Monthly Cash Requirement</span><strong>{admin_cost_format_money(summary['monthly_cash'])}</strong></div>
+            <div class='cost-summary-box'><span>Yearly Subscriptions</span><strong>{admin_cost_format_money(summary['subscriptions_yearly'])}</strong></div>
+            <div class='cost-summary-box'><span>Total Monthly Cash Requirement</span><strong>{admin_cost_format_money(summary['monthly_cash'])}</strong></div>
             <div class='cost-summary-box'><span>Effective Monthly Cost</span><strong>{admin_cost_format_money(summary['effective_monthly'])}</strong></div>
             <div class='cost-summary-box'><span>Subject Allocations</span><strong>{summary['staffing_summary']['Subject allocations']}</strong></div>
             <div class='cost-summary-box'><span>Unique Tutors</span><strong>{summary['staffing_summary']['Unique tutors']}</strong></div>
+            <div class='cost-summary-box'><span>Tutor Managers</span><strong>{summary['staffing_summary']['Tutor Managers']}</strong></div>
+            <div class='cost-summary-box'><span>Operational Team Members</span><strong>{summary['staffing_summary']['Operational team members']}</strong></div>
         </div>
     </section>
 
@@ -43268,7 +43315,7 @@ def admin_cost_centre():
             <input type='hidden' name='section' value='{escape(selected_section, quote=True)}'>
             <div style='flex:1;min-width:220px'>
                 <label>Search selected table</label>
-                <input name='q' value='{escape(search, quote=True)}' placeholder='Search the selected cost table'>
+                <input name='q' value='{escape(search, quote=True)}' placeholder='Search the selected table'>
             </div>
             <button class='btn'>Apply</button>
         </form>
@@ -43315,8 +43362,8 @@ def admin_cost_centre():
             <section class='card soft'>
                 <h2>Upload Excel</h2>
                 <p class='mini muted'>
-                    Upload the EBTA cost workbook. The newer Overview, TM Workload and Banking Summary
-                    sheets are supported together with the existing cost tables and any extra columns.
+                    Upload the EBTA monthly cost workbook. The August Overview, Subscriptions,
+                    Tutors, Tutor Managers, TM Workload, Operational Team and Banking Summary sheets are supported.
                 </p>
                 <form method='post'
                       action='{url_for('admin_cost_import')}'
@@ -43404,8 +43451,8 @@ def admin_cost_centre():
                     <thead>
                         <tr>
                             <th>Cost Area</th>
-                            <th>Excel Total</th>
-                            <th>Current Total</th>
+                            <th>Workbook Total</th>
+                            <th>Current Portal Total</th>
                             <th>Difference</th>
                             <th>Workbook Note</th>
                         </tr>
@@ -43421,7 +43468,6 @@ def admin_cost_centre():
         f"""
         <section class='card' style='border-left:5px solid #1b5e20'>
             <h2>Academic Staffing Snapshot Check</h2>
-
             <div class='scroll-x'>
                 <table>
                     <thead>
@@ -43432,14 +43478,11 @@ def admin_cost_centre():
                             <th>Difference</th>
                         </tr>
                     </thead>
-
                     <tbody>{staffing_reconciliation_rows}</tbody>
                 </table>
             </div>
         </section>
-        """
-        if staffing_reconciliation_rows
-        else ""
+        """ if staffing_reconciliation_rows else ""
     }
 
     {
@@ -43448,7 +43491,15 @@ def admin_cost_centre():
             <h2>Bank Totals Check</h2>
             <div class='scroll-x'>
                 <table>
-                    <thead><tr><th>Bank</th><th>Excel Members</th><th>Excel Payroll</th><th>Current Members</th><th>Current Payroll</th></tr></thead>
+                    <thead>
+                        <tr>
+                            <th>Bank</th>
+                            <th>Workbook Payroll Entries</th>
+                            <th>Workbook Payroll</th>
+                            <th>Current Payroll Entries</th>
+                            <th>Current Payroll</th>
+                        </tr>
+                    </thead>
                     <tbody>{source_bank_rows}</tbody>
                 </table>
             </div>
@@ -43460,7 +43511,7 @@ def admin_cost_centre():
         <h2>Payroll by Bank</h2>
         <div class='scroll-x'>
             <table>
-                <thead><tr><th>Bank</th><th>Team Members</th><th>Monthly Payroll</th></tr></thead>
+                <thead><tr><th>Bank</th><th>Payroll Entries</th><th>Monthly Payroll</th></tr></thead>
                 <tbody>{bank_rows}</tbody>
             </table>
         </div>
@@ -43747,9 +43798,14 @@ def admin_cost_import():
     if r:
         return r
 
-    upload = request.files.get('cost_file')
+    upload = request.files.get(
+        'cost_file'
+    )
+
     cost_month = admin_cost_valid_month(
-        request.form.get('cost_month')
+        request.form.get(
+            'cost_month'
+        )
     )
 
     import_mode = request.form.get(
@@ -43819,11 +43875,17 @@ def admin_cost_import():
     source_staffing_summary = {}
     source_bank_summary = {}
 
+    # ============================================================
+    # Overview / older Summary
+    # ============================================================
     overview_sheet = next(
         (
-            ws
-            for ws in workbook.worksheets
-            if str(ws.title).strip().lower()
+            worksheet
+            for worksheet
+            in workbook.worksheets
+            if str(
+                worksheet.title
+            ).strip().lower()
             in {
                 'overview',
                 'summary'
@@ -43843,19 +43905,19 @@ def admin_cost_import():
             or 0
         )
 
-        # Cost summary and notes can appear anywhere across the sheet.
+        # Cost Area / Current Calculated / Notes
         for row_number in range(
             1,
             max_rows + 1
         ):
-            for start_col in range(
+            for start_column in range(
                 1,
                 max_columns + 1
             ):
                 heading = str(
                     overview_sheet.cell(
                         row_number,
-                        start_col
+                        start_column
                     ).value
                     or ''
                 ).strip()
@@ -43869,7 +43931,7 @@ def admin_cost_import():
                     label = str(
                         overview_sheet.cell(
                             scan_row,
-                            start_col
+                            start_column
                         ).value
                         or ''
                     ).strip()
@@ -43883,18 +43945,25 @@ def admin_cost_import():
                     }:
                         break
 
-                    amount = overview_sheet.cell(
-                        scan_row,
-                        start_col + 1
-                    ).value
+                    amount = (
+                        overview_sheet.cell(
+                            scan_row,
+                            start_column + 1
+                        ).value
+                        if (
+                            start_column + 1
+                            <= max_columns
+                        )
+                        else None
+                    )
 
                     note = (
                         overview_sheet.cell(
                             scan_row,
-                            start_col + 2
+                            start_column + 2
                         ).value
                         if (
-                            start_col + 2
+                            start_column + 2
                             <= max_columns
                         )
                         else None
@@ -43912,25 +43981,27 @@ def admin_cost_import():
                     ):
                         source_summary_notes[
                             label
-                        ] = str(note).strip()
+                        ] = str(
+                            note
+                        ).strip()
 
                     scan_row += 1
 
                 break
 
-        # Academic staffing snapshot.
+        # Metric / Current Position
         for row_number in range(
             1,
             max_rows + 1
         ):
-            for start_col in range(
+            for start_column in range(
                 1,
                 max_columns
             ):
                 first = str(
                     overview_sheet.cell(
                         row_number,
-                        start_col
+                        start_column
                     ).value
                     or ''
                 ).strip()
@@ -43938,12 +44009,12 @@ def admin_cost_import():
                 second = str(
                     overview_sheet.cell(
                         row_number,
-                        start_col + 1
+                        start_column + 1
                     ).value
                     or ''
                 ).strip()
 
-                if (
+                if not (
                     first.lower() == 'metric'
                     and second.lower()
                     in {
@@ -43952,48 +44023,50 @@ def admin_cost_import():
                         'current'
                     }
                 ):
-                    scan_row = row_number + 1
+                    continue
 
-                    while scan_row <= max_rows:
-                        metric = str(
+                scan_row = row_number + 1
+
+                while scan_row <= max_rows:
+                    metric = str(
+                        overview_sheet.cell(
+                            scan_row,
+                            start_column
+                        ).value
+                        or ''
+                    ).strip()
+
+                    if not metric:
+                        break
+
+                    source_staffing_summary[
+                        metric
+                    ] = int(
+                        admin_cost_money(
                             overview_sheet.cell(
                                 scan_row,
-                                start_col
+                                start_column + 1
                             ).value
-                            or ''
-                        ).strip()
-
-                        if not metric:
-                            break
-
-                        source_staffing_summary[
-                            metric
-                        ] = int(
-                            admin_cost_money(
-                                overview_sheet.cell(
-                                    scan_row,
-                                    start_col + 1
-                                ).value
-                            )
                         )
+                    )
 
-                        scan_row += 1
+                    scan_row += 1
 
-                    break
+                break
 
-        # Older workbooks sometimes placed bank totals beside Summary.
+        # Older Summary workbook bank table compatibility.
         for row_number in range(
             1,
             max_rows + 1
         ):
-            for start_col in range(
+            for start_column in range(
                 1,
                 max_columns
             ):
                 first = str(
                     overview_sheet.cell(
                         row_number,
-                        start_col
+                        start_column
                     ).value
                     or ''
                 ).strip()
@@ -44001,12 +44074,12 @@ def admin_cost_import():
                 second = str(
                     overview_sheet.cell(
                         row_number,
-                        start_col + 1
+                        start_column + 1
                     ).value
                     or ''
                 ).strip()
 
-                if (
+                if not (
                     first.lower()
                     in {
                         'bank',
@@ -44019,57 +44092,67 @@ def admin_cost_import():
                         'payroll entries'
                     }
                 ):
-                    scan_row = row_number + 1
+                    continue
 
-                    while scan_row <= max_rows:
-                        bank = str(
-                            overview_sheet.cell(
-                                scan_row,
-                                start_col
-                            ).value
-                            or ''
-                        ).strip()
+                scan_row = row_number + 1
 
-                        if (
-                            not bank
-                            or bank.upper() == 'TOTAL'
-                        ):
-                            break
+                while scan_row <= max_rows:
+                    bank = str(
+                        overview_sheet.cell(
+                            scan_row,
+                            start_column
+                        ).value
+                        or ''
+                    ).strip()
 
-                        source_bank_summary[
-                            bank
-                        ] = {
-                            'members': int(
-                                admin_cost_money(
-                                    overview_sheet.cell(
-                                        scan_row,
-                                        start_col + 1
-                                    ).value
-                                )
-                            ),
-                            'payroll': admin_cost_money(
+                    if (
+                        not bank
+                        or bank.upper()
+                        == 'TOTAL'
+                    ):
+                        break
+
+                    source_bank_summary[
+                        bank
+                    ] = {
+                        'entries': int(
+                            admin_cost_money(
                                 overview_sheet.cell(
                                     scan_row,
-                                    start_col + 2
+                                    start_column + 1
+                                ).value
+                            )
+                        ),
+                        'payroll': (
+                            admin_cost_money(
+                                overview_sheet.cell(
+                                    scan_row,
+                                    start_column + 2
                                 ).value
                             )
                             if (
-                                start_col + 2
+                                start_column + 2
                                 <= max_columns
                             )
-                            else 0,
-                        }
+                            else 0
+                        ),
+                    }
 
-                        scan_row += 1
+                    scan_row += 1
 
-                    break
+                break
 
-    # Dedicated new Banking Summary sheet takes priority.
+    # ============================================================
+    # Exact dedicated Banking Summary
+    # ============================================================
     banking_sheet = next(
         (
-            ws
-            for ws in workbook.worksheets
-            if str(ws.title).strip().lower()
+            worksheet
+            for worksheet
+            in workbook.worksheets
+            if str(
+                worksheet.title
+            ).strip().lower()
             == 'banking summary'
         ),
         None
@@ -44081,7 +44164,10 @@ def admin_cost_import():
         for row_number in range(
             1,
             min(
-                int(banking_sheet.max_row or 0),
+                int(
+                    banking_sheet.max_row
+                    or 0
+                ),
                 25
             ) + 1
         ):
@@ -44102,11 +44188,14 @@ def admin_cost_import():
                 break
 
         if header_row:
-            parsed_banks = {}
+            dedicated_banks = {}
 
             for row_number in range(
                 header_row + 1,
-                int(banking_sheet.max_row or 0) + 1
+                int(
+                    banking_sheet.max_row
+                    or 0
+                ) + 1
             ):
                 bank = str(
                     banking_sheet.cell(
@@ -44116,16 +44205,16 @@ def admin_cost_import():
                     or ''
                 ).strip()
 
-                if (
-                    not bank
-                    or bank.upper() == 'TOTAL'
-                ):
+                if not bank:
                     continue
 
-                parsed_banks[
+                if bank.upper() == 'TOTAL':
+                    continue
+
+                dedicated_banks[
                     bank
                 ] = {
-                    'members': int(
+                    'entries': int(
                         admin_cost_money(
                             banking_sheet.cell(
                                 row_number,
@@ -44141,9 +44230,12 @@ def admin_cost_import():
                     ),
                 }
 
-            if parsed_banks:
-                source_bank_summary = parsed_banks
+            if dedicated_banks:
+                source_bank_summary = dedicated_banks
 
+    # ============================================================
+    # Exact detail sheets
+    # ============================================================
     sheet_map = {
         'subscriptions': 'SUBSCRIPTIONS',
         'tutors': 'TUTORS',
@@ -44154,23 +44246,23 @@ def admin_cost_import():
         'other costs': 'OTHER_COSTS',
     }
 
-    header_first_keys = {
+    first_header_keys = {
         'service',
         'grade',
         'full_name',
-        'description',
         'tutor_manager',
         'bank',
-    }
-
-    numeric_keys = {
-        'subject_allocations',
-        'payroll_entries',
+        'description',
     }
 
     currency_keys = {
         'monthly_cost',
         'yearly_cost',
+    }
+
+    number_keys = {
+        'subject_allocations',
+        'payroll_entries',
     }
 
     conn = get_db()
@@ -44185,7 +44277,9 @@ def admin_cost_import():
 
     for worksheet in workbook.worksheets:
         section_key = sheet_map.get(
-            str(worksheet.title).strip().lower()
+            str(
+                worksheet.title
+            ).strip().lower()
         )
 
         if not section_key:
@@ -44214,17 +44308,21 @@ def admin_cost_import():
             values = [
                 worksheet.cell(
                     row_number,
-                    col
+                    column
                 ).value
-                for col in range(
+                for column
+                in range(
                     1,
                     max_columns + 1
                 )
             ]
 
             nonempty = [
-                str(value).strip()
-                for value in values
+                str(
+                    value
+                ).strip()
+                for value
+                in values
                 if value not in (
                     None,
                     ''
@@ -44238,19 +44336,22 @@ def admin_cost_import():
                 nonempty[0]
             )
 
-            if first_key in header_first_keys:
+            if first_key in first_header_keys:
                 header_row_number = row_number
 
                 headers = [
                     (
-                        str(value).strip()
+                        str(
+                            value
+                        ).strip()
                         if value not in (
                             None,
                             ''
                         )
                         else ''
                     )
-                    for value in values
+                    for value
+                    in values
                 ]
 
                 break
@@ -44273,10 +44374,13 @@ def admin_cost_import():
 
             if key in currency_keys:
                 data_type = 'CURRENCY'
-            elif key in numeric_keys:
+
+            elif key in number_keys:
                 data_type = 'NUMBER'
+
             elif key == 'email':
                 data_type = 'EMAIL'
+
             else:
                 data_type = 'TEXT'
 
@@ -44287,9 +44391,9 @@ def admin_cost_import():
                 label,
                 data_type,
                 1
-                if key in (
-                    currency_keys
-                    | numeric_keys
+                if (
+                    key in currency_keys
+                    or key in number_keys
                 )
                 else 0
             )
@@ -44297,8 +44401,7 @@ def admin_cost_import():
             column_map.append(
                 (
                     position,
-                    key,
-                    label
+                    key
                 )
             )
 
@@ -44311,9 +44414,10 @@ def admin_cost_import():
             values = [
                 worksheet.cell(
                     row_number,
-                    col
+                    column
                 ).value
-                for col in range(
+                for column
+                in range(
                     1,
                     max_columns + 1
                 )
@@ -44324,7 +44428,8 @@ def admin_cost_import():
                     None,
                     ''
                 )
-                for value in values
+                for value
+                in values
             ):
                 continue
 
@@ -44333,11 +44438,15 @@ def admin_cost_import():
                 or ''
             ).strip().upper()
 
-            # Do not import workbook total/formula rows as actual staff records.
+            # Source workbook calculated totals must never become
+            # additional cost records.
             if (
-                'TOTAL' in first_value
+                first_value == 'TOTAL'
+                or 'TOTAL' in first_value
                 or 'SUBTOTAL' in first_value
-                or first_value.startswith('CALCULATED')
+                or first_value.startswith(
+                    'CALCULATED'
+                )
             ):
                 continue
 
@@ -44346,12 +44455,16 @@ def admin_cost_import():
             yearly_cost = 0.0
             has_content = False
 
-            for position, key, label in column_map:
+            for position, key in column_map:
                 value = (
-                    values[position - 1]
+                    values[
+                        position - 1
+                    ]
                     if (
                         position - 1
-                        < len(values)
+                        < len(
+                            values
+                        )
                     )
                     else None
                 )
@@ -44374,7 +44487,7 @@ def admin_cost_import():
                     )
                     continue
 
-                if key in numeric_keys:
+                if key in number_keys:
                     row_data[
                         key
                     ] = admin_cost_money(
@@ -44382,9 +44495,10 @@ def admin_cost_import():
                     )
                     continue
 
+                # The attached sheet stores some phone numbers and
+                # account numbers numerically.
                 if (
-                    key
-                    in {
+                    key in {
                         'contact',
                         'account_no'
                     }
@@ -44394,25 +44508,35 @@ def admin_cost_import():
                     )
                 ):
                     try:
-                        if float(value).is_integer():
-                            value_text = str(
-                                int(value)
+                        if float(
+                            value
+                        ).is_integer():
+                            clean_value = str(
+                                int(
+                                    value
+                                )
                             )
                         else:
-                            value_text = str(value)
+                            clean_value = str(
+                                value
+                            )
                     except Exception:
-                        value_text = str(value)
+                        clean_value = str(
+                            value
+                        )
 
                     if (
                         key == 'contact'
-                        and len(value_text) == 9
+                        and len(
+                            clean_value
+                        ) == 9
                     ):
-                        value_text = (
+                        clean_value = (
                             '0'
-                            + value_text
+                            + clean_value
                         )
 
-                    value = value_text
+                    value = clean_value
 
                 elif value is None:
                     value = ''
@@ -44434,9 +44558,13 @@ def admin_cost_import():
                     )
 
                 else:
-                    value = str(value)
+                    value = str(
+                        value
+                    )
 
-                row_data[key] = value
+                row_data[
+                    key
+                ] = value
 
             if has_content:
                 section_rows.append(
@@ -44458,10 +44586,12 @@ def admin_cost_import():
         return page(
             'No Cost Tables Found',
             card_msg(
-                'The Excel file does not contain the expected EBTA cost sheets.'
+                'The Excel file does not contain the expected EBTA Cost Centre sheets.'
             )
         )
 
+    # Only replace sheets present in the uploaded workbook.
+    # Other Costs is preserved when it is not included in the file.
     if import_mode == 'REPLACE':
         for section_key in parsed_sections:
             cur.execute("""
@@ -44526,7 +44656,9 @@ def admin_cost_import():
                 monthly_cost,
                 yearly_cost,
                 start_order + offset,
-                Path(upload.filename).name,
+                Path(
+                    upload.filename
+                ).name,
                 now_utc_iso(),
                 now_utc_iso()
             ))
@@ -44591,15 +44723,22 @@ def admin_cost_import():
         )
         VALUES(?,?,?,?,?,?,?)
     """, (
-        Path(upload.filename).name,
+        Path(
+            upload.filename
+        ).name,
         cost_month,
         import_mode,
         ', '.join(
-            ADMIN_COST_SECTIONS[key]
-            for key in parsed_sections
+            ADMIN_COST_SECTIONS[
+                section_key
+            ]
+            for section_key
+            in parsed_sections
         ),
         imported_rows,
-        session.get('admin_username')
+        session.get(
+            'admin_username'
+        )
         or 'High Admin',
         now_utc_iso()
     ))
@@ -44608,7 +44747,9 @@ def admin_cost_import():
     conn.close()
 
     first_section = next(
-        iter(parsed_sections)
+        iter(
+            parsed_sections
+        )
     )
 
     return redirect(
@@ -44630,7 +44771,9 @@ def admin_cost_export():
         return r
 
     cost_month = admin_cost_valid_month(
-        request.args.get('month')
+        request.args.get(
+            'month'
+        )
     )
 
     if not cost_month:
@@ -44651,6 +44794,7 @@ def admin_cost_export():
 
     try:
         from openpyxl import Workbook
+
         from openpyxl.styles import (
             Font,
             Alignment,
@@ -44658,7 +44802,10 @@ def admin_cost_export():
             Border,
             Side
         )
-        from openpyxl.utils import get_column_letter
+
+        from openpyxl.utils import (
+            get_column_letter
+        )
 
     except Exception:
         conn.close()
@@ -44710,13 +44857,11 @@ def admin_cost_export():
             'solid',
             fgColor=dark_green
         )
-
         overview[cell_ref].font = Font(
             color=white,
             bold=True,
             size=14 if cell_ref == 'A1' else 11
         )
-
         overview[cell_ref].alignment = Alignment(
             horizontal='center'
         )
@@ -44724,9 +44869,8 @@ def admin_cost_export():
     overview.merge_cells('A4:C4')
     overview['A4'] = (
         'Executive Cost Summary | '
-        'Current Portal Position'
+        'Current Detail vs Source Summary'
     )
-
     overview['A4'].font = Font(
         bold=True,
         color=dark_green,
@@ -44756,7 +44900,7 @@ def admin_cost_export():
         (
             'Tutor Manager Monthly Cost',
             summary['tutor_manager_cost'],
-            'Detailed Tutor Manager pay lines'
+            'Detailed TM pay lines'
         ),
         (
             'Operational Team Monthly Cost',
@@ -44766,7 +44910,7 @@ def admin_cost_export():
         (
             'Total Management Monthly Cost',
             summary['management_cost'],
-            'Tutor Managers + operational team'
+            'TM + operational'
         ),
         (
             'Total Monthly Payroll',
@@ -44780,26 +44924,22 @@ def admin_cost_export():
         ),
         (
             'Yearly Subscriptions',
-            summary['yearly_total'],
-            'Annual subscriptions and yearly costs'
+            summary['subscriptions_yearly'],
+            'Domains + Canva'
         ),
         (
             'Total Monthly Cash Requirement',
             summary['monthly_cash'],
-            'Payroll + monthly subscriptions + other monthly costs'
+            'Payroll + monthly subscriptions'
         ),
         (
             'Effective Monthly Cost',
             summary['effective_monthly'],
-            'Includes yearly costs / 12'
+            'Includes annual subscriptions / 12'
         ),
     ]
 
-    for row_index, (
-        label,
-        amount,
-        note
-    ) in enumerate(
+    for row_index, (label, amount, note) in enumerate(
         cost_rows,
         start=6
     ):
@@ -44824,16 +44964,6 @@ def admin_cost_export():
     overview['E6'] = 'Metric'
     overview['F6'] = 'Current Position'
 
-    for cell_ref in ('E6', 'F6'):
-        overview[cell_ref].fill = PatternFill(
-            'solid',
-            fgColor=light_green
-        )
-        overview[cell_ref].font = Font(
-            color=dark_green,
-            bold=True
-        )
-
     staffing_rows = [
         (
             'Subject allocations',
@@ -44853,10 +44983,7 @@ def admin_cost_export():
         ),
     ]
 
-    for row_index, (
-        label,
-        value
-    ) in enumerate(
+    for row_index, (label, value) in enumerate(
         staffing_rows,
         start=7
     ):
@@ -44864,49 +44991,19 @@ def admin_cost_export():
         overview.cell(row_index, 6, int(value or 0))
 
     overview['E12'] = 'Workbook Navigation'
-    overview['E12'].fill = PatternFill(
-        'solid',
-        fgColor=green
-    )
-    overview['E12'].font = Font(
-        color=white,
-        bold=True
-    )
-
     overview['E13'] = 'Sheet'
     overview['F13'] = 'Purpose'
 
     navigation_rows = [
-        (
-            'Subscriptions',
-            'Digital services and recurring costs'
-        ),
-        (
-            'Tutors',
-            'Tutor register, academic details, banking and pay'
-        ),
-        (
-            'Tutor Managers',
-            'Tutor Manager details and monthly stipend'
-        ),
-        (
-            'TM Workload',
-            'Current Tutor Manager subject allocation workload'
-        ),
-        (
-            'Operational Team',
-            'Operational management details and pay'
-        ),
-        (
-            'Banking Summary',
-            'Payroll by bank / payment institution'
-        ),
+        ('Subscriptions', 'Digital services and recurring costs'),
+        ('Tutors', 'Current August tutor register, banking and pay'),
+        ('Tutor Managers', 'Tutor Manager details and monthly stipend'),
+        ('TM Workload', 'Current subject allocation workload'),
+        ('Operational Team', 'Operational management details and pay'),
+        ('Banking Summary', 'Payroll by bank / payment institution'),
     ]
 
-    for row_index, (
-        label,
-        purpose
-    ) in enumerate(
+    for row_index, (label, purpose) in enumerate(
         navigation_rows,
         start=14
     ):
@@ -44925,7 +45022,8 @@ def admin_cost_export():
 
     overview.freeze_panes = 'A5'
 
-    sheet_names = {
+    # ---------------- Detail sheets ----------------
+    sheet_config = {
         'SUBSCRIPTIONS': (
             'Subscriptions',
             'ACTIVE SUBSCRIPTIONS & DIGITAL SERVICES'
@@ -44956,11 +45054,7 @@ def admin_cost_export():
         ),
     }
 
-    for section_key, (
-        sheet_name,
-        sheet_title
-    ) in sheet_names.items():
-
+    for section_key, (sheet_name, sheet_title) in sheet_config.items():
         columns = admin_cost_columns(
             cur,
             section_key
@@ -44971,9 +45065,7 @@ def admin_cost_export():
             FROM admin_cost_records
             WHERE cost_month=?
               AND section_key=?
-            ORDER BY
-                display_order,
-                id
+            ORDER BY display_order,id
         """, (
             cost_month,
             section_key
@@ -44987,10 +45079,7 @@ def admin_cost_export():
         ):
             continue
 
-        ws = wb.create_sheet(
-            sheet_name
-        )
-
+        ws = wb.create_sheet(sheet_name)
         ws.sheet_view.showGridLines = False
 
         end_col = max(
@@ -45004,24 +45093,16 @@ def admin_cost_export():
             end_row=1,
             end_column=end_col
         )
-
-        ws.cell(
-            1,
-            1,
-            sheet_title
-        )
-
+        ws.cell(1, 1, sheet_title)
         ws.cell(1, 1).fill = PatternFill(
             'solid',
             fgColor=dark_green
         )
-
         ws.cell(1, 1).font = Font(
             color=white,
             bold=True,
             size=14
         )
-
         ws.cell(1, 1).alignment = Alignment(
             horizontal='center'
         )
@@ -45032,23 +45113,15 @@ def admin_cost_export():
             end_row=2,
             end_column=end_col
         )
-
-        ws.cell(
-            2,
-            1,
-            subtitle
-        )
-
+        ws.cell(2, 1, subtitle)
         ws.cell(2, 1).fill = PatternFill(
             'solid',
             fgColor=light_green
         )
-
         ws.cell(2, 1).font = Font(
             color=dark_green,
             bold=True
         )
-
         ws.cell(2, 1).alignment = Alignment(
             horizontal='center'
         )
@@ -45062,17 +45135,14 @@ def admin_cost_export():
                 col_index,
                 column['label']
             )
-
             cell.fill = PatternFill(
                 'solid',
                 fgColor=green
             )
-
             cell.font = Font(
                 color=white,
                 bold=True
             )
-
             cell.alignment = Alignment(
                 horizontal='center',
                 vertical='center',
@@ -45098,13 +45168,11 @@ def admin_cost_export():
                         record['monthly_cost']
                         or 0
                     )
-
                 elif key == 'yearly_cost':
                     value = float(
                         record['yearly_cost']
                         or 0
                     )
-
                 else:
                     value = data.get(
                         key,
@@ -45116,11 +45184,9 @@ def admin_cost_export():
                     col_index,
                     value
                 )
-
                 cell.border = Border(
                     bottom=thin
                 )
-
                 cell.alignment = Alignment(
                     vertical='top',
                     wrap_text=True
@@ -45140,11 +45206,8 @@ def admin_cost_export():
 
         total_row = 5 + len(records)
 
-        monetary_columns = [
-            (
-                col_index,
-                column
-            )
+        money_columns = [
+            (col_index, column)
             for col_index, column in enumerate(
                 columns,
                 start=1
@@ -45156,16 +45219,34 @@ def admin_cost_export():
             }
         ]
 
-        if monetary_columns:
-            ws.cell(
-                total_row,
-                1,
+        if money_columns:
+            total_label = {
+                'SUBSCRIPTIONS':
+                    'CALCULATED CURRENT TOTALS',
+                'TUTORS':
+                    'CALCULATED CURRENT TUTOR MONTHLY COST',
+                'TUTOR_MANAGERS':
+                    'CALCULATED CURRENT TUTOR MANAGER MONTHLY COST',
+                'OPERATIONAL_TEAM':
+                    'CALCULATED OPERATIONAL MANAGEMENT MONTHLY COST',
+                'BANKING_SUMMARY':
+                    'TOTAL',
+            }.get(
+                section_key,
                 (
-                    f"CALCULATED CURRENT "
-                    f"{ADMIN_COST_SECTIONS[section_key].upper()} TOTAL"
+                    'CALCULATED CURRENT '
+                    + ADMIN_COST_SECTIONS[
+                        section_key
+                    ].upper()
+                    + ' TOTAL'
                 )
             )
 
+            ws.cell(
+                total_row,
+                1,
+                total_label
+            )
             ws.cell(
                 total_row,
                 1
@@ -45174,7 +45255,7 @@ def admin_cost_export():
                 color=dark_green
             )
 
-            for col_index, column in monetary_columns:
+            for col_index, column in money_columns:
                 letter = get_column_letter(
                     col_index
                 )
@@ -45186,7 +45267,7 @@ def admin_cost_export():
                         (
                             f"=SUM("
                             f"{letter}5:"
-                            f"{letter}{total_row-1}"
+                            f"{letter}{total_row - 1}"
                             f")"
                         )
                     )
@@ -45201,7 +45282,6 @@ def admin_cost_export():
                     total_row,
                     col_index
                 ).number_format = money_format
-
                 ws.cell(
                     total_row,
                     col_index
@@ -45232,13 +45312,13 @@ def admin_cost_export():
                 term in label
                 for term in (
                     'purpose',
-                    'department',
                     'institution',
                     'qualification',
-                    'description',
-                    'notes',
+                    'department',
                     'grades covered',
-                    'current subjects'
+                    'current subjects',
+                    'description',
+                    'notes'
                 )
             ):
                 width = 34
