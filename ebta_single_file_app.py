@@ -43791,8 +43791,6 @@ def admin_cost_month_update():
 
 @app.post('/admin/cost-centre/import')
 @require_high_admin
-@app.post('/admin/cost-centre/import')
-@require_high_admin
 def admin_cost_import():
     r = require_admin()
     if r:
@@ -44761,8 +44759,6 @@ def admin_cost_import():
     )
 
 
-@app.get('/admin/cost-centre/export')
-@require_high_admin
 @app.get('/admin/cost-centre/export')
 @require_high_admin
 def admin_cost_export():
