@@ -4042,7 +4042,7 @@ def init_db():
         ("Business Studies", "G10"),
         ("Business Studies", "G11"),
         ("English FAL", "G10"),
-        ("English FAL", "G11"),
+        ("English FAL", "G12"),
         ("English HL", "G10"),
     ]
 
