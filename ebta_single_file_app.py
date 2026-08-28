@@ -2803,7 +2803,7 @@ def init_db():
             ("Economics","G13"),
 
             # Business Studies
-            ("Business Studies","G11"),
+            #("Business Studies","G11"),
             ("Business Studies","G12"),
             ("Business Studies","G13"),
 
@@ -2814,14 +2814,14 @@ def init_db():
             # English FAL
             ("English FAL","G8"),
             ("English FAL","G9"),
-            ("English FAL","G10"),
+            #("English FAL","G10"),
             ("English FAL","G11"),
-            ("English FAL","G12"),
+            #("English FAL","G12"),
             
             # English HL
             ("English HL","G8"),
             ("English HL","G9"),
-            ("English HL","G10"),
+            #("English HL","G10"),
             ("English HL","G11"),
             ("English HL","G12"),
             
@@ -2864,7 +2864,7 @@ def init_db():
             ("Economics","G13"),
             
             # Business Studies
-            ("Business Studies","G11"),
+            #("Business Studies","G11"),
             ("Business Studies","G12"),
             ("Business Studies","G13"),
 
@@ -2875,14 +2875,14 @@ def init_db():
             # English FAL
             ("English FAL","G8"),
             ("English FAL","G9"),
-            ("English FAL","G10"),
+            #("English FAL","G10"),
             ("English FAL","G11"),
-            ("English FAL","G12"),
+            #("English FAL","G12"),
             
             # English HL
             ("English HL","G8"),
             ("English HL","G9"),
-            ("English HL","G10"),
+            #("English HL","G10"),
             ("English HL","G11"),
             ("English HL","G12"),
             
@@ -4040,6 +4040,10 @@ def init_db():
         ("Geography", "G11"),
         ("Economics", "G12"),
         ("Business Studies", "G10"),
+        ("Business Studies", "G11"),
+        ("English FAL", "G10"),
+        ("English FAL", "G11"),
+        ("English HL", "G10"),
     ]
 
     for name, grade in subjects_to_remove:
@@ -14761,7 +14765,7 @@ def home():
         ("Economics","G13"),
 
         # Business Studies
-        ("Business Studies","G11"),
+        #("Business Studies","G11"),
         ("Business Studies","G12"),
         ("Business Studies","G13"),
 
@@ -14772,14 +14776,14 @@ def home():
         # English FAL
         ("English FAL","G8"),
         ("English FAL","G9"),
-        ("English FAL","G10"),
+        #("English FAL","G10"),
         ("English FAL","G11"),
-        ("English FAL","G12"),
+        #("English FAL","G12"),
         
         # English HL
         ("English HL","G8"),
         ("English HL","G9"),
-        ("English HL","G10"),
+        #("English HL","G10"),
         ("English HL","G11"),
         ("English HL","G12"),
         
