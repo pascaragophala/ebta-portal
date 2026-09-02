@@ -14935,7 +14935,7 @@ def home():
     )
     enrollment_month_labels_json = json.dumps({m: pretty_month_label(m) for m in enrollment_start_months})
     
-    HELP_WHATSAPP_NUMBER = "27648650013"  # Replace with EBTA helper WhatsApp number
+    HELP_WHATSAPP_NUMBER = "27828353443"  # Replace with EBTA helper WhatsApp number
 
     help_message = quote_from_bytes(
         "Good day EBTA, I need help with the enrollment ON THE EBTA PORTAL.".encode("utf-8")
