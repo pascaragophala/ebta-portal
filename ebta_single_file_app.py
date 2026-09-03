@@ -64316,6 +64316,7 @@ def admin_applications():
         "grade": grade_filter,
         "subject": subject_filter,
         "status": status_filter,
+        "session_type": session_type_filter,
         "page": page_num
     }
 
@@ -64345,6 +64346,30 @@ def admin_applications():
             "BOTH": "Both",
         }.get(session_type_value, "Both")
 
+        row_status_options = ""
+        for st in ["NEW", "SHORTLISTED", "INTERVIEWED", "ACCEPTED", "REJECTED"]:
+            selected = "selected" if a["status"] == st else ""
+            row_status_options += f"<option value='{st}' {selected}>{st}</option>"
+
+        if is_high_admin():
+            status_cell = f"""
+            <form method="post"
+                  action="/admin/application/{a['id']}/quick-status"
+                  style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:210px">
+                <input type="hidden"
+                       name="return_to"
+                       value="{escape(return_url, quote=True)}">
+                <select name="status"
+                        aria-label="Change tutor application status"
+                        style="min-width:135px;padding:7px 9px;border-radius:10px;font-size:12px;font-weight:800">
+                    {row_status_options}
+                </select>
+                <button class="btn mini success" type="submit">Update</button>
+            </form>
+            """
+        else:
+            status_cell = f"<span class='chip'>{escape(a['status'])}</span>"
+
         rows += f"""
         <tr>
             <td>
@@ -64355,7 +64380,7 @@ def admin_applications():
             <td>{escape(subjects)}</td>
             <td>{escape(session_type_display)}</td>
             <td>{escape(a['highest_qualification'] or '—')}</td>
-            <td><span class="chip">{escape(a['status'])}</span></td>
+            <td>{status_cell}</td>
             <td>{a['created_at'][:16].replace('T',' ')}</td>
             <td style="white-space:nowrap">
                 <a class="btn mini"
@@ -64719,6 +64744,29 @@ def admin_application_update_status(app_id):
         + f"?return_url={encoded_return_url}"
     )
     
+
+
+@app.post('/admin/application/<int:app_id>/quick-status')
+@require_high_admin
+def admin_application_quick_status(app_id):
+    status = request.form.get("status", "").strip().upper()
+    return_to = request.form.get("return_to", "").strip()
+    allowed_statuses = ["NEW", "SHORTLISTED", "INTERVIEWED", "ACCEPTED", "REJECTED"]
+
+    if status not in allowed_statuses:
+        return page("Invalid Status", card_msg("Please select a valid tutor application status."))
+
+    if not (return_to == "/admin/applications" or return_to.startswith("/admin/applications?")):
+        return_to = url_for("admin_applications")
+
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""
+        UPDATE tutor_applications
+        SET status=?, updated_at=?
+        WHERE id=?
+    """, (status, now_utc_iso(), app_id))
+    conn.commit(); conn.close()
+    return redirect(return_to)
 
 @app.get('/admin/application/<int:app_id>/download/<kind>')
 @require_recruitment_access
@@ -66038,6 +66086,30 @@ def admin_management_applications():
             return_to=list_return_to
         )
 
+        row_status_options = ""
+        for st in ["NEW", "SHORTLISTED", "INTERVIEWED", "ACCEPTED", "REJECTED"]:
+            selected = "selected" if a["status"] == st else ""
+            row_status_options += f"<option value='{st}' {selected}>{st}</option>"
+
+        if is_high_admin():
+            status_cell = f"""
+            <form method="post"
+                  action="/admin/management-application/{a['id']}/quick-status"
+                  style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:210px">
+                <input type="hidden"
+                       name="return_to"
+                       value="{escape(list_return_to, quote=True)}">
+                <select name="status"
+                        aria-label="Change management application status"
+                        style="min-width:135px;padding:7px 9px;border-radius:10px;font-size:12px;font-weight:800">
+                    {row_status_options}
+                </select>
+                <button class="btn mini success" type="submit">Update</button>
+            </form>
+            """
+        else:
+            status_cell = f"<span class='chip'>{escape(a['status'])}</span>"
+
         rows += f"""
         <tr>
             <td>
@@ -66051,7 +66123,7 @@ def admin_management_applications():
                 {escape(a['city'] or '—')}
                 <div class="mini muted">{escape(a['province'] or '')}</div>
             </td>
-            <td><span class="chip">{escape(a['status'])}</span></td>
+            <td>{status_cell}</td>
             <td>{a['created_at'][:16].replace('T',' ')}</td>
             <td style="white-space:nowrap">
                 <a class="btn mini"
@@ -66415,6 +66487,29 @@ def admin_management_application_update_status(app_id):
     )
     
  
+
+@app.post('/admin/management-application/<int:app_id>/quick-status')
+@require_high_admin
+def admin_management_application_quick_status(app_id):
+    status = request.form.get("status", "").strip().upper()
+    return_to = request.form.get("return_to", "").strip()
+    allowed_statuses = ["NEW", "SHORTLISTED", "INTERVIEWED", "ACCEPTED", "REJECTED"]
+
+    if status not in allowed_statuses:
+        return page("Invalid Status", card_msg("Please select a valid management application status."))
+
+    if not (return_to == "/admin/management-applications" or return_to.startswith("/admin/management-applications?")):
+        return_to = url_for("admin_management_applications")
+
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""
+        UPDATE management_applications
+        SET status=?, updated_at=?
+        WHERE id=?
+    """, (status, now_utc_iso(), app_id))
+    conn.commit(); conn.close()
+    return redirect(return_to)
+
 @app.get('/admin/management-application/<int:app_id>/view/<kind>')
 @require_recruitment_access
 def admin_management_application_view_file(app_id, kind):
