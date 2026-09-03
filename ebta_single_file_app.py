@@ -34816,18 +34816,16 @@ def enrollment_action(id: int, action: str):
             """, (id,))
 
     elif action == "lapse":
-        if period_ref_to_update:
-            cur.execute("""
-                UPDATE enrollments
-                SET status = 'LAPSED'
-                WHERE enrollment_period_ref = ?
-            """, (period_ref_to_update,))
-        else:
-            cur.execute("""
-                UPDATE enrollments
-                SET status = 'LAPSED'
-                WHERE id = ?
-            """, (id,))
+        # Lapse ONLY the exact enrollment selected by High Admin.
+        #
+        # Do not use enrollment_period_ref here. A paid period can contain
+        # multiple subjects and/or months, and lapsing one subject must not
+        # change the status of the learner's other enrollment rows.
+        cur.execute("""
+            UPDATE enrollments
+            SET status = 'LAPSED'
+            WHERE id = ?
+        """, (id,))
 
     elif action == "pending":
 
@@ -77927,7 +77925,9 @@ def admission_enrollment_action(id, action):
     should_approve = action in ["approve", "approve_sms"]
 
     # Multi-month enrolments share one enrollment_period_ref.
-    # Admissions approves or lapses the whole linked paid period in one action.
+    # Approval can still activate the linked paid period in one action.
+    # Lapse is intentionally enrollment-specific so one subject/month does
+    # not change the learner's other enrollment statuses.
     cur.execute("""
         SELECT
             id,
@@ -77978,18 +77978,15 @@ def admission_enrollment_action(id, action):
             """, (id,))
 
     elif action == "lapse":
-        if period_ref_to_update:
-            cur.execute("""
-                UPDATE enrollments
-                SET status='LAPSED'
-                WHERE enrollment_period_ref=?
-            """, (period_ref_to_update,))
-        else:
-            cur.execute("""
-                UPDATE enrollments
-                SET status='LAPSED'
-                WHERE id=?
-            """, (id,))
+        # Lapse ONLY the exact enrollment selected by Admissions.
+        #
+        # enrollment_period_ref may be shared by several subjects/months,
+        # so using it here would incorrectly lapse unrelated enrollment rows.
+        cur.execute("""
+            UPDATE enrollments
+            SET status='LAPSED'
+            WHERE id=?
+        """, (id,))
 
     if needs_sms_details:
         cur.execute("""
