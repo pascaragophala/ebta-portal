@@ -996,6 +996,37 @@ def init_db():
     );
     """)
 
+    # Learner proof-of-payment correction history.
+    # A correction replaces the active PoP on the learner's most recent
+    # enrollment/period. The audit row keeps the previous/new file references
+    # and enforces a maximum of two correction submissions per calendar month.
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS student_pop_reuploads(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id INTEGER NOT NULL,
+        source_enrollment_id INTEGER,
+        enrollment_period_ref TEXT,
+        enrollment_month TEXT,
+        edit_month TEXT NOT NULL,
+        edit_number INTEGER NOT NULL,
+        old_files_json TEXT,
+        new_files_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+        FOREIGN KEY(source_enrollment_id) REFERENCES enrollments(id) ON DELETE SET NULL
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_student_pop_reuploads_student_month
+        ON student_pop_reuploads(student_id, edit_month)
+    """)
+
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_student_pop_reuploads_limit_slot
+        ON student_pop_reuploads(student_id, edit_month, edit_number)
+    """)
+
     cur.execute("""
     CREATE TABLE IF NOT EXISTS payments(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34345,7 +34376,7 @@ def admin_enrollments():
     returning_ids = {r['student_id'] for r in cur.fetchall()}
 
     # PoP files
-    cur.execute("SELECT enrollment_id, file_path FROM enrollment_files")
+    cur.execute("SELECT enrollment_id, file_path FROM enrollment_files ORDER BY id")
 
     pop_map = {}
     for r in cur.fetchall():
@@ -62916,6 +62947,112 @@ def aqm_assessment_analysis():
     return page("AQM Assessment Analysis", body) 
     
     
+def student_recent_pop_context(conn, student_id):
+    """Return the learner's most recent enrollment and PoP correction state."""
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            e.id,
+            e.student_id,
+            e.month,
+            e.status,
+            e.pop_url,
+            e.created_at,
+            e.enrollment_period_ref,
+            e.period_month_count,
+            e.period_start_month,
+            e.period_end_month,
+            sub.name AS subject_name,
+            sub.grade AS subject_grade
+        FROM enrollments e
+        JOIN subjects sub ON sub.id=e.subject_id
+        WHERE e.student_id=?
+        ORDER BY e.created_at DESC, e.id DESC
+        LIMIT 1
+    """, (student_id,))
+
+    latest_row = cur.fetchone()
+    edit_month = portal_today_date().strftime("%Y-%m")
+
+    if not latest_row:
+        return {
+            "latest": None,
+            "target_ids": [],
+            "subjects": [],
+            "files": [],
+            "edit_month": edit_month,
+            "edits_used": 0,
+            "edits_remaining": 2,
+        }
+
+    latest = dict(latest_row)
+    period_ref = str(latest.get("enrollment_period_ref") or "").strip()
+
+    if period_ref:
+        cur.execute("""
+            SELECT id
+            FROM enrollments
+            WHERE student_id=?
+              AND enrollment_period_ref=?
+            ORDER BY id
+        """, (student_id, period_ref))
+        target_ids = [int(row["id"]) for row in cur.fetchall()]
+    else:
+        target_ids = [int(latest["id"])]
+
+    placeholders = ",".join("?" for _ in target_ids)
+
+    cur.execute(f"""
+        SELECT DISTINCT sub.name, sub.grade
+        FROM enrollments e
+        JOIN subjects sub ON sub.id=e.subject_id
+        WHERE e.id IN ({placeholders})
+        ORDER BY CAST(REPLACE(sub.grade,'G','') AS INTEGER), sub.name
+    """, target_ids)
+
+    subjects = [
+        f"{grade_label(row['grade'])} {row['name']}"
+        for row in cur.fetchall()
+    ]
+
+    cur.execute(f"""
+        SELECT file_path, MIN(id) AS first_id
+        FROM enrollment_files
+        WHERE enrollment_id IN ({placeholders})
+        GROUP BY file_path
+        ORDER BY first_id
+    """, target_ids)
+
+    current_files = [
+        row["file_path"]
+        for row in cur.fetchall()
+        if row["file_path"]
+    ]
+
+    if not current_files and latest.get("pop_url"):
+        current_files = [latest["pop_url"]]
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM student_pop_reuploads
+        WHERE student_id=?
+          AND edit_month=?
+    """, (student_id, edit_month))
+
+    edits_used = int(cur.fetchone()["c"] or 0)
+
+    return {
+        "latest": latest,
+        "target_ids": target_ids,
+        "subjects": subjects,
+        "files": current_files,
+        "edit_month": edit_month,
+        "edits_used": edits_used,
+        "edits_remaining": max(0, 2 - edits_used),
+    }
+
+
 @app.get('/student/profile')
 def student_profile_page():
 
@@ -62951,6 +63088,12 @@ def student_profile_page():
     """, (sid,))
 
     student = cur.fetchone()
+
+    pop_context = student_recent_pop_context(
+        conn,
+        sid
+    )
+
     conn.close()
 
     if not student:
@@ -62993,6 +63136,151 @@ def student_profile_page():
 
     if student["profile_picture_uploaded_at"]:
         uploaded_at = (student["profile_picture_uploaded_at"] or "")[:16].replace("T", " ")
+
+    pop_updated_notice = ""
+
+    if request.args.get("pop_updated") == "1":
+        pop_updated_notice = """
+        <div class="card soft" style="border-left:5px solid #25D366;margin-bottom:12px">
+            <strong>Proof of Payment updated successfully.</strong>
+            <div class="mini muted" style="margin-top:4px">
+                The replacement is now the Proof of Payment shown for your most recent enrollment.
+            </div>
+        </div>
+        """
+
+    latest_enrollment = pop_context["latest"]
+
+    if latest_enrollment:
+        current_pop_files = pop_context["files"]
+        current_pop_links = ""
+
+        for index, file_url in enumerate(current_pop_files, start=1):
+            label = (
+                f"View Current PoP {index}"
+                if len(current_pop_files) > 1
+                else "View Current PoP"
+            )
+
+            current_pop_links += f"""
+            <a class="btn mini secondary"
+               target="_blank"
+               href="{escape(file_url, quote=True)}">
+                {label}
+            </a>
+            """
+
+        if not current_pop_links:
+            current_pop_links = "<span class='mini muted'>No Proof of Payment is currently attached.</span>"
+
+        period_start = (
+            latest_enrollment.get("period_start_month")
+            or latest_enrollment.get("month")
+        )
+        period_end = (
+            latest_enrollment.get("period_end_month")
+            or latest_enrollment.get("month")
+        )
+
+        if period_start == period_end:
+            period_label = pretty_month_label(period_start)
+        else:
+            period_label = (
+                f"{pretty_month_label(period_start)} to "
+                f"{pretty_month_label(period_end)}"
+            )
+
+        subject_label = ", ".join(pop_context["subjects"]) or "Recent enrollment"
+        edit_month_label = pretty_month_label(pop_context["edit_month"])
+        remaining = int(pop_context["edits_remaining"] or 0)
+        used = int(pop_context["edits_used"] or 0)
+
+        if remaining > 0:
+            pop_form = f"""
+            <form method="post"
+                  action="{url_for('student_replace_recent_pop')}"
+                  enctype="multipart/form-data"
+                  class="grid"
+                  style="grid-template-columns:1fr;gap:9px;margin-top:12px"
+                  onsubmit="return confirm('Replace the Proof of Payment on your most recent enrollment?');">
+
+                <div>
+                    <label>Replacement Proof of Payment</label>
+                    <input type="file"
+                           name="proof_of_payment"
+                           accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,image/*,application/pdf"
+                           multiple
+                           required>
+                    <div class="mini muted" style="margin-top:5px">
+                        Upload 1 or 2 files. PDF or image, maximum 15 MB per file.
+                    </div>
+                </div>
+
+                <button class="btn success" type="submit">
+                    Re-upload Proof of Payment
+                </button>
+            </form>
+            """
+        else:
+            pop_form = f"""
+            <div class="card soft" style="margin-top:12px;border-left:5px solid #f59e0b">
+                <strong>Monthly correction limit reached</strong>
+                <div class="mini muted" style="margin-top:4px">
+                    You have already used both Proof of Payment corrections for {escape(edit_month_label)}.
+                </div>
+            </div>
+            """
+
+        recent_pop_card = f"""
+        <div class="card soft" style="grid-column:1/-1;border-left:5px solid #8b5cf6">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+                <div>
+                    <h2 style="margin-bottom:5px">Proof of Payment Correction</h2>
+                    <div class="mini muted">
+                        Replace the Proof of Payment attached to your most recent enrollment if the wrong file was uploaded.
+                    </div>
+                </div>
+
+                <span class="chip {'active' if remaining > 0 else 'pending'}">
+                    {remaining} of 2 corrections remaining · {escape(edit_month_label)}
+                </span>
+            </div>
+
+            <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-top:12px">
+                <div>
+                    <div class="mini muted">Most recent enrollment</div>
+                    <strong>{escape(subject_label)}</strong>
+                </div>
+                <div>
+                    <div class="mini muted">Enrollment period</div>
+                    <strong>{escape(period_label)}</strong>
+                </div>
+                <div>
+                    <div class="mini muted">Enrollment status</div>
+                    <strong>{escape(latest_enrollment.get('status') or '—')}</strong>
+                </div>
+                <div>
+                    <div class="mini muted">Corrections used this month</div>
+                    <strong>{used} / 2</strong>
+                </div>
+            </div>
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px">
+                {current_pop_links}
+            </div>
+
+            {pop_form}
+        </div>
+        """
+    else:
+        recent_pop_card = """
+        <div class="card soft" style="grid-column:1/-1;border-left:5px solid #94a3b8">
+            <h2>Proof of Payment Correction</h2>
+            <div class="mini muted">
+                No enrollment is available yet. Once you have enrolled, your most recent Proof of Payment can be corrected here.
+            </div>
+        </div>
+        """
 
     body = f"""
     <section class="card">
@@ -63040,7 +63328,11 @@ def student_profile_page():
             </div>
         </div>
 
+        {pop_updated_notice}
+
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px">
+
+            {recent_pop_card}
 
             <div class="card soft" style="border-left:5px solid #25D366">
                 <h2>Update Profile Picture</h2>
@@ -63198,6 +63490,249 @@ def student_profile_page():
     return page("My Profile", body)
     
     
+@app.post('/student/profile/proof-of-payment')
+def student_replace_recent_pop():
+    r = require_student()
+    if r:
+        return r
+
+    sid = is_student()
+
+    uploads = [
+        file
+        for file in request.files.getlist("proof_of_payment")
+        if file and file.filename
+    ]
+
+    if len(uploads) < 1 or len(uploads) > 2:
+        return page(
+            "Proof of Payment",
+            card_msg(
+                "Please select 1 or 2 replacement Proof of Payment files."
+            )
+        )
+
+    payloads = []
+
+    for upload in uploads:
+        original_name = Path(upload.filename).name.strip()
+        extension = Path(original_name).suffix.lower()
+
+        if extension not in ALLOWED_ENROLLMENT_POP_EXTENSIONS:
+            return page(
+                "Invalid Proof of Payment",
+                card_msg(
+                    "Proof of Payment must be PDF, PNG, JPG, JPEG, GIF or WEBP."
+                )
+            )
+
+        try:
+            file_bytes = upload.read(
+                ENROLLMENT_POP_MAX_FILE_BYTES + 1
+            )
+        except Exception:
+            return page(
+                "Upload Error",
+                card_msg(
+                    "The selected Proof of Payment could not be read. Please select it again."
+                )
+            )
+
+        if not file_bytes:
+            return page(
+                "Upload Error",
+                card_msg(
+                    "One of the selected Proof of Payment files is empty."
+                )
+            )
+
+        if len(file_bytes) > ENROLLMENT_POP_MAX_FILE_BYTES:
+            return page(
+                "File Too Large",
+                card_msg(
+                    "Each Proof of Payment file must be 15 MB or smaller."
+                )
+            )
+
+        payloads.append((
+            original_name,
+            extension,
+            file_bytes
+        ))
+
+    conn = get_db()
+    cur = conn.cursor()
+    saved_disk_paths = []
+
+    try:
+        # Serialize the two-per-month limit so two browser submissions cannot
+        # accidentally use the same correction slot at the same time.
+        conn.execute("BEGIN IMMEDIATE")
+
+        context = student_recent_pop_context(
+            conn,
+            sid
+        )
+
+        latest = context["latest"]
+
+        if not latest or not context["target_ids"]:
+            conn.rollback()
+            conn.close()
+            return page(
+                "No Recent Enrollment",
+                card_msg(
+                    "There is no enrollment available for a Proof of Payment correction."
+                )
+            )
+
+        edits_used = int(
+            context["edits_used"]
+            or 0
+        )
+
+        if edits_used >= 2:
+            conn.rollback()
+            conn.close()
+            return page(
+                "Correction Limit Reached",
+                card_msg(
+                    "You have already used both Proof of Payment corrections for this month."
+                )
+            )
+
+        target_ids = [
+            int(value)
+            for value in context["target_ids"]
+        ]
+        placeholders = ",".join(
+            "?"
+            for _ in target_ids
+        )
+
+        old_files = list(
+            context["files"]
+        )
+
+        timestamp = int(time.time())
+        new_urls = []
+
+        for index, (original_name, extension, file_bytes) in enumerate(
+            payloads,
+            start=1
+        ):
+            safe_original = (
+                secure_name(original_name)
+                or f"proof{extension}"
+            )
+
+            safe_name = (
+                f"pop_edit_{sid}_{timestamp}_"
+                f"{secrets.token_hex(6)}_{index}_"
+                f"{safe_original}"
+            )
+
+            destination = UPLOAD_DIR / safe_name
+            destination.write_bytes(file_bytes)
+            saved_disk_paths.append(destination)
+            new_urls.append(f"/uploads/{safe_name}")
+
+        # Remove the old active file references from every enrollment row in
+        # the latest paid period. The physical old files are deliberately not
+        # deleted so the audit record remains recoverable if ever required.
+        cur.execute(
+            f"DELETE FROM enrollment_files WHERE enrollment_id IN ({placeholders})",
+            target_ids
+        )
+
+        for enrollment_id in target_ids:
+            for file_url in new_urls:
+                cur.execute("""
+                    INSERT INTO enrollment_files(
+                        enrollment_id,
+                        file_path
+                    )
+                    VALUES(?,?)
+                """, (
+                    enrollment_id,
+                    file_url
+                ))
+
+        # Keep the legacy single-PoP field synchronized because some existing
+        # Admission/Admin screens still use it as a fallback.
+        cur.execute(
+            f"UPDATE enrollments SET pop_url=? WHERE id IN ({placeholders})",
+            [new_urls[0]] + target_ids
+        )
+
+        edit_number = edits_used + 1
+        enrollment_month = (
+            latest.get("period_start_month")
+            or latest.get("month")
+            or ""
+        )
+        period_ref = str(
+            latest.get("enrollment_period_ref")
+            or ""
+        ).strip()
+
+        cur.execute("""
+            INSERT INTO student_pop_reuploads(
+                student_id,
+                source_enrollment_id,
+                enrollment_period_ref,
+                enrollment_month,
+                edit_month,
+                edit_number,
+                old_files_json,
+                new_files_json,
+                created_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?)
+        """, (
+            sid,
+            latest["id"],
+            period_ref or None,
+            enrollment_month,
+            context["edit_month"],
+            edit_number,
+            json.dumps(old_files, ensure_ascii=False),
+            json.dumps(new_urls, ensure_ascii=False),
+            now_utc_iso()
+        ))
+
+        conn.commit()
+
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+        for file_path in saved_disk_paths:
+            try:
+                file_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        conn.close()
+        return page(
+            "Proof of Payment Update Failed",
+            card_msg(
+                "The replacement Proof of Payment could not be saved. Please try again."
+            )
+        )
+
+    conn.close()
+
+    return redirect(
+        url_for(
+            "student_profile_page",
+            pop_updated="1"
+        )
+    )
+
+
 @app.post('/student/profile/update')
 def student_update_profile():
 
@@ -77668,6 +78203,34 @@ def admission_enrollments():
     """, data_params)
 
     rows = cur.fetchall()
+
+    pop_map = {}
+
+    if rows:
+        enrollment_ids = [
+            int(row["id"])
+            for row in rows
+        ]
+        placeholders = ",".join(
+            "?"
+            for _ in enrollment_ids
+        )
+
+        cur.execute(f"""
+            SELECT enrollment_id, file_path
+            FROM enrollment_files
+            WHERE enrollment_id IN ({placeholders})
+            ORDER BY id
+        """, enrollment_ids)
+
+        for pop_row in cur.fetchall():
+            pop_map.setdefault(
+                int(pop_row["enrollment_id"]),
+                []
+            ).append(
+                pop_row["file_path"]
+            )
+
     conn.close()
 
     trs = ""
@@ -77765,11 +78328,30 @@ def admission_enrollments():
         history_label = "Returning student" if is_returning else "First month"
         history_class = "pending" if is_returning else "active"
 
+        pop_files = (
+            pop_map.get(
+                int(row["id"]),
+                []
+            )
+            or (
+                [row["pop_url"]]
+                if row["pop_url"]
+                else []
+            )
+        )
+
         pop_link = "—"
-        if row["pop_url"]:
-            pop_link = (
+
+        if pop_files:
+            pop_link = " ".join(
                 f"<a class='admission-pop-link' target='_blank' "
-                f"href='{escape(row['pop_url'])}'>View PoP</a>"
+                f"href='{escape(file_url, quote=True)}'>"
+                f"{'View PoP ' + str(index) if len(pop_files) > 1 else 'View PoP'}"
+                f"</a>"
+                for index, file_url in enumerate(
+                    pop_files,
+                    start=1
+                )
             )
 
         amount = (
