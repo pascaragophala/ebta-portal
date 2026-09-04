@@ -188,6 +188,18 @@ os.makedirs(BASE_DATA_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
 
+# Tutor Manager training workspace.
+# Demo tutor/student records are physically isolated from the real EBTA DB.
+DEMO_DB_PATH = os.path.join(BASE_DATA_DIR, "ebta_tutor_demo.db")
+
+
+def demo_workspace_active():
+    try:
+        return bool(session.get("_demo_workspace_mode"))
+    except Exception:
+        return False
+
+
 UPLOADS_DIR = Path(BASE_DATA_DIR) / "uploads"
 REPORTS_DIR = UPLOADS_DIR / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -582,6 +594,10 @@ def portal_presence_identity():
 
 @app.before_request
 def record_portal_presence():
+    # Demo training activity never enters the real portal-presence table.
+    if demo_workspace_active():
+        return None
+
     if request.method not in ("GET", "POST"):
         return None
 
@@ -680,12 +696,16 @@ def record_portal_presence():
 
 # ===================== DB ==============
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    database_path = DEMO_DB_PATH if demo_workspace_active() else DB_PATH
+
+    conn = sqlite3.connect(database_path)
     conn.row_factory = sqlite3.Row
+
     try:
         conn.execute("PRAGMA foreign_keys=ON")
     except Exception:
         pass
+
     return conn
 
 def now_utc_iso():
@@ -4739,6 +4759,624 @@ with app.app_context():
     init_db()
 
 
+
+
+# =============================================================
+# ISOLATED TUTOR MANAGER TRAINING WORKSPACE
+# =============================================================
+
+DEMO_TUTOR_NAME = "EBTA Demo Tutor"
+
+DEMO_STUDENT_NAMES = {
+    1: "Demo Learner One",
+    2: "Demo Learner Two",
+}
+
+
+def _demo_db_connection():
+    conn = sqlite3.connect(DEMO_DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    try:
+        conn.execute("PRAGMA foreign_keys=ON")
+    except Exception:
+        pass
+
+    return conn
+
+
+def ensure_demo_tutor_workspace():
+    """
+    Create/repair a complete training database using the same EBTA schema.
+
+    init_db() is deliberately run while demo mode is temporarily enabled.
+    Therefore all schema setup/migrations happen in ebta_tutor_demo.db,
+    never in the real ebta.db.
+    """
+    had_flag = "_demo_workspace_mode" in session
+    old_flag = session.get("_demo_workspace_mode")
+
+    try:
+        session["_demo_workspace_mode"] = 1
+        init_db()
+    finally:
+        if had_flag:
+            session["_demo_workspace_mode"] = old_flag
+        else:
+            session.pop("_demo_workspace_mode", None)
+
+    conn = _demo_db_connection()
+    cur = conn.cursor()
+
+    now = now_utc_iso()
+    today = portal_today_date()
+
+    try:
+        current_month = datetime.datetime.now(
+            ZoneInfo("Africa/Johannesburg")
+        ).strftime("%Y-%m")
+    except Exception:
+        current_month = datetime.datetime.now().strftime("%Y-%m")
+
+    cur.execute("""
+        INSERT OR REPLACE INTO settings(key,value)
+        VALUES('current_month',?)
+    """, (current_month,))
+
+    # ---------------- Demo tutor ----------------
+    cur.execute("""
+        SELECT id FROM tutors
+        WHERE phone='DEMO-TUTOR'
+        LIMIT 1
+    """)
+    row = cur.fetchone()
+
+    if row:
+        tutor_id = int(row["id"])
+        cur.execute("""
+            UPDATE tutors
+            SET full_name=?,
+                pin='12345',
+                is_active=1,
+                deleted_at=NULL,
+                qualification='Demo training account',
+                achievements='Tutor Manager practice workspace',
+                about=?
+            WHERE id=?
+        """, (
+            DEMO_TUTOR_NAME,
+            (
+                "This tutor exists only inside the isolated EBTA training "
+                "database. Actions here do not change real portal records."
+            ),
+            tutor_id
+        ))
+    else:
+        cur.execute("""
+            INSERT INTO tutors(full_name,phone,pin,created_at)
+            VALUES(?,?,?,?)
+        """, (
+            DEMO_TUTOR_NAME,
+            "DEMO-TUTOR",
+            "12345",
+            now
+        ))
+        tutor_id = int(cur.lastrowid)
+
+        cur.execute("""
+            UPDATE tutors
+            SET qualification='Demo training account',
+                achievements='Tutor Manager practice workspace',
+                about=?,
+                is_active=1,
+                deleted_at=NULL
+            WHERE id=?
+        """, (
+            (
+                "This tutor exists only inside the isolated EBTA training "
+                "database. Actions here do not change real portal records."
+            ),
+            tutor_id
+        ))
+
+    # ---------------- Demo manager inside demo DB ----------------
+    cur.execute("""
+        SELECT id FROM tutor_managers
+        WHERE phone='DEMO-MANAGER'
+        LIMIT 1
+    """)
+    row = cur.fetchone()
+
+    if row:
+        demo_manager_id = int(row["id"])
+        cur.execute("""
+            UPDATE tutor_managers
+            SET full_name='EBTA Demo Tutor Manager',
+                pin='12345'
+            WHERE id=?
+        """, (demo_manager_id,))
+    else:
+        cur.execute("""
+            INSERT INTO tutor_managers(
+                full_name,phone,pin,created_at
+            )
+            VALUES(
+                'EBTA Demo Tutor Manager',
+                'DEMO-MANAGER',
+                '12345',
+                ?
+            )
+        """, (now,))
+        demo_manager_id = int(cur.lastrowid)
+
+    cur.execute("""
+        INSERT OR IGNORE INTO manager_tutors(manager_id,tutor_id)
+        VALUES(?,?)
+    """, (
+        demo_manager_id,
+        tutor_id
+    ))
+
+    # ---------------- Demo subject ----------------
+    cur.execute("""
+        SELECT id FROM subjects
+        WHERE name='Demo Mathematics'
+          AND grade='G12'
+        LIMIT 1
+    """)
+    row = cur.fetchone()
+
+    if row:
+        subject_id = int(row["id"])
+    else:
+        cur.execute("""
+            INSERT INTO subjects(name,grade)
+            VALUES('Demo Mathematics','G12')
+        """)
+        subject_id = int(cur.lastrowid)
+
+    cur.execute("""
+        INSERT INTO tutor_subjects(
+            tutor_id,
+            subject_id,
+            delivery_mode
+        )
+        VALUES(?,?,?)
+        ON CONFLICT(tutor_id,subject_id)
+        DO UPDATE SET delivery_mode='BOTH'
+    """, (
+        tutor_id,
+        subject_id,
+        "BOTH"
+    ))
+
+    # ---------------- Demo class/session ----------------
+    cur.execute("""
+        SELECT id
+        FROM subject_session_templates
+        WHERE subject_id=?
+          AND day_of_week=6
+          AND start_time='18:00'
+          AND end_time='19:30'
+        LIMIT 1
+    """, (subject_id,))
+
+    if not cur.fetchone():
+        cur.execute("""
+            INSERT INTO subject_session_templates(
+                subject_id,
+                day_of_week,
+                start_time,
+                end_time,
+                meet_link,
+                meeting_id,
+                meeting_passcode,
+                active,
+                is_visible,
+                created_at,
+                updated_at
+            )
+            VALUES(
+                ?,
+                6,
+                '18:00',
+                '19:30',
+                NULL,
+                'DEMO-CLASS',
+                'DEMO',
+                1,
+                1,
+                ?,
+                ?
+            )
+        """, (
+            subject_id,
+            now,
+            now
+        ))
+
+    sync_subject_session_templates(
+        conn,
+        subject_id=subject_id,
+        tutor_id=tutor_id
+    )
+
+    # ---------------- Two demo learners ----------------
+    student_ids = {}
+
+    demo_students = [
+        (1, DEMO_STUDENT_NAMES[1], "DEMO-STUDENT-1", "11111"),
+        (2, DEMO_STUDENT_NAMES[2], "DEMO-STUDENT-2", "22222"),
+    ]
+
+    for slot, full_name, demo_phone, pin in demo_students:
+        cur.execute("""
+            SELECT id
+            FROM students
+            WHERE phone_whatsapp=?
+            LIMIT 1
+        """, (demo_phone,))
+        row = cur.fetchone()
+
+        if row:
+            student_id = int(row["id"])
+            cur.execute("""
+                UPDATE students
+                SET full_name=?,
+                    pin=?,
+                    grade='G12',
+                    guardian_name='Demo Guardian',
+                    guardian_phone='DEMO-GUARDIAN',
+                    email=?,
+                    province='Demo',
+                    school='EBTA Demo School'
+                WHERE id=?
+            """, (
+                full_name,
+                pin,
+                f"demo.student{slot}@example.invalid",
+                student_id
+            ))
+        else:
+            cur.execute("""
+                INSERT INTO students(
+                    full_name,
+                    phone_whatsapp,
+                    guardian_phone,
+                    email,
+                    grade,
+                    pin,
+                    created_at
+                )
+                VALUES(?,?,?,?,?,?,?)
+            """, (
+                full_name,
+                demo_phone,
+                "DEMO-GUARDIAN",
+                f"demo.student{slot}@example.invalid",
+                "G12",
+                pin,
+                now
+            ))
+            student_id = int(cur.lastrowid)
+
+            cur.execute("""
+                UPDATE students
+                SET guardian_name='Demo Guardian',
+                    province='Demo',
+                    school='EBTA Demo School'
+                WHERE id=?
+            """, (student_id,))
+
+        student_ids[slot] = student_id
+
+        cur.execute("""
+            SELECT id
+            FROM enrollments
+            WHERE student_id=?
+              AND subject_id=?
+              AND month=?
+            ORDER BY id DESC
+            LIMIT 1
+        """, (
+            student_id,
+            subject_id,
+            current_month
+        ))
+        enrollment = cur.fetchone()
+
+        if enrollment:
+            cur.execute("""
+                UPDATE enrollments
+                SET status='ACTIVE',
+                    payment_method='DEMO',
+                    payment_ref='DEMO-TRAINING',
+                    amount_paid=0,
+                    enrollment_period_ref=?,
+                    period_month_count=1,
+                    period_start_month=?,
+                    period_end_month=?
+                WHERE id=?
+            """, (
+                f"DEMO-{current_month}",
+                current_month,
+                current_month,
+                enrollment["id"]
+            ))
+        else:
+            cur.execute("""
+                INSERT INTO enrollments(
+                    student_id,
+                    subject_id,
+                    month,
+                    status,
+                    payment_method,
+                    payment_ref,
+                    pop_url,
+                    status_token,
+                    created_at,
+                    amount_paid,
+                    enrollment_period_ref,
+                    period_month_count,
+                    period_start_month,
+                    period_end_month
+                )
+                VALUES(
+                    ?,
+                    ?,
+                    ?,
+                    'ACTIVE',
+                    'DEMO',
+                    'DEMO-TRAINING',
+                    NULL,
+                    ?,
+                    ?,
+                    0,
+                    ?,
+                    1,
+                    ?,
+                    ?
+                )
+            """, (
+                student_id,
+                subject_id,
+                current_month,
+                secrets.token_urlsafe(24),
+                now,
+                f"DEMO-{current_month}",
+                current_month,
+                current_month
+            ))
+
+    # ---------------- Starter assignment ----------------
+    cur.execute("""
+        SELECT id
+        FROM materials
+        WHERE tutor_id=?
+          AND subject_id=?
+          AND month=?
+          AND title='Demo Practice Assignment'
+          AND (is_assignment=1 OR kind='assignment')
+        LIMIT 1
+    """, (
+        tutor_id,
+        subject_id,
+        current_month
+    ))
+
+    if not cur.fetchone():
+        cur.execute("""
+            INSERT INTO materials(
+                subject_id,
+                tutor_id,
+                month,
+                title,
+                kind,
+                file_path,
+                youtube_url,
+                created_at,
+                is_assignment,
+                open_date,
+                due_date,
+                max_points,
+                delivery_mode
+            )
+            VALUES(
+                ?,
+                ?,
+                ?,
+                'Demo Practice Assignment',
+                'assignment',
+                NULL,
+                NULL,
+                ?,
+                1,
+                ?,
+                ?,
+                100,
+                'GROUP'
+            )
+        """, (
+            subject_id,
+            tutor_id,
+            current_month,
+            now,
+            today.isoformat(),
+            (
+                today
+                + datetime.timedelta(days=30)
+            ).isoformat()
+        ))
+
+    # ---------------- Starter learner messages ----------------
+    for slot, student_id in student_ids.items():
+        message_body = (
+            f"[DEMO-{slot}] Hello tutor, "
+            "this is a practice learner message."
+        )
+
+        cur.execute("""
+            SELECT id
+            FROM direct_messages
+            WHERE from_role='student'
+              AND from_id=?
+              AND to_role='tutor'
+              AND to_id=?
+              AND subject_id=?
+              AND body=?
+            LIMIT 1
+        """, (
+            student_id,
+            tutor_id,
+            subject_id,
+            message_body
+        ))
+
+        if not cur.fetchone():
+            cur.execute("""
+                INSERT INTO direct_messages(
+                    from_role,
+                    from_id,
+                    to_role,
+                    to_id,
+                    subject_id,
+                    body,
+                    created_at
+                )
+                VALUES(
+                    'student',
+                    ?,
+                    'tutor',
+                    ?,
+                    ?,
+                    ?,
+                    ?
+                )
+            """, (
+                student_id,
+                tutor_id,
+                subject_id,
+                message_body,
+                now
+            ))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "tutor_id": tutor_id,
+        "student_ids": student_ids,
+        "subject_id": subject_id,
+        "month": current_month,
+    }
+
+
+def begin_demo_workspace_from_manager(demo_role, student_slot=None):
+    manager_id = session.get("manager_id")
+    manager_name = session.get("manager_name", "Tutor Manager")
+
+    if not manager_id:
+        return redirect(url_for("manager_login"))
+
+    demo = ensure_demo_tutor_workspace()
+
+    # Replace the active role in this browser while preserving only a safe
+    # return identity for the real Tutor Manager.
+    session.clear()
+
+    session["_demo_workspace_mode"] = 1
+    session["_demo_return_manager_id"] = int(manager_id)
+    session["_demo_return_manager_name"] = str(
+        manager_name or "Tutor Manager"
+    )
+    session["_demo_started_at"] = now_utc_iso()
+
+    if demo_role == "student":
+        student_id = demo["student_ids"].get(int(student_slot or 1))
+
+        if not student_id:
+            return redirect(url_for("manager_login"))
+
+        conn = _demo_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id,full_name
+            FROM students
+            WHERE id=?
+            LIMIT 1
+        """, (student_id,))
+        student = cur.fetchone()
+        conn.close()
+
+        if not student:
+            return redirect(url_for("manager_login"))
+
+        session["student_id"] = int(student["id"])
+        session["student_name"] = student["full_name"]
+
+        return redirect(url_for("student_home"))
+
+    conn = _demo_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id,full_name
+        FROM tutors
+        WHERE id=?
+        LIMIT 1
+    """, (demo["tutor_id"],))
+    tutor = cur.fetchone()
+    conn.close()
+
+    if not tutor:
+        return redirect(url_for("manager_login"))
+
+    session["tutor_id"] = int(tutor["id"])
+    session["tutor_name"] = tutor["full_name"]
+
+    return redirect(url_for("tutor_home"))
+
+
+@app.get('/demo/return-to-manager')
+def demo_return_to_manager():
+    if not demo_workspace_active():
+        return redirect(url_for("manager_login"))
+
+    manager_id = session.get("_demo_return_manager_id")
+    manager_name = session.get("_demo_return_manager_name")
+
+    if not manager_id:
+        session.clear()
+        return redirect(url_for("manager_login"))
+
+    # Verify the saved manager identity against the REAL DB.
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id,full_name
+        FROM tutor_managers
+        WHERE id=?
+        LIMIT 1
+    """, (int(manager_id),))
+
+    manager = cur.fetchone()
+    conn.close()
+
+    session.clear()
+
+    if not manager:
+        return redirect(url_for("manager_login"))
+
+    session["manager_id"] = int(manager["id"])
+    session["manager_name"] = (
+        manager["full_name"]
+        or manager_name
+        or "Tutor Manager"
+    )
+
+    return redirect(url_for("manager_dashboard"))
+
 # ===================== Registration helper/table ==============
 def ensure_registration_table(conn=None):
     """Ensure registrations table exists. If conn provided, use it; otherwise open a new connection."""
@@ -8620,7 +9258,10 @@ def send_email_notification(to_email: str, subject: str, body: str):
 
 
 def send_sms_notification(to_phone: str, body: str):
-    # Best-effort SMS sender with automatic SA phone normalization
+    # Best-effort SMS sender with automatic SA phone normalization.
+    # Demo users must never trigger Twilio or real SMS traffic.
+    if demo_workspace_active():
+        return
 
     if not to_phone:
         return
@@ -13029,6 +13670,63 @@ def page(title, body_html, extra_head="", extra_js=""):
         ]
 
     right = " ".join(auth)
+
+    demo_workspace_banner_html = ""
+
+    if demo_workspace_active():
+        demo_role_name = (
+            "Demo Tutor"
+            if current_portal_role == "tutor"
+            else "Demo Learner"
+            if current_portal_role == "student"
+            else "Demo Workspace"
+        )
+
+        return_button = ""
+
+        if session.get("_demo_return_manager_id"):
+            return_button = f"""
+            <a class="btn mini"
+               href="{url_for('demo_return_to_manager')}"
+               style="
+                   background:#ffffff;
+                   color:#7c2d12;
+                   border:1px solid #fdba74;
+               ">
+                Return to Tutor Manager
+            </a>
+            """
+
+        demo_workspace_banner_html = f"""
+        <div class="card"
+             style="
+                 border:2px solid #f59e0b;
+                 background:#fff7ed;
+                 margin-bottom:14px;
+             ">
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                gap:12px;
+                flex-wrap:wrap;
+            ">
+                <div>
+                    <strong>
+                        DEMO TRAINING WORKSPACE · {escape(demo_role_name)}
+                    </strong>
+
+                    <div class="mini muted"
+                         style="margin-top:3px">
+                        This uses a separate demo database. Nothing captured
+                        here changes real EBTA tutor, learner or staff records.
+                    </div>
+                </div>
+
+                {return_button}
+            </div>
+        </div>
+        """
     
     portal_celebration_banner_html = ""
 
@@ -14237,11 +14935,15 @@ def page(title, body_html, extra_head="", extra_js=""):
         <section class='dashboard-main'>
             {ann_html}
             {status_banner}
+            {demo_workspace_banner_html}
             {portal_celebration_banner_html}
             {body_html}
         </section>
     </div>
-    """ if sidebar_html else body_html
+    """ if sidebar_html else (
+        demo_workspace_banner_html
+        + body_html
+    )
     
     upload_feedback_js = """
     <style>
@@ -19203,8 +19905,13 @@ def student_start_enrollment():
 
 
 @app.get('/student/logout')
+@app.get('/student/logout')
 def student_logout():
+    if demo_workspace_active():
+        return redirect(url_for("demo_return_to_manager"))
+
     clear_student_session()
+
     return redirect(url_for('student_login'))
 
 
@@ -23991,10 +24698,15 @@ def tutor_forgot_pin():
     return page("Submitted", card_msg("Request sent to Admin."))
 
 @app.get('/tutor/logout')
+@app.get('/tutor/logout')
 def tutor_logout():
+    if demo_workspace_active():
+        return redirect(url_for("demo_return_to_manager"))
+
     session.pop('tutor_id', None)
     session.pop('tutor_name', None)
-    session.pop('tutor_month', None)  # 🔑 clear month override
+    session.pop('tutor_month', None)
+
     return redirect(url_for('tutor_login'))
 
 
@@ -49687,6 +50399,32 @@ def manager_login():
 
     return page("Manager Login", body)
     
+
+
+@app.post('/manager/demo-workspace/tutor')
+def manager_open_demo_tutor():
+    r = require_manager()
+    if r:
+        return r
+
+    return begin_demo_workspace_from_manager("tutor")
+
+
+@app.post('/manager/demo-workspace/student/<int:student_slot>')
+def manager_open_demo_student(student_slot):
+    r = require_manager()
+    if r:
+        return r
+
+    if student_slot not in (1, 2):
+        return redirect(url_for("manager_dashboard"))
+
+    return begin_demo_workspace_from_manager(
+        "student",
+        student_slot=student_slot
+    )
+
+
 @app.get('/manager/dashboard')
 def manager_dashboard():
 
@@ -49966,6 +50704,90 @@ def manager_dashboard():
         </div>
 
         {month_selector}
+
+
+        <div class="card soft" style="
+            margin:0 0 12px;
+            padding:15px;
+            border:2px solid #f59e0b;
+            background:#fffaf0;
+        ">
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                gap:14px;
+                align-items:flex-start;
+                flex-wrap:wrap;
+            ">
+                <div style="flex:1;min-width:250px">
+                    <strong style="font-size:16px">
+                        Demo Tutor Training Workspace
+                    </strong>
+
+                    <div class="mini muted"
+                         style="margin-top:5px;max-width:760px">
+                        Practice the Tutor Portal with a fake tutor and two
+                        demo learners. This workspace runs in a separate
+                        database and cannot change real EBTA staff, learners,
+                        enrollments, materials, attendance, ratings or reports.
+                    </div>
+
+                    <div style="
+                        display:flex;
+                        gap:7px;
+                        flex-wrap:wrap;
+                        margin-top:9px;
+                    ">
+                        <span class="chip active">EBTA Demo Tutor</span>
+                        <span class="chip">Grade 12 · Demo Mathematics</span>
+                        <span class="chip">2 Demo Learners</span>
+                    </div>
+                </div>
+
+                <div style="
+                    display:flex;
+                    gap:8px;
+                    flex-wrap:wrap;
+                    justify-content:flex-end;
+                ">
+                    <form method="post"
+                          action="{url_for('manager_open_demo_tutor')}"
+                          style="margin:0">
+                        <button class="btn success">
+                            Open Demo Tutor Portal
+                        </button>
+                    </form>
+
+                    <form method="post"
+                          action="{url_for(
+                              'manager_open_demo_student',
+                              student_slot=1
+                          )}"
+                          style="margin:0">
+                        <button class="btn mini">
+                            Demo Learner 1
+                        </button>
+                    </form>
+
+                    <form method="post"
+                          action="{url_for(
+                              'manager_open_demo_student',
+                              student_slot=2
+                          )}"
+                          style="margin:0">
+                        <button class="btn mini">
+                            Demo Learner 2
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="mini muted"
+                 style="margin-top:10px">
+                Use Logout or “Return to Tutor Manager” inside the demo
+                workspace to return to your real Tutor Manager dashboard.
+            </div>
+        </div>
 
         <div class="card soft" style="
             margin:0 0 12px;
