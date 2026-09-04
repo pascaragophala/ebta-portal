@@ -13674,14 +13674,6 @@ def page(title, body_html, extra_head="", extra_js=""):
     demo_workspace_banner_html = ""
 
     if demo_workspace_active():
-        demo_role_name = (
-            "Demo Tutor"
-            if current_portal_role == "tutor"
-            else "Demo Learner"
-            if current_portal_role == "student"
-            else "Demo Workspace"
-        )
-
         return_button = ""
 
         if session.get("_demo_return_manager_id"):
@@ -13693,7 +13685,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                    color:#7c2d12;
                    border:1px solid #fdba74;
                ">
-                Return to Tutor Manager
+                Back to Tutor Manager
             </a>
             """
 
@@ -13711,18 +13703,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 gap:12px;
                 flex-wrap:wrap;
             ">
-                <div>
-                    <strong>
-                        DEMO TRAINING WORKSPACE · {escape(demo_role_name)}
-                    </strong>
-
-                    <div class="mini muted"
-                         style="margin-top:3px">
-                        This uses a separate demo database. Nothing captured
-                        here changes real EBTA tutor, learner or staff records.
-                    </div>
-                </div>
-
+                <strong>Practice Account</strong>
                 {return_button}
             </div>
         </div>
@@ -50709,52 +50690,31 @@ def manager_dashboard():
         <div class="card soft" style="
             margin:0 0 12px;
             padding:15px;
-            border:2px solid #f59e0b;
-            background:#fffaf0;
+            border-left:5px solid #f59e0b;
         ">
             <div style="
                 display:flex;
                 justify-content:space-between;
-                gap:14px;
-                align-items:flex-start;
+                gap:12px;
+                align-items:center;
                 flex-wrap:wrap;
             ">
-                <div style="flex:1;min-width:250px">
+                <div>
                     <strong style="font-size:16px">
-                        Demo Tutor Training Workspace
+                        Tutor Practice Account
                     </strong>
-
-                    <div class="mini muted"
-                         style="margin-top:5px;max-width:760px">
-                        Practice the Tutor Portal with a fake tutor and two
-                        demo learners. This workspace runs in a separate
-                        database and cannot change real EBTA staff, learners,
-                        enrollments, materials, attendance, ratings or reports.
-                    </div>
-
-                    <div style="
-                        display:flex;
-                        gap:7px;
-                        flex-wrap:wrap;
-                        margin-top:9px;
-                    ">
-                        <span class="chip active">EBTA Demo Tutor</span>
-                        <span class="chip">Grade 12 · Demo Mathematics</span>
-                        <span class="chip">2 Demo Learners</span>
-                    </div>
                 </div>
 
                 <div style="
                     display:flex;
                     gap:8px;
                     flex-wrap:wrap;
-                    justify-content:flex-end;
                 ">
                     <form method="post"
                           action="{url_for('manager_open_demo_tutor')}"
                           style="margin:0">
                         <button class="btn success">
-                            Open Demo Tutor Portal
+                            Open Tutor Account
                         </button>
                     </form>
 
@@ -50765,7 +50725,7 @@ def manager_dashboard():
                           )}"
                           style="margin:0">
                         <button class="btn mini">
-                            Demo Learner 1
+                            Learner 1
                         </button>
                     </form>
 
@@ -50776,16 +50736,10 @@ def manager_dashboard():
                           )}"
                           style="margin:0">
                         <button class="btn mini">
-                            Demo Learner 2
+                            Learner 2
                         </button>
                     </form>
                 </div>
-            </div>
-
-            <div class="mini muted"
-                 style="margin-top:10px">
-                Use Logout or “Return to Tutor Manager” inside the demo
-                workspace to return to your real Tutor Manager dashboard.
             </div>
         </div>
 
