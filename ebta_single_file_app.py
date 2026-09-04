@@ -698,11 +698,17 @@ def record_portal_presence():
 def get_db():
     database_path = DEMO_DB_PATH if demo_workspace_active() else DB_PATH
 
-    conn = sqlite3.connect(database_path)
+    conn = sqlite3.connect(
+        database_path,
+        timeout=30.0 if demo_workspace_active() else 5.0
+    )
     conn.row_factory = sqlite3.Row
 
     try:
         conn.execute("PRAGMA foreign_keys=ON")
+
+        if demo_workspace_active():
+            conn.execute("PRAGMA busy_timeout=30000")
     except Exception:
         pass
 
@@ -2542,8 +2548,6 @@ def init_db():
     ensure_column(conn, "sessions", "meeting_id", "TEXT")
     ensure_column(conn, "sessions", "meeting_passcode", "TEXT")
     ensure_column(conn, "sessions", "session_template_id", "INTEGER")
-    ensure_column(conn, "one_on_one_bookings", "meeting_id", "TEXT")
-    ensure_column(conn, "one_on_one_bookings", "meeting_passcode", "TEXT")
     ensure_column(conn, "followups", "issue_type", "TEXT")
     ensure_column(conn, "followups", "captured_by", "TEXT")
     ensure_column(conn, "followups", "updated_by", "TEXT")
@@ -4332,6 +4336,22 @@ def init_db():
     );
     """)
 
+    # Add booking meeting fields only after the table exists.
+    ensure_column(
+        conn,
+        "one_on_one_bookings",
+        "meeting_id",
+        "TEXT"
+    )
+
+    ensure_column(
+        conn,
+        "one_on_one_bookings",
+        "meeting_passcode",
+        "TEXT"
+    )
+
+
     cur.execute("""
     CREATE TABLE IF NOT EXISTS one_on_one_session_notes(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4772,13 +4792,19 @@ DEMO_STUDENT_NAMES = {
     2: "Demo Learner Two",
 }
 
+DEMO_WORKSPACE_INIT_LOCK = threading.Lock()
+
 
 def _demo_db_connection():
-    conn = sqlite3.connect(DEMO_DB_PATH)
+    conn = sqlite3.connect(
+        DEMO_DB_PATH,
+        timeout=30.0
+    )
     conn.row_factory = sqlite3.Row
 
     try:
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=30000")
     except Exception:
         pass
 
@@ -4798,7 +4824,10 @@ def ensure_demo_tutor_workspace():
 
     try:
         session["_demo_workspace_mode"] = 1
-        init_db()
+
+        with DEMO_WORKSPACE_INIT_LOCK:
+            init_db()
+
     finally:
         if had_flag:
             session["_demo_workspace_mode"] = old_flag
