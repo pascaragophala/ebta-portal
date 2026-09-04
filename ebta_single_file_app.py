@@ -1259,6 +1259,40 @@ def init_db():
     );
     """)
     
+    # ================= STAFF WHATSAPP GROUP LINKS =================
+    # Invite links are saved in the database and edited through High Admin.
+    # No WhatsApp invite URL is hard-coded in the application.
+    #
+    # OFFICIAL_TUTORS   -> all tutors
+    # OFFICIAL_MANAGERS -> all Tutor Managers
+    # MANAGER_TEAM      -> one Tutor Manager + tutors assigned to that manager
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS staff_whatsapp_group_links(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        link_type TEXT NOT NULL,
+        manager_id INTEGER,
+        invite_link TEXT NOT NULL,
+        is_visible INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        FOREIGN KEY(manager_id)
+            REFERENCES tutor_managers(id)
+            ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_whatsapp_group_global
+        ON staff_whatsapp_group_links(link_type)
+        WHERE manager_id IS NULL
+    """)
+
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_whatsapp_group_manager
+        ON staff_whatsapp_group_links(link_type, manager_id)
+        WHERE manager_id IS NOT NULL
+    """)
+
     cur.execute("""
     CREATE TABLE IF NOT EXISTS tutor_manager_ratings(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26451,6 +26485,145 @@ def tutor_home():
     if not tutor_google_drive_html:
         tutor_google_drive_html = "<div class='empty'>No Google Drive links are available for your subjects.</div>"
 
+    # ============================================================
+    # STAFF WHATSAPP GROUPS FOR TUTOR DASHBOARD
+    # ============================================================
+    # Official Tutors group is available to every tutor when configured.
+    cur.execute("""
+        SELECT invite_link
+        FROM staff_whatsapp_group_links
+        WHERE link_type='OFFICIAL_TUTORS'
+          AND manager_id IS NULL
+          AND is_visible=1
+        ORDER BY id DESC
+        LIMIT 1
+    """)
+
+    official_tutors_group = cur.fetchone()
+
+    # Tutor Manager team groups follow the actual manager_tutors assignment.
+    # A tutor only sees the group(s) for manager(s) they are assigned to.
+    cur.execute("""
+        SELECT DISTINCT
+            tm.id AS manager_id,
+            tm.full_name AS manager_name,
+            sgl.invite_link
+        FROM manager_tutors mt
+        JOIN tutor_managers tm
+          ON tm.id=mt.manager_id
+        LEFT JOIN staff_whatsapp_group_links sgl
+          ON sgl.manager_id=tm.id
+         AND sgl.link_type='MANAGER_TEAM'
+         AND sgl.is_visible=1
+        WHERE mt.tutor_id=?
+        ORDER BY tm.full_name
+    """, (tid,))
+
+    tutor_manager_group_rows = cur.fetchall()
+
+    tutor_staff_groups_html = ""
+
+    if official_tutors_group:
+        tutor_staff_groups_html += f"""
+        <div class="card soft"
+             style="border-left:5px solid #25D366">
+
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                flex-wrap:wrap;
+                gap:10px;
+            ">
+                <div>
+                    <div style="font-weight:700">
+                        Official Tutors Group
+                    </div>
+
+                    <div class="mini muted">
+                        EBTA official WhatsApp group for tutors.
+                    </div>
+                </div>
+
+                <a class="btn success mini"
+                   href="{escape(
+                       official_tutors_group['invite_link'],
+                       quote=True
+                   )}"
+                   target="_blank"
+                   rel="noopener">
+                    Join Group
+                </a>
+            </div>
+        </div>
+        """
+
+    for manager_group in tutor_manager_group_rows:
+        manager_name = (
+            manager_group["manager_name"]
+            or "Tutor Manager"
+        )
+
+        invite_link = str(
+            manager_group["invite_link"]
+            or ""
+        ).strip()
+
+        if invite_link:
+            manager_action = f"""
+            <a class="btn success mini"
+               href="{escape(invite_link, quote=True)}"
+               target="_blank"
+               rel="noopener">
+                Join Team Group
+            </a>
+            """
+        else:
+            manager_action = """
+            <span class="chip">
+                Link not available yet
+            </span>
+            """
+
+        tutor_staff_groups_html += f"""
+        <div class="card soft"
+             style="border-left:5px solid #1b5e20">
+
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                flex-wrap:wrap;
+                gap:10px;
+            ">
+                <div>
+                    <div style="font-weight:700">
+                        {escape(manager_name)} Tutor Team
+                    </div>
+
+                    <div class="mini muted">
+                        Your assigned Tutor Manager team group.
+                    </div>
+                </div>
+
+                {manager_action}
+            </div>
+        </div>
+        """
+
+    if not tutor_staff_groups_html:
+        tutor_staff_groups_html = """
+        <div class="empty">
+            No official tutor or Tutor Manager team group link is available yet.
+        </div>
+        """
+
+    tutor_staff_groups_html = f"""
+    <div class="grid" style="gap:10px">
+        {tutor_staff_groups_html}
+    </div>
+    """
+
 
     conn.close()
 
@@ -26527,7 +26700,18 @@ def tutor_home():
         </div>
     </div>
 
-    <div class='card'><h2>WhatsApp Group Links</h2>{groups_html}</div>
+    <div class='card'>
+        <h2>Tutor WhatsApp Groups</h2>
+        <p class="mini muted">
+            Official tutor group and the team group connected to your assigned Tutor Manager.
+        </p>
+        {tutor_staff_groups_html}
+    </div>
+
+    <div class='card'>
+        <h2>Class WhatsApp Groups</h2>
+        {groups_html}
+    </div>
 
     <div class='card' style="border-left:5px solid #1b5e20">
         <h2>Google Drive Links</h2>
@@ -26664,6 +26848,8 @@ def tutor_manager_rating_save():
 
     return redirect(url_for("tutor_home"))  
   
+
+
 
 @app.get('/tutor/profile')
 def tutor_profile_page():
@@ -30614,6 +30800,7 @@ def admin_nav():
                 "Tutors & Academic",
                 [
                     ("Tutors", "admin_tutors", "/admin/tutors"),
+                    ("Tutor WhatsApp Groups", "admin_tutor_whatsapp_groups", "/admin/tutor-whatsapp-groups"),
                     ("Tutor Referrals", "admin_tutor_referrals", "/admin/tutor-referrals"),
                     ("Tutor Tracker", "admin_tutor_tracker", "/admin/tutor-tracker"),
                     ("Tutor Operations", "admin_tutor_operations", "/admin/tutor-operations"),
@@ -41510,6 +41697,560 @@ def manager_google_drive_links():
     return page("Tutor Manager Google Drive Links", body)
 
 
+
+
+def staff_whatsapp_group_link_is_valid(value):
+    value = str(value or "").strip()
+
+    return bool(
+        value
+        and value.lower().startswith(
+            "https://chat.whatsapp.com/"
+        )
+    )
+
+
+def upsert_staff_whatsapp_group_link(
+    conn,
+    link_type,
+    invite_link,
+    manager_id=None,
+    is_visible=1
+):
+    cur = conn.cursor()
+    invite_link = str(invite_link or "").strip()
+
+    if manager_id is None:
+        cur.execute("""
+            SELECT id
+            FROM staff_whatsapp_group_links
+            WHERE link_type=?
+              AND manager_id IS NULL
+            LIMIT 1
+        """, (link_type,))
+    else:
+        cur.execute("""
+            SELECT id
+            FROM staff_whatsapp_group_links
+            WHERE link_type=?
+              AND manager_id=?
+            LIMIT 1
+        """, (
+            link_type,
+            int(manager_id)
+        ))
+
+    existing = cur.fetchone()
+
+    # Leaving the field blank and saving removes the stored link.
+    if not invite_link:
+        if existing:
+            cur.execute("""
+                DELETE FROM staff_whatsapp_group_links
+                WHERE id=?
+            """, (existing["id"],))
+        return "REMOVED"
+
+    if not staff_whatsapp_group_link_is_valid(invite_link):
+        raise ValueError(
+            "Please enter a valid WhatsApp group invite link beginning with "
+            "https://chat.whatsapp.com/."
+        )
+
+    now = now_utc_iso()
+
+    if existing:
+        cur.execute("""
+            UPDATE staff_whatsapp_group_links
+            SET invite_link=?,
+                is_visible=?,
+                updated_at=?
+            WHERE id=?
+        """, (
+            invite_link,
+            int(bool(is_visible)),
+            now,
+            existing["id"]
+        ))
+        return "UPDATED"
+
+    cur.execute("""
+        INSERT INTO staff_whatsapp_group_links(
+            link_type,
+            manager_id,
+            invite_link,
+            is_visible,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?)
+    """, (
+        link_type,
+        int(manager_id) if manager_id is not None else None,
+        invite_link,
+        int(bool(is_visible)),
+        now,
+        now
+    ))
+
+    return "CREATED"
+
+
+@app.get('/admin/tutor-whatsapp-groups')
+@require_high_admin
+def admin_tutor_whatsapp_groups():
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            tm.id,
+            tm.full_name,
+            tm.phone,
+            COUNT(DISTINCT mt.tutor_id) AS tutor_count
+        FROM tutor_managers tm
+        LEFT JOIN manager_tutors mt
+          ON mt.manager_id=tm.id
+        GROUP BY tm.id, tm.full_name, tm.phone
+        ORDER BY tm.full_name
+    """)
+    managers = cur.fetchall()
+
+    cur.execute("""
+        SELECT *
+        FROM staff_whatsapp_group_links
+        ORDER BY
+            CASE link_type
+                WHEN 'OFFICIAL_TUTORS' THEN 1
+                WHEN 'OFFICIAL_MANAGERS' THEN 2
+                WHEN 'MANAGER_TEAM' THEN 3
+                ELSE 4
+            END,
+            manager_id,
+            id
+    """)
+    stored_links = cur.fetchall()
+    conn.close()
+
+    official_tutors = None
+    manager_link_map = {}
+
+    for row in stored_links:
+        link_type = str(row["link_type"] or "").upper()
+
+        if link_type == "OFFICIAL_TUTORS" and row["manager_id"] is None:
+            official_tutors = row
+        elif link_type == "MANAGER_TEAM" and row["manager_id"] is not None:
+            manager_link_map[int(row["manager_id"])] = row
+
+    def build_global_group_form(heading, description, link_type, row):
+        current_link = row["invite_link"] if row else ""
+
+        checked = (
+            "checked"
+            if (
+                not row
+                or int(row["is_visible"] or 0) == 1
+            )
+            else ""
+        )
+
+        status_html = (
+            "<span class='chip active'>Configured</span>"
+            if current_link
+            else "<span class='chip'>Not configured</span>"
+        )
+
+        return f"""
+        <div class="card soft"
+             style="border-left:5px solid #25D366;min-width:0">
+
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                gap:10px;
+                flex-wrap:wrap;
+                align-items:center;
+            ">
+                <div>
+                    <h2 style="margin:0 0 4px 0">
+                        {escape(heading)}
+                    </h2>
+
+                    <div class="mini muted">
+                        {escape(description)}
+                    </div>
+                </div>
+
+                {status_html}
+            </div>
+
+            <form method="post"
+                  action="{url_for('admin_staff_whatsapp_group_save_global')}"
+                  style="margin-top:12px">
+
+                <input type="hidden"
+                       name="link_type"
+                       value="{escape(link_type, quote=True)}">
+
+                <label>WhatsApp Group Invite Link</label>
+
+                <input type="url"
+                       name="invite_link"
+                       value="{escape(current_link or '', quote=True)}"
+                       placeholder="https://chat.whatsapp.com/..."
+                       autocomplete="off">
+
+                <label style="
+                    display:flex;
+                    gap:8px;
+                    align-items:center;
+                    margin-top:9px;
+                    font-weight:700;
+                ">
+                    <input type="checkbox"
+                           name="is_visible"
+                           value="1"
+                           {checked}
+                           style="width:auto">
+                    Show this group in the portal
+                </label>
+
+                <div class="mini muted"
+                     style="margin-top:7px">
+                    Paste a new link and save whenever the invite changes.
+                    Leave the link blank and save to remove it.
+                </div>
+
+                <button class="btn success"
+                        style="margin-top:10px">
+                    Save Group Link
+                </button>
+            </form>
+        </div>
+        """
+
+    manager_rows = ""
+
+    for manager in managers:
+        manager_id = int(manager["id"])
+        row = manager_link_map.get(manager_id)
+
+        current_link = row["invite_link"] if row else ""
+
+        checked = (
+            "checked"
+            if (
+                not row
+                or int(row["is_visible"] or 0) == 1
+            )
+            else ""
+        )
+
+        status_html = (
+            "<span class='chip active'>Configured</span>"
+            if current_link
+            else "<span class='chip'>No link</span>"
+        )
+
+        open_group_html = ""
+
+        if current_link:
+            open_group_html = f"""
+            <a class="btn mini"
+               href="{escape(current_link, quote=True)}"
+               target="_blank"
+               rel="noopener">
+                Open Group
+            </a>
+            """
+
+        manager_rows += f"""
+        <tr>
+            <td style="min-width:210px">
+                <strong>
+                    {escape(manager["full_name"] or "")}
+                </strong>
+
+                <div class="mini muted">
+                    {int(manager["tutor_count"] or 0)}
+                    assigned tutor(s)
+                </div>
+            </td>
+
+            <td style="min-width:420px">
+                <form method="post"
+                      action="{url_for(
+                          'admin_staff_whatsapp_group_save_manager',
+                          manager_id=manager_id
+                      )}">
+
+                    <input type="url"
+                           name="invite_link"
+                           value="{escape(current_link or '', quote=True)}"
+                           placeholder="https://chat.whatsapp.com/..."
+                           autocomplete="off">
+
+                    <label style="
+                        display:flex;
+                        gap:7px;
+                        align-items:center;
+                        margin-top:6px;
+                        font-size:12px;
+                        font-weight:700;
+                    ">
+                        <input type="checkbox"
+                               name="is_visible"
+                               value="1"
+                               {checked}
+                               style="width:auto">
+                        Show to this Tutor Manager and assigned tutors
+                    </label>
+
+                    <div style="
+                        display:flex;
+                        gap:7px;
+                        flex-wrap:wrap;
+                        margin-top:7px;
+                    ">
+                        <button class="btn mini success">
+                            Save
+                        </button>
+
+                        {open_group_html}
+                    </div>
+                </form>
+            </td>
+
+            <td>
+                {status_html}
+            </td>
+        </tr>
+        """
+
+    if not manager_rows:
+        manager_rows = """
+        <tr>
+            <td colspan="3">
+                No Tutor Managers are currently available.
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <div style="
+            display:flex;
+            justify-content:space-between;
+            gap:12px;
+            flex-wrap:wrap;
+            align-items:flex-start;
+        ">
+            <div>
+                <h1 style="margin-bottom:4px">
+                    Tutor WhatsApp Groups
+                </h1>
+
+                <div class="mini muted">
+                    Manage official staff groups and Tutor Manager team groups.
+                </div>
+            </div>
+
+            <span class="chip active">
+                High Admin
+            </span>
+        </div>
+
+        <div class="grid"
+             style="
+                 grid-template-columns:repeat(auto-fit,minmax(320px,1fr));
+                 gap:12px;
+                 margin-top:14px;
+             ">
+
+            {build_global_group_form(
+                "Official Tutors Group",
+                "Shown to every active tutor.",
+                "OFFICIAL_TUTORS",
+                official_tutors
+            )}
+
+        </div>
+    </section>
+
+    <section class="card">
+        <h2>Tutor Manager Team Groups</h2>
+
+        <div class="mini muted"
+             style="margin-bottom:12px">
+            Each group is shown to that Tutor Manager and tutors currently
+            assigned to that manager.
+        </div>
+
+        <div class="scroll-x">
+            <table style="min-width:850px">
+                <thead>
+                    <tr>
+                        <th>Tutor Manager</th>
+                        <th>Team WhatsApp Group</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {manager_rows}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page(
+        "Tutor WhatsApp Groups",
+        body
+    )
+
+
+@app.post('/admin/tutor-whatsapp-groups/global/save')
+@require_high_admin
+def admin_staff_whatsapp_group_save_global():
+    r = require_admin()
+    if r:
+        return r
+
+    link_type = request.form.get(
+        "link_type",
+        ""
+    ).strip().upper()
+
+    invite_link = request.form.get(
+        "invite_link",
+        ""
+    ).strip()
+
+    is_visible = (
+        1
+        if request.form.get("is_visible") == "1"
+        else 0
+    )
+
+    if link_type != "OFFICIAL_TUTORS":
+        return page(
+            "Invalid Group",
+            card_msg(
+                "The selected staff WhatsApp group is invalid."
+            )
+        )
+
+    conn = get_db()
+
+    try:
+        upsert_staff_whatsapp_group_link(
+            conn,
+            link_type,
+            invite_link,
+            manager_id=None,
+            is_visible=is_visible
+        )
+        conn.commit()
+    except ValueError as exc:
+        conn.rollback()
+        conn.close()
+        return page(
+            "Invalid WhatsApp Link",
+            card_msg(
+                escape(str(exc))
+            )
+        )
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+
+    conn.close()
+
+    return redirect(
+        url_for(
+            "admin_tutor_whatsapp_groups"
+        )
+    )
+
+
+@app.post('/admin/tutor-whatsapp-groups/manager/<int:manager_id>/save')
+@require_high_admin
+def admin_staff_whatsapp_group_save_manager(manager_id):
+    r = require_admin()
+    if r:
+        return r
+
+    invite_link = request.form.get(
+        "invite_link",
+        ""
+    ).strip()
+
+    is_visible = (
+        1
+        if request.form.get("is_visible") == "1"
+        else 0
+    )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id
+        FROM tutor_managers
+        WHERE id=?
+        LIMIT 1
+    """, (manager_id,))
+
+    if not cur.fetchone():
+        conn.close()
+        return page(
+            "Tutor Manager Not Found",
+            card_msg(
+                "The selected Tutor Manager could not be found."
+            )
+        )
+
+    try:
+        upsert_staff_whatsapp_group_link(
+            conn,
+            "MANAGER_TEAM",
+            invite_link,
+            manager_id=manager_id,
+            is_visible=is_visible
+        )
+        conn.commit()
+    except ValueError as exc:
+        conn.rollback()
+        conn.close()
+        return page(
+            "Invalid WhatsApp Link",
+            card_msg(
+                escape(str(exc))
+            )
+        )
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+
+    conn.close()
+
+    return redirect(
+        url_for(
+            "admin_tutor_whatsapp_groups"
+        )
+    )
+
+
 @app.get('/admin/groups')
 @require_high_admin
 def admin_groups():
@@ -51319,17 +52060,35 @@ def manager_session_links():
 
 @app.get('/manager/whatsapp-groups')
 def manager_whatsapp_groups():
-
     r = require_manager()
     if r:
         return r
 
-    manager_id = session.get("manager_id")
-    month = manager_get_month()
+    manager_id = int(
+        session.get(
+            "manager_id"
+        )
+    )
 
     conn = get_db()
     cur = conn.cursor()
 
+    # This Tutor Manager sees only their own tutor-team group.
+    cur.execute("""
+        SELECT invite_link
+        FROM staff_whatsapp_group_links
+        WHERE link_type='MANAGER_TEAM'
+          AND manager_id=?
+          AND is_visible=1
+        ORDER BY id DESC
+        LIMIT 1
+    """, (
+        manager_id,
+    ))
+
+    manager_team_group = cur.fetchone()
+
+    # Existing class/subject groups for tutors assigned to this manager.
     cur.execute("""
         SELECT DISTINCT
             s.grade,
@@ -51338,34 +52097,113 @@ def manager_whatsapp_groups():
             g.month,
             t.full_name AS tutor_name
         FROM manager_tutors mt
-        JOIN tutors t ON t.id = mt.tutor_id
-        JOIN tutor_subjects ts ON ts.tutor_id = t.id
-        JOIN subjects s ON s.id = ts.subject_id
-        JOIN groups g ON g.subject_id = s.id
-        WHERE mt.manager_id = ?
-          AND g.month = 'ALL'
-          AND COALESCE(g.is_visible, 1) = 1
+        JOIN tutors t
+          ON t.id=mt.tutor_id
+        JOIN tutor_subjects ts
+          ON ts.tutor_id=t.id
+        JOIN subjects s
+          ON s.id=ts.subject_id
+        JOIN groups g
+          ON g.subject_id=s.id
+        WHERE mt.manager_id=?
+          AND g.month='ALL'
+          AND COALESCE(g.is_visible,1)=1
           AND g.invite_link IS NOT NULL
-          AND TRIM(g.invite_link) != ''
-        ORDER BY s.grade, s.name, t.full_name
-    """, (manager_id,))
+          AND TRIM(g.invite_link)!=''
+        ORDER BY
+            s.grade,
+            s.name,
+            t.full_name
+    """, (
+        manager_id,
+    ))
 
     rows = cur.fetchall()
     conn.close()
 
-    group_cards = ""
+    team_group_html = ""
+
+    if manager_team_group:
+        team_group_html = f"""
+        <div class="card soft"
+             style="
+                 border-left:5px solid #1b5e20;
+                 margin-bottom:12px;
+             ">
+
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                gap:12px;
+                flex-wrap:wrap;
+            ">
+                <div>
+                    <h3 style="margin:0 0 4px 0">
+                        My Tutor Team Group
+                    </h3>
+
+                    <div class="mini muted">
+                        This group is also shown to tutors currently assigned to you.
+                    </div>
+                </div>
+
+                <a class="btn"
+                   href="{escape(
+                       manager_team_group['invite_link'],
+                       quote=True
+                   )}"
+                   target="_blank"
+                   rel="noopener"
+                   style="
+                       background:#25D366;
+                       color:#ffffff;
+                   ">
+                    Join Team Group
+                </a>
+            </div>
+        </div>
+        """
+    else:
+        team_group_html = """
+        <div class="card soft"
+             style="
+                 border-left:5px solid #f59e0b;
+                 margin-bottom:12px;
+             ">
+            Your Tutor Team WhatsApp group link is not available yet.
+        </div>
+        """
+
+    subject_cards = ""
 
     for row in rows:
-        grade_text = grade_label(row["grade"])
-        subject_name = row["subject_name"] or ""
-        tutor_name = row["tutor_name"] or "Assigned tutor"
-        invite_link = row["invite_link"] or ""
+        grade_text = grade_label(
+            row["grade"]
+        )
 
-        group_cards += f"""
-        <div class="card soft" style="
-            border-left:5px solid #25D366;
-            margin-bottom:12px;
-        ">
+        subject_name = (
+            row["subject_name"]
+            or ""
+        )
+
+        tutor_name = (
+            row["tutor_name"]
+            or "Assigned tutor"
+        )
+
+        invite_link = (
+            row["invite_link"]
+            or ""
+        )
+
+        subject_cards += f"""
+        <div class="card soft"
+             style="
+                 border-left:5px solid #25D366;
+                 margin-bottom:12px;
+             ">
+
             <div style="
                 display:flex;
                 justify-content:space-between;
@@ -51374,37 +52212,40 @@ def manager_whatsapp_groups():
                 align-items:center;
             ">
                 <div>
-                    <h3 style="margin:0 0 4px 0;">
-                        {escape(grade_text)} - {escape(subject_name)}
+                    <h3 style="margin:0 0 4px 0">
+                        {escape(grade_text)}
+                        -
+                        {escape(subject_name)}
                     </h3>
 
                     <div class="mini muted">
-                        Tutor: {escape(tutor_name)}
-                    </div>
-
-                    <div class="mini muted">
-                        Link type: Persistent group link
+                        Tutor:
+                        {escape(tutor_name)}
                     </div>
                 </div>
 
                 <a class="btn"
-                   href="{escape(invite_link, quote=True)}"
+                   href="{escape(
+                       invite_link,
+                       quote=True
+                   )}"
                    target="_blank"
                    rel="noopener"
-                   style="background:#25D366;color:white;">
-                    Join WhatsApp Group
+                   style="
+                       background:#25D366;
+                       color:white;
+                   ">
+                    Join Class Group
                 </a>
             </div>
         </div>
         """
 
-    if not group_cards:
-        group_cards = """
-        <div class="card soft" style="border-left:5px solid #f59e0b;">
-            <h3>No WhatsApp group links found</h3>
-            <p class="mini muted">
-                There are no visible WhatsApp group links for the subjects managed by you.
-            </p>
+    if not subject_cards:
+        subject_cards = """
+        <div class="card soft"
+             style="border-left:5px solid #f59e0b">
+            No class WhatsApp group links are available for your assigned tutors.
         </div>
         """
 
@@ -51414,18 +52255,29 @@ def manager_whatsapp_groups():
     <section class="card">
         <h1>WhatsApp Groups</h1>
 
-        <p class="mini muted">
-            These are the WhatsApp groups for the subjects linked to the tutors you are managing.
-            Only your assigned subjects are shown here.
-        </p>
+        <h2 style="margin-top:14px">
+            My Tutor Team Group
+        </h2>
 
-        <div style="margin-top:14px;">
-            {group_cards}
+        {team_group_html}
+
+        <h2 style="margin-top:22px">
+            Class Groups
+        </h2>
+
+        <div class="mini muted"
+             style="margin-bottom:10px">
+            Class groups linked to tutors assigned to you.
         </div>
+
+        {subject_cards}
     </section>
     """
 
-    return page("Tutor Manager WhatsApp Groups", body)    
+    return page(
+        "Tutor Manager WhatsApp Groups",
+        body
+    )
     
 @app.get('/manager/tracker/history')
 def manager_tracker_history():
