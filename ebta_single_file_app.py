@@ -29593,12 +29593,36 @@ def tutor_session_attendance(sid: int):
             )
 
         present_ids = set()
+        absent_ids = set()
+        unmarked_names = []
 
-        for value in request.form.getlist("present"):
-            try:
-                present_ids.add(int(value))
-            except Exception:
-                pass
+        for st in studs:
+            status = request.form.get(
+                f"attendance_{st['id']}",
+                ""
+            ).strip().lower()
+
+            if status == "present":
+                present_ids.add(int(st["id"]))
+
+            elif status == "absent":
+                absent_ids.add(int(st["id"]))
+
+            else:
+                unmarked_names.append(
+                    st["full_name"]
+                    or f"Learner {st['id']}"
+                )
+
+        if unmarked_names:
+            conn.close()
+
+            return page(
+                "Attendance Incomplete",
+                card_msg(
+                    "Please mark every learner as Present or Absent before saving."
+                )
+            )
 
         # Record that this class happened.
         # The actual date can be in the next month, but the academic month remains attendance_month.
@@ -29668,6 +29692,19 @@ def tutor_session_attendance(sid: int):
 
     already = {row["student_id"] for row in cur.fetchall()}
 
+    cur.execute("""
+        SELECT 1
+        FROM attendance_sessions
+        WHERE session_id = ?
+          AND date = ?
+        LIMIT 1
+    """, (sid, date_str))
+
+    selected_date_captured = (
+        cur.fetchone()
+        is not None
+    )
+
     # Load captured class dates for this session and selected academic month.
     cur.execute("""
         SELECT date
@@ -29684,21 +29721,53 @@ def tutor_session_attendance(sid: int):
     rows = []
 
     for st in studs:
-        checked = "checked" if st["id"] in already else ""
+        student_id = int(st["id"])
+
+        present_checked = ""
+        absent_checked = ""
+
+        if selected_date_captured:
+            if student_id in already:
+                present_checked = "checked"
+            else:
+                absent_checked = "checked"
 
         rows.append(f"""
-        <tr>
+        <tr class="attendance-row"
+            data-student-id="{student_id}">
             <td>
-                {escape(st['full_name'])}
-                <div class="mini muted">{escape(st['phone_whatsapp'] or '—')}</div>
+                <strong>{escape(st['full_name'])}</strong>
+                <div class="mini muted">
+                    {escape(st['phone_whatsapp'] or '—')}
+                </div>
             </td>
 
-            <td style="text-align:center">
-                <input type="checkbox"
-                       name="present"
-                       value="{st['id']}"
-                       {checked}
-                       style="width:20px;height:20px">
+            <td>
+                <div class="attendance-options">
+                    <label class="attendance-choice attendance-present">
+                        <input type="radio"
+                               name="attendance_{student_id}"
+                               value="present"
+                               {present_checked}
+                               onchange="updateAttendanceSummary()">
+                        <span>Present</span>
+                    </label>
+
+                    <label class="attendance-choice attendance-absent">
+                        <input type="radio"
+                               name="attendance_{student_id}"
+                               value="absent"
+                               {absent_checked}
+                               onchange="updateAttendanceSummary()">
+                        <span>Absent</span>
+                    </label>
+
+                    <button type="button"
+                            class="btn mini secondary"
+                            onclick="unmarkLearner({student_id})">
+                        Unmark
+                    </button>
+                </div>
             </td>
         </tr>
         """)
@@ -29734,12 +29803,48 @@ def tutor_session_attendance(sid: int):
         """
         if not rows
         else f"""
+        <div class="attendance-toolbar">
+            <div class="attendance-actions">
+                <button type="button"
+                        class="btn success mini"
+                        onclick="markAllAttendance('present')">
+                    Mark All Present
+                </button>
+
+                <button type="button"
+                        class="btn danger mini"
+                        onclick="markAllAttendance('absent')">
+                    Mark All Absent
+                </button>
+
+                <button type="button"
+                        class="btn secondary mini"
+                        onclick="clearAllAttendance()">
+                    Unmark All
+                </button>
+            </div>
+
+            <div class="attendance-summary">
+                <span class="attendance-count attendance-count-present">
+                    Present <strong id="presentCount">0</strong>
+                </span>
+
+                <span class="attendance-count attendance-count-absent">
+                    Absent <strong id="absentCount">0</strong>
+                </span>
+
+                <span class="attendance-count attendance-count-unmarked">
+                    Unmarked <strong id="unmarkedCount">0</strong>
+                </span>
+            </div>
+        </div>
+
         <div class="scroll-x">
-            <table>
+            <table class="attendance-table">
                 <thead>
                     <tr>
                         <th>Learner</th>
-                        <th>Present</th>
+                        <th>Attendance</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -29751,6 +29856,119 @@ def tutor_session_attendance(sid: int):
     )
 
     body = f"""
+    <style>
+        .attendance-toolbar {{
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:12px;
+            flex-wrap:wrap;
+            padding:12px;
+            margin-bottom:12px;
+            border:1px solid #d9e5dc;
+            border-radius:14px;
+            background:#f8fbf9;
+        }}
+
+        .attendance-actions,
+        .attendance-summary {{
+            display:flex;
+            align-items:center;
+            gap:8px;
+            flex-wrap:wrap;
+        }}
+
+        .attendance-count {{
+            display:inline-flex;
+            align-items:center;
+            gap:6px;
+            padding:7px 10px;
+            border-radius:999px;
+            font-size:12px;
+            font-weight:700;
+            border:1px solid #dde5df;
+        }}
+
+        .attendance-count-present {{
+            background:#f0fdf4;
+            border-color:#bbf7d0;
+            color:#166534;
+        }}
+
+        .attendance-count-absent {{
+            background:#fef2f2;
+            border-color:#fecaca;
+            color:#991b1b;
+        }}
+
+        .attendance-count-unmarked {{
+            background:#fffbeb;
+            border-color:#fde68a;
+            color:#7c5a00;
+        }}
+
+        .attendance-options {{
+            display:flex;
+            align-items:center;
+            gap:8px;
+            flex-wrap:wrap;
+        }}
+
+        .attendance-choice {{
+            position:relative;
+            display:inline-flex;
+            margin:0;
+            cursor:pointer;
+        }}
+
+        .attendance-choice input {{
+            position:absolute;
+            opacity:0;
+            pointer-events:none;
+        }}
+
+        .attendance-choice span {{
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            min-width:86px;
+            padding:8px 12px;
+            border:1px solid #d7e0da;
+            border-radius:10px;
+            background:#ffffff;
+            font-size:13px;
+            font-weight:800;
+            transition:all .15s ease;
+        }}
+
+        .attendance-present input:checked + span {{
+            background:#dcfce7;
+            border-color:#16a34a;
+            color:#166534;
+        }}
+
+        .attendance-absent input:checked + span {{
+            background:#fee2e2;
+            border-color:#dc2626;
+            color:#991b1b;
+        }}
+
+        .attendance-table td {{
+            vertical-align:middle;
+        }}
+
+        @media (max-width:700px) {{
+            .attendance-options {{
+                min-width:250px;
+            }}
+
+            .attendance-choice span {{
+                min-width:76px;
+                padding:8px 10px;
+            }}
+        }}
+    </style>
+
     <a class="btn mini secondary" href="/tutor">
         ← Back to Tutor Dashboard
     </a>
@@ -29762,25 +29980,16 @@ def tutor_session_attendance(sid: int):
             {grade_label(se['grade'])} — {escape(se['subject_name'])}
         </p>
 
-        <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:12px">
+        <div class="card soft"
+             style="border-left:5px solid #1b5e20;margin-bottom:12px">
             <h3>Academic Month</h3>
-            <p class="mini muted">
-                You are capturing attendance for <strong>{pretty_month_label(attendance_month)}</strong>.
-                The actual session date may fall within this month or within the first 7 days of the next month.
-            </p>
-            <p class="mini muted">
-                Allowed date range:
-                <strong>{month_start.strftime('%d %b %Y')}</strong>
-                to
-                <strong>{grace_end.strftime('%d %b %Y')}</strong>
-            </p>
-        </div>
 
-        <div class="card soft" style="border-left:5px solid #f59e0b;margin-bottom:12px">
-            <h3>Important</h3>
             <p class="mini muted">
-                If this is a May session happening on 1 June, first switch your tutor dashboard month to May,
-                then select 1 June as the session date here.
+                <strong>{pretty_month_label(attendance_month)}</strong>
+                ·
+                {month_start.strftime('%d %b %Y')}
+                to
+                {grace_end.strftime('%d %b %Y')}
             </p>
         </div>
 
@@ -29804,8 +30013,13 @@ def tutor_session_attendance(sid: int):
             </noscript>
         </form>
 
-        <form method="post">
-            <input type="hidden" name="date" value="{escape(date_str)}">
+        <form method="post"
+              id="attendanceForm"
+              onsubmit="return validateAttendanceBeforeSave(event)">
+
+            <input type="hidden"
+                   name="date"
+                   value="{escape(date_str)}">
 
             {table}
 
@@ -29816,6 +30030,119 @@ def tutor_session_attendance(sid: int):
             </button>
         </form>
     </section>
+
+    <script>
+        function attendanceRows() {{
+            return Array.from(
+                document.querySelectorAll(
+                    '.attendance-row'
+                )
+            );
+        }}
+
+        function markAllAttendance(status) {{
+            attendanceRows().forEach(function(row) {{
+                var input = row.querySelector(
+                    'input[type="radio"][value="' + status + '"]'
+                );
+
+                if (input) {{
+                    input.checked = true;
+                }}
+            }});
+
+            updateAttendanceSummary();
+        }}
+
+        function clearAllAttendance() {{
+            attendanceRows().forEach(function(row) {{
+                row.querySelectorAll(
+                    'input[type="radio"]'
+                ).forEach(function(input) {{
+                    input.checked = false;
+                }});
+            }});
+
+            updateAttendanceSummary();
+        }}
+
+        function unmarkLearner(studentId) {{
+            var row = document.querySelector(
+                '.attendance-row[data-student-id="' + studentId + '"]'
+            );
+
+            if (!row) {{
+                return;
+            }}
+
+            row.querySelectorAll(
+                'input[type="radio"]'
+            ).forEach(function(input) {{
+                input.checked = false;
+            }});
+
+            updateAttendanceSummary();
+        }}
+
+        function updateAttendanceSummary() {{
+            var present = 0;
+            var absent = 0;
+            var unmarked = 0;
+
+            attendanceRows().forEach(function(row) {{
+                var selected = row.querySelector(
+                    'input[type="radio"]:checked'
+                );
+
+                if (!selected) {{
+                    unmarked += 1;
+                }}
+                else if (selected.value === 'present') {{
+                    present += 1;
+                }}
+                else {{
+                    absent += 1;
+                }}
+            }});
+
+            var presentEl = document.getElementById('presentCount');
+            var absentEl = document.getElementById('absentCount');
+            var unmarkedEl = document.getElementById('unmarkedCount');
+
+            if (presentEl) presentEl.textContent = present;
+            if (absentEl) absentEl.textContent = absent;
+            if (unmarkedEl) unmarkedEl.textContent = unmarked;
+        }}
+
+        function validateAttendanceBeforeSave(event) {{
+            var unmarked = attendanceRows().filter(
+                function(row) {{
+                    return !row.querySelector(
+                        'input[type="radio"]:checked'
+                    );
+                }}
+            );
+
+            if (unmarked.length > 0) {{
+                alert(
+                    'Please mark every learner as Present or Absent before saving.'
+                );
+
+                if (event) {{
+                    event.preventDefault();
+                }}
+
+                return false;
+            }}
+
+            return true;
+        }}
+
+        document.addEventListener(
+            'DOMContentLoaded',
+            updateAttendanceSummary
+        );
+    </script>
     """
 
     return page("Capture Attendance", body)
