@@ -14280,6 +14280,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 ("🏠 Dashboard", url_for('tutor_home')),
                 ("👤 My Profile", url_for('tutor_profile_page')),
                 ("📊 Work Progress", url_for('tutor_work_progress')),
+                ("⭐ Student Reviews", url_for('tutor_student_reviews')),
                 ("👨‍🏫 One-on-One Sessions", "/tutor/one-on-one"),
                 ("⬆️ Upload Material", url_for('tutor_home') + "#upload"),
                 ("📚 My Library", url_for('tutor_uploads_library')),
@@ -30248,6 +30249,440 @@ def tutor_rank_ordinal(value):
         suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
 
     return f"{n}{suffix}"
+
+
+
+
+@app.get('/tutor/reviews')
+def tutor_student_reviews():
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = int(is_tutor())
+
+    month = request.args.get(
+        "month",
+        ""
+    ).strip()
+
+    if not month:
+        month = get_active_month("tutor")
+
+    try:
+        datetime.datetime.strptime(
+            month,
+            "%Y-%m"
+        )
+    except Exception:
+        month = get_active_month("tutor")
+
+    subject_filter = request.args.get(
+        "subject_id",
+        ""
+    ).strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT
+            s.id,
+            s.name,
+            s.grade
+        FROM tutor_subjects ts
+        JOIN subjects s
+          ON s.id=ts.subject_id
+        WHERE ts.tutor_id=?
+        ORDER BY
+            CAST(
+                REPLACE(
+                    s.grade,
+                    'G',
+                    ''
+                )
+                AS INTEGER
+            ),
+            s.name
+    """, (tid,))
+
+    assigned_subjects = cur.fetchall()
+
+    allowed_subject_ids = {
+        int(row["id"])
+        for row in assigned_subjects
+    }
+
+    selected_subject_id = None
+
+    if subject_filter:
+        try:
+            candidate_subject_id = int(subject_filter)
+
+            if candidate_subject_id in allowed_subject_ids:
+                selected_subject_id = candidate_subject_id
+
+        except Exception:
+            selected_subject_id = None
+
+    subject_options = (
+        '<option value="">All Subjects</option>'
+    )
+
+    for subject in assigned_subjects:
+        selected = (
+            "selected"
+            if (
+                selected_subject_id is not None
+                and int(subject["id"]) == selected_subject_id
+            )
+            else ""
+        )
+
+        subject_options += f"""
+        <option value="{int(subject['id'])}" {selected}>
+            {escape(grade_label(subject['grade']))}
+            -
+            {escape(subject['name'] or '')}
+        </option>
+        """
+
+    where = [
+        "ts.tutor_id=?",
+        "lr.month=?"
+    ]
+
+    params = [
+        tid,
+        month
+    ]
+
+    if selected_subject_id is not None:
+        where.append("lr.subject_id=?")
+        params.append(selected_subject_id)
+
+    where_sql = " AND ".join(where)
+
+    # Tutor-facing review data excludes learner profile details.
+    cur.execute(f"""
+        SELECT
+            lr.id,
+            lr.month,
+            lr.rating,
+            COALESCE(lr.comment, '') AS comment,
+            sub.id AS subject_id,
+            sub.name AS subject_name,
+            sub.grade AS subject_grade
+        FROM lesson_ratings lr
+        JOIN subjects sub
+          ON sub.id=lr.subject_id
+        JOIN tutor_subjects ts
+          ON ts.subject_id=lr.subject_id
+        WHERE {where_sql}
+        ORDER BY
+            CAST(
+                REPLACE(
+                    sub.grade,
+                    'G',
+                    ''
+                )
+                AS INTEGER
+            ),
+            sub.name,
+            lr.id DESC
+    """, params)
+
+    reviews = cur.fetchall()
+
+    cur.execute(f"""
+        SELECT
+            sub.id AS subject_id,
+            sub.name AS subject_name,
+            sub.grade AS subject_grade,
+            COUNT(lr.id) AS review_count,
+            ROUND(AVG(lr.rating), 1) AS average_rating
+        FROM lesson_ratings lr
+        JOIN subjects sub
+          ON sub.id=lr.subject_id
+        JOIN tutor_subjects ts
+          ON ts.subject_id=lr.subject_id
+        WHERE {where_sql}
+        GROUP BY
+            sub.id,
+            sub.name,
+            sub.grade
+        ORDER BY
+            CAST(
+                REPLACE(
+                    sub.grade,
+                    'G',
+                    ''
+                )
+                AS INTEGER
+            ),
+            sub.name
+    """, params)
+
+    subject_summaries = cur.fetchall()
+
+    conn.close()
+
+    total_reviews = len(reviews)
+
+    overall_average = 0
+
+    if reviews:
+        overall_average = round(
+            sum(
+                int(row["rating"] or 0)
+                for row in reviews
+            )
+            / total_reviews,
+            1
+        )
+
+    comments_count = sum(
+        1
+        for row in reviews
+        if str(row["comment"] or "").strip()
+    )
+
+    summary_cards = ""
+
+    for item in subject_summaries:
+        average = (
+            item["average_rating"]
+            if item["average_rating"] is not None
+            else 0
+        )
+
+        try:
+            rounded_rating = int(
+                round(float(average))
+            )
+        except Exception:
+            rounded_rating = 0
+
+        rounded_rating = max(
+            0,
+            min(5, rounded_rating)
+        )
+
+        stars = (
+            "★" * rounded_rating
+            + "☆" * (5 - rounded_rating)
+        )
+
+        summary_cards += f"""
+        <div class="card soft"
+             style="
+                 margin:0;
+                 border-left:5px solid #e3ad24;
+             ">
+
+            <div class="mini muted">
+                {escape(grade_label(item["subject_grade"]))}
+            </div>
+
+            <strong>
+                {escape(item["subject_name"] or "")}
+            </strong>
+
+            <div style="
+                margin-top:8px;
+                font-size:18px;
+                font-weight:800;
+            ">
+                {escape(stars)}
+            </div>
+
+            <div class="mini muted"
+                 style="margin-top:4px">
+                {average}/5
+                ·
+                {int(item["review_count"] or 0)}
+                review(s)
+            </div>
+        </div>
+        """
+
+    if not summary_cards:
+        summary_cards = """
+        <div class="empty">
+            No reviews for this month.
+        </div>
+        """
+
+    review_cards = ""
+
+    for review in reviews:
+        rating = int(review["rating"] or 0)
+        rating = max(0, min(5, rating))
+
+        stars = (
+            "★" * rating
+            + "☆" * (5 - rating)
+        )
+
+        comment = str(
+            review["comment"]
+            or ""
+        ).strip()
+
+        comment_html = (
+            escape(comment)
+            if comment
+            else "<span class='muted'>No comment added.</span>"
+        )
+
+        review_cards += f"""
+        <div class="card soft"
+             style="
+                 margin:0;
+                 border-left:5px solid #1b5e20;
+             ">
+
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                align-items:flex-start;
+                gap:10px;
+                flex-wrap:wrap;
+            ">
+                <div>
+                    <strong>
+                        {escape(grade_label(review["subject_grade"]))}
+                        -
+                        {escape(review["subject_name"] or "")}
+                    </strong>
+
+                    <div class="mini muted"
+                         style="margin-top:3px">
+                        Anonymous review
+                    </div>
+                </div>
+
+                <span class="chip active">
+                    {escape(stars)}
+                    {rating}/5
+                </span>
+            </div>
+
+            <div style="
+                margin-top:12px;
+                line-height:1.55;
+                white-space:pre-wrap;
+            ">
+                {comment_html}
+            </div>
+        </div>
+        """
+
+    if not review_cards:
+        review_cards = """
+        <div class="empty">
+            No student reviews found for the selected month.
+        </div>
+        """
+
+    body = f"""
+    <section class="card">
+
+        <div style="
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:12px;
+            flex-wrap:wrap;
+        ">
+            <div>
+                <h1 style="margin-bottom:4px">
+                    Student Reviews
+                </h1>
+
+                <div class="mini muted">
+                    {escape(pretty_month_label(month))}
+                </div>
+            </div>
+
+            <span class="chip">
+                Anonymous
+            </span>
+        </div>
+
+        <form method="get"
+              class="toolbar"
+              style="
+                  align-items:end;
+                  margin-top:14px;
+              ">
+
+            <div>
+                <label>Month</label>
+
+                <input type="month"
+                       name="month"
+                       value="{escape(month, quote=True)}">
+            </div>
+
+            <div style="min-width:240px">
+                <label>Subject</label>
+
+                <select name="subject_id">
+                    {subject_options}
+                </select>
+            </div>
+
+            <button class="btn mini success">
+                View
+            </button>
+
+            <a class="btn mini secondary"
+               href="{url_for('tutor_student_reviews')}">
+                Clear
+            </a>
+        </form>
+
+        <div class="stats"
+             style="margin-top:14px">
+            {stat("Reviews", total_reviews)}
+            {stat("Average Rating", str(overall_average) + "/5")}
+            {stat("Comments", comments_count)}
+        </div>
+
+    </section>
+
+    <section class="card">
+        <h2>Subjects</h2>
+
+        <div class="grid"
+             style="
+                 grid-template-columns:
+                     repeat(
+                         auto-fit,
+                         minmax(210px, 1fr)
+                     );
+                 gap:10px;
+             ">
+            {summary_cards}
+        </div>
+    </section>
+
+    <section class="card">
+        <h2>Reviews</h2>
+
+        <div class="grid"
+             style="gap:10px">
+            {review_cards}
+        </div>
+    </section>
+    """
+
+    return page(
+        "Student Reviews",
+        body
+    )
 
 
 def tutor_work_progress_data(tutor_id, month):
