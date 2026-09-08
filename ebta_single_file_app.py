@@ -33136,8 +33136,39 @@ def admin_email_notifications():
         event_rows += f"""<label style='display:flex;gap:9px;align-items:center;padding:9px 10px;border:1px solid #e2e8e4;border-radius:10px;margin:0'><input type='checkbox' name='event_{escape(key,quote=True)}' value='1' {checked} style='width:auto'><span>{escape(label)}</span></label>"""
     cur.execute("SELECT status,COUNT(*) AS c FROM email_queue GROUP BY status")
     counts={row["status"]:int(row["c"] or 0) for row in cur.fetchall()}
-    cur.execute("""SELECT id,recipient_email,subject,event_key,status,retry_count,last_error,created_at,sent_at FROM email_queue ORDER BY id DESC LIMIT 60""")
+
+    try:
+        page_num=max(1,int(request.args.get("page",1)))
+    except Exception:
+        page_num=1
+
+    per_page=20
+    total_emails=sum(counts.values())
+    total_pages=max(1,(total_emails+per_page-1)//per_page)
+
+    if page_num>total_pages:
+        page_num=total_pages
+
+    offset=(page_num-1)*per_page
+
+    cur.execute("""
+        SELECT id,recipient_email,subject,event_key,status,retry_count,
+               last_error,created_at,sent_at
+        FROM email_queue
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?
+    """,(per_page,offset))
+
     recent=cur.fetchall(); conn.close()
+
+    email_pagination=pagination_controls(
+        "/admin/email-notifications",
+        page_num,
+        total_pages
+    )
+
+    showing_from=offset+1 if total_emails else 0
+    showing_to=min(offset+len(recent),total_emails)
     queue_rows=""
     for row in recent:
         cls="active" if row["status"]=="SENT" else "lapsed" if row["status"]=="FAILED" else "pending"
@@ -33159,7 +33190,33 @@ def admin_email_notifications():
     <div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(220px,1fr))'><div class='card soft'><strong>SMTP Host</strong><div class='mini muted'>{escape(os.environ.get('EBTA_SMTP_HOST','smtp-relay.brevo.com'))}</div></div><div class='card soft'><strong>SMTP Username</strong><div class='mini muted'>{'Configured' if os.environ.get('EBTA_SMTP_USERNAME') else 'Not configured'}</div></div><div class='card soft'><strong>SMTP Password</strong><div class='mini muted'>{'Configured' if os.environ.get('EBTA_SMTP_PASSWORD') else 'Not configured'}</div></div></div>
     <form method='post' action='{url_for('admin_email_notifications_test')}' class='toolbar' style='margin-top:14px'><input type='email' name='test_email' placeholder='Email address for test' required><button class='btn'>Send Test Email</button></form>
     <form method='post' action='{url_for('admin_email_notifications_retry')}' style='margin-top:10px'><button class='btn secondary'>Retry Failed Emails</button></form></section>
-    <section class='card'><h2>Recent Emails</h2><div class='scroll-x'><table style='min-width:1050px'><thead><tr><th>ID</th><th>Recipient</th><th>Email</th><th>Status</th><th>Queued</th><th>Sent</th><th>Error</th></tr></thead><tbody>{queue_rows}</tbody></table></div></section>
+    <section class='card'>
+        <div style='display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap'>
+            <h2 style='margin:0'>Recent Emails</h2>
+            <div class='mini muted'>Showing {showing_from}-{showing_to} of {total_emails}</div>
+        </div>
+
+        {email_pagination}
+
+        <div class='scroll-x'>
+            <table style='min-width:1050px'>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Recipient</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Queued</th>
+                        <th>Sent</th>
+                        <th>Error</th>
+                    </tr>
+                </thead>
+                <tbody>{queue_rows}</tbody>
+            </table>
+        </div>
+
+        {email_pagination}
+    </section>
     """
     return page("Email Notifications",body)
 
