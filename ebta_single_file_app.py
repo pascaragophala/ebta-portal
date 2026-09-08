@@ -10,6 +10,10 @@ import threading
 import time
 import hmac
 import io
+import smtplib
+import re
+from email.message import EmailMessage
+from email.utils import formataddr
 import zipfile
 from urllib.parse import urlencode, quote_from_bytes
 from zoneinfo import ZoneInfo
@@ -1214,6 +1218,40 @@ def init_db():
         sent_at TEXT
     );
     """)
+
+    # ================= EMAIL NOTIFICATIONS =================
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS email_queue(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        recipient_email TEXT NOT NULL,
+        recipient_name TEXT,
+        subject TEXT NOT NULL,
+        text_body TEXT NOT NULL,
+        html_body TEXT,
+        event_key TEXT NOT NULL,
+        recipient_type TEXT,
+        related_type TEXT,
+        related_id TEXT,
+        dedupe_key TEXT UNIQUE,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        attempted_at TEXT,
+        sent_at TEXT
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_email_queue_status
+        ON email_queue(status, id)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_email_queue_event
+        ON email_queue(event_key, created_at)
+    """)
+
     
     
     # ================= FOLLOW UPS =================
@@ -2576,6 +2614,9 @@ def init_db():
     ensure_column(conn, "tutors", "qualification", "TEXT")
     ensure_column(conn, "tutors", "achievements", "TEXT")
     ensure_column(conn, "tutors", "about", "TEXT")
+    ensure_column(conn, "tutors", "email", "TEXT")
+    ensure_column(conn, "tutor_managers", "email", "TEXT")
+    ensure_column(conn, "academic_quality_managers", "email", "TEXT")
     
     ensure_column(conn, "tutors", "is_active", "INTEGER NOT NULL DEFAULT 1")
     ensure_column(conn, "tutors", "deleted_at", "TEXT")
@@ -5488,6 +5529,520 @@ def set_setting(key, value):
     )
     conn.commit()
     conn.close()
+
+
+
+# =============================================================
+# EMAIL NOTIFICATIONS
+# =============================================================
+
+EMAIL_NOTIFICATION_EVENTS = {
+    "enrollment_received": "Enrollment submitted",
+    "enrollment_approved": "Enrollment approved",
+    "enrollment_lapsed": "Enrollment lapsed",
+    "enrollment_pending": "Enrollment changed to pending",
+    "pop_updated_student": "Proof of Payment updated - learner",
+    "pop_updated_admission": "Proof of Payment updated - Admissions",
+    "material_uploaded": "New learning material",
+    "assignment_uploaded": "New assignment",
+    "assignment_submitted": "Assignment submitted",
+    "assignment_marked": "Assignment marked",
+    "student_message_to_tutor": "Student message to tutor",
+    "tutor_message_to_student": "Tutor message to student",
+    "student_review_received": "Student review received",
+    "tutor_application_received": "Tutor application submitted",
+    "tutor_application_status": "Tutor application status",
+    "management_application_received": "Management application submitted",
+    "management_application_status": "Management application status",
+    "acc_message_received": "ACC portal message",
+    "acc_task_assigned": "ACC task assigned",
+    "one_on_one_request_received": "One-on-One request submitted",
+    "tutor_subject_assigned": "Tutor subject assignment",
+    "tutor_manager_assigned": "Tutor Manager assignment",
+}
+
+
+def _email_setting(conn, key, default=""):
+    if conn is None:
+        return get_setting(key, default)
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM settings WHERE key=? LIMIT 1", (key,))
+    row = cur.fetchone()
+    return row["value"] if row else default
+
+
+def email_event_enabled(event_key, conn=None):
+    if demo_workspace_active():
+        return False
+    if _email_setting(conn, "email_notifications_enabled", "1") != "1":
+        return False
+    if event_key not in EMAIL_NOTIFICATION_EVENTS:
+        return True
+    return _email_setting(conn, f"email_event_{event_key}", "1") == "1"
+
+
+def normalize_email_address(value):
+    value = str(value or "").strip()
+    if not value or len(value) > 254:
+        return ""
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value):
+        return ""
+    return value
+
+
+def portal_email_base_url():
+    configured = os.environ.get("EBTA_PORTAL_BASE_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+    try:
+        root = request.url_root or ""
+        if root:
+            return root.rstrip("/")
+    except Exception:
+        pass
+    return "https://ebtaportal.co.za"
+
+
+def portal_email_url(path="/"):
+    path = str(path or "/").strip()
+    if path.startswith("http://") or path.startswith("https://"):
+        return path
+    if not path.startswith("/"):
+        path = "/" + path
+    return portal_email_base_url() + path
+
+
+def build_email_bodies(title, recipient_name="", message="", details=None,
+                       action_label="Open EBTA Portal", action_url=""):
+    recipient_name = str(recipient_name or "").strip()
+    greeting = f"Good day {recipient_name}," if recipient_name else "Good day,"
+    details = details or []
+    text_lines = [greeting, "", str(message or "").strip()]
+    detail_rows = ""
+    for label, value in details:
+        value = str(value or "").strip()
+        if not value:
+            continue
+        text_lines.append(f"{label}: {value}")
+        detail_rows += f"""
+        <tr><td style='padding:8px 10px;border-bottom:1px solid #e5e7eb;font-weight:700;width:34%'>{escape(str(label or ''))}</td>
+        <td style='padding:8px 10px;border-bottom:1px solid #e5e7eb'>{escape(value)}</td></tr>
+        """
+    if action_url:
+        text_lines += ["", f"{action_label}: {action_url}"]
+    text_lines += ["", "Kind regards,", "Early Bird Testimony Academy"]
+    text_body = "\n".join(text_lines)
+    details_html = f"<table style='width:100%;border-collapse:collapse;margin:18px 0;border:1px solid #e5e7eb'>{detail_rows}</table>" if detail_rows else ""
+    action_html = (
+        f"<div style='margin:22px 0'><a href='{escape(action_url, quote=True)}' style='display:inline-block;padding:11px 17px;border-radius:8px;background:#1b5e20;color:#fff;text-decoration:none;font-weight:700'>{escape(action_label)}</a></div>"
+        if action_url else ""
+    )
+    html_body = f"""<!doctype html><html><body style='margin:0;background:#f4f7f5;font-family:Arial,Helvetica,sans-serif;color:#1f2937'>
+    <div style='max-width:660px;margin:0 auto;padding:24px 14px'><div style='background:#fff;border:1px solid #e1e8e3;border-radius:14px;overflow:hidden'>
+    <div style='background:#123d1f;color:#fff;padding:20px 24px'><div style='font-size:12px;letter-spacing:.6px;opacity:.86'>EARLY BIRD TESTIMONY ACADEMY</div><h1 style='margin:7px 0 0;font-size:22px'>{escape(str(title or 'EBTA Notification'))}</h1></div>
+    <div style='padding:24px;line-height:1.6'><p>{escape(greeting)}</p><p>{escape(str(message or ''))}</p>{details_html}{action_html}<p style='margin-top:24px;color:#4b5563'>Kind regards,<br><strong>Early Bird Testimony Academy</strong></p></div>
+    </div></div></body></html>"""
+    return text_body, html_body
+
+
+def queue_email_notification(recipient_email, subject, message, event_key,
+                             recipient_name="", details=None, action_path="",
+                             action_label="Open EBTA Portal", recipient_type="",
+                             related_type="", related_id=None, dedupe_key=None,
+                             conn=None, force=False):
+    if demo_workspace_active():
+        return False
+    recipient_email = normalize_email_address(recipient_email)
+    if not recipient_email:
+        return False
+    if not force and not email_event_enabled(event_key, conn=conn):
+        return False
+    action_url = portal_email_url(action_path) if action_path else ""
+    text_body, html_body = build_email_bodies(
+        subject, recipient_name, message, details, action_label, action_url
+    )
+    own = conn is None
+    if own:
+        conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO email_queue(
+                recipient_email,recipient_name,subject,text_body,html_body,event_key,
+                recipient_type,related_type,related_id,dedupe_key,status,retry_count,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,'PENDING',0,?)
+        """, (
+            recipient_email, str(recipient_name or "").strip() or None,
+            str(subject or "EBTA Notification").strip(), text_body, html_body,
+            event_key, str(recipient_type or "").strip() or None,
+            str(related_type or "").strip() or None,
+            str(related_id) if related_id is not None else None,
+            str(dedupe_key or "").strip() or None, now_utc_iso()
+        ))
+        if own:
+            conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        if own:
+            conn.rollback()
+        return False
+    finally:
+        if own:
+            conn.close()
+
+
+def tutor_contact_email(conn, tutor_id):
+    cur = conn.cursor()
+    cur.execute("SELECT id,full_name,phone,email FROM tutors WHERE id=? LIMIT 1", (int(tutor_id),))
+    tutor = cur.fetchone()
+    if not tutor:
+        return None
+    email = normalize_email_address(tutor["email"])
+    if not email and tutor["phone"]:
+        cur.execute("""
+            SELECT email FROM tutor_applications
+            WHERE phone=? AND email IS NOT NULL AND TRIM(email)<>''
+            ORDER BY id DESC LIMIT 1
+        """, (tutor["phone"],))
+        row = cur.fetchone()
+        if row:
+            email = normalize_email_address(row["email"])
+    return {"id": tutor["id"], "name": tutor["full_name"], "email": email}
+
+
+def queue_email_to_tutor(conn, tutor_id, subject, message, event_key, details=None,
+                         action_path="/tutor", related_type="", related_id=None,
+                         dedupe_key=None):
+    tutor = tutor_contact_email(conn, tutor_id)
+    if not tutor or not tutor["email"]:
+        return False
+    return queue_email_notification(
+        tutor["email"], subject, message, event_key,
+        recipient_name=tutor["name"], details=details, action_path=action_path,
+        recipient_type="tutor", related_type=related_type, related_id=related_id,
+        dedupe_key=dedupe_key, conn=conn
+    )
+
+
+def queue_email_to_student(conn, student_id, subject, message, event_key, details=None,
+                           action_path="/student", related_type="", related_id=None,
+                           dedupe_key=None):
+    cur = conn.cursor()
+    cur.execute("SELECT id,full_name,email FROM students WHERE id=? LIMIT 1", (int(student_id),))
+    student = cur.fetchone()
+    if not student:
+        return False
+    return queue_email_notification(
+        student["email"], subject, message, event_key,
+        recipient_name=student["full_name"], details=details, action_path=action_path,
+        recipient_type="student", related_type=related_type, related_id=related_id,
+        dedupe_key=dedupe_key, conn=conn
+    )
+
+
+def staff_email_record(conn, role, person_id):
+    role = str(role or "").strip().upper()
+    if role == "TUTOR":
+        return tutor_contact_email(conn, person_id)
+    mapping = {
+        "ACC": "admission_content_coordinators",
+        "TUTOR_MANAGER": "tutor_managers",
+        "CAO": "caos",
+        "AQM": "academic_quality_managers",
+        "ADMISSION": "admission_coordinators",
+        "ONE_ON_ONE_MANAGER": "one_on_one_managers",
+        "HR": "human_resources",
+        "COO": "coos",
+        "CEO": "ceos",
+    }
+    table = mapping.get(role)
+    if not table:
+        return None
+    cur = conn.cursor()
+    try:
+        cur.execute(f"SELECT id,full_name,email FROM {table} WHERE id=? LIMIT 1", (int(person_id),))
+    except sqlite3.OperationalError:
+        return None
+    row = cur.fetchone()
+    if not row:
+        return None
+    return {"id": row["id"], "name": row["full_name"], "email": normalize_email_address(row["email"])}
+
+
+def queue_email_to_staff(conn, role, person_id, subject, message, event_key,
+                         details=None, action_path="/", related_type="",
+                         related_id=None, dedupe_key=None):
+    person = staff_email_record(conn, role, person_id)
+    if not person or not person["email"]:
+        return False
+    return queue_email_notification(
+        person["email"], subject, message, event_key,
+        recipient_name=person["name"], details=details, action_path=action_path,
+        recipient_type=str(role or "").lower(), related_type=related_type,
+        related_id=related_id, dedupe_key=dedupe_key, conn=conn
+    )
+
+
+def queue_enrollment_status_email(conn, enrollment_id, action):
+    action = str(action or "").strip().lower()
+    event_map = {
+        "approve": ("enrollment_approved", "Enrollment Approved", "Your EBTA enrollment has been approved."),
+        "approve_sms": ("enrollment_approved", "Enrollment Approved", "Your EBTA enrollment has been approved."),
+        "lapse": ("enrollment_lapsed", "Enrollment Lapsed", "Your EBTA enrollment status has been updated to Lapsed."),
+        "pending": ("enrollment_pending", "Enrollment Pending", "Your EBTA enrollment status has been changed to Pending."),
+    }
+    event = event_map.get(action)
+    if not event:
+        return False
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT e.id,e.student_id,e.month,e.enrollment_period_ref,e.period_start_month,e.period_end_month,
+               st.full_name,st.email,sub.name AS subject_name,sub.grade
+        FROM enrollments e JOIN students st ON st.id=e.student_id JOIN subjects sub ON sub.id=e.subject_id
+        WHERE e.id=? LIMIT 1
+    """, (int(enrollment_id),))
+    row = cur.fetchone()
+    if not row:
+        return False
+    event_key, subject_line, message = event
+    details = [("Subject", f"{grade_label(row['grade'])} - {row['subject_name']}"),
+               ("Month", pretty_month_label(row["month"]))]
+    if action in {"approve", "approve_sms"} and row["enrollment_period_ref"]:
+        cur.execute("""
+            SELECT DISTINCT sub.name,sub.grade FROM enrollments e
+            JOIN subjects sub ON sub.id=e.subject_id WHERE e.enrollment_period_ref=?
+            ORDER BY CAST(REPLACE(sub.grade,'G','') AS INTEGER),sub.name
+        """, (row["enrollment_period_ref"],))
+        subjects = [f"{grade_label(x['grade'])} - {x['name']}" for x in cur.fetchall()]
+        if subjects:
+            details[0] = ("Subjects", ", ".join(subjects))
+        if row["period_start_month"] and row["period_end_month"]:
+            details[1] = ("Period", f"{pretty_month_label(row['period_start_month'])} to {pretty_month_label(row['period_end_month'])}")
+    status_scope = (
+        row["enrollment_period_ref"]
+        if action in {"approve", "approve_sms"} and row["enrollment_period_ref"]
+        else str(row["id"])
+    )
+    return queue_email_notification(
+        row["email"], subject_line, message, event_key,
+        recipient_name=row["full_name"], details=details, action_path="/student",
+        action_label="Open Student Portal", recipient_type="student",
+        related_type="enrollment", related_id=row["id"],
+        dedupe_key=f"enrollment-status:{event_key}:{status_scope}", conn=conn
+    )
+
+
+def queue_material_student_emails(conn, material_id):
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT m.id,m.subject_id,m.tutor_id,m.month,m.title,m.kind,m.is_assignment,m.open_date,m.due_date,
+               s.name AS subject_name,s.grade,t.full_name AS tutor_name
+        FROM materials m JOIN subjects s ON s.id=m.subject_id JOIN tutors t ON t.id=m.tutor_id
+        WHERE m.id=? LIMIT 1
+    """, (int(material_id),))
+    material = cur.fetchone()
+    if not material:
+        return 0
+    is_assignment = int(material["is_assignment"] or 0) == 1 or material["kind"] == "assignment"
+    event_key = "assignment_uploaded" if is_assignment else "material_uploaded"
+    email_subject = "New Assignment" if is_assignment else "New Learning Material"
+    message = f"{material['tutor_name']} added a new assignment." if is_assignment else f"{material['tutor_name']} added new learning material."
+    details = [("Subject", f"{grade_label(material['grade'])} - {material['subject_name']}"), ("Title", material["title"])]
+    if is_assignment and material["open_date"]:
+        details.append(("Opens", material["open_date"]))
+    if is_assignment and material["due_date"]:
+        details.append(("Due", material["due_date"]))
+    cur.execute("""
+        SELECT DISTINCT st.id,st.full_name,st.email FROM enrollments e
+        JOIN students st ON st.id=e.student_id
+        WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
+          AND st.email IS NOT NULL AND TRIM(st.email)<>'' ORDER BY st.id
+    """, (material["subject_id"], material["month"]))
+    queued = 0
+    for student in cur.fetchall():
+        if queue_email_notification(
+            student["email"], email_subject, message, event_key,
+            recipient_name=student["full_name"], details=details, action_path="/student",
+            action_label="Open Student Portal", recipient_type="student",
+            related_type="material", related_id=material["id"],
+            dedupe_key=f"material:{material['id']}:student:{student['id']}:{event_key}", conn=conn
+        ):
+            queued += 1
+    return queued
+
+
+def queue_assignment_submission_email(conn, material_id, student_id):
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT m.id,m.title,m.tutor_id,s.name AS subject_name,s.grade,st.full_name AS student_name
+        FROM materials m JOIN subjects s ON s.id=m.subject_id JOIN students st ON st.id=?
+        WHERE m.id=? LIMIT 1
+    """, (int(student_id), int(material_id)))
+    row = cur.fetchone()
+    if not row:
+        return False
+    return queue_email_to_tutor(
+        conn,row["tutor_id"],"Assignment Submitted",f"{row['student_name']} submitted {row['title']}.",
+        "assignment_submitted",details=[("Learner",row["student_name"]),("Subject",f"{grade_label(row['grade'])} - {row['subject_name']}"),("Assignment",row["title"])],
+        action_path=f"/tutor/assignment/{material_id}",related_type="submission",related_id=f"{material_id}:{student_id}"
+    )
+
+
+def queue_assignment_marked_email(conn, material_id, student_id, mark=None, total=None):
+    cur=conn.cursor()
+    cur.execute("""SELECT m.id,m.title,s.name AS subject_name,s.grade FROM materials m JOIN subjects s ON s.id=m.subject_id WHERE m.id=? LIMIT 1""",(int(material_id),))
+    material=cur.fetchone()
+    if not material:
+        return False
+    details=[("Subject",f"{grade_label(material['grade'])} - {material['subject_name']}"),("Assignment",material["title"])]
+    if mark is not None:
+        value=str(mark)+(f"/{total}" if total is not None else "")
+        details.append(("Mark",value))
+    return queue_email_to_student(
+        conn, student_id, "Assignment Marked",
+        "Your assignment has been marked.", "assignment_marked",
+        details=details, action_path="/student", related_type="submission",
+        related_id=f"{material_id}:{student_id}",
+        dedupe_key=f"assignment-marked:{material_id}:{student_id}"
+    )
+
+
+def queue_student_message_tutor_email(conn, student_id, tutor_id, subject_id, message_body):
+    cur=conn.cursor()
+    cur.execute("""SELECT st.full_name AS student_name,sub.name AS subject_name,sub.grade FROM students st JOIN subjects sub ON sub.id=? WHERE st.id=? LIMIT 1""",(int(subject_id),int(student_id)))
+    row=cur.fetchone()
+    if not row:
+        return False
+    preview=str(message_body or "").strip()
+    if len(preview)>500: preview=preview[:497]+"..."
+    return queue_email_to_tutor(conn,tutor_id,"New Student Message",preview,"student_message_to_tutor",details=[("Learner",row["student_name"]),("Subject",f"{grade_label(row['grade'])} - {row['subject_name']}")],action_path="/tutor#messages",related_type="message")
+
+
+def queue_tutor_message_student_emails(conn, tutor_id, student_subject_pairs, message_body):
+    cur=conn.cursor(); cur.execute("SELECT full_name FROM tutors WHERE id=? LIMIT 1",(int(tutor_id),)); tutor=cur.fetchone(); tutor_name=tutor["full_name"] if tutor else "Your tutor"
+    seen=set(); queued=0
+    for item in student_subject_pairs:
+        try:
+            sid=int(item["student_id"] if hasattr(item,"keys") else item[0]); subid=int(item["subject_id"] if hasattr(item,"keys") else item[1])
+        except Exception:
+            continue
+        if (sid,subid) in seen: continue
+        seen.add((sid,subid))
+        cur.execute("""SELECT st.full_name,st.email,sub.name AS subject_name,sub.grade FROM students st JOIN subjects sub ON sub.id=? WHERE st.id=? LIMIT 1""",(subid,sid))
+        row=cur.fetchone()
+        if not row: continue
+        preview=str(message_body or "").strip(); preview=preview[:497]+"..." if len(preview)>500 else preview
+        if queue_email_notification(row["email"],"New Message from Your Tutor",preview,"tutor_message_to_student",recipient_name=row["full_name"],details=[("Tutor",tutor_name),("Subject",f"{grade_label(row['grade'])} - {row['subject_name']}")],action_path="/student",action_label="Open Messages",recipient_type="student",related_type="message",conn=conn): queued+=1
+    return queued
+
+
+def queue_anonymous_review_emails(conn, subject_id, month, rating, comment):
+    cur=conn.cursor(); cur.execute("SELECT name AS subject_name,grade FROM subjects WHERE id=? LIMIT 1",(int(subject_id),)); subject=cur.fetchone()
+    if not subject: return 0
+    cur.execute("SELECT DISTINCT tutor_id FROM tutor_subjects WHERE subject_id=?",(int(subject_id),)); queued=0
+    for tr in cur.fetchall():
+        details=[("Subject",f"{grade_label(subject['grade'])} - {subject['subject_name']}"),("Month",pretty_month_label(month)),("Rating",f"{rating}/5")]
+        if comment: details.append(("Comment",str(comment)[:800]))
+        if queue_email_to_tutor(conn,tr["tutor_id"],"New Student Review","A student submitted a review for one of your subjects.","student_review_received",details=details,action_path="/tutor/reviews",related_type="review"): queued+=1
+    return queued
+
+
+def queue_application_status_email(conn, table_name, app_id, application_type, status):
+    if table_name not in {"tutor_applications","management_applications"}: return False
+    cur=conn.cursor(); cur.execute(f"SELECT full_name,email FROM {table_name} WHERE id=? LIMIT 1",(int(app_id),)); row=cur.fetchone()
+    if not row: return False
+    title="Tutor Application Update" if application_type=="Tutor" else "Management Application Update"
+    event_key="tutor_application_status" if application_type=="Tutor" else "management_application_status"
+    return queue_email_notification(
+        row["email"], title,
+        f"Your {application_type.lower()} application status is now {status.title()}.",
+        event_key, recipient_name=row["full_name"],
+        details=[("Status", status.title())],
+        action_path="/", action_label="Open EBTA",
+        recipient_type="applicant",
+        related_type=application_type.lower()+"_application",
+        related_id=app_id,
+        dedupe_key=f"{table_name}:{app_id}:status:{str(status).upper()}",
+        conn=conn
+    )
+
+
+def queue_pop_update_notifications(conn, student_id, enrollment_id, edit_number, enrollment_month):
+    queue_email_to_student(conn,student_id,"Proof of Payment Updated","Your replacement Proof of Payment was saved successfully.","pop_updated_student",details=[("Enrollment Month",pretty_month_label(enrollment_month) if enrollment_month else ""),("Correction",str(edit_number))],action_path="/student/profile",related_type="enrollment",related_id=enrollment_id)
+    cur=conn.cursor(); cur.execute("SELECT full_name AS student_name,grade FROM students WHERE id=? LIMIT 1",(int(student_id),)); student=cur.fetchone()
+    cur.execute("SELECT id,full_name,email FROM admission_coordinators WHERE is_active=1 AND email IS NOT NULL AND TRIM(email)<>'' ORDER BY id")
+    for coordinator in cur.fetchall():
+        queue_email_notification(coordinator["email"],"Updated Proof of Payment","A learner replaced their Proof of Payment.","pop_updated_admission",recipient_name=coordinator["full_name"],details=[("Learner",student["student_name"] if student else f"Student {student_id}"),("Grade",grade_label(student["grade"]) if student else ""),("Enrollment Month",pretty_month_label(enrollment_month) if enrollment_month else "")],action_path="/admission/enrollments",action_label="Open Enrollments",recipient_type="admission",related_type="enrollment",related_id=enrollment_id,conn=conn)
+
+
+def email_smtp_config(conn=None):
+    sender_email=normalize_email_address(_email_setting(conn,"email_sender_address",os.environ.get("EBTA_EMAIL_FROM","")))
+    sender_name=str(_email_setting(conn,"email_sender_name",os.environ.get("EBTA_EMAIL_FROM_NAME","Early Bird Testimony Academy")) or "Early Bird Testimony Academy").strip()
+    host=os.environ.get("EBTA_SMTP_HOST","smtp-relay.brevo.com").strip()
+    try: port=int(os.environ.get("EBTA_SMTP_PORT","587"))
+    except Exception: port=587
+    username=os.environ.get("EBTA_SMTP_USERNAME","").strip(); password=os.environ.get("EBTA_SMTP_PASSWORD","")
+    security=os.environ.get("EBTA_SMTP_SECURITY","STARTTLS").strip().upper()
+    reply_to=normalize_email_address(os.environ.get("EBTA_EMAIL_REPLY_TO",sender_email))
+    return {"host":host,"port":port,"username":username,"password":password,"security":security,"sender_email":sender_email,"sender_name":sender_name,"reply_to":reply_to}
+
+
+def email_smtp_ready(conn=None):
+    cfg=email_smtp_config(conn=conn)
+    return bool(cfg["host"] and cfg["port"] and cfg["username"] and cfg["password"] and cfg["sender_email"])
+
+
+def send_email_queue_row(row):
+    cfg=email_smtp_config()
+    if not email_smtp_ready(): raise RuntimeError("Email SMTP is not configured.")
+    msg=EmailMessage(); msg["Subject"]=row["subject"]; msg["From"]=formataddr((cfg["sender_name"],cfg["sender_email"])); msg["To"]=row["recipient_email"]
+    if cfg["reply_to"]: msg["Reply-To"]=cfg["reply_to"]
+    msg.set_content(row["text_body"] or "")
+    if row["html_body"]: msg.add_alternative(row["html_body"],subtype="html")
+    smtp=smtplib.SMTP_SSL(cfg["host"],cfg["port"],timeout=20) if cfg["security"]=="SSL" else smtplib.SMTP(cfg["host"],cfg["port"],timeout=20)
+    try:
+        smtp.ehlo()
+        if cfg["security"]=="STARTTLS": smtp.starttls(); smtp.ehlo()
+        smtp.login(cfg["username"],cfg["password"]); smtp.send_message(msg)
+    finally:
+        try: smtp.quit()
+        except Exception: pass
+
+
+def process_email_queue(batch_size=25):
+    if not email_smtp_ready(): return 0
+    conn=sqlite3.connect(DB_PATH,timeout=10.0); conn.row_factory=sqlite3.Row
+    try: conn.execute("PRAGMA busy_timeout=10000")
+    except Exception: pass
+    cur=conn.cursor()
+    stale_before=(datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))-datetime.timedelta(minutes=10)).isoformat()
+    cur.execute("""
+        UPDATE email_queue
+        SET status='FAILED',
+            last_error=COALESCE(last_error,'Recovered after an interrupted send.')
+        WHERE status='SENDING'
+          AND attempted_at IS NOT NULL
+          AND attempted_at < ?
+    """,(stale_before,))
+    conn.commit()
+    cur.execute("SELECT id FROM email_queue WHERE status IN ('PENDING','FAILED') AND retry_count<5 ORDER BY id LIMIT ?",(int(batch_size),))
+    ids=[int(r["id"]) for r in cur.fetchall()]
+    processed=0
+    for email_id in ids:
+        try:
+            cur.execute("UPDATE email_queue SET status='SENDING',attempted_at=? WHERE id=? AND status IN ('PENDING','FAILED') AND retry_count<5",(now_utc_iso(),email_id))
+            if int(cur.rowcount or 0)!=1: conn.commit(); continue
+            conn.commit(); cur.execute("SELECT * FROM email_queue WHERE id=? LIMIT 1",(email_id,)); row=cur.fetchone()
+            if not row: continue
+            send_email_queue_row(row)
+            cur.execute("UPDATE email_queue SET status='SENT',sent_at=?,last_error=NULL WHERE id=?",(now_utc_iso(),email_id)); conn.commit(); processed+=1
+        except Exception as exc:
+            try: cur.execute("UPDATE email_queue SET status='FAILED',retry_count=retry_count+1,last_error=? WHERE id=?",(str(exc)[:500],email_id)); conn.commit()
+            except Exception:
+                try: conn.rollback()
+                except Exception: pass
+    conn.close(); return processed
+
     
     
 def get_celebration_banner_html():
@@ -19426,6 +19981,29 @@ def register():
                 month
             )
 
+    if created:
+        cur.execute(
+            f"""
+            SELECT DISTINCT name, grade
+            FROM subjects
+            WHERE id IN ({','.join('?' for _ in subject_ids)})
+            ORDER BY CAST(REPLACE(grade,'G','') AS INTEGER), name
+            """,
+            [int(value) for value in subject_ids]
+        )
+        enrollment_subjects = [f"{grade_label(row['grade'])} - {row['name']}" for row in cur.fetchall()]
+        queue_email_notification(
+            email, "Enrollment Received",
+            "Your EBTA enrollment has been received and is pending review.",
+            "enrollment_received", recipient_name=full_name,
+            details=[("Subjects", ", ".join(enrollment_subjects)),
+                     ("Period", f"{pretty_month_label(period_start_month)} to {pretty_month_label(period_end_month)}"),
+                     ("Amount Paid", f"R{amount_paid}"), ("Status", "Pending")],
+            action_path="/student/login", action_label="Open Student Login",
+            recipient_type="student", related_type="enrollment_period",
+            related_id=period_ref, dedupe_key=f"enrollment-received:{period_ref}", conn=conn
+        )
+
     conn.commit()
     conn.close()
 
@@ -23062,6 +23640,7 @@ def student_submit_assignment(mid:int):
         VALUES (?, ?, ?, ?)
     """, (mid, sid, path, now))
 
+    queue_assignment_submission_email(conn, mid, sid)
     conn.commit()
     conn.close()
 
@@ -23095,6 +23674,7 @@ def student_send_message():
         conn.close(); return page("Error", card_msg("Tutor not assigned to that subject."))
     cur.execute("INSERT INTO direct_messages(from_role,from_id,to_role,to_id,subject_id,body,created_at) VALUES('student',?,?,?,?,?,?)",
                 (sid,'tutor',tutor_id,subject_id,body,now_utc_iso()))
+    queue_student_message_tutor_email(conn, sid, tutor_id, subject_id, body)
     conn.commit(); conn.close()
     return redirect(url_for('student_home'))
     
@@ -23261,6 +23841,8 @@ def student_submit_ratings():
             comment,
             now
         ))
+
+        queue_anonymous_review_emails(conn, subid, month, rating, comment)
 
     # Optional overall EBTA review.
     ebta_rating_raw = request.form.get(
@@ -27720,6 +28302,14 @@ def tutor_profile_page():
                     </div>
 
                     <div>
+                        <label>Email</label>
+                        <input type="email"
+                               name="email"
+                               value="{escape(tutor['email'] or '', quote=True)}"
+                               placeholder="Your email address">
+                    </div>
+
+                    <div>
                         <label>Qualification</label>
                         <input name="qualification"
                                value="{escape(tutor['qualification'] or '')}"
@@ -27798,7 +28388,11 @@ def tutor_update_profile():
     tid = is_tutor()
 
     full_name = request.form.get("full_name", "").strip()
+    email = request.form.get("email", "").strip()
     qualification = request.form.get("qualification", "").strip()
+
+    if email and not normalize_email_address(email):
+        return page("Invalid Email", card_msg("Please enter a valid email address."))
     achievements = request.form.get("achievements", "").strip()
     about = request.form.get("about", "").strip()
 
@@ -27811,12 +28405,14 @@ def tutor_update_profile():
     cur.execute("""
         UPDATE tutors
         SET full_name=?,
+            email=?,
             qualification=?,
             achievements=?,
             about=?
         WHERE id=?
     """, (
         full_name,
+        email or None,
         qualification,
         achievements,
         about,
@@ -28794,6 +29390,8 @@ def tutor_upload():
         delivery_mode
     ))
 
+    material_id = int(cur.lastrowid)
+    queue_material_student_emails(conn, material_id)
     conn.commit()
     conn.close()
 
@@ -28871,6 +29469,7 @@ def tutor_upload_marked_script(mid, sid):
         WHERE id = ?
     """, (str(path), now_utc_iso(), sub["id"]))
 
+    queue_assignment_marked_email(conn, mid, sid)
     conn.commit()
     conn.close()
 
@@ -29270,6 +29869,7 @@ def tutor_assignment_grade(mid:int, sid:int):
     if not row:
         conn.close(); return page("Error", card_msg("No submission to grade."))
     cur.execute("UPDATE submissions SET mark=?, feedback=?, evaluated_at=? WHERE id=?", (mark, feedback, now_utc_iso(), row['id']))
+    queue_assignment_marked_email(conn, mid, sid, mark=mark, total=total)
     conn.commit(); conn.close()
     # redirect with saved alert
     return redirect(url_for('tutor_assignment_manage', mid=mid, saved=1))
@@ -29354,6 +29954,7 @@ def tutor_message_student():
             VALUES ('tutor', ?, 'student', ?, ?, ?, ?)
         """, [(tid, r['student_id'], r['subject_id'], body, now) for r in rows])
 
+        queue_tutor_message_student_emails(conn, tid, rows, body)
         conn.commit()
         conn.close()
 
@@ -29404,6 +30005,7 @@ def tutor_message_student():
             VALUES ('tutor', ?, 'student', ?, ?, ?, ?)
         """, [(tid, s['student_id'], s['subject_id'], body, now) for s in students])
 
+        queue_tutor_message_student_emails(conn, tid, students, body)
         conn.commit()
         conn.close()
 
@@ -29452,6 +30054,7 @@ def tutor_message_student():
         VALUES ('tutor', ?, 'student', ?, ?, ?, ?)
     """, (tid, student_id, subject_id, body, now))
 
+    queue_tutor_message_student_emails(conn, tid, [{"student_id": student_id, "subject_id": subject_id}], body)
     conn.commit()
     conn.close()
 
@@ -32355,6 +32958,7 @@ def admin_nav():
                     ("Settings", "admin_settings", "/admin/settings"),
                     ("Portal Activity", "admin_portal_activity", "/admin/portal-activity"),
                     ("SMS Dashboard", "admin_sms_dashboard", "/admin/sms-dashboard"),
+                    ("Email Notifications", "admin_email_notifications", "/admin/email-notifications"),
                     ("Enrollment Reminders", "admin_enrollment_sms", "/admin/enrollment-sms"),
                     ("Processed SMS", "admin_process_sms", "/admin/process-sms"),
                     ("Awards Export", "admin_awards_student_export", "/admin/awards-export"),
@@ -32514,6 +33118,89 @@ def admin_nav():
         </div>
     </nav>
     """
+
+
+
+@app.get('/admin/email-notifications')
+@require_high_admin
+def admin_email_notifications():
+    r = require_admin()
+    if r: return r
+    conn=get_db(); cur=conn.cursor()
+    enabled=_email_setting(conn,"email_notifications_enabled","1")=="1"
+    sender_name=_email_setting(conn,"email_sender_name",os.environ.get("EBTA_EMAIL_FROM_NAME","Early Bird Testimony Academy"))
+    sender_address=_email_setting(conn,"email_sender_address",os.environ.get("EBTA_EMAIL_FROM",""))
+    event_rows=""
+    for key,label in EMAIL_NOTIFICATION_EVENTS.items():
+        checked="checked" if _email_setting(conn,f"email_event_{key}","1")=="1" else ""
+        event_rows += f"""<label style='display:flex;gap:9px;align-items:center;padding:9px 10px;border:1px solid #e2e8e4;border-radius:10px;margin:0'><input type='checkbox' name='event_{escape(key,quote=True)}' value='1' {checked} style='width:auto'><span>{escape(label)}</span></label>"""
+    cur.execute("SELECT status,COUNT(*) AS c FROM email_queue GROUP BY status")
+    counts={row["status"]:int(row["c"] or 0) for row in cur.fetchall()}
+    cur.execute("""SELECT id,recipient_email,subject,event_key,status,retry_count,last_error,created_at,sent_at FROM email_queue ORDER BY id DESC LIMIT 60""")
+    recent=cur.fetchall(); conn.close()
+    queue_rows=""
+    for row in recent:
+        cls="active" if row["status"]=="SENT" else "lapsed" if row["status"]=="FAILED" else "pending"
+        queue_rows += f"""<tr><td>{row['id']}</td><td>{escape(row['recipient_email'] or '')}</td><td><strong>{escape(row['subject'] or '')}</strong><div class='mini muted'>{escape(EMAIL_NOTIFICATION_EVENTS.get(row['event_key'],row['event_key'] or ''))}</div></td><td><span class='chip {cls}'>{escape(row['status'] or '')}</span><div class='mini muted'>Retry {int(row['retry_count'] or 0)}</div></td><td class='mini'>{escape((row['created_at'] or '')[:19].replace('T',' '))}</td><td class='mini'>{escape((row['sent_at'] or '')[:19].replace('T',' '))}</td><td class='mini' style='max-width:260px;white-space:normal;word-break:break-word'>{escape(row['last_error'] or '')}</td></tr>"""
+    if not queue_rows: queue_rows="<tr><td colspan='7'>No email notifications have been queued yet.</td></tr>"
+    ready=email_smtp_ready(); setup="<span class='chip active'>Ready</span>" if ready else "<span class='chip lapsed'>Setup Required</span>"
+    global_checked="checked" if enabled else ""
+    body=f"""
+    {admin_nav()}
+    <section class='card'><div style='display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start'><h1>Email Notifications</h1>{setup}</div>
+    <div class='stats' style='margin-top:14px'>{stat('Pending',counts.get('PENDING',0))}{stat('Sending',counts.get('SENDING',0))}{stat('Sent',counts.get('SENT',0))}{stat('Failed',counts.get('FAILED',0))}</div></section>
+    <section class='card'><h2>Settings</h2><form method='post' action='{url_for('admin_email_notifications_save')}' class='grid' style='grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px'>
+    <label style='display:flex;align-items:center;gap:9px;grid-column:1/-1'><input type='checkbox' name='enabled' value='1' {global_checked} style='width:auto'><strong>Send portal email notifications</strong></label>
+    <div><label>Sender Name</label><input name='sender_name' value='{escape(sender_name or "",quote=True)}' placeholder='Early Bird Testimony Academy'></div>
+    <div><label>Sender Email</label><input type='email' name='sender_address' value='{escape(sender_address or "",quote=True)}' placeholder='notifications@yourdomain.co.za'></div>
+    <div style='grid-column:1/-1'><h3>Activities</h3><div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px'>{event_rows}</div></div>
+    <div style='grid-column:1/-1'><button class='btn success'>Save Email Settings</button></div></form></section>
+    <section class='card'><h2>SMTP Setup</h2><p class='mini muted'>Render environment variables: <strong>EBTA_SMTP_HOST</strong>, <strong>EBTA_SMTP_PORT</strong>, <strong>EBTA_SMTP_USERNAME</strong>, <strong>EBTA_SMTP_PASSWORD</strong>, <strong>EBTA_EMAIL_FROM</strong>. Optional: <strong>EBTA_EMAIL_FROM_NAME</strong>, <strong>EBTA_EMAIL_REPLY_TO</strong>, <strong>EBTA_SMTP_SECURITY</strong>.</p>
+    <div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(220px,1fr))'><div class='card soft'><strong>SMTP Host</strong><div class='mini muted'>{escape(os.environ.get('EBTA_SMTP_HOST','smtp-relay.brevo.com'))}</div></div><div class='card soft'><strong>SMTP Username</strong><div class='mini muted'>{'Configured' if os.environ.get('EBTA_SMTP_USERNAME') else 'Not configured'}</div></div><div class='card soft'><strong>SMTP Password</strong><div class='mini muted'>{'Configured' if os.environ.get('EBTA_SMTP_PASSWORD') else 'Not configured'}</div></div></div>
+    <form method='post' action='{url_for('admin_email_notifications_test')}' class='toolbar' style='margin-top:14px'><input type='email' name='test_email' placeholder='Email address for test' required><button class='btn'>Send Test Email</button></form>
+    <form method='post' action='{url_for('admin_email_notifications_retry')}' style='margin-top:10px'><button class='btn secondary'>Retry Failed Emails</button></form></section>
+    <section class='card'><h2>Recent Emails</h2><div class='scroll-x'><table style='min-width:1050px'><thead><tr><th>ID</th><th>Recipient</th><th>Email</th><th>Status</th><th>Queued</th><th>Sent</th><th>Error</th></tr></thead><tbody>{queue_rows}</tbody></table></div></section>
+    """
+    return page("Email Notifications",body)
+
+
+@app.post('/admin/email-notifications/settings')
+@require_high_admin
+def admin_email_notifications_save():
+    r=require_admin()
+    if r:return r
+    sender_name=request.form.get('sender_name','').strip(); sender_address=request.form.get('sender_address','').strip()
+    if sender_address and not normalize_email_address(sender_address): return page('Email Settings',card_msg('Please enter a valid sender email address.'))
+    conn=get_db(); cur=conn.cursor(); values={"email_notifications_enabled":"1" if request.form.get('enabled')=='1' else '0',"email_sender_name":sender_name or 'Early Bird Testimony Academy',"email_sender_address":sender_address}
+    for key in EMAIL_NOTIFICATION_EVENTS: values[f"email_event_{key}"]='1' if request.form.get(f'event_{key}')=='1' else '0'
+    for key,value in values.items(): cur.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(key,value))
+    conn.commit(); conn.close(); return redirect(url_for('admin_email_notifications'))
+
+
+@app.post('/admin/email-notifications/test')
+@require_high_admin
+def admin_email_notifications_test():
+    r=require_admin()
+    if r:return r
+    test_email=normalize_email_address(request.form.get('test_email',''))
+    if not test_email:return page('Test Email',card_msg('Please enter a valid email address.'))
+    queued=queue_email_notification(test_email,'EBTA Email Test','This is a test email from the EBTA Portal.','test',details=[('Portal','EBTA')],action_path='/',recipient_type='test',force=True)
+    if queued and email_smtp_ready():
+        try: process_email_queue(5)
+        except Exception: pass
+    return redirect(url_for('admin_email_notifications'))
+
+
+@app.post('/admin/email-notifications/retry')
+@require_high_admin
+def admin_email_notifications_retry():
+    r=require_admin()
+    if r:return r
+    conn=get_db(); cur=conn.cursor()
+    cur.execute("UPDATE email_queue SET status='PENDING',retry_count=0,last_error=NULL WHERE status IN ('FAILED','SENDING')")
+    conn.commit(); conn.close()
+    return redirect(url_for('admin_email_notifications'))
+
 
 
 # =============================================================
@@ -34463,6 +35150,32 @@ def acc_message_send():
         now_utc_iso()
     ))
 
+    message_id = int(cur.lastrowid)
+    message_preview = str(body or "").strip()
+    if len(message_preview) > 700:
+        message_preview = message_preview[:697] + "..."
+
+    target_path = {
+        "ACC": "/acc/messages",
+        "TUTOR": "/tutor/acc-messages",
+        "TUTOR_MANAGER": "/manager/acc-messages",
+        "CAO": "/cao/acc-messages",
+    }.get(target_role, "/")
+
+    queue_email_to_staff(
+        conn,
+        target_role,
+        target_id,
+        "New Portal Message",
+        message_preview,
+        "acc_message_received",
+        details=[("From", actor_name)],
+        action_path=target_path,
+        related_type="acc_message",
+        related_id=message_id,
+        dedupe_key=f"acc-message:{message_id}"
+    )
+
     conn.commit()
     conn.close()
 
@@ -35102,6 +35815,26 @@ def cao_acc_task_add():
         now,
         now
     ))
+
+    task_id = int(cur.lastrowid)
+
+    queue_email_to_staff(
+        conn,
+        "ACC",
+        acc_id,
+        "New ACC Task",
+        title,
+        "acc_task_assigned",
+        details=[
+            ("Priority", priority.title()),
+            ("Due Date", due_date),
+            ("Assigned By", session.get("cao_name", "CAO"))
+        ],
+        action_path="/acc/tasks",
+        related_type="acc_task",
+        related_id=task_id,
+        dedupe_key=f"acc-task:{task_id}"
+    )
 
     conn.commit()
     conn.close()
@@ -36564,6 +37297,9 @@ def enrollment_action(id: int, action: str):
                 """, (new_pin, row["id"]))
 
                 notify_pin = new_pin
+
+    if action in {"approve", "approve_sms", "lapse", "pending"}:
+        queue_enrollment_status_email(conn, id, action)
 
     conn.commit()
     conn.close()
@@ -40623,6 +41359,11 @@ def admin_tutors():
                     <input name='phone' placeholder='Phone' required>
                 </div>
 
+                <div>
+                    <label>Email</label>
+                    <input type='email' name='email' placeholder='Email'>
+                </div>
+
                 <button class='btn'>
                     Add Tutor
                 </button>
@@ -40786,6 +41527,11 @@ def admin_tutor_edit(tid: int):
                 <label>Phone</label>
                 <input name='phone' value="{tutor['phone']}" required>
             </div>
+
+            <div>
+                <label>Email</label>
+                <input type='email' name='email' value="{escape(tutor['email'] or '', quote=True)}">
+            </div>
             
             <div style="grid-column:1/-1">
                 <label>Qualification</label>
@@ -40819,6 +41565,10 @@ def admin_tutor_update(tid: int):
 
     full_name = request.form.get('full_name', '').strip()
     phone = normalize_phone(request.form.get('phone', ''))
+    email = request.form.get('email', '').strip()
+
+    if email and not normalize_email_address(email):
+        return page("Error", card_msg("Please enter a valid tutor email address."))
 
     if not full_name or not phone:
         return page("Error", card_msg("All fields are required."))
@@ -40829,9 +41579,11 @@ def admin_tutor_update(tid: int):
     try:
         cur.execute("""
             UPDATE tutors
-            SET full_name=?, phone=?
+            SET full_name=?,
+                phone=?,
+                email=?
             WHERE id=?
-        """, (full_name, phone, tid))
+        """, (full_name, phone, email or None, tid))
         conn.commit()
     except sqlite3.IntegrityError:
         conn.close()
@@ -40848,6 +41600,9 @@ def admin_tutor_add():
         return r
     full_name = request.form.get('full_name','').strip()
     phone = normalize_phone(request.form.get('phone',''))
+    email = request.form.get('email','').strip()
+    if email and not normalize_email_address(email):
+        return page("Error", card_msg("Please enter a valid tutor email address."))
     if not (full_name and phone):
         return page("Error", card_msg("Missing fields."))
     now = now_utc_iso()
@@ -40860,8 +41615,10 @@ def admin_tutor_add():
     pins |= {r['pin'] for r in cur.fetchall()}
     pin = gen_pin(pins)
     try:
-        cur.execute("INSERT INTO tutors(full_name,phone,pin,created_at) VALUES(?,?,?,?)",
-                    (full_name, phone, pin, now))
+        cur.execute(
+            "INSERT INTO tutors(full_name,phone,email,pin,created_at) VALUES(?,?,?,?,?)",
+            (full_name, phone, email or None, pin, now)
+        )
         conn.commit()
     except sqlite3.IntegrityError:
         conn.close()
@@ -41121,6 +41878,25 @@ def admin_tutor_add_subject(tid:int):
             ON CONFLICT(tutor_id, subject_id)
             DO UPDATE SET delivery_mode=excluded.delivery_mode
         """, (tid, subject_id, delivery_mode))
+
+        cur.execute("SELECT name, grade FROM subjects WHERE id=? LIMIT 1", (int(subject_id),))
+        assigned_subject = cur.fetchone()
+
+        if assigned_subject:
+            queue_email_to_tutor(
+                conn,
+                tid,
+                "Subject Assignment",
+                "A subject assignment has been updated on your tutor account.",
+                "tutor_subject_assigned",
+                details=[
+                    ("Subject", f"{grade_label(assigned_subject['grade'])} - {assigned_subject['name']}"),
+                    ("Delivery Mode", delivery_mode.replace("_", " ").title())
+                ],
+                action_path="/tutor",
+                related_type="subject",
+                related_id=subject_id
+            )
 
         # Session details now come automatically from the subject.
         sync_subject_session_templates(
@@ -49441,6 +50217,18 @@ def process_sms_queue(batch_size=100):
 
     return len(rows)
 
+
+def email_worker():
+    while True:
+        try: process_email_queue(25)
+        except Exception: pass
+        time.sleep(30)
+
+if not globals().get("_email_worker_started"):
+    threading.Thread(target=email_worker,daemon=True).start()
+    _email_worker_started=True
+
+
 @app.post('/admin/broadcast-sms')
 def admin_broadcast_sms():
 
@@ -50853,11 +51641,13 @@ def admin_tutor_tracker():
 
         <form method="post" action="/admin/managers/add">
 
-            <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px">
 
                 <input name="name" placeholder="Manager Name" required>
 
                 <input name="phone" placeholder="Phone Number" required>
+
+                <input type="email" name="email" placeholder="Email">
 
                 <button class="btn">Create Manager</button>
 
@@ -51913,6 +52703,10 @@ def admin_manager_add():
 
     name = request.form.get("name")
     phone = request.form.get("phone")
+    email = request.form.get("email", "").strip()
+
+    if email and not normalize_email_address(email):
+        return page("Error", card_msg("Please enter a valid Tutor Manager email address."))
 
     conn = get_db()
     cur = conn.cursor()
@@ -51931,9 +52725,9 @@ def admin_manager_add():
     pin = gen_pin(pins)
 
     cur.execute("""
-    INSERT INTO tutor_managers(full_name, phone, pin, created_at)
-    VALUES(?,?,?,?)
-    """,(name,phone,pin,now_utc_iso()))
+    INSERT INTO tutor_managers(full_name, phone, email, pin, created_at)
+    VALUES(?,?,?,?,?)
+    """,(name,phone,email or None,pin,now_utc_iso()))
 
     conn.commit()
     conn.close()
@@ -51956,12 +52750,17 @@ def admin_edit_manager(manager_id):
 
         name = request.form.get("name")
         phone = request.form.get("phone")
+        email = request.form.get("email", "").strip()
+
+        if email and not normalize_email_address(email):
+            conn.close()
+            return page("Error", card_msg("Please enter a valid Tutor Manager email address."))
 
         cur.execute("""
         UPDATE tutor_managers
-        SET full_name=?, phone=?
+        SET full_name=?, phone=?, email=?
         WHERE id=?
-        """,(name,phone,manager_id))
+        """,(name,phone,email or None,manager_id))
 
         conn.commit()
         conn.close()
@@ -51992,6 +52791,9 @@ def admin_edit_manager(manager_id):
 
     <label>Phone</label>
     <input name="phone" value="{manager['phone']}" required>
+
+    <label>Email</label>
+    <input type="email" name="email" value="{escape(manager['email'] or '', quote=True)}">
 
     <button class="btn success">Update Manager</button>
 
@@ -52077,6 +52879,50 @@ def assign_tutor():
         INSERT OR IGNORE INTO manager_tutors(manager_id,tutor_id)
         VALUES(?,?)
         """,(manager_id,tutor_id))
+
+        assignment_created = int(cur.rowcount or 0) > 0
+
+        if assignment_created:
+            cur.execute("""
+                SELECT
+                    tm.full_name AS manager_name,
+                    tm.email AS manager_email,
+                    t.full_name AS tutor_name
+                FROM tutor_managers tm
+                JOIN tutors t ON t.id=?
+                WHERE tm.id=?
+                LIMIT 1
+            """, (tutor_id, manager_id))
+            assignment_info = cur.fetchone()
+
+            if assignment_info:
+                queue_email_to_tutor(
+                    conn,
+                    tutor_id,
+                    "Tutor Manager Assignment",
+                    "Your Tutor Manager assignment has been updated.",
+                    "tutor_manager_assigned",
+                    details=[("Tutor Manager", assignment_info["manager_name"])],
+                    action_path="/tutor",
+                    related_type="tutor_manager",
+                    related_id=manager_id,
+                    dedupe_key=f"manager-assignment:tutor:{tutor_id}:manager:{manager_id}"
+                )
+
+                queue_email_notification(
+                    assignment_info["manager_email"],
+                    "Tutor Assigned to Your Team",
+                    f"{assignment_info['tutor_name']} has been assigned to your team.",
+                    "tutor_manager_assigned",
+                    recipient_name=assignment_info["manager_name"],
+                    details=[("Tutor", assignment_info["tutor_name"])],
+                    action_path="/manager/dashboard",
+                    recipient_type="tutor_manager",
+                    related_type="tutor",
+                    related_id=tutor_id,
+                    dedupe_key=f"manager-assignment:manager:{manager_id}:tutor:{tutor_id}",
+                    conn=conn
+                )
 
     else:
 
@@ -66118,6 +66964,7 @@ def student_replace_recent_pop():
             now_utc_iso()
         ))
 
+        queue_pop_update_notifications(conn, sid, latest["id"], edit_number, enrollment_month)
         conn.commit()
 
     except Exception as exc:
@@ -67128,6 +67975,28 @@ def tutor_application_submit():
         now_utc_iso()
     ))
 
+    application_id = int(cur.lastrowid)
+
+    queue_email_notification(
+        email,
+        "Tutor Application Received",
+        "Your tutor application has been received.",
+        "tutor_application_received",
+        recipient_name=full_name,
+        details=[
+            ("Grades", ", ".join(grade_label(value) for value in grades)),
+            ("Subjects", ", ".join(subjects)),
+            ("Status", "New")
+        ],
+        action_path="/",
+        action_label="Open EBTA",
+        recipient_type="tutor_applicant",
+        related_type="tutor_application",
+        related_id=application_id,
+        dedupe_key=f"tutor-application-received:{application_id}",
+        conn=conn
+    )
+
     conn.commit()
     conn.close()
 
@@ -67688,6 +68557,14 @@ def admin_application_update_status(app_id):
         WHERE id=?
     """, (status, admin_notes, now_utc_iso(), app_id))
 
+    queue_application_status_email(
+        conn,
+        "tutor_applications",
+        app_id,
+        "Tutor",
+        status
+    )
+
     conn.commit()
     conn.close()
 
@@ -67717,6 +68594,13 @@ def admin_application_quick_status(app_id):
         SET status=?, updated_at=?
         WHERE id=?
     """, (status, now_utc_iso(), app_id))
+    queue_application_status_email(
+        conn,
+        "tutor_applications",
+        app_id,
+        "Tutor",
+        status
+    )
     conn.commit(); conn.close()
     return redirect(return_to)
 
@@ -68900,6 +69784,27 @@ def management_application_submit():
         now_utc_iso()
     ))
 
+    application_id = int(cur.lastrowid)
+
+    queue_email_notification(
+        email,
+        "Management Application Received",
+        "Your EBTA management application has been received.",
+        "management_application_received",
+        recipient_name=full_name,
+        details=[
+            ("Role", role_applied),
+            ("Status", "New")
+        ],
+        action_path="/",
+        action_label="Open EBTA",
+        recipient_type="management_applicant",
+        related_type="management_application",
+        related_id=application_id,
+        dedupe_key=f"management-application-received:{application_id}",
+        conn=conn
+    )
+
     conn.commit()
     conn.close()
 
@@ -69427,6 +70332,14 @@ def admin_management_application_update_status(app_id):
         WHERE id=?
     """, (status, admin_notes, now_utc_iso(), app_id))
 
+    queue_application_status_email(
+        conn,
+        "management_applications",
+        app_id,
+        "Management",
+        status
+    )
+
     conn.commit()
     conn.close()
 
@@ -69459,6 +70372,13 @@ def admin_management_application_quick_status(app_id):
         SET status=?, updated_at=?
         WHERE id=?
     """, (status, now_utc_iso(), app_id))
+    queue_application_status_email(
+        conn,
+        "management_applications",
+        app_id,
+        "Management",
+        status
+    )
     conn.commit(); conn.close()
     return redirect(return_to)
 
@@ -80451,6 +81371,9 @@ def admission_enrollment_action(id, action):
                 """, (new_pin, row["id"]))
 
                 notify_pin = new_pin
+
+    if action in {"approve", "approve_sms", "lapse"}:
+        queue_enrollment_status_email(conn, id, action)
 
     conn.commit()
     conn.close()
@@ -112469,6 +113392,35 @@ def one_on_one_request_submit():
                 request_id, amount_paid, proof_of_payment, payment_status, notes, created_at
             ) VALUES(?,?,?,?,?,?)
         """, (request_id, package["parent_fee"], proof_path, "Pending", "Proof uploaded by parent/learner on request submission.", now))
+
+    confirmation_email = parent_email or ""
+
+    if not confirmation_email and linked_student_id:
+        cur.execute("SELECT email FROM students WHERE id=? LIMIT 1", (linked_student_id,))
+        student_email_row = cur.fetchone()
+        if student_email_row:
+            confirmation_email = student_email_row["email"] or ""
+
+    queue_email_notification(
+        confirmation_email,
+        "One-on-One Request Received",
+        "Your one-on-one request has been received.",
+        "one_on_one_request_received",
+        recipient_name=parent_name or learner_name,
+        details=[
+            ("Learner", learner_name),
+            ("Subject", f"{grade_label(grade)} - {subject['name']}"),
+            ("Package", package_type),
+            ("Status", request_status)
+        ],
+        action_path="/student/login",
+        action_label="Open Student Login",
+        recipient_type="parent_or_student",
+        related_type="one_on_one_request",
+        related_id=request_id,
+        dedupe_key=f"one-on-one-request:{request_id}",
+        conn=conn
+    )
 
     conn.commit()
     conn.close()
