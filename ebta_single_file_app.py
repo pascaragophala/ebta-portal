@@ -28172,6 +28172,7 @@ def tutor_profile_page():
         SELECT
             id,
             full_name,
+            email,
             phone,
             referral_code,
             referral_points,
