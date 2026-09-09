@@ -85128,7 +85128,10 @@ def admission_discounts():
     )
 
     subject_options = """
-    <option value="">Select one subject</option>
+    <option value="">Select discount subject option</option>
+    <option value="ANY_SUBJECT" data-generic="1">
+        Any one subject — learner chooses during enrollment
+    </option>
     """ + "".join(
         f"""
         <option value="{sub['id']}"
@@ -85249,7 +85252,9 @@ def admission_discounts():
                     </select>
 
                     <div class="mini muted">
-                        The discount is for one subject and one month only.
+                        Choose a specific subject, or choose <strong>Any one subject</strong>
+                        so the learner can use the code on any one selected subject during enrollment.
+                        The discount still applies to one subject for one month only.
                     </div>
                 </div>
 
@@ -85600,7 +85605,7 @@ def admission_discounts():
                     }}
 
                     Array.from(subjectSelect.options).forEach(function (option, index) {{
-                        if (index === 0) {{
+                        if (index === 0 || option.dataset.generic === "1") {{
                             option.hidden = false;
                             return;
                         }}
@@ -85670,7 +85675,7 @@ def admission_discounts():
 
                         if (!subjectSelect || !subjectSelect.value) {{
                             event.preventDefault();
-                            alert("Please select the subject that will receive the discount.");
+                            alert("Please choose a specific subject or Any one subject for this discount.");
                             return;
                         }}
                     }});
@@ -85711,7 +85716,7 @@ def admission_discount_create():
         ""
     ).strip().upper()
 
-    subject_id = request.form.get(
+    subject_choice = request.form.get(
         "subject_id",
         ""
     ).strip()
@@ -85735,14 +85740,31 @@ def admission_discount_create():
 
     try:
         student_id_value = int(student_id)
-        subject_id_value = int(subject_id)
     except Exception:
         return page(
             "Invalid Selection",
             card_msg(
-                "Please select a learner and one subject."
+                "Please select a learner."
             )
         )
+
+    generic_subject = (
+        subject_choice.upper()
+        == "ANY_SUBJECT"
+    )
+
+    subject_id_value = None
+
+    if not generic_subject:
+        try:
+            subject_id_value = int(subject_choice)
+        except Exception:
+            return page(
+                "Invalid Selection",
+                card_msg(
+                    "Please choose a specific subject or Any one subject."
+                )
+            )
 
     discount_percent = int(rule["percent"])
 
@@ -85769,43 +85791,46 @@ def admission_discount_create():
             card_msg("Student not found.")
         )
 
-    cur.execute("""
-        SELECT
-            id,
-            name,
-            grade
-        FROM subjects
-        WHERE id=?
-        LIMIT 1
-    """, (subject_id_value,))
-
-    subject = cur.fetchone()
-
-    if not subject:
-        conn.close()
-        return page(
-            "Invalid Subject",
-            card_msg(
-                "The selected subject could not be found."
-            )
-        )
-
     student_grade = str(
         student["grade"] or ""
     ).strip().upper()
 
-    subject_grade = str(
-        subject["grade"] or ""
-    ).strip().upper()
+    subject = None
 
-    if student_grade != subject_grade:
-        conn.close()
-        return page(
-            "Grade Mismatch",
-            card_msg(
-                "The selected subject must be from the learner's grade."
+    if not generic_subject:
+        cur.execute("""
+            SELECT
+                id,
+                name,
+                grade
+            FROM subjects
+            WHERE id=?
+            LIMIT 1
+        """, (subject_id_value,))
+
+        subject = cur.fetchone()
+
+        if not subject:
+            conn.close()
+            return page(
+                "Invalid Subject",
+                card_msg(
+                    "The selected subject could not be found."
+                )
             )
-        )
+
+        subject_grade = str(
+            subject["grade"] or ""
+        ).strip().upper()
+
+        if student_grade != subject_grade:
+            conn.close()
+            return page(
+                "Grade Mismatch",
+                card_msg(
+                    "The selected subject must be from the learner's grade."
+                )
+            )
 
     allowed_grades = rule.get("allowed_grades")
 
@@ -85851,8 +85876,23 @@ def admission_discount_create():
         f"{category_label} · {benefit_text}"
     )
 
+    if generic_subject:
+        stored_notes += " · Any one subject"
+
     if notes:
         stored_notes += f" · {notes}"
+
+    applies_to_value = (
+        "ANY_SUBJECT"
+        if generic_subject
+        else "SUBJECT"
+    )
+
+    stored_subject_id = (
+        None
+        if generic_subject
+        else subject_id_value
+    )
 
     cur.execute("""
         INSERT INTO discount_coupons(
@@ -85879,8 +85919,8 @@ def admission_discount_create():
         student_id_value,
         None,
         discount_percent,
-        "SUBJECT",
-        subject_id_value,
+        applies_to_value,
+        stored_subject_id,
         "AWARD",
         "ACTIVE",
         1,
@@ -85895,6 +85935,14 @@ def admission_discount_create():
 
     conn.commit()
     conn.close()
+
+    subject_display = (
+        "Any one subject — learner chooses during enrollment"
+        if generic_subject
+        else (
+            f"{grade_label(subject['grade'])} — {subject['name']}"
+        )
+    )
 
     return page(
         "Award Discount Code Created",
@@ -85922,9 +85970,8 @@ def admission_discount_create():
                 </p>
 
                 <p>
-                    <strong>Subject:</strong>
-                    {escape(grade_label(subject['grade']))}
-                    — {escape(subject['name'])}
+                    <strong>Applies To:</strong>
+                    {escape(subject_display)}
                 </p>
 
                 <p>
