@@ -90599,6 +90599,203 @@ def coo_student_ratings_feedback():
 
 # ---------------- COO ENROLLMENTS ----------------
 
+@app.post('/coo/enrollment/<int:id>/<action>')
+def coo_enrollment_action(id, action):
+
+    r = require_coo_permission("coo_enrollments_enabled", "enrollment approvals")
+    if r:
+        return r
+
+    allowed_actions = ["approve", "approve_sms", "sms", "lapse"]
+
+    if action not in allowed_actions:
+        return page("Invalid Action", card_msg("Invalid enrollment action."))
+        
+    status_changing_actions = ["approve", "approve_sms", "lapse"]
+
+    if action in status_changing_actions and enrollment_status_actions_locked():
+        return page(
+            "Approvals Locked",
+            card_msg(
+                "Enrollment approvals and rejections are currently locked by High Admin. "
+                "Please contact High Admin if this enrollment needs to be approved or lapsed."
+            )
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    notify_phone = None
+    notify_name = None
+    notify_pin = None
+    notify_subject = None
+    notify_grade = None
+    notify_month = None
+
+    needs_sms_details = action in ["approve_sms", "sms"]
+    should_approve = action in ["approve", "approve_sms"]
+
+    # Multi-month enrolments share one enrollment_period_ref.
+    # Approval can still activate the linked paid period in one action.
+    # Lapse is intentionally enrollment-specific so one subject/month does
+    # not change the learner's other enrollment statuses.
+    cur.execute("""
+        SELECT
+            id,
+            enrollment_period_ref,
+            period_month_count,
+            period_start_month,
+            period_end_month
+        FROM enrollments
+        WHERE id=?
+        LIMIT 1
+    """, (id,))
+
+    selected_enrollment = cur.fetchone()
+
+    if not selected_enrollment:
+        conn.close()
+        return page(
+            "Enrollment Not Found",
+            card_msg("This enrollment could not be found.")
+        )
+
+    period_ref_to_update = str(
+        selected_enrollment["enrollment_period_ref"] or ""
+    ).strip()
+
+    notify_period_count = int(
+        selected_enrollment["period_month_count"] or 1
+    )
+    notify_period_start = (
+        selected_enrollment["period_start_month"] or ""
+    )
+    notify_period_end = (
+        selected_enrollment["period_end_month"] or ""
+    )
+
+    if should_approve:
+        if period_ref_to_update:
+            cur.execute("""
+                UPDATE enrollments
+                SET status='ACTIVE'
+                WHERE enrollment_period_ref=?
+            """, (period_ref_to_update,))
+        else:
+            cur.execute("""
+                UPDATE enrollments
+                SET status='ACTIVE'
+                WHERE id=?
+            """, (id,))
+
+    elif action == "lapse":
+        # Lapse ONLY the exact enrollment selected by Admissions.
+        #
+        # enrollment_period_ref may be shared by several subjects/months,
+        # so using it here would incorrectly lapse unrelated enrollment rows.
+        cur.execute("""
+            UPDATE enrollments
+            SET status='LAPSED'
+            WHERE id=?
+        """, (id,))
+
+    if needs_sms_details:
+        cur.execute("""
+            SELECT
+                st.id,
+                st.full_name,
+                st.phone_whatsapp,
+                st.pin,
+                e.month,
+                sub.name AS subject_name,
+                sub.grade
+            FROM enrollments e
+            JOIN students st ON st.id = e.student_id
+            JOIN subjects sub ON sub.id = e.subject_id
+            WHERE e.id=?
+        """, (id,))
+
+        row = cur.fetchone()
+
+        if row:
+            notify_name = row["full_name"]
+            notify_phone = row["phone_whatsapp"]
+            notify_pin = row["pin"]
+            notify_month = row["month"]
+            notify_subject = row["subject_name"]
+            notify_grade = row["grade"]
+
+            if not notify_pin:
+                pins = set()
+
+                cur.execute("SELECT pin FROM students WHERE pin IS NOT NULL")
+                pins |= {x["pin"] for x in cur.fetchall()}
+
+                cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
+                pins |= {x["pin"] for x in cur.fetchall()}
+
+                new_pin = gen_pin(pins)
+
+                cur.execute("""
+                    UPDATE students
+                    SET pin=?
+                    WHERE id=?
+                """, (new_pin, row["id"]))
+
+                notify_pin = new_pin
+
+    if action in {"approve", "approve_sms", "lapse"}:
+        queue_enrollment_status_email(conn, id, action)
+
+    conn.commit()
+    conn.close()
+
+    try:
+        if needs_sms_details and notify_phone and notify_pin:
+
+            base_url = (request.url_root or "").rstrip("/")
+            login_link = base_url + url_for("student_login")
+
+            month_label = pretty_month_label(notify_month) if notify_month else ""
+            grade_label_txt = grade_label(notify_grade) if notify_grade else ""
+            first_name = notify_name.split()[0] if notify_name else ""
+
+            if action == "approve_sms":
+                sms_intro = f"EBTA: Hi {first_name}, your enrollment is APPROVED."
+            else:
+                sms_intro = f"EBTA: Hi {first_name}, your portal login details are below."
+
+            sms_body_parts = [sms_intro]
+
+            if notify_subject:
+                sms_body_parts.append(f"Subject: {grade_label_txt} {notify_subject}")
+
+            if (
+                notify_period_count > 1
+                and notify_period_start
+                and notify_period_end
+            ):
+                sms_body_parts.append(
+                    "Period: "
+                    f"{pretty_month_label(notify_period_start)} to "
+                    f"{pretty_month_label(notify_period_end)} "
+                    f"({notify_period_count} months)"
+                )
+            elif month_label:
+                sms_body_parts.append(f"Month: {month_label}")
+
+            sms_body_parts.append(f"Login: {login_link}")
+            sms_body_parts.append(f"PIN: {notify_pin}")
+
+            sms_body = "\n".join(sms_body_parts)
+
+            send_sms_notification(notify_phone, sms_body)
+
+    except Exception as e:
+        print("COO enrollment SMS error:", e)
+
+    return redirect(request.referrer or url_for("coo_enrollments"))
+
 @app.get('/coo/enrollments')
 def coo_enrollments():
 
@@ -90681,6 +90878,19 @@ def coo_enrollments():
 
     rows = cur.fetchall()
 
+    pop_map = {}
+    if rows:
+        enrollment_ids = [int(row["id"]) for row in rows]
+        placeholders = ",".join("?" for _ in enrollment_ids)
+        cur.execute(f"""
+            SELECT enrollment_id, file_path
+            FROM enrollment_files
+            WHERE enrollment_id IN ({placeholders})
+            ORDER BY id
+        """, enrollment_ids)
+        for pop_row in cur.fetchall():
+            pop_map.setdefault(int(pop_row["enrollment_id"]), []).append(pop_row["file_path"])
+
     cur.execute("""
         SELECT status, COUNT(*) AS c
         FROM enrollments
@@ -90696,16 +90906,48 @@ def coo_enrollments():
         for r in status_rows
     ])
 
+    approval_locked = enrollment_status_actions_locked()
     trs = ""
 
     for e in rows:
+        pop_files = pop_map.get(int(e["id"]), []) or ([e["pop_url"]] if e["pop_url"] else [])
         pop = "—"
-
-        if e["pop_url"]:
-            pop = f"<a target='_blank' href='{escape(e['pop_url'])}'>PoP</a>"
+        if pop_files:
+            pop = " ".join(
+                f"<a class='btn mini secondary' target='_blank' href='{escape(file_url, quote=True)}'>"
+                f"{'PoP '+str(i) if len(pop_files)>1 else 'View PoP'}</a>"
+                for i, file_url in enumerate(pop_files, start=1)
+            )
 
         coupon = e["coupon_code"] or e["referral_code_used"] or "No code used"
         period_html = active_enrollment_period_badge_for_student_subject(e['student_id'], e['subject_id'], month)
+
+        if approval_locked:
+            actions = f"""
+            <div style='display:flex;flex-direction:column;gap:6px;min-width:150px'>
+                <span class='chip lapsed'>Approvals locked</span>
+                <form method='post' action='{url_for("coo_enrollment_action", id=e["id"], action="sms")}'>
+                    <button class='btn mini secondary'>SMS Only</button>
+                </form>
+            </div>
+            """
+        else:
+            actions = f"""
+            <div style='display:flex;flex-wrap:wrap;gap:6px;min-width:230px'>
+                <form method='post' action='{url_for("coo_enrollment_action", id=e["id"], action="approve")}'>
+                    <button class='btn success mini'>Approve</button>
+                </form>
+                <form method='post' action='{url_for("coo_enrollment_action", id=e["id"], action="approve_sms")}' onsubmit="return confirm('Approve this enrollment and send SMS?');">
+                    <button class='btn warn mini'>Approve + SMS</button>
+                </form>
+                <form method='post' action='{url_for("coo_enrollment_action", id=e["id"], action="sms")}'>
+                    <button class='btn secondary mini'>SMS Only</button>
+                </form>
+                <form method='post' action='{url_for("coo_enrollment_action", id=e["id"], action="lapse")}' onsubmit="return confirm('Lapse only this selected enrollment?');">
+                    <button class='btn danger mini'>Lapse</button>
+                </form>
+            </div>
+            """
 
         trs += f"""
         <tr>
@@ -90722,6 +90964,7 @@ def coo_enrollments():
             <td>{escape(coupon)}</td>
             <td>R{float(e['amount_paid'] or 0):,.2f}</td>
             <td>{pop}</td>
+            <td>{actions}</td>
             <td>{escape((e['created_at'] or '')[:16].replace('T',' '))}</td>
         </tr>
         """
@@ -90738,8 +90981,14 @@ def coo_enrollments():
         <h1>COO Enrollments</h1>
 
         <p class="muted">
-            Operational enrollment overview. Academic marks and AQM tools are excluded.
+            Review learner details, payment evidence and approve or lapse enrollments just like the Admission Coordinator.
         </p>
+
+        {
+            "<div class='card soft' style='border-left:5px solid #c62828'><strong>Approvals are locked by High Admin.</strong><div class='mini muted'>You can still review enrollments and send SMS, but Approve and Lapse are disabled.</div></div>"
+            if approval_locked
+            else "<div class='card soft' style='border-left:5px solid #1b5e20'><strong>COO enrollment approval access is active.</strong><div class='mini muted'>Review the learner details, amount and Proof of Payment before approving.</div></div>"
+        }
 
         <form method="get" class="toolbar">
             <input type="month" name="month" value="{escape(month)}">
@@ -90781,12 +91030,13 @@ def coo_enrollments():
                         <th>Coupon / Referral</th>
                         <th>Amount Paid</th>
                         <th>PoP</th>
+                        <th>Actions</th>
                         <th>Created</th>
                     </tr>
                 </thead>
 
                 <tbody>
-                    {trs or "<tr><td colspan='9'>No enrollments found.</td></tr>"}
+                    {trs or "<tr><td colspan='10'>No enrollments found.</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -110598,7 +110848,7 @@ def admin_enrollment_approval_control():
         <h1>Enrollment Approval Control</h1>
 
         <p class="muted">
-            Control whether Normal Admins and Admission Coordinators can approve or lapse student enrollments.
+            Control whether Normal Admins, Admission Coordinators and the COO can approve or lapse student enrollments.
         </p>
 
         <div class="card soft" style="border-left:5px solid #1b5e20">
@@ -110607,7 +110857,7 @@ def admin_enrollment_approval_control():
             <p>{status_html}</p>
 
             <p class="muted">
-                When locked, Normal Admins and Admission Coordinators will not be able to approve, approve with SMS,
+                When locked, Normal Admins, Admission Coordinators and the COO will not be able to approve, approve with SMS,
                 or lapse enrollments. High Admin can still perform these actions.
             </p>
 
