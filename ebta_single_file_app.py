@@ -9,7 +9,10 @@ import secrets
 import threading
 import time
 import hmac
+import hashlib
 import io
+import urllib.request as urlreq
+import urllib.error as urlerror
 import smtplib
 import re
 from email.message import EmailMessage
@@ -1250,6 +1253,70 @@ def init_db():
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_email_queue_event
         ON email_queue(event_key, created_at)
+    """)
+
+    
+    
+    # ================= WHATSAPP ENROLLMENT BOT =================
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS whatsapp_bot_messages(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        wa_message_id TEXT UNIQUE,
+        phone TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        message_type TEXT NOT NULL DEFAULT 'text',
+        message_text TEXT,
+        status TEXT NOT NULL DEFAULT 'RECEIVED',
+        error_text TEXT,
+        created_at TEXT NOT NULL
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS whatsapp_bot_queue(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        wa_message_id TEXT NOT NULL UNIQUE,
+        phone TEXT NOT NULL,
+        profile_name TEXT,
+        message_type TEXT NOT NULL DEFAULT 'text',
+        message_text TEXT NOT NULL,
+        media_id TEXT,
+        media_mime_type TEXT,
+        media_filename TEXT,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        attempted_at TEXT,
+        processed_at TEXT
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS whatsapp_enrollment_drafts(
+        phone TEXT PRIMARY KEY,
+        profile_name TEXT,
+        stage TEXT NOT NULL,
+        data_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_bot_queue_status
+        ON whatsapp_bot_queue(status, id)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_bot_messages_phone
+        ON whatsapp_bot_messages(phone, id)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_enrollment_drafts_status
+        ON whatsapp_enrollment_drafts(status, updated_at)
     """)
 
     
@@ -16268,10 +16335,13 @@ def home():
     )
     enrollment_month_labels_json = json.dumps({m: pretty_month_label(m) for m in enrollment_start_months})
     
-    HELP_WHATSAPP_NUMBER = "27828353443"  # Replace with EBTA helper WhatsApp number
+    HELP_WHATSAPP_NUMBER = (
+        os.environ.get("EBTA_WHATSAPP_BOT_NUMBER", "").strip()
+        or "27828353443"
+    )
 
     help_message = quote_from_bytes(
-        "Good day EBTA, I need help with the enrollment ON THE EBTA PORTAL.".encode("utf-8")
+        "Hi EBTA, I need help with enrollment.".encode("utf-8")
     )
 
     enrollment_whatsapp_helper = f"""
@@ -32960,6 +33030,7 @@ def admin_nav():
                     ("Portal Activity", "admin_portal_activity", "/admin/portal-activity"),
                     ("SMS Dashboard", "admin_sms_dashboard", "/admin/sms-dashboard"),
                     ("Email Notifications", "admin_email_notifications", "/admin/email-notifications"),
+                    ("WhatsApp Enrollment Bot", "admin_whatsapp_bot", "/admin/whatsapp-bot"),
                     ("Enrollment Reminders", "admin_enrollment_sms", "/admin/enrollment-sms"),
                     ("Processed SMS", "admin_process_sms", "/admin/process-sms"),
                     ("Awards Export", "admin_awards_student_export", "/admin/awards-export"),
@@ -117984,6 +118055,3395 @@ def admission_school_movement():
     if r:
         return r
     return school_movement_overview("Admission School Movement Overview", admission_nav(), show_credentials=False)
+
+
+# =============================================================
+# FREE RULE-BASED WHATSAPP ENROLLMENT BOT
+# No OpenAI API is required.
+# =============================================================
+
+WHATSAPP_ENROLLMENT_MEDIA_MIME_MAP = {
+    "application/pdf": ".pdf",
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+
+
+def _whatsapp_real_db():
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn.row_factory = sqlite3.Row
+
+    try:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=10000")
+    except Exception:
+        pass
+
+    return conn
+
+
+def _whatsapp_setting(conn, key, default=""):
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM settings WHERE key=? LIMIT 1", (key,))
+    row = cur.fetchone()
+    return row["value"] if row else default
+
+
+def whatsapp_bot_enabled(conn=None):
+    own = conn is None
+
+    if own:
+        conn = _whatsapp_real_db()
+
+    try:
+        return _whatsapp_setting(
+            conn,
+            "whatsapp_bot_enabled",
+            "1"
+        ) == "1"
+    finally:
+        if own:
+            conn.close()
+
+
+def whatsapp_bot_config():
+    return {
+        "access_token": os.environ.get("WHATSAPP_ACCESS_TOKEN", "").strip(),
+        "phone_number_id": os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "").strip(),
+        "verify_token": os.environ.get("WHATSAPP_VERIFY_TOKEN", "").strip(),
+        "app_secret": os.environ.get("WHATSAPP_APP_SECRET", "").strip(),
+        "graph_version": os.environ.get("WHATSAPP_GRAPH_VERSION", "").strip(),
+        "public_number": os.environ.get("EBTA_WHATSAPP_BOT_NUMBER", "").strip(),
+    }
+
+
+def whatsapp_bot_setup_status():
+    cfg = whatsapp_bot_config()
+
+    required = {
+        "WhatsApp Access Token": cfg["access_token"],
+        "WhatsApp Phone Number ID": cfg["phone_number_id"],
+        "WhatsApp Verify Token": cfg["verify_token"],
+        "WhatsApp App Secret": cfg["app_secret"],
+        "WhatsApp Graph Version": cfg["graph_version"],
+    }
+
+    missing = [
+        label
+        for label, value in required.items()
+        if not value
+    ]
+
+    return {
+        "ready": not missing,
+        "missing": missing,
+    }
+
+
+def whatsapp_bot_base_url():
+    return (
+        os.environ.get(
+            "EBTA_PORTAL_BASE_URL",
+            "https://ebtaportal.co.za"
+        ).strip().rstrip("/")
+        or "https://ebtaportal.co.za"
+    )
+
+
+def whatsapp_bot_mask_phone(phone):
+    value = str(phone or "").strip()
+
+    if len(value) <= 4:
+        return value
+
+    return "••••" + value[-4:]
+
+
+def whatsapp_bot_verify_signature(raw_body, signature):
+    secret = whatsapp_bot_config()["app_secret"]
+
+    if not secret:
+        return False
+
+    expected = (
+        "sha256="
+        + hmac.new(
+            secret.encode("utf-8"),
+            raw_body,
+            hashlib.sha256
+        ).hexdigest()
+    )
+
+    return hmac.compare_digest(
+        expected,
+        str(signature or "")
+    )
+
+
+def whatsapp_bot_send_text(phone, message_text):
+    cfg = whatsapp_bot_config()
+
+    if not (
+        cfg["access_token"]
+        and cfg["phone_number_id"]
+        and cfg["graph_version"]
+    ):
+        raise RuntimeError(
+            "WhatsApp Cloud API is not fully configured."
+        )
+
+    phone = str(phone or "").strip()
+    message_text = str(message_text or "").strip()
+
+    if not phone:
+        raise RuntimeError("WhatsApp recipient is missing.")
+
+    if not message_text:
+        return None
+
+    # Stay comfortably below the WhatsApp text-message size ceiling.
+    if len(message_text) > 3500:
+        message_text = message_text[:3497] + "..."
+
+    url = (
+        "https://graph.facebook.com/"
+        + cfg["graph_version"]
+        + "/"
+        + cfg["phone_number_id"]
+        + "/messages"
+    )
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": phone,
+        "type": "text",
+        "text": {
+            "preview_url": False,
+            "body": message_text,
+        }
+    }
+
+    req = urlreq.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + cfg["access_token"],
+            "Content-Type": "application/json",
+        },
+        method="POST"
+    )
+
+    try:
+        with urlreq.urlopen(req, timeout=20) as response:
+            data = json.loads(
+                response.read().decode("utf-8")
+            )
+
+    except urlerror.HTTPError as exc:
+        body = ""
+
+        try:
+            body = exc.read().decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+
+        raise RuntimeError(
+            "WhatsApp send failed: "
+            + (body[:500] if body else str(exc))
+        )
+
+    messages = data.get("messages") or []
+
+    if messages:
+        return messages[0].get("id")
+
+    return None
+
+
+def whatsapp_bot_log_message(
+    conn,
+    wa_message_id,
+    phone,
+    direction,
+    message_type,
+    message_text,
+    status,
+    error_text=""
+):
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT OR IGNORE INTO whatsapp_bot_messages(
+            wa_message_id,
+            phone,
+            direction,
+            message_type,
+            message_text,
+            status,
+            error_text,
+            created_at
+        )
+        VALUES(?,?,?,?,?,?,?,?)
+    """, (
+        wa_message_id or None,
+        str(phone or "").strip(),
+        direction,
+        message_type,
+        message_text,
+        status,
+        error_text or None,
+        now_utc_iso()
+    ))
+
+
+def whatsapp_enrollment_get_draft(conn, phone):
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            phone,
+            profile_name,
+            stage,
+            data_json,
+            status,
+            created_at,
+            updated_at
+        FROM whatsapp_enrollment_drafts
+        WHERE phone=?
+          AND status='ACTIVE'
+        LIMIT 1
+    """, (
+        str(phone or "").strip(),
+    ))
+
+    row = cur.fetchone()
+
+    if not row:
+        return None
+
+    try:
+        data = json.loads(row["data_json"] or "{}")
+    except Exception:
+        data = {}
+
+    if not isinstance(data, dict):
+        data = {}
+
+    return {
+        "phone": row["phone"],
+        "profile_name": row["profile_name"],
+        "stage": row["stage"],
+        "data": data,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def whatsapp_enrollment_save_draft(
+    conn,
+    phone,
+    profile_name,
+    stage,
+    data
+):
+    now = now_utc_iso()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO whatsapp_enrollment_drafts(
+            phone,
+            profile_name,
+            stage,
+            data_json,
+            status,
+            created_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,'ACTIVE',?,?)
+        ON CONFLICT(phone)
+        DO UPDATE SET
+            profile_name=excluded.profile_name,
+            stage=excluded.stage,
+            data_json=excluded.data_json,
+            status='ACTIVE',
+            updated_at=excluded.updated_at
+    """, (
+        str(phone or "").strip(),
+        str(profile_name or "").strip() or None,
+        str(stage or "").strip(),
+        json.dumps(data or {}, ensure_ascii=False),
+        now,
+        now
+    ))
+
+
+def whatsapp_enrollment_remove_pop_file(data):
+    pop_path = str((data or {}).get("pop_path", "") or "").strip()
+
+    if not pop_path:
+        return
+
+    try:
+        filename = Path(pop_path).name
+
+        if filename:
+            path = UPLOAD_DIR / filename
+
+            if path.exists():
+                path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def whatsapp_enrollment_cancel(conn, phone, remove_file=True):
+    draft = whatsapp_enrollment_get_draft(conn, phone)
+
+    if remove_file and draft:
+        whatsapp_enrollment_remove_pop_file(draft["data"])
+
+    cur = conn.cursor()
+    cur.execute(
+        "DELETE FROM whatsapp_enrollment_drafts WHERE phone=?",
+        (str(phone or "").strip(),)
+    )
+
+
+def whatsapp_bot_human_reply(conn):
+    number = _whatsapp_setting(
+        conn,
+        "whatsapp_bot_human_number",
+        ""
+    ).strip()
+
+    if not number:
+        number = os.environ.get(
+            "EBTA_WHATSAPP_HUMAN_NUMBER",
+            ""
+        ).strip()
+
+    if number:
+        return (
+            "A member of the EBTA team can assist you.\n"
+            "Human support: "
+            + number
+        )
+
+    return (
+        "A member of the EBTA team can assist you. "
+        "Please use the official EBTA contact details on "
+        + whatsapp_bot_base_url()
+        + "."
+    )
+
+
+def whatsapp_bot_menu(conn):
+    enrollment_open = (
+        _whatsapp_setting(
+            conn,
+            "enrollment_open",
+            "1"
+        )
+        == "1"
+    )
+
+    status = "OPEN ✅" if enrollment_open else "CLOSED"
+
+    return (
+        "Hi 👋 Welcome to the EBTA WhatsApp Enrollment Assistant.\n\n"
+        f"Enrollment is currently {status}.\n\n"
+        "Reply with:\n"
+        "ENROLL - Complete an enrollment here on WhatsApp\n"
+        "SUBJECTS - View subjects\n"
+        "FEES - View current subject fees\n"
+        "PAYMENT - View EBTA EFT banking details\n"
+        "REGISTRATION - Annual registration information\n"
+        "STATUS - How to check an enrollment\n"
+        "HUMAN - Get help from the EBTA team\n"
+        "MENU - Show this menu again"
+    )
+
+
+def whatsapp_bot_fee_reply():
+    return (
+        "Current EBTA monthly subject fees:\n"
+        "Grades 8-11: R200 per subject\n"
+        "Grade 12: R250 per subject\n"
+        "Upgrading / Grade 13: R350 per subject\n\n"
+        "For 3 or more subjects the portal applies the current "
+        "bulk-discount rules automatically. Valid coupon/referral "
+        "codes are also checked automatically during enrollment."
+    )
+
+
+def whatsapp_enrollment_bank_details(conn):
+    return {
+        "business_name": _whatsapp_setting(
+            conn,
+            "whatsapp_bot_bank_business_name",
+            "EBTA/K2025591697 SA PTY LTD"
+        ),
+        "account_holder": _whatsapp_setting(
+            conn,
+            "whatsapp_bot_bank_account_holder",
+            "MC MOHALE"
+        ),
+        "bank_name": _whatsapp_setting(
+            conn,
+            "whatsapp_bot_bank_name",
+            "Capitec Business"
+        ),
+        "account_number": _whatsapp_setting(
+            conn,
+            "whatsapp_bot_bank_account_number",
+            "1055480919"
+        ),
+        "branch_code": _whatsapp_setting(
+            conn,
+            "whatsapp_bot_bank_branch_code",
+            "470010"
+        ),
+        "account_type": _whatsapp_setting(
+            conn,
+            "whatsapp_bot_bank_account_type",
+            "Business"
+        ),
+    }
+
+
+def whatsapp_bot_payment_reply(conn):
+    bank = whatsapp_enrollment_bank_details(conn)
+
+    return (
+        "Official EBTA EFT banking details:\n"
+        f"Business: {bank['business_name']}\n"
+        f"Account holder: {bank['account_holder']}\n"
+        f"Bank: {bank['bank_name']}\n"
+        f"Account number: {bank['account_number']}\n"
+        f"Branch code: {bank['branch_code']}\n"
+        f"Account type: {bank['account_type']}\n\n"
+        "Preferred reference: Learner name + surname + month.\n"
+        "When doing an enrollment through this bot, wait for the bot "
+        "to calculate your exact amount before paying."
+    )
+
+
+def whatsapp_enrollment_parse_grade(value):
+    clean = str(value or "").strip().lower()
+
+    if "upgrad" in clean:
+        return "G13"
+
+    match = re.search(r"\b(8|9|10|11|12|13)\b", clean)
+
+    if not match:
+        return ""
+
+    return "G" + match.group(1)
+
+
+def whatsapp_enrollment_subject_rows(conn, grade):
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id,name,grade
+        FROM subjects
+        WHERE grade=?
+        ORDER BY name
+    """, (grade,))
+
+    return cur.fetchall()
+
+
+def whatsapp_enrollment_subject_prompt(conn, grade):
+    rows = whatsapp_enrollment_subject_rows(conn, grade)
+
+    if not rows:
+        return (
+            "There are no subjects available for "
+            + grade_label(grade)
+            + " right now."
+        )
+
+    lines = [
+        "Choose the subject(s) for "
+        + grade_label(grade)
+        + ":"
+    ]
+
+    for index, row in enumerate(rows, start=1):
+        lines.append(
+            f"{index}. {row['name']}"
+        )
+
+    lines.append(
+        "\nReply with the numbers, for example: 1, 3"
+    )
+
+    return "\n".join(lines)
+
+
+def whatsapp_bot_subjects_reply(conn, message_text=""):
+    grade = whatsapp_enrollment_parse_grade(message_text)
+
+    if grade:
+        return whatsapp_enrollment_subject_prompt(conn, grade)
+
+    return (
+        "Which grade would you like subjects for?\n"
+        "Reply with: 8, 9, 10, 11, 12 or UPGRADING."
+    )
+
+
+def whatsapp_enrollment_parse_subject_ids(
+    conn,
+    grade,
+    value
+):
+    rows = whatsapp_enrollment_subject_rows(conn, grade)
+
+    if not rows:
+        return []
+
+    raw = str(value or "").strip()
+    selected = []
+
+    for token in re.findall(r"\d+", raw):
+        try:
+            index = int(token)
+
+            if 1 <= index <= len(rows):
+                subject_id = int(rows[index - 1]["id"])
+
+                if subject_id not in selected:
+                    selected.append(subject_id)
+        except Exception:
+            continue
+
+    if selected:
+        return selected
+
+    lower_raw = " " + raw.lower() + " "
+
+    for row in rows:
+        name = str(row["name"] or "").strip()
+
+        if name and name.lower() in lower_raw:
+            selected.append(int(row["id"]))
+
+    return selected
+
+
+def whatsapp_enrollment_subject_names(conn, subject_ids):
+    clean_ids = []
+
+    for value in subject_ids or []:
+        try:
+            clean_ids.append(int(value))
+        except Exception:
+            pass
+
+    if not clean_ids:
+        return []
+
+    placeholders = ",".join("?" for _ in clean_ids)
+    cur = conn.cursor()
+
+    cur.execute(
+        f"""
+        SELECT id,name,grade
+        FROM subjects
+        WHERE id IN ({placeholders})
+        ORDER BY
+            CAST(REPLACE(grade,'G','') AS INTEGER),
+            name
+        """,
+        clean_ids
+    )
+
+    return [
+        f"{grade_label(row['grade'])} - {row['name']}"
+        for row in cur.fetchall()
+    ]
+
+
+def whatsapp_enrollment_normalize_phone(value, sender_phone=""):
+    value = str(value or "").strip()
+
+    if value.lower() in {
+        "same",
+        "this number",
+        "my number",
+        "yes"
+    }:
+        value = str(sender_phone or "").strip()
+
+    digits = "".join(ch for ch in value if ch.isdigit())
+
+    if digits.startswith("27") and len(digits) == 11:
+        return normalize_phone(digits, "SA", strict=True)
+
+    if digits.startswith("0") and len(digits) == 10:
+        return normalize_phone(digits, "SA", strict=True)
+
+    if value.startswith("+"):
+        return normalize_phone(value, "INT", strict=True)
+
+    if digits and not digits.startswith("27"):
+        return normalize_phone("+" + digits, "INT", strict=True)
+
+    raise ValueError(
+        "Please enter a valid contact number with the country code."
+    )
+
+
+def whatsapp_enrollment_existing_student(conn, student_phone):
+    variants = phone_variants(student_phone)
+
+    if not variants:
+        return None
+
+    placeholders = ",".join("?" for _ in variants)
+    cur = conn.cursor()
+
+    cur.execute(
+        f"""
+        SELECT
+            id,
+            full_name,
+            phone_whatsapp,
+            guardian_phone,
+            guardian_name,
+            email,
+            grade,
+            pin,
+            province,
+            school,
+            phone_type,
+            guardian_phone_type
+        FROM students
+        WHERE phone_whatsapp IN ({placeholders})
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        variants
+    )
+
+    return cur.fetchone()
+
+
+def whatsapp_enrollment_month_options(conn):
+    system_month = _whatsapp_setting(
+        conn,
+        "current_month",
+        datetime.date.today().strftime("%Y-%m")
+    )
+
+    return allowed_enrollment_start_months(
+        system_month,
+        12
+    )
+
+
+def whatsapp_enrollment_month_prompt(conn):
+    months = whatsapp_enrollment_month_options(conn)
+    lines = ["When should the enrollment start?"]
+
+    for index, month in enumerate(months, start=1):
+        lines.append(
+            f"{index}. {pretty_month_label(month)}"
+        )
+
+    lines.append("\nReply with the number.")
+    return "\n".join(lines)
+
+
+def whatsapp_enrollment_parse_month(conn, value):
+    months = whatsapp_enrollment_month_options(conn)
+    clean = str(value or "").strip()
+
+    if clean in months:
+        return clean
+
+    try:
+        index = int(clean)
+
+        if 1 <= index <= len(months):
+            return months[index - 1]
+    except Exception:
+        pass
+
+    lower = clean.lower()
+
+    for month in months:
+        if lower == pretty_month_label(month).lower():
+            return month
+
+    return ""
+
+
+def whatsapp_enrollment_duplicate_pairs(
+    conn,
+    student_id,
+    subject_ids,
+    start_month,
+    month_count
+):
+    if not student_id:
+        return set()
+
+    months = enrollment_month_sequence(
+        start_month,
+        month_count
+    )
+
+    placeholders = ",".join("?" for _ in months)
+    cur = conn.cursor()
+
+    cur.execute(
+        f"""
+        SELECT subject_id,month
+        FROM enrollments
+        WHERE student_id=?
+          AND month IN ({placeholders})
+        """,
+        [int(student_id)] + months
+    )
+
+    existing = {
+        (int(row["subject_id"]), row["month"])
+        for row in cur.fetchall()
+    }
+
+    selected = {
+        (int(subject_id), month)
+        for subject_id in subject_ids
+        for month in months
+    }
+
+    return selected.intersection(existing)
+
+
+def whatsapp_enrollment_prepare_fee(conn, data):
+    existing_student = whatsapp_enrollment_existing_student(
+        conn,
+        data.get("student_phone", "")
+    )
+
+    existing_student_id = (
+        int(existing_student["id"])
+        if existing_student
+        else None
+    )
+
+    subject_ids = [
+        int(value)
+        for value in data.get("subject_ids", [])
+    ]
+
+    start_month = data.get("enrollment_start_month", "")
+
+    month_count = normalize_enrollment_month_count(
+        data.get("enrollment_month_count", 1)
+    )
+
+    duplicates = whatsapp_enrollment_duplicate_pairs(
+        conn,
+        existing_student_id,
+        subject_ids,
+        start_month,
+        month_count
+    )
+
+    if duplicates:
+        return {
+            "valid": False,
+            "message": (
+                "One or more selected subjects are already enrolled "
+                "for the selected month range. Type CANCEL and start "
+                "again with only the new subjects/months you need."
+            )
+        }
+
+    coupon_code = str(
+        data.get("coupon_code", "")
+        or ""
+    ).strip().upper()
+
+    breakdown = calculate_enrollment_fee_breakdown(
+        conn,
+        subject_ids,
+        coupon_code=coupon_code,
+        student_id=existing_student_id,
+        month_count=month_count
+    )
+
+    if not breakdown["valid"]:
+        return {
+            "valid": False,
+            "message": (
+                breakdown.get("message")
+                or breakdown.get(
+                    "coupon_result",
+                    {}
+                ).get("message")
+                or "The discount code could not be applied."
+            )
+        }
+
+    year = datetime.date.today().strftime("%Y")
+    registration_due = 50
+
+    if (
+        existing_student_id
+        and student_registered_for_year(
+            conn,
+            existing_student_id,
+            year
+        )
+    ):
+        registration_due = 0
+
+    class_total = int(breakdown["total_due"])
+    payment_total = class_total + registration_due
+
+    return {
+        "valid": True,
+        "existing_student_id": existing_student_id,
+        "class_total_due": class_total,
+        "registration_due": registration_due,
+        "payment_total": payment_total,
+        "subtotal": int(breakdown["subtotal"]),
+        "discount": int(breakdown["total_discount"]),
+        "breakdown": breakdown,
+    }
+
+
+def whatsapp_enrollment_payment_message(conn, data):
+    bank = whatsapp_enrollment_bank_details(conn)
+
+    class_total = int(
+        data.get("class_total_due", 0)
+        or 0
+    )
+
+    registration_due = int(
+        data.get("registration_due", 0)
+        or 0
+    )
+
+    payment_total = int(
+        data.get("payment_total", 0)
+        or 0
+    )
+
+    lines = [
+        "Payment details:",
+        f"Class fees: R{class_total}",
+    ]
+
+    if registration_due:
+        lines.append("Annual registration: R50")
+
+    lines.extend([
+        f"Total EFT amount: R{payment_total}",
+        "",
+        f"Bank: {bank['bank_name']}",
+        f"Account holder: {bank['account_holder']}",
+        f"Account number: {bank['account_number']}",
+        f"Branch code: {bank['branch_code']}",
+        f"Account type: {bank['account_type']}",
+        (
+            "Reference: "
+            + data.get("full_name", "")
+            + " "
+            + pretty_month_label(
+                data.get(
+                    "enrollment_start_month",
+                    ""
+                )
+            )
+        ),
+        "",
+        (
+            "After paying, send the Proof of Payment here "
+            "as an image or PDF."
+        )
+    ])
+
+    return "\n".join(lines)
+
+
+def whatsapp_enrollment_download_media(
+    media_id,
+    original_filename="",
+    declared_mime_type=""
+):
+    cfg = whatsapp_bot_config()
+
+    if not (
+        cfg["access_token"]
+        and cfg["phone_number_id"]
+        and cfg["graph_version"]
+    ):
+        raise RuntimeError(
+            "WhatsApp media access is not configured."
+        )
+
+    media_id = str(media_id or "").strip()
+
+    if not media_id:
+        raise ValueError(
+            "No WhatsApp media file was received."
+        )
+
+    metadata_url = (
+        "https://graph.facebook.com/"
+        + cfg["graph_version"]
+        + "/"
+        + media_id
+        + "?"
+        + urlencode({
+            "phone_number_id": cfg["phone_number_id"]
+        })
+    )
+
+    metadata_req = urlreq.Request(
+        metadata_url,
+        headers={
+            "Authorization": "Bearer " + cfg["access_token"]
+        },
+        method="GET"
+    )
+
+    try:
+        with urlreq.urlopen(
+            metadata_req,
+            timeout=20
+        ) as response:
+            metadata = json.loads(
+                response.read().decode("utf-8")
+            )
+
+    except urlerror.HTTPError as exc:
+        body = ""
+
+        try:
+            body = exc.read().decode(
+                "utf-8",
+                errors="ignore"
+            )
+        except Exception:
+            pass
+
+        raise RuntimeError(
+            "Could not retrieve the WhatsApp file. "
+            + (body[:300] if body else str(exc))
+        )
+
+    media_url = str(metadata.get("url") or "").strip()
+
+    mime_type = str(
+        metadata.get("mime_type")
+        or declared_mime_type
+        or ""
+    ).split(";", 1)[0].strip().lower()
+
+    if mime_type not in WHATSAPP_ENROLLMENT_MEDIA_MIME_MAP:
+        raise ValueError(
+            "Please send the Proof of Payment as a PDF, "
+            "JPG, JPEG, PNG, GIF or WEBP file."
+        )
+
+    try:
+        file_size = int(metadata.get("file_size") or 0)
+    except Exception:
+        file_size = 0
+
+    if (
+        file_size
+        and file_size > ENROLLMENT_POP_MAX_FILE_BYTES
+    ):
+        raise ValueError(
+            "The Proof of Payment must be 15 MB or smaller."
+        )
+
+    if not media_url:
+        raise RuntimeError(
+            "WhatsApp did not return a download link for the file."
+        )
+
+    download_req = urlreq.Request(
+        media_url,
+        headers={
+            "Authorization": "Bearer " + cfg["access_token"]
+        },
+        method="GET"
+    )
+
+    try:
+        with urlreq.urlopen(
+            download_req,
+            timeout=30
+        ) as response:
+            file_bytes = response.read(
+                ENROLLMENT_POP_MAX_FILE_BYTES + 1
+            )
+
+    except urlerror.HTTPError as exc:
+        raise RuntimeError(
+            "The Proof of Payment could not be downloaded "
+            "from WhatsApp. Please send it again."
+        ) from exc
+
+    if not file_bytes:
+        raise ValueError(
+            "The Proof of Payment file is empty. "
+            "Please send it again."
+        )
+
+    if len(file_bytes) > ENROLLMENT_POP_MAX_FILE_BYTES:
+        raise ValueError(
+            "The Proof of Payment must be 15 MB or smaller."
+        )
+
+    extension = WHATSAPP_ENROLLMENT_MEDIA_MIME_MAP[
+        mime_type
+    ]
+
+    original_name = Path(
+        str(original_filename or "")
+    ).name.strip()
+
+    if original_name:
+        original_ext = Path(original_name).suffix.lower()
+
+        if original_ext in ALLOWED_ENROLLMENT_POP_EXTENSIONS:
+            extension = original_ext
+
+    safe_name = (
+        "wa_pop_"
+        + str(int(time.time()))
+        + "_"
+        + secrets.token_hex(10)
+        + extension
+    )
+
+    destination = UPLOAD_DIR / safe_name
+    destination.write_bytes(file_bytes)
+
+    return {
+        "file_path": "/uploads/" + safe_name,
+        "file_name": original_name or safe_name,
+        "mime_type": mime_type,
+        "size": len(file_bytes),
+    }
+
+
+def whatsapp_enrollment_confirmation_summary(conn, data):
+    subjects = whatsapp_enrollment_subject_names(
+        conn,
+        data.get("subject_ids", [])
+    )
+
+    start_month = data.get(
+        "enrollment_start_month",
+        ""
+    )
+
+    month_count = int(
+        data.get("enrollment_month_count", 1)
+        or 1
+    )
+
+    months = enrollment_month_sequence(
+        start_month,
+        month_count
+    )
+
+    period_text = (
+        pretty_month_label(months[0])
+        if len(months) == 1
+        else (
+            pretty_month_label(months[0])
+            + " to "
+            + pretty_month_label(months[-1])
+        )
+    )
+
+    lines = [
+        "Please check the enrollment:",
+        f"Learner: {data.get('full_name','')}",
+        f"WhatsApp: {data.get('student_phone','')}",
+        f"Grade: {grade_label(data.get('grade',''))}",
+        "Subjects: " + ", ".join(subjects),
+        f"Period: {period_text}",
+        f"Class fees: R{int(data.get('class_total_due',0) or 0)}",
+    ]
+
+    registration_due = int(
+        data.get("registration_due", 0)
+        or 0
+    )
+
+    if registration_due:
+        lines.append("Annual registration: R50")
+
+    lines.extend([
+        f"Total payment: R{int(data.get('payment_total',0) or 0)}",
+        "",
+        (
+            "Reply CONFIRM to submit the enrollment. "
+            "By confirming, you confirm the details are correct "
+            "and authorise EBTA to process this enrollment."
+        ),
+        "Reply CANCEL if you do not want to submit."
+    ])
+
+    return "\n".join(lines)
+
+
+def whatsapp_enrollment_submit(conn, data):
+    if _whatsapp_setting(
+        conn,
+        "enrollment_open",
+        "1"
+    ) != "1":
+        raise ValueError(
+            _whatsapp_setting(
+                conn,
+                "enrollment_message",
+                "Enrollments are currently closed."
+            )
+        )
+
+    full_name = str(
+        data.get("full_name", "")
+        or ""
+    ).strip()
+
+    student_phone = str(
+        data.get("student_phone", "")
+        or ""
+    ).strip()
+
+    guardian_name = str(
+        data.get("guardian_name", "")
+        or ""
+    ).strip()
+
+    guardian_phone = str(
+        data.get("guardian_phone", "")
+        or ""
+    ).strip()
+
+    email = normalize_email_address(
+        data.get("email", "")
+    ) or None
+
+    province = str(
+        data.get("province", "")
+        or ""
+    ).strip()
+
+    school = str(
+        data.get("school", "")
+        or ""
+    ).strip()
+
+    grade = str(
+        data.get("grade", "")
+        or ""
+    ).strip()
+
+    pin = str(
+        data.get("pin", "")
+        or ""
+    ).strip()
+
+    subject_ids = [
+        int(value)
+        for value in data.get("subject_ids", [])
+    ]
+
+    coupon_code = str(
+        data.get("coupon_code", "")
+        or ""
+    ).strip().upper()
+
+    start_month = str(
+        data.get("enrollment_start_month", "")
+        or ""
+    ).strip()
+
+    month_count = normalize_enrollment_month_count(
+        data.get("enrollment_month_count", 1)
+    )
+
+    if not (
+        full_name
+        and student_phone
+        and guardian_name
+        and guardian_phone
+        and province
+        and school
+        and grade
+        and is_valid_pin(pin)
+        and subject_ids
+        and start_month
+    ):
+        raise ValueError(
+            "Some enrollment details are missing. "
+            "Type CANCEL and start again."
+        )
+
+    cur = conn.cursor()
+
+    placeholders = ",".join(
+        "?"
+        for _ in subject_ids
+    )
+
+    cur.execute(
+        f"""
+        SELECT id,name,grade
+        FROM subjects
+        WHERE id IN ({placeholders})
+        """,
+        subject_ids
+    )
+
+    subject_rows = cur.fetchall()
+
+    if (
+        len(subject_rows) != len(set(subject_ids))
+        or any(
+            row["grade"] != grade
+            for row in subject_rows
+        )
+    ):
+        raise ValueError(
+            "The subject selection is no longer valid. "
+            "Type CANCEL and start again."
+        )
+
+    existing_student = whatsapp_enrollment_existing_student(
+        conn,
+        student_phone
+    )
+
+    if existing_student:
+        if str(existing_student["pin"] or "") != pin:
+            raise ValueError(
+                "The existing student PIN no longer matches. "
+                "Type HUMAN if you need help."
+            )
+
+        sid = int(existing_student["id"])
+
+    else:
+        sid = None
+
+    duplicates = whatsapp_enrollment_duplicate_pairs(
+        conn,
+        sid,
+        subject_ids,
+        start_month,
+        month_count
+    )
+
+    if duplicates:
+        raise ValueError(
+            "One or more selected subjects/months are already enrolled. "
+            "Please type CANCEL and start again."
+        )
+
+    phone_type = (
+        "SA"
+        if student_phone.startswith("+27")
+        else "INT"
+    )
+
+    guardian_phone_type = (
+        "SA"
+        if guardian_phone.startswith("+27")
+        else "INT"
+    )
+
+    if existing_student:
+        cur.execute("""
+            UPDATE students
+            SET full_name=?,
+                guardian_phone=?,
+                guardian_name=?,
+                email=?,
+                grade=?,
+                province=?,
+                school=?,
+                phone_type=?,
+                guardian_phone_type=?
+            WHERE id=?
+        """, (
+            full_name,
+            guardian_phone,
+            guardian_name,
+            email,
+            grade,
+            province,
+            school,
+            phone_type,
+            guardian_phone_type,
+            sid
+        ))
+
+    else:
+        cur.execute("""
+            INSERT INTO students(
+                full_name,
+                phone_whatsapp,
+                guardian_phone,
+                guardian_name,
+                email,
+                grade,
+                pin,
+                created_at,
+                province,
+                school,
+                phone_type,
+                guardian_phone_type
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            full_name,
+            student_phone,
+            guardian_phone,
+            guardian_name,
+            email,
+            grade,
+            pin,
+            now_utc_iso(),
+            province,
+            school,
+            phone_type,
+            guardian_phone_type
+        ))
+
+        sid = int(cur.lastrowid)
+        ensure_student_referral_code(conn, sid)
+
+    breakdown = calculate_enrollment_fee_breakdown(
+        conn,
+        subject_ids,
+        coupon_code=coupon_code,
+        student_id=sid,
+        month_count=month_count
+    )
+
+    if not breakdown["valid"]:
+        raise ValueError(
+            breakdown.get("message")
+            or breakdown.get(
+                "coupon_result",
+                {}
+            ).get("message")
+            or "The fee calculation changed."
+        )
+
+    class_total_due = int(
+        breakdown["total_due"]
+    )
+
+    year = datetime.date.today().strftime("%Y")
+
+    registration_due = (
+        0
+        if student_registered_for_year(
+            conn,
+            sid,
+            year
+        )
+        else 50
+    )
+
+    payment_total = (
+        class_total_due
+        + registration_due
+    )
+
+    if (
+        int(
+            data.get(
+                "class_total_due",
+                -1
+            )
+            or 0
+        )
+        != class_total_due
+        or int(
+            data.get(
+                "registration_due",
+                -1
+            )
+            or 0
+        )
+        != registration_due
+        or int(
+            data.get(
+                "payment_total",
+                -1
+            )
+            or 0
+        )
+        != payment_total
+    ):
+        raise ValueError(
+            "The enrollment amount changed before submission. "
+            f"The current total is R{payment_total}. "
+            "Please type CANCEL and start the enrollment again "
+            "before making another payment."
+        )
+
+    pop_path = str(
+        data.get("pop_path", "")
+        or ""
+    ).strip()
+
+    if payment_total > 0:
+        if not pop_path:
+            raise ValueError(
+                "Proof of Payment is required before submission."
+            )
+
+        pop_file = UPLOAD_DIR / Path(pop_path).name
+
+        if not pop_file.exists():
+            raise ValueError(
+                "The Proof of Payment could not be found. "
+                "Please send it again."
+            )
+
+    if registration_due:
+        ensure_registration_table(conn)
+
+        cur.execute("""
+            INSERT OR IGNORE INTO registrations(
+                student_id,
+                year,
+                amount,
+                created_at
+            )
+            VALUES(?,?,?,?)
+        """, (
+            sid,
+            year,
+            50,
+            now_utc_iso()
+        ))
+
+    months_to_enroll = enrollment_month_sequence(
+        start_month,
+        month_count
+    )
+
+    period_ref = (
+        f"PERIOD-{sid}-"
+        f"{int(datetime.datetime.now().timestamp())}-"
+        f"{secrets.token_hex(4)}"
+    )
+
+    period_start_month = months_to_enroll[0]
+    period_end_month = months_to_enroll[-1]
+    coupon_result = breakdown["coupon_result"]
+    coupon_discount = breakdown["coupon_discount"]
+
+    is_new_referral_student = is_first_time_student(
+        conn,
+        sid
+    )
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM enrollments
+        WHERE student_id=?
+    """, (sid,))
+
+    existing_enrollment_count = int(
+        cur.fetchone()["c"]
+        or 0
+    )
+
+    is_new_student_for_referral = (
+        existing_enrollment_count == 0
+    )
+
+    if (
+        coupon_result.get("code_type")
+        == "REFERRAL_ONLY"
+        and not is_new_referral_student
+    ):
+        raise ValueError(
+            "Referral codes can only be used by new EBTA learners."
+        )
+
+    created = []
+    coupon_saved_on_enrollment = False
+
+    for enroll_month in months_to_enroll:
+        for subject_id in subject_ids:
+            status_token = secrets.token_urlsafe(16)
+
+            coupon_code_for_row = None
+            coupon_discount_for_row = 0
+            coupon_type_for_row = None
+            referral_code_for_row = None
+
+            if coupon_code and not coupon_saved_on_enrollment:
+                coupon_code_for_row = coupon_code
+                coupon_discount_for_row = coupon_discount
+                coupon_type_for_row = coupon_result.get(
+                    "code_type"
+                )
+
+                if coupon_result.get("code_type") in {
+                    "REFERRAL_ONLY",
+                    "TUTOR_REFERRAL"
+                }:
+                    referral_code_for_row = coupon_code
+
+            cur.execute("""
+                INSERT INTO enrollments(
+                    student_id,
+                    subject_id,
+                    month,
+                    status,
+                    payment_method,
+                    payment_ref,
+                    pop_url,
+                    amount_paid,
+                    coupon_code,
+                    coupon_discount_amount,
+                    coupon_type,
+                    referral_code_used,
+                    enrollment_period_ref,
+                    period_month_count,
+                    period_start_month,
+                    period_end_month,
+                    period_total_amount,
+                    period_auto_active,
+                    status_token,
+                    created_at
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                sid,
+                subject_id,
+                enroll_month,
+                "PENDING",
+                "EFT",
+                None,
+                pop_path or None,
+                class_total_due,
+                coupon_code_for_row,
+                coupon_discount_for_row,
+                coupon_type_for_row,
+                referral_code_for_row,
+                period_ref,
+                month_count,
+                period_start_month,
+                period_end_month,
+                class_total_due,
+                0,
+                status_token,
+                now_utc_iso()
+            ))
+
+            if coupon_code and not coupon_saved_on_enrollment:
+                coupon_saved_on_enrollment = True
+
+            enrollment_id = int(cur.lastrowid)
+
+            payment_ref = (
+                f"EFT-{enrollment_id}-"
+                f"{int(datetime.datetime.now().timestamp())}"
+            )
+
+            cur.execute(
+                "UPDATE enrollments SET payment_ref=? WHERE id=?",
+                (payment_ref, enrollment_id)
+            )
+
+            cur.execute("""
+                INSERT INTO payments(
+                    enrollment_id,
+                    amount,
+                    gateway,
+                    reference,
+                    result,
+                    timestamp
+                )
+                VALUES(?,?,?,?,?,?)
+            """, (
+                enrollment_id,
+                class_total_due,
+                "EFT",
+                payment_ref,
+                "PENDING",
+                now_utc_iso()
+            ))
+
+            if pop_path:
+                cur.execute("""
+                    INSERT INTO enrollment_files(
+                        enrollment_id,
+                        file_path
+                    )
+                    VALUES(?,?)
+                """, (
+                    enrollment_id,
+                    pop_path
+                ))
+
+            created.append(
+                (
+                    enrollment_id,
+                    status_token
+                )
+            )
+
+    if created:
+        mark_coupon_used(
+            conn,
+            coupon_result.get("coupon_id")
+        )
+
+        if coupon_result.get("code_type") == "REFERRAL_ONLY":
+            award_referral_point_and_rewards(
+                conn,
+                coupon_result.get("referral_owner_id"),
+                sid,
+                coupon_code,
+                start_month
+            )
+
+        if (
+            is_new_student_for_referral
+            and coupon_result.get("tutor_referrer_id")
+        ):
+            award_tutor_referral_reward(
+                conn,
+                coupon_result.get("tutor_referrer_id"),
+                sid,
+                coupon_code,
+                start_month
+            )
+
+    subject_names = whatsapp_enrollment_subject_names(
+        conn,
+        subject_ids
+    )
+
+    queue_email_notification(
+        email,
+        "Enrollment Received",
+        (
+            "Your EBTA enrollment has been received "
+            "and is pending review."
+        ),
+        "enrollment_received",
+        recipient_name=full_name,
+        details=[
+            (
+                "Subjects",
+                ", ".join(subject_names)
+            ),
+            (
+                "Period",
+                (
+                    f"{pretty_month_label(period_start_month)} "
+                    f"to "
+                    f"{pretty_month_label(period_end_month)}"
+                )
+            ),
+            (
+                "Class Fees",
+                f"R{class_total_due}"
+            ),
+            (
+                "Annual Registration",
+                (
+                    "R50"
+                    if registration_due
+                    else "Already registered"
+                )
+            ),
+            (
+                "Status",
+                "Pending"
+            )
+        ],
+        action_path="/student/login",
+        action_label="Open Student Login",
+        recipient_type="student",
+        related_type="enrollment_period",
+        related_id=period_ref,
+        dedupe_key=(
+            f"enrollment-received:"
+            f"{period_ref}"
+        ),
+        conn=conn
+    )
+
+    return {
+        "student_id": sid,
+        "period_ref": period_ref,
+        "created": created,
+        "subject_names": subject_names,
+        "period_start_month": period_start_month,
+        "period_end_month": period_end_month,
+        "class_total_due": class_total_due,
+        "registration_due": registration_due,
+        "payment_total": payment_total,
+    }
+
+
+def whatsapp_enrollment_start(conn, phone, profile_name):
+    if not whatsapp_bot_enabled(conn):
+        return (
+            "The WhatsApp enrollment service is currently disabled."
+        )
+
+    if _whatsapp_setting(
+        conn,
+        "enrollment_open",
+        "1"
+    ) != "1":
+        return _whatsapp_setting(
+            conn,
+            "enrollment_message",
+            "Enrollments are currently closed."
+        )
+
+    whatsapp_enrollment_cancel(
+        conn,
+        phone,
+        remove_file=True
+    )
+
+    data = {
+        "source": "WHATSAPP",
+        "sender_phone": str(phone or "").strip(),
+    }
+
+    whatsapp_enrollment_save_draft(
+        conn,
+        phone,
+        profile_name,
+        "full_name",
+        data
+    )
+
+    return (
+        "Enrollment started ✅\n\n"
+        "What is the learner's full name and surname?\n\n"
+        "You can type CANCEL at any time."
+    )
+
+
+def whatsapp_enrollment_handle(
+    conn,
+    phone,
+    profile_name,
+    message_text,
+    message_type="text",
+    media_id="",
+    media_mime_type="",
+    media_filename=""
+):
+    draft = whatsapp_enrollment_get_draft(
+        conn,
+        phone
+    )
+
+    if not draft:
+        return whatsapp_enrollment_start(
+            conn,
+            phone,
+            profile_name
+        )
+
+    stage = draft["stage"]
+    data = dict(draft["data"])
+
+    clean = str(message_text or "").strip()
+    lower = clean.lower()
+
+    if lower == "cancel":
+        whatsapp_enrollment_cancel(
+            conn,
+            phone,
+            remove_file=True
+        )
+
+        return (
+            "Enrollment cancelled. "
+            "Reply ENROLL whenever you want to start again."
+        )
+
+    if stage == "full_name":
+        if len(clean) < 3:
+            return (
+                "Please enter the learner's full name and surname."
+            )
+
+        data["full_name"] = clean
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
+            "student_phone",
+            data
+        )
+
+        return (
+            "Is this WhatsApp number the learner's own number?\n\n"
+            "Reply SAME if yes, or send the learner's contact number "
+            "with the country code."
+        )
+
+    if stage == "student_phone":
+        try:
+            student_phone = whatsapp_enrollment_normalize_phone(
+                clean,
+                sender_phone=phone
+            )
+        except ValueError as exc:
+            return str(exc)
+
+        data["student_phone"] = student_phone
+
+        existing_student = whatsapp_enrollment_existing_student(
+            conn,
+            student_phone
+        )
+
+        data["existing_student"] = bool(existing_student)
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
+            "pin",
+            data
+        )
+
+        if existing_student:
+            return (
+                "I found an existing EBTA student account for that number.\n\n"
+                "Please enter the existing 5-digit Student Portal PIN."
+            )
+
+        return (
+            "Create a 5-digit PIN for the learner's Student Portal account."
+        )
+
+    if stage == "pin":
+        if not is_valid_pin(clean):
+            return (
+                "The PIN must be exactly 5 digits. Please try again."
+            )
+
+        existing_student = whatsapp_enrollment_existing_student(
+            conn,
+            data.get("student_phone", "")
+        )
+
+        if (
+            existing_student
+            and str(existing_student["pin"] or "") != clean
+        ):
+            return (
+                "That PIN does not match the existing Student Portal account. "
+                "Please try again, or type HUMAN if you need help."
+            )
+
+        data["pin"] = clean
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
+            "guardian_name",
+            data
+        )
+
+        return (
+            "What is the parent or guardian's full name?"
+        )
+
+    if stage == "guardian_name":
+        if len(clean) < 3:
+            return (
+                "Please enter the parent or guardian's full name."
+            )
+
+        data["guardian_name"] = clean
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
+            "guardian_phone",
+            data
+        )
+
+        return (
+            "What is the parent or guardian's contact number? "
+            "Please include the country code."
+        )
+
+    if stage == "guardian_phone":
+        try:
+            guardian_phone = whatsapp_enrollment_normalize_phone(
+                clean
+            )
+        except ValueError as exc:
+            return str(exc)
+
+        data["guardian_phone"] = guardian_phone
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
+            "email",
+            data
+        )
+
+        return (
+            "What email address should EBTA use for enrollment updates?\n\n"
+            "Reply NONE if there is no email address."
+        )
+
+    if stage == "email":
+        if lower in {
+            "none",
+            "no",
+            "skip",
+            "n/a"
+        }:
+            email = ""
+        else:
+            email = normalize_email_address(clean)
+
+            if not email:
+                return (
+                    "Please enter a valid email address, "
+                    "or reply NONE."
+                )
+
+        data["email"] = email
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
+            "province",
+            data
+        )
+
+        return (
+            "Which province does the learner live in?"
+        )
+
+    if stage == "province":
+        if len(clean) < 2:
+            return (
+                "Please enter the learner's province."
+            )
+
+        data["province"] = clean
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
+            "school",
+            data
+        )
+
+        return (
+            "What is the learner's school name?"
+        )
+
+    if stage == "school":
+        if len(clean) < 2:
+            return (
+                "Please enter the learner's school name."
+            )
+
+        data["school"] = clean
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
+            "grade",
+            data
+        )
+
+        return (
+            "Which grade is the learner enrolling for?\n\n"
+            "Reply 8, 9, 10, 11, 12 or UPGRADING."
+        )
+
+    if stage == "grade":
+        grade = whatsapp_enrollment_parse_grade(clean)
+
+        if grade not in {
+            "G8",
+            "G9",
+            "G10",
+            "G11",
+            "G12",
+            "G13"
+        }:
+            return (
+                "Please reply with Grade 8, 9, 10, 11, 12 "
+                "or UPGRADING."
+            )
+
+        if not whatsapp_enrollment_subject_rows(conn, grade):
+            return (
+                "There are no subjects available for that grade right now. "
+                "Please type HUMAN for assistance."
+            )
+
+        data["grade"] = grade
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
+            "subjects",
+            data
+        )
+
+        return whatsapp_enrollment_subject_prompt(
+            conn,
+            grade
+        )
+
+    if stage == "subjects":
+        subject_ids = whatsapp_enrollment_parse_subject_ids(
+            conn,
+            data.get("grade", ""),
+            clean
+        )
+
+        if not subject_ids:
+            return (
+                "I could not match that subject selection.\n\n"
+                + whatsapp_enrollment_subject_prompt(
+                    conn,
+                    data.get("grade", "")
+                )
+            )
+
+        data["subject_ids"] = subject_ids
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
+            "start_month",
+            data
+        )
+
+        return whatsapp_enrollment_month_prompt(conn)
+
+    if stage == "start_month":
+        start_month = whatsapp_enrollment_parse_month(
+            conn,
+            clean
+        )
+
+        if not start_month:
+            return (
+                "Please choose one of the month numbers below.\n\n"
+                + whatsapp_enrollment_month_prompt(conn)
+            )
+
+        data["enrollment_start_month"] = start_month
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
+            "month_count",
+            data
+        )
+
+        return (
+            "How many consecutive months do you want to enroll for?\n\n"
+            "Reply with a number from 1 to 12."
+        )
+
+    if stage == "month_count":
+        try:
+            count = int(clean)
+        except Exception:
+            count = 0
+
+        if count < 1 or count > 12:
+            return (
+                "Please enter a number from 1 to 12."
+            )
+
+        data["enrollment_month_count"] = count
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
+            "coupon",
+            data
+        )
+
+        return (
+            "Do you have an EBTA coupon or referral code?\n\n"
+            "Send the code, or reply NONE."
+        )
+
+    if stage == "coupon":
+        coupon_code = (
+            ""
+            if lower in {
+                "none",
+                "no",
+                "skip",
+                "n/a"
+            }
+            else clean.upper()
+        )
+
+        data["coupon_code"] = coupon_code
+
+        fee = whatsapp_enrollment_prepare_fee(
+            conn,
+            data
+        )
+
+        if not fee.get("valid"):
+            return (
+                str(
+                    fee.get(
+                        "message",
+                        "The enrollment fee could not be calculated."
+                    )
+                )
+                + "\n\nPlease send a different code or reply NONE."
+            )
+
+        for key in {
+            "class_total_due",
+            "registration_due",
+            "payment_total",
+            "subtotal",
+            "discount",
+        }:
+            data[key] = fee[key]
+
+        if int(data["payment_total"]) <= 0:
+            whatsapp_enrollment_save_draft(
+                conn,
+                phone,
+                profile_name,
+                "confirm",
+                data
+            )
+
+            return whatsapp_enrollment_confirmation_summary(
+                conn,
+                data
+            )
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
+            "awaiting_pop",
+            data
+        )
+
+        return whatsapp_enrollment_payment_message(
+            conn,
+            data
+        )
+
+    if stage == "awaiting_pop":
+        if message_type not in {
+            "image",
+            "document"
+        }:
+            return (
+                "Please send the Proof of Payment "
+                "as an image or PDF file."
+            )
+
+        if not media_id:
+            return (
+                "I could not read that file. "
+                "Please send the Proof of Payment again."
+            )
+
+        try:
+            stored = whatsapp_enrollment_download_media(
+                media_id,
+                original_filename=media_filename,
+                declared_mime_type=media_mime_type
+            )
+        except Exception as exc:
+            return str(exc)
+
+        if data.get("pop_path"):
+            whatsapp_enrollment_remove_pop_file(data)
+
+        data["pop_path"] = stored["file_path"]
+        data["pop_name"] = stored["file_name"]
+        data["pop_media_id"] = media_id
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
+            "confirm",
+            data
+        )
+
+        return (
+            "Proof of Payment received ✅\n\n"
+            + whatsapp_enrollment_confirmation_summary(
+                conn,
+                data
+            )
+        )
+
+    if stage == "confirm":
+        if lower not in {
+            "confirm",
+            "yes",
+            "submit"
+        }:
+            return (
+                "Reply CONFIRM to submit the enrollment, "
+                "or CANCEL to stop."
+            )
+
+        try:
+            result = whatsapp_enrollment_submit(
+                conn,
+                data
+            )
+
+            conn.commit()
+
+        except Exception as exc:
+            conn.rollback()
+
+            return (
+                "The enrollment could not be submitted: "
+                + str(exc)
+            )
+
+        # The PoP is now linked to real enrollment rows.
+        whatsapp_enrollment_cancel(
+            conn,
+            phone,
+            remove_file=False
+        )
+
+        conn.commit()
+
+        first_status_url = ""
+
+        if result["created"]:
+            first_id, first_token = result["created"][0]
+
+            first_status_url = (
+                whatsapp_bot_base_url()
+                + f"/status/{first_id}?"
+                + urlencode({
+                    "token": first_token
+                })
+            )
+
+        lines = [
+            "Enrollment submitted ✅",
+            "",
+            "Learner: " + data.get("full_name", ""),
+            "Subjects: " + ", ".join(
+                result["subject_names"]
+            ),
+            (
+                "Period: "
+                + pretty_month_label(
+                    result["period_start_month"]
+                )
+                + " to "
+                + pretty_month_label(
+                    result["period_end_month"]
+                )
+            ),
+            "Status: Pending approval",
+            "",
+            (
+                "Your Proof of Payment and enrollment details "
+                "have been saved on the EBTA Portal."
+            ),
+        ]
+
+        if first_status_url:
+            lines.extend([
+                "",
+                "Check enrollment status: " + first_status_url
+            ])
+
+        lines.extend([
+            "",
+            (
+                "Student Portal: "
+                + whatsapp_bot_base_url()
+                + "/student/login"
+            )
+        ])
+
+        return "\n".join(lines)
+
+    return (
+        "I could not continue this enrollment. "
+        "Please type CANCEL and then ENROLL to start again."
+    )
+
+
+def whatsapp_bot_rule_reply(
+    conn,
+    phone,
+    profile_name,
+    message_text,
+    message_type="text",
+    media_id="",
+    media_mime_type="",
+    media_filename=""
+):
+    message_text = str(message_text or "").strip()
+    clean = re.sub(r"\s+", " ", message_text.lower()).strip()
+
+    # Commands that can be used even while an enrollment is in progress.
+    if clean in {
+        "human",
+        "agent",
+        "admin",
+        "person"
+    }:
+        return whatsapp_bot_human_reply(conn)
+
+    if clean in {
+        "reset",
+        "restart",
+        "start over",
+        "clear"
+    }:
+        whatsapp_enrollment_cancel(
+            conn,
+            phone,
+            remove_file=True
+        )
+
+        return (
+            "Your unfinished enrollment was cleared.\n\n"
+            + whatsapp_bot_menu(conn)
+        )
+
+    active_draft = whatsapp_enrollment_get_draft(
+        conn,
+        phone
+    )
+
+    if active_draft:
+        return whatsapp_enrollment_handle(
+            conn,
+            phone,
+            profile_name,
+            message_text,
+            message_type=message_type,
+            media_id=media_id,
+            media_mime_type=media_mime_type,
+            media_filename=media_filename
+        )
+
+    enroll_phrases = {
+        "enroll",
+        "enrol",
+        "enrollment",
+        "enrolment",
+        "register",
+        "registration",
+        "start enrollment",
+        "start enrolment",
+        "start registration",
+        "i want to enroll",
+        "i want to enrol",
+        "i want to register",
+        "enroll me",
+        "enrol me",
+        "register me",
+    }
+
+    if clean in enroll_phrases:
+        return whatsapp_enrollment_start(
+            conn,
+            phone,
+            profile_name
+        )
+
+    if clean in {
+        "",
+        "hi",
+        "hello",
+        "hey",
+        "start",
+        "menu",
+        "help"
+    }:
+        return whatsapp_bot_menu(conn)
+
+    if message_type in {
+        "image",
+        "document",
+        "audio",
+        "video",
+        "sticker"
+    }:
+        return (
+            "If this is a Proof of Payment for a new enrollment, "
+            "reply ENROLL first. I will ask for the file at the "
+            "correct payment step."
+        )
+
+    if "subject" in clean:
+        return whatsapp_bot_subjects_reply(
+            conn,
+            message_text
+        )
+
+    parsed_grade = whatsapp_enrollment_parse_grade(
+        message_text
+    )
+
+    if parsed_grade and (
+        "what do you offer" in clean
+        or "available" in clean
+        or "classes" in clean
+    ):
+        return whatsapp_enrollment_subject_prompt(
+            conn,
+            parsed_grade
+        )
+
+    if (
+        "fee" in clean
+        or "price" in clean
+        or "cost" in clean
+        or "how much" in clean
+    ):
+        if parsed_grade:
+            return (
+                f"{grade_label(parsed_grade)} costs "
+                f"R{fee_for_grade(parsed_grade)} per subject per month.\n\n"
+                "Reply ENROLL when you are ready to start."
+            )
+
+        return whatsapp_bot_fee_reply()
+
+    if (
+        "bank" in clean
+        or "payment" in clean
+        or "pay" == clean
+        or "account number" in clean
+    ):
+        return whatsapp_bot_payment_reply(conn)
+
+    if (
+        "registration fee" in clean
+        or "r50" in clean
+        or "annual registration" in clean
+    ):
+        return (
+            "EBTA annual registration is R50 for a learner who is "
+            "not yet registered for the current year. During a WhatsApp "
+            "enrollment the bot checks this automatically and includes it "
+            "in the total when it is due."
+        )
+
+    if (
+        "open" in clean
+        and (
+            "enroll" in clean
+            or "registration" in clean
+        )
+    ):
+        if _whatsapp_setting(
+            conn,
+            "enrollment_open",
+            "1"
+        ) == "1":
+            return (
+                "Yes, EBTA enrollment is currently open ✅\n"
+                "Reply ENROLL to start."
+            )
+
+        return _whatsapp_setting(
+            conn,
+            "enrollment_message",
+            "Enrollments are currently closed."
+        )
+
+    if "status" in clean:
+        return (
+            "After a WhatsApp enrollment is submitted, I send you "
+            "an enrollment status link. You can also use the Student Portal:\n"
+            + whatsapp_bot_base_url()
+            + "/student/login"
+        )
+
+    if (
+        "discount" in clean
+        or "coupon" in clean
+        or "referral" in clean
+    ):
+        return (
+            "Valid EBTA coupon and referral codes can be entered during "
+            "enrollment. The portal validates the code and calculates the "
+            "discount automatically before you pay."
+        )
+
+    if (
+        "what is ebta" in clean
+        or clean == "ebta"
+    ):
+        return (
+            "EBTA is Early Bird Testimony Academy. "
+            "This WhatsApp assistant can help with enrollment, subjects, "
+            "fees and payment guidance. Visit https://ebta.co.za for more "
+            "general information, or reply ENROLL to register."
+        )
+
+    return (
+        "I can help with EBTA enrollment without using an AI API.\n\n"
+        "Reply MENU to see the available options, or ENROLL to start "
+        "an enrollment."
+    )
+
+
+def whatsapp_bot_queue_incoming(
+    wa_message_id,
+    phone,
+    profile_name,
+    message_type,
+    message_text,
+    media_id="",
+    media_mime_type="",
+    media_filename=""
+):
+    conn = _whatsapp_real_db()
+    cur = conn.cursor()
+
+    try:
+        whatsapp_bot_log_message(
+            conn,
+            wa_message_id,
+            phone,
+            "INBOUND",
+            message_type,
+            message_text,
+            "RECEIVED"
+        )
+
+        cur.execute("""
+            INSERT OR IGNORE INTO whatsapp_bot_queue(
+                wa_message_id,
+                phone,
+                profile_name,
+                message_type,
+                message_text,
+                media_id,
+                media_mime_type,
+                media_filename,
+                status,
+                retry_count,
+                created_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,'PENDING',0,?)
+        """, (
+            wa_message_id,
+            phone,
+            profile_name or None,
+            message_type,
+            message_text,
+            str(media_id or "").strip() or None,
+            str(media_mime_type or "").strip() or None,
+            str(media_filename or "").strip() or None,
+            now_utc_iso()
+        ))
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
+def whatsapp_bot_extract_webhook_messages(payload):
+    extracted = []
+
+    if not isinstance(payload, dict):
+        return extracted
+
+    if payload.get("object") != "whatsapp_business_account":
+        return extracted
+
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value", {}) or {}
+            contacts = value.get("contacts", []) or []
+
+            profile_name = ""
+
+            if contacts:
+                profile = contacts[0].get(
+                    "profile",
+                    {}
+                ) or {}
+
+                profile_name = str(
+                    profile.get("name")
+                    or ""
+                ).strip()
+
+            for message in value.get("messages", []) or []:
+                wa_message_id = str(
+                    message.get("id")
+                    or ""
+                ).strip()
+
+                phone = str(
+                    message.get("from")
+                    or ""
+                ).strip()
+
+                message_type = str(
+                    message.get("type")
+                    or "unknown"
+                ).strip()
+
+                message_text = ""
+                media_id = ""
+                media_mime_type = ""
+                media_filename = ""
+
+                if message_type == "text":
+                    message_text = str(
+                        (
+                            message.get(
+                                "text",
+                                {}
+                            )
+                            or {}
+                        ).get("body")
+                        or ""
+                    ).strip()
+
+                elif message_type == "interactive":
+                    interactive = (
+                        message.get(
+                            "interactive",
+                            {}
+                        )
+                        or {}
+                    )
+
+                    reply_data = (
+                        interactive.get("button_reply")
+                        or interactive.get("list_reply")
+                        or {}
+                    )
+
+                    message_text = str(
+                        reply_data.get("title")
+                        or reply_data.get("id")
+                        or ""
+                    ).strip()
+
+                elif message_type == "button":
+                    message_text = str(
+                        (
+                            message.get(
+                                "button",
+                                {}
+                            )
+                            or {}
+                        ).get("text")
+                        or ""
+                    ).strip()
+
+                elif message_type in {
+                    "image",
+                    "document",
+                    "audio",
+                    "video",
+                    "sticker"
+                }:
+                    media = (
+                        message.get(
+                            message_type,
+                            {}
+                        )
+                        or {}
+                    )
+
+                    media_id = str(
+                        media.get("id")
+                        or ""
+                    ).strip()
+
+                    media_mime_type = str(
+                        media.get("mime_type")
+                        or ""
+                    ).strip()
+
+                    media_filename = str(
+                        media.get("filename")
+                        or ""
+                    ).strip()
+
+                    caption = str(
+                        media.get("caption")
+                        or ""
+                    ).strip()
+
+                    message_text = (
+                        caption
+                        or "["
+                        + message_type
+                        + " received]"
+                    )
+
+                else:
+                    message_text = (
+                        "[unsupported WhatsApp message]"
+                    )
+
+                if wa_message_id and phone:
+                    extracted.append({
+                        "wa_message_id": wa_message_id,
+                        "phone": phone,
+                        "profile_name": profile_name,
+                        "message_type": message_type,
+                        "message_text": message_text,
+                        "media_id": media_id,
+                        "media_mime_type": media_mime_type,
+                        "media_filename": media_filename,
+                    })
+
+    return extracted
+
+
+def whatsapp_bot_process_one():
+    if not whatsapp_bot_enabled():
+        return False
+
+    if not whatsapp_bot_setup_status()["ready"]:
+        return False
+
+    claim_conn = _whatsapp_real_db()
+
+    try:
+        claim_cur = claim_conn.cursor()
+        claim_cur.execute("BEGIN IMMEDIATE")
+
+        claim_cur.execute("""
+            SELECT *
+            FROM whatsapp_bot_queue
+            WHERE status IN ('PENDING','FAILED')
+              AND retry_count < 3
+            ORDER BY id
+            LIMIT 1
+        """)
+
+        row = claim_cur.fetchone()
+
+        if not row:
+            claim_conn.commit()
+            return False
+
+        queue_id = int(row["id"])
+
+        claim_cur.execute("""
+            UPDATE whatsapp_bot_queue
+            SET status='PROCESSING',
+                attempted_at=?
+            WHERE id=?
+              AND status IN ('PENDING','FAILED')
+        """, (
+            now_utc_iso(),
+            queue_id
+        ))
+
+        if int(claim_cur.rowcount or 0) != 1:
+            claim_conn.commit()
+            return False
+
+        claim_conn.commit()
+
+    finally:
+        claim_conn.close()
+
+    conn = _whatsapp_real_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            SELECT *
+            FROM whatsapp_bot_queue
+            WHERE id=?
+            LIMIT 1
+        """, (queue_id,))
+
+        item = cur.fetchone()
+
+        if not item:
+            return False
+
+        reply = whatsapp_bot_rule_reply(
+            conn,
+            item["phone"],
+            item["profile_name"],
+            item["message_text"],
+            item["message_type"],
+            media_id=item["media_id"] or "",
+            media_mime_type=item["media_mime_type"] or "",
+            media_filename=item["media_filename"] or ""
+        )
+
+        outbound_id = whatsapp_bot_send_text(
+            item["phone"],
+            reply
+        )
+
+        whatsapp_bot_log_message(
+            conn,
+            outbound_id,
+            item["phone"],
+            "OUTBOUND",
+            "text",
+            reply,
+            "SENT"
+        )
+
+        cur.execute("""
+            UPDATE whatsapp_bot_queue
+            SET status='DONE',
+                last_error=NULL,
+                processed_at=?
+            WHERE id=?
+        """, (
+            now_utc_iso(),
+            queue_id
+        ))
+
+        conn.commit()
+        return True
+
+    except Exception as exc:
+        try:
+            cur.execute("""
+                SELECT retry_count
+                FROM whatsapp_bot_queue
+                WHERE id=?
+                LIMIT 1
+            """, (queue_id,))
+
+            retry_row = cur.fetchone()
+
+            retry_count = int(
+                retry_row["retry_count"]
+                if retry_row
+                else 0
+            ) + 1
+
+            cur.execute("""
+                UPDATE whatsapp_bot_queue
+                SET status='FAILED',
+                    retry_count=?,
+                    last_error=?
+                WHERE id=?
+            """, (
+                retry_count,
+                str(exc)[:700],
+                queue_id
+            ))
+
+            conn.commit()
+
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+        return False
+
+    finally:
+        conn.close()
+
+
+def whatsapp_bot_worker():
+    while True:
+        try:
+            processed = whatsapp_bot_process_one()
+
+            if processed:
+                time.sleep(0.5)
+            else:
+                time.sleep(3)
+
+        except Exception:
+            time.sleep(5)
+
+
+@app.get('/whatsapp/webhook')
+def whatsapp_bot_webhook_verify():
+    cfg = whatsapp_bot_config()
+
+    mode = request.args.get(
+        "hub.mode",
+        ""
+    )
+
+    token = request.args.get(
+        "hub.verify_token",
+        ""
+    )
+
+    challenge = request.args.get(
+        "hub.challenge",
+        ""
+    )
+
+    if (
+        mode == "subscribe"
+        and cfg["verify_token"]
+        and hmac.compare_digest(
+            token,
+            cfg["verify_token"]
+        )
+    ):
+        return challenge, 200
+
+    return "Verification failed", 403
+
+
+@app.post('/whatsapp/webhook')
+def whatsapp_bot_webhook_receive():
+    raw_body = request.get_data()
+
+    signature = request.headers.get(
+        "X-Hub-Signature-256",
+        ""
+    )
+
+    if not whatsapp_bot_verify_signature(
+        raw_body,
+        signature
+    ):
+        return "Invalid signature", 403
+
+    payload = request.get_json(
+        silent=True
+    ) or {}
+
+    messages = whatsapp_bot_extract_webhook_messages(
+        payload
+    )
+
+    for item in messages:
+        whatsapp_bot_queue_incoming(
+            item["wa_message_id"],
+            item["phone"],
+            item["profile_name"],
+            item["message_type"],
+            item["message_text"],
+            media_id=item.get("media_id", ""),
+            media_mime_type=item.get("media_mime_type", ""),
+            media_filename=item.get("media_filename", "")
+        )
+
+    return "EVENT_RECEIVED", 200
+
+
+@app.get('/admin/whatsapp-bot')
+@require_high_admin
+def admin_whatsapp_bot():
+    r = require_admin()
+
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    enabled = (
+        _whatsapp_setting(
+            conn,
+            "whatsapp_bot_enabled",
+            "1"
+        )
+        == "1"
+    )
+
+    human_number = _whatsapp_setting(
+        conn,
+        "whatsapp_bot_human_number",
+        ""
+    )
+
+    setup = whatsapp_bot_setup_status()
+    cfg = whatsapp_bot_config()
+
+    cur.execute("""
+        SELECT status,COUNT(*) AS c
+        FROM whatsapp_bot_queue
+        GROUP BY status
+    """)
+
+    counts = {
+        row["status"]: int(row["c"] or 0)
+        for row in cur.fetchall()
+    }
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM whatsapp_enrollment_drafts
+        WHERE status='ACTIVE'
+    """)
+
+    active_enrollments = int(
+        (cur.fetchone() or {"c": 0})["c"]
+        or 0
+    )
+
+    cur.execute("""
+        SELECT
+            id,
+            phone,
+            direction,
+            message_type,
+            message_text,
+            status,
+            error_text,
+            created_at
+        FROM whatsapp_bot_messages
+        ORDER BY id DESC
+        LIMIT 40
+    """)
+
+    recent = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for row in recent:
+        direction_chip = (
+            "<span class='chip active'>Out</span>"
+            if row["direction"] == "OUTBOUND"
+            else "<span class='chip'>In</span>"
+        )
+
+        preview = str(
+            row["message_text"]
+            or ""
+        ).strip()
+
+        if len(preview) > 180:
+            preview = preview[:177] + "..."
+
+        rows += f"""
+        <tr>
+            <td>{row['id']}</td>
+            <td>{escape(whatsapp_bot_mask_phone(row['phone']))}</td>
+            <td>{direction_chip}</td>
+            <td>{escape(row['message_type'] or '')}</td>
+            <td style='max-width:430px;white-space:normal;word-break:break-word'>
+                {escape(preview)}
+            </td>
+            <td><span class='chip'>{escape(row['status'] or '')}</span></td>
+            <td class='mini'>
+                {escape((row['created_at'] or '')[:19].replace('T',' '))}
+            </td>
+        </tr>
+        """
+
+    if not rows:
+        rows = (
+            "<tr><td colspan='7'>"
+            "No WhatsApp bot messages yet."
+            "</td></tr>"
+        )
+
+    configured_items = [
+        ("Access Token", bool(cfg["access_token"])),
+        ("Phone Number ID", bool(cfg["phone_number_id"])),
+        ("Verify Token", bool(cfg["verify_token"])),
+        ("App Secret", bool(cfg["app_secret"])),
+        ("Graph Version", bool(cfg["graph_version"])),
+        ("Bot Number", bool(cfg["public_number"])),
+    ]
+
+    setup_cards = ""
+
+    for label, configured in configured_items:
+        setup_cards += f"""
+        <div class='card soft' style='margin:0'>
+            <strong>{escape(label)}</strong>
+            <div class='mini' style='margin-top:5px'>
+                {
+                    "<span class='chip active'>Configured</span>"
+                    if configured
+                    else "<span class='chip lapsed'>Not configured</span>"
+                }
+            </div>
+        </div>
+        """
+
+    ready_chip = (
+        "<span class='chip active'>Ready</span>"
+        if setup["ready"]
+        else "<span class='chip lapsed'>Setup Required</span>"
+    )
+
+    enabled_checked = (
+        "checked"
+        if enabled
+        else ""
+    )
+
+    webhook_url = (
+        whatsapp_bot_base_url()
+        + "/whatsapp/webhook"
+    )
+
+    body = f"""
+    {admin_nav()}
+
+    <section class='card'>
+        <div style='display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start'>
+            <div>
+                <h1 style='margin-bottom:4px'>WhatsApp Enrollment Bot</h1>
+                <p class='muted' style='margin-top:0'>
+                    Rule-based enrollment assistant. No OpenAI API is required.
+                </p>
+            </div>
+            {ready_chip}
+        </div>
+
+        <div class='stats' style='margin-top:14px'>
+            {stat('Pending', counts.get('PENDING',0))}
+            {stat('Done', counts.get('DONE',0))}
+            {stat('Failed', counts.get('FAILED',0))}
+            {stat('Enrollments in Progress', active_enrollments)}
+        </div>
+    </section>
+
+    <section class='card'>
+        <h2>Bot Settings</h2>
+
+        <form method='post'
+              action='{url_for("admin_whatsapp_bot_save")}'
+              class='grid'
+              style='grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px'>
+
+            <label style='display:flex;align-items:center;gap:9px;grid-column:1/-1'>
+                <input type='checkbox'
+                       name='enabled'
+                       value='1'
+                       {enabled_checked}
+                       style='width:auto'>
+                <strong>Enable WhatsApp enrollment bot</strong>
+            </label>
+
+            <div>
+                <label>Human Support Number</label>
+                <input name='human_number'
+                       value='{escape(human_number or "", quote=True)}'
+                       placeholder='+27 ...'>
+            </div>
+
+            <div style='grid-column:1/-1'>
+                <button class='btn success'>
+                    Save Bot Settings
+                </button>
+            </div>
+        </form>
+    </section>
+
+    <section class='card'>
+        <h2>Meta WhatsApp Setup</h2>
+
+        <div class='card soft' style='border-left:5px solid #25D366'>
+            <strong>Webhook URL</strong>
+            <div style='margin-top:6px;word-break:break-all'>
+                {escape(webhook_url)}
+            </div>
+        </div>
+
+        <div class='grid'
+             style='grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin-top:12px'>
+            {setup_cards}
+        </div>
+
+        <div class='mini muted' style='margin-top:12px'>
+            Required Render variables:
+            WHATSAPP_ACCESS_TOKEN,
+            WHATSAPP_PHONE_NUMBER_ID,
+            WHATSAPP_VERIFY_TOKEN,
+            WHATSAPP_APP_SECRET,
+            WHATSAPP_GRAPH_VERSION,
+            EBTA_WHATSAPP_BOT_NUMBER,
+            EBTA_PORTAL_BASE_URL.
+            No OpenAI key is required.
+        </div>
+    </section>
+
+    <section class='card'>
+        <div style='display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap'>
+            <h2 style='margin:0'>Recent Bot Messages</h2>
+
+            <form method='post'
+                  action='{url_for("admin_whatsapp_bot_retry")}'
+                  style='margin:0'>
+                <button class='btn mini secondary'>
+                    Retry Failed
+                </button>
+            </form>
+        </div>
+
+        <div class='scroll-x' style='margin-top:12px'>
+            <table style='min-width:950px'>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Number</th>
+                        <th>Direction</th>
+                        <th>Type</th>
+                        <th>Message</th>
+                        <th>Status</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody>{rows}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page(
+        "WhatsApp Enrollment Bot",
+        body
+    )
+
+
+@app.post('/admin/whatsapp-bot/settings')
+@require_high_admin
+def admin_whatsapp_bot_save():
+    r = require_admin()
+
+    if r:
+        return r
+
+    enabled = (
+        "1"
+        if request.form.get("enabled") == "1"
+        else "0"
+    )
+
+    human_number = request.form.get(
+        "human_number",
+        ""
+    ).strip()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    for key, value in {
+        "whatsapp_bot_enabled": enabled,
+        "whatsapp_bot_human_number": human_number,
+    }.items():
+        cur.execute("""
+            INSERT INTO settings(key,value)
+            VALUES(?,?)
+            ON CONFLICT(key)
+            DO UPDATE SET value=excluded.value
+        """, (
+            key,
+            value
+        ))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(
+        url_for("admin_whatsapp_bot")
+    )
+
+
+@app.post('/admin/whatsapp-bot/retry')
+@require_high_admin
+def admin_whatsapp_bot_retry():
+    r = require_admin()
+
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE whatsapp_bot_queue
+        SET status='PENDING',
+            retry_count=0,
+            last_error=NULL
+        WHERE status IN ('FAILED','PROCESSING')
+    """)
+
+    conn.commit()
+    conn.close()
+
+    return redirect(
+        url_for("admin_whatsapp_bot")
+    )
+
+
+# Start the queue worker only after all bot functions/routes exist.
+if not globals().get("_whatsapp_bot_worker_started"):
+    threading.Thread(
+        target=whatsapp_bot_worker,
+        daemon=True
+    ).start()
+
+    _whatsapp_bot_worker_started = True
 
 
 # --- Payfast IPN stub ---
