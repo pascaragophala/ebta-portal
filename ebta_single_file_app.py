@@ -10,6 +10,7 @@ import threading
 import time
 import hmac
 import hashlib
+import gzip
 import io
 import urllib.request as urlreq
 import urllib.error as urlerror
@@ -183,6 +184,34 @@ def apply_security_headers(response):
     if get_logged_in_portal_role() or "/login" in request.path:
         response.headers["Cache-Control"] = "no-store, private"
         response.headers["Pragma"] = "no-cache"
+
+    # Compress generated HTML/JSON/text responses. Most portal pages contain
+    # a large shared CSS/JS shell, so gzip cuts transfer size substantially.
+    try:
+        accepts_gzip = "gzip" in request.headers.get("Accept-Encoding", "").lower()
+        content_type = (response.content_type or "").lower()
+        compressible = (
+            content_type.startswith("text/")
+            or "application/json" in content_type
+            or "application/javascript" in content_type
+        )
+
+        if (
+            accepts_gzip
+            and compressible
+            and not response.direct_passthrough
+            and "Content-Encoding" not in response.headers
+        ):
+            raw = response.get_data()
+            if len(raw) >= 2048:
+                compressed = gzip.compress(raw, compresslevel=5)
+                if len(compressed) < len(raw):
+                    response.set_data(compressed)
+                    response.headers["Content-Encoding"] = "gzip"
+                    response.headers["Content-Length"] = str(len(compressed))
+                    response.headers.add("Vary", "Accept-Encoding")
+    except Exception:
+        pass
 
     return response
 
@@ -702,24 +731,32 @@ def record_portal_presence():
 
 
 # ===================== DB ==============
+def _configure_sqlite_connection(conn, demo=False):
+    """Apply lightweight per-connection settings that reduce SQLite stalls."""
+    try:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute(
+            "PRAGMA busy_timeout=" + ("30000" if demo else "5000")
+        )
+        # Keep temporary query work and a modest page cache in memory.
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA cache_size=-12000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except Exception:
+        pass
+    return conn
+
+
 def get_db():
-    database_path = DEMO_DB_PATH if demo_workspace_active() else DB_PATH
+    is_demo = demo_workspace_active()
+    database_path = DEMO_DB_PATH if is_demo else DB_PATH
 
     conn = sqlite3.connect(
         database_path,
-        timeout=30.0 if demo_workspace_active() else 5.0
+        timeout=30.0 if is_demo else 5.0
     )
     conn.row_factory = sqlite3.Row
-
-    try:
-        conn.execute("PRAGMA foreign_keys=ON")
-
-        if demo_workspace_active():
-            conn.execute("PRAGMA busy_timeout=30000")
-    except Exception:
-        pass
-
-    return conn
+    return _configure_sqlite_connection(conn, demo=is_demo)
 
 def now_utc_iso():
     """Return ISO timestamp in Africa/Johannesburg timezone (UTC+02:00)."""
@@ -942,6 +979,16 @@ def sync_subject_session_templates(conn, subject_id=None, tutor_id=None, templat
 def init_db():
     conn = get_db()
     cur = conn.cursor()
+
+    # WAL lets normal portal reads continue while background workers write.
+    # This is especially important now that WhatsApp/SMS workers share ebta.db.
+    if not demo_workspace_active():
+        try:
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA synchronous=NORMAL")
+            cur.execute("PRAGMA wal_autocheckpoint=1000")
+        except Exception:
+            pass
     
     cur.execute("""
     CREATE TABLE IF NOT EXISTS settings(
@@ -4877,6 +4924,36 @@ def init_db():
             ('admin_cost_centre_remove_hardcoded_data_v1', '1')
         )
 
+    # =========================================================
+    # PERFORMANCE INDEXES
+    # These support the small summary/count queries used on nearly every
+    # learner, tutor and admin page, plus the WhatsApp queue.
+    # =========================================================
+    performance_indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_enrollments_month_status ON enrollments(month, status)",
+        "CREATE INDEX IF NOT EXISTS idx_enrollments_student_month_status ON enrollments(student_id, month, status)",
+        "CREATE INDEX IF NOT EXISTS idx_enrollments_subject_month_status ON enrollments(subject_id, month, status)",
+        "CREATE INDEX IF NOT EXISTS idx_materials_tutor_month ON materials(tutor_id, month)",
+        "CREATE INDEX IF NOT EXISTS idx_materials_subject_month ON materials(subject_id, month)",
+        "CREATE INDEX IF NOT EXISTS idx_submissions_student_material ON submissions(student_id, material_id)",
+        "CREATE INDEX IF NOT EXISTS idx_submissions_material_mark ON submissions(material_id, mark)",
+        "CREATE INDEX IF NOT EXISTS idx_direct_messages_recipient_read ON direct_messages(to_role, to_id, is_read)",
+        "CREATE INDEX IF NOT EXISTS idx_messages_kind_resolved ON messages(kind, resolved)",
+        "CREATE INDEX IF NOT EXISTS idx_tutor_subjects_subject_tutor ON tutor_subjects(subject_id, tutor_id)",
+        "CREATE INDEX IF NOT EXISTS idx_whatsapp_queue_ready ON whatsapp_bot_queue(status, retry_count, id)",
+    ]
+
+    for index_sql in performance_indexes:
+        try:
+            cur.execute(index_sql)
+        except Exception:
+            # Older/demo schemas can safely skip an index whose column is absent.
+            pass
+
+    try:
+        cur.execute("PRAGMA optimize")
+    except Exception:
+        pass
 
     conn.commit()
     conn.close()
@@ -5579,23 +5656,51 @@ def get_admin_active_month():
     return session.get('admin_month') or get_setting('current_month')
 
 
+_SETTINGS_CACHE = {}
+_SETTINGS_CACHE_LOCK = threading.Lock()
+_SETTINGS_CACHE_TTL_SECONDS = 5.0
+
+
 def get_setting(key, default=""):
+    """Read a setting with a tiny TTL cache to avoid opening SQLite repeatedly."""
+    now_mono = time.monotonic()
+
+    with _SETTINGS_CACHE_LOCK:
+        cached = _SETTINGS_CACHE.get(key)
+        if cached and (now_mono - cached[0]) < _SETTINGS_CACHE_TTL_SECONDS:
+            found, value = cached[1], cached[2]
+            return value if found else default
+
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT value FROM settings WHERE key=?", (key,))
-    row = cur.fetchone()
-    conn.close()
-    return row["value"] if row else default
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM settings WHERE key=?", (key,))
+        row = cur.fetchone()
+        found = row is not None
+        value = row["value"] if row else None
+    finally:
+        conn.close()
+
+    with _SETTINGS_CACHE_LOCK:
+        _SETTINGS_CACHE[key] = (now_mono, found, value)
+
+    return value if found else default
+
 
 def set_setting(key, value):
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (key, value)
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with _SETTINGS_CACHE_LOCK:
+        _SETTINGS_CACHE.pop(key, None)
 
 
 
@@ -14600,9 +14705,14 @@ def page(title, body_html, extra_head="", extra_js=""):
     # Build role-aware sidebar with compact stats
     sidebar_html = ""
     ann_html = ""
+    conn = None
     try:
         conn = get_db(); cur = conn.cursor()
-        month = get_setting('current_month')
+        # Reuse this page connection instead of opening another SQLite
+        # connection just to read current_month.
+        cur.execute("SELECT value FROM settings WHERE key='current_month' LIMIT 1")
+        _month_row = cur.fetchone()
+        month = _month_row["value"] if _month_row else ""
 
         if is_student():
             sid = is_student()
@@ -15030,8 +15140,9 @@ def page(title, body_html, extra_head="", extra_js=""):
             links = []
             stats_grid = ""
 
-        # Build announcements (optional)
-        cur = get_db().cursor()
+        # Build announcements using the same connection. The previous code
+        # opened another connection on every rendered page and kept both open
+        # until the whole HTML response had been assembled.
         cur.execute("SELECT payload, created_at FROM messages WHERE kind='announcement' ORDER BY id ASC LIMIT 3")
         ann = cur.fetchall()
         if ann:
@@ -15042,6 +15153,12 @@ def page(title, body_html, extra_head="", extra_js=""):
         links = []
         stats_grid = ""
         ann_html = ""
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
 
     if role_title:
         links_html = "".join([
@@ -15860,6 +15977,19 @@ def page(title, body_html, extra_head="", extra_js=""):
     });
     </script>
     """
+    # Chart.js was previously downloaded on every portal page, even pages
+    # without charts. Only include it where page-specific HTML/JS uses Chart.
+    _chart_needed = (
+        "new Chart" in str(body_html)
+        or "new Chart" in str(extra_js)
+        or "Chart(" in str(extra_js)
+    )
+    _chart_script = (
+        '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>'
+        if _chart_needed
+        else ""
+    )
+
     return f"""
     <html><head>
     <meta name='viewport' content='width=device-width, initial-scale=1'/>
@@ -15898,7 +16028,7 @@ def page(title, body_html, extra_head="", extra_js=""):
     </script>
 
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    {_chart_script}
     
     {GOOGLE_FONTS}{BASE_CSS}{BASE_JS}{EBTA_MATH_SUPPORT_HEAD}{extra_head}{EBTA_UNIFIED_UI_CSS}
     </head><body class="{body_class}">
@@ -50306,8 +50436,8 @@ if not globals().get("_sms_worker_started"):
     threading.Thread(target=sms_worker, daemon=True).start()
     _sms_worker_started = True
     
-def process_sms_queue(batch_size=100):
-
+def process_sms_queue(batch_size=25):
+    """Process SMS without keeping an SQLite write lock across network I/O."""
     conn = get_db()
     cur = conn.cursor()
 
@@ -50315,15 +50445,26 @@ def process_sms_queue(batch_size=100):
         SELECT id, phone, body
         FROM sms_queue
         WHERE status IN ('PENDING','FAILED')
+          AND COALESCE(retry_count,0) < 3
         ORDER BY id
         LIMIT ?
-    """, (batch_size,))
+    """, (int(batch_size),))
 
     rows = cur.fetchall()
 
     for r in rows:
-
         try:
+            # Claim and commit before calling Twilio so the portal stays free.
+            cur.execute("""
+                UPDATE sms_queue
+                SET status='SENDING'
+                WHERE id=?
+                  AND status IN ('PENDING','FAILED')
+            """, (r["id"],))
+            conn.commit()
+
+            if int(cur.rowcount or 0) != 1:
+                continue
 
             send_sms_notification(r["phone"], r["body"])
 
@@ -50332,18 +50473,24 @@ def process_sms_queue(batch_size=100):
                 SET status='SENT', sent_at=?
                 WHERE id=?
             """, (now_utc_iso(), r["id"]))
+            conn.commit()
 
         except Exception:
+            try:
+                cur.execute("""
+                    UPDATE sms_queue
+                    SET status='FAILED',
+                        retry_count=COALESCE(retry_count,0)+1
+                    WHERE id=?
+                """, (r["id"],))
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
 
-            cur.execute("""
-                UPDATE sms_queue
-                SET status='FAILED'
-                WHERE id=?
-            """, (r["id"],))
-
-    conn.commit()
     conn.close()
-
     return len(rows)
 
 
@@ -118071,18 +118218,15 @@ WHATSAPP_ENROLLMENT_MEDIA_MIME_MAP = {
     "image/webp": ".webp",
 }
 
+# Wake the bot immediately when a webhook adds work. This avoids grabbing an
+# SQLite write lock every few seconds while the bot is idle.
+WHATSAPP_BOT_WAKE_EVENT = threading.Event()
+
 
 def _whatsapp_real_db():
-    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
     conn.row_factory = sqlite3.Row
-
-    try:
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA busy_timeout=10000")
-    except Exception:
-        pass
-
-    return conn
+    return _configure_sqlite_connection(conn, demo=False)
 
 
 def _whatsapp_setting(conn, key, default=""):
@@ -120701,6 +120845,7 @@ def whatsapp_bot_queue_incoming(
         ))
 
         conn.commit()
+        WHATSAPP_BOT_WAKE_EVENT.set()
 
     finally:
         conn.close()
@@ -120938,6 +121083,11 @@ def whatsapp_bot_process_one():
             media_filename=item["media_filename"] or ""
         )
 
+        # rule_reply can update the enrollment draft. Commit before waiting on
+        # Meta's network response, otherwise SQLite can stay write-locked for
+        # the entire HTTP request (up to the network timeout).
+        conn.commit()
+
         outbound_id = whatsapp_bot_send_text(
             item["phone"],
             reply
@@ -121011,17 +121161,32 @@ def whatsapp_bot_process_one():
 
 
 def whatsapp_bot_worker():
+    """Drain queued WhatsApp messages quickly and sleep without touching SQLite."""
     while True:
         try:
-            processed = whatsapp_bot_process_one()
+            processed_any = False
 
-            if processed:
-                time.sleep(0.5)
-            else:
-                time.sleep(3)
+            # Drain a short burst so a conversation does not wait for a 3-second
+            # polling interval between messages.
+            for _ in range(20):
+                processed = whatsapp_bot_process_one()
+                if not processed:
+                    break
+                processed_any = True
+
+            if processed_any:
+                # Give other request threads a chance, then check once more.
+                time.sleep(0.05)
+                continue
+
+            # No work: wait for the webhook/admin retry to wake us. The timeout
+            # is only a fallback for another process that may have queued work.
+            WHATSAPP_BOT_WAKE_EVENT.wait(timeout=15.0)
+            WHATSAPP_BOT_WAKE_EVENT.clear()
 
         except Exception:
-            time.sleep(5)
+            WHATSAPP_BOT_WAKE_EVENT.wait(timeout=2.0)
+            WHATSAPP_BOT_WAKE_EVENT.clear()
 
 
 @app.get('/whatsapp/webhook')
@@ -121430,6 +121595,7 @@ def admin_whatsapp_bot_retry():
 
     conn.commit()
     conn.close()
+    WHATSAPP_BOT_WAKE_EVENT.set()
 
     return redirect(
         url_for("admin_whatsapp_bot")
