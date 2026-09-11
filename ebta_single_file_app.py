@@ -10,6 +10,7 @@ import threading
 import time
 import hmac
 import hashlib
+import http.client
 import gzip
 import io
 import urllib.request as urlreq
@@ -26,7 +27,7 @@ from html import escape
 from functools import wraps
 
 
-from flask import Flask, request, redirect, url_for, render_template_string, send_from_directory, send_file, session, flash, make_response
+from flask import Flask, request, redirect, url_for, render_template_string, send_from_directory, send_file, session, flash, make_response, g
 
 app = Flask(__name__)
 
@@ -82,6 +83,7 @@ _is_production = bool(os.environ.get("RENDER")) or (
 )
 
 app.config.update(
+    SEND_FILE_MAX_AGE_DEFAULT=86400,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SECURE=_is_production,
     SESSION_COOKIE_SAMESITE="Lax",
@@ -127,6 +129,14 @@ def _same_origin_request():
 
     expected = request.host_url.rstrip("/")
     return source.rstrip("/").startswith(expected)
+
+
+@app.before_request
+def _ebta_request_timer_start():
+    try:
+        g._ebta_request_started = time.perf_counter()
+    except Exception:
+        pass
 
 
 @app.before_request
@@ -180,8 +190,13 @@ def apply_security_headers(response):
             "max-age=31536000; includeSubDomains",
         )
 
-    # Prevent sensitive portal and login pages from being cached.
-    if get_logged_in_portal_role() or "/login" in request.path:
+    # Prevent sensitive HTML/login pages from being cached. Shared versioned
+    # CSS/JS assets are safe to cache even when the request carries a session.
+    _asset_request = (
+        request.path.startswith("/assets/")
+        or request.path.startswith("/static/")
+    )
+    if (get_logged_in_portal_role() or "/login" in request.path) and not _asset_request:
         response.headers["Cache-Control"] = "no-store, private"
         response.headers["Pragma"] = "no-cache"
 
@@ -204,12 +219,26 @@ def apply_security_headers(response):
         ):
             raw = response.get_data()
             if len(raw) >= 2048:
-                compressed = gzip.compress(raw, compresslevel=5)
+                compressed = gzip.compress(raw, compresslevel=1)
                 if len(compressed) < len(raw):
                     response.set_data(compressed)
                     response.headers["Content-Encoding"] = "gzip"
                     response.headers["Content-Length"] = str(len(compressed))
                     response.headers.add("Vary", "Accept-Encoding")
+    except Exception:
+        pass
+
+    try:
+        started = getattr(g, "_ebta_request_started", None)
+        if started is not None:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            response.headers["Server-Timing"] = f"app;dur={elapsed_ms:.1f}"
+            if elapsed_ms >= 1200:
+                print(
+                    f"[EBTA SLOW] {request.method} {request.path} "
+                    f"{elapsed_ms:.0f}ms",
+                    flush=True
+                )
     except Exception:
         pass
 
@@ -468,6 +497,7 @@ def auto_logout_after_inactivity():
     # Do not track static files and images as user activity.
     ignored_prefixes = (
         "/static/",
+        "/assets/",
         "/profile-picture/",
         "/tutor-profile-picture/",
         "/uploads/",
@@ -524,7 +554,7 @@ def session_keep_alive():
 
 
 
-PORTAL_PRESENCE_TOUCH_INTERVAL_SECONDS = 90
+PORTAL_PRESENCE_TOUCH_INTERVAL_SECONDS = 5 * 60
 PORTAL_PRESENCE_ACTIVE_SECONDS = 5 * 60
 PORTAL_PRESENCE_RECENT_SECONDS = 30 * 60
 
@@ -642,6 +672,7 @@ def record_portal_presence():
     # Existing background requests are deliberately excluded.
     if (
         path.startswith("/static/")
+        or path.startswith("/assets/")
         or path.startswith("/uploads/")
         or path.startswith("/profile-picture/")
         or path.startswith("/tutor-profile-picture/")
@@ -740,8 +771,9 @@ def _configure_sqlite_connection(conn, demo=False):
         )
         # Keep temporary query work and a modest page cache in memory.
         conn.execute("PRAGMA temp_store=MEMORY")
-        conn.execute("PRAGMA cache_size=-12000")
+        conn.execute("PRAGMA cache_size=-24000")
         conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA mmap_size=134217728")
     except Exception:
         pass
     return conn
@@ -753,7 +785,8 @@ def get_db():
 
     conn = sqlite3.connect(
         database_path,
-        timeout=30.0 if is_demo else 5.0
+        timeout=30.0 if is_demo else 5.0,
+        cached_statements=512
     )
     conn.row_factory = sqlite3.Row
     return _configure_sqlite_connection(conn, demo=is_demo)
@@ -4941,6 +4974,17 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_messages_kind_resolved ON messages(kind, resolved)",
         "CREATE INDEX IF NOT EXISTS idx_tutor_subjects_subject_tutor ON tutor_subjects(subject_id, tutor_id)",
         "CREATE INDEX IF NOT EXISTS idx_whatsapp_queue_ready ON whatsapp_bot_queue(status, retry_count, id)",
+        "CREATE INDEX IF NOT EXISTS idx_whatsapp_queue_phone_status_id ON whatsapp_bot_queue(phone, status, id)",
+        "CREATE INDEX IF NOT EXISTS idx_materials_assignment_month_subject ON materials(month, subject_id, is_assignment, kind)",
+        "CREATE INDEX IF NOT EXISTS idx_submissions_student_mark ON submissions(student_id, mark)",
+        "CREATE INDEX IF NOT EXISTS idx_messages_announcement_id ON messages(kind, id)",
+        "CREATE INDEX IF NOT EXISTS idx_assessments_tutor_month_published ON assessments(tutor_id, month, is_published)",
+        "CREATE INDEX IF NOT EXISTS idx_sessions_tutor_subject ON sessions(tutor_id, subject_id)",
+        "CREATE INDEX IF NOT EXISTS idx_attendance_session_student ON attendance(session_id, student_id)",
+        "CREATE INDEX IF NOT EXISTS idx_direct_messages_from_pair_id ON direct_messages(from_role, from_id, to_role, to_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_direct_messages_to_pair_id ON direct_messages(to_role, to_id, from_role, from_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_attendance_student_date ON attendance(student_id, date)",
+        "CREATE INDEX IF NOT EXISTS idx_attendance_sessions_tutor_month_subject ON attendance_sessions(tutor_id, month, subject_id, date)",
     ]
 
     for index_sql in performance_indexes:
@@ -8436,24 +8480,34 @@ def tutor_profile_image_html(tutor_id, full_name, size=96):
     """
 
 
-def student_profile_image_html(student_id, full_name, size=96):
+def student_profile_image_html(
+    student_id,
+    full_name,
+    size=96,
+    profile_picture_path=None,
+    path_already_known=False
+):
     """
     Returns student profile picture HTML, or initials if no picture exists.
+    Callers that already selected profile_picture_path can pass it to avoid
+    another SQLite connection for every learner row.
     """
-    conn = get_db()
-    cur = conn.cursor()
+    known_path = profile_picture_path
 
-    cur.execute("""
-        SELECT profile_picture_path
-        FROM students
-        WHERE id=?
-        LIMIT 1
-    """, (student_id,))
+    if not path_already_known:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT profile_picture_path
+            FROM students
+            WHERE id=?
+            LIMIT 1
+        """, (student_id,))
+        row = cur.fetchone()
+        conn.close()
+        known_path = row["profile_picture_path"] if row else None
 
-    row = cur.fetchone()
-    conn.close()
-
-    if row and row["profile_picture_path"] and os.path.exists(row["profile_picture_path"]):
+    if known_path and os.path.exists(known_path):
         return f"""
         <img src="/profile-picture/{student_id}"
              style="
@@ -14379,6 +14433,137 @@ EBTA_UNIFIED_UI_JS = """
 """
 
 
+# =============================================================
+# FAST SHARED PAGE SHELL
+# =============================================================
+_EBTA_UI_ASSET_VERSION = "20260910-fast3"
+_EBTA_SIDEBAR_CACHE = {}
+_EBTA_SIDEBAR_CACHE_LOCK = threading.Lock()
+_EBTA_SIDEBAR_CACHE_TTL = 12.0
+
+
+def _ebta_cache_get(key):
+    now = time.monotonic()
+    with _EBTA_SIDEBAR_CACHE_LOCK:
+        item = _EBTA_SIDEBAR_CACHE.get(key)
+        if item and (now - item[0]) < _EBTA_SIDEBAR_CACHE_TTL:
+            return item[1]
+        if item:
+            _EBTA_SIDEBAR_CACHE.pop(key, None)
+    return None
+
+
+def _ebta_cache_set(key, value):
+    with _EBTA_SIDEBAR_CACHE_LOCK:
+        if len(_EBTA_SIDEBAR_CACHE) > 256:
+            _EBTA_SIDEBAR_CACHE.clear()
+        _EBTA_SIDEBAR_CACHE[key] = (time.monotonic(), value)
+    return value
+
+
+def _strip_outer_html_tag(value, tag):
+    text = str(value or "").strip()
+    text = re.sub(
+        rf"^<{tag}(?:\s[^>]*)?>\s*",
+        "",
+        text,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        rf"\s*</{tag}>\s*$",
+        "",
+        text,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    return text
+
+
+_EBTA_CORE_CSS_TEXT = (
+    _strip_outer_html_tag(BASE_CSS, "style")
+    + "\\n"
+    + _strip_outer_html_tag(EBTA_UNIFIED_UI_CSS, "style")
+)
+_EBTA_CORE_JS_TEXT = (
+    _strip_outer_html_tag(BASE_JS, "script")
+    + "\\n"
+    + _strip_outer_html_tag(EBTA_UNIFIED_UI_JS, "script")
+)
+
+
+def _cached_asset_response(data, mimetype):
+    raw = data.encode("utf-8") if isinstance(data, str) else data
+    accepts_gzip = "gzip" in request.headers.get("Accept-Encoding", "").lower()
+
+    if accepts_gzip:
+        raw = gzip.compress(raw, compresslevel=1)
+        response = make_response(raw)
+        response.headers["Content-Encoding"] = "gzip"
+        response.headers["Vary"] = "Accept-Encoding"
+    else:
+        response = make_response(raw)
+
+    response.headers["Content-Type"] = mimetype + "; charset=utf-8"
+    response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    response.headers["Content-Length"] = str(len(raw))
+    return response
+
+
+@app.get("/assets/ebta-core.css")
+def ebta_core_css_asset():
+    return _cached_asset_response(_EBTA_CORE_CSS_TEXT, "text/css")
+
+
+@app.get("/assets/ebta-core.js")
+def ebta_core_js_asset():
+    return _cached_asset_response(_EBTA_CORE_JS_TEXT, "application/javascript")
+
+
+
+@app.get("/ebta-sw.js")
+def ebta_service_worker_asset():
+    """Tiny cache-first worker for immutable EBTA shell assets only."""
+    script = f"""
+const CACHE = 'ebta-shell-{_EBTA_UI_ASSET_VERSION}';
+const SHELL = [
+  '/assets/ebta-core.css?v={_EBTA_UI_ASSET_VERSION}',
+  '/assets/ebta-core.js?v={_EBTA_UI_ASSET_VERSION}',
+  '/static/icons/icon-192.png'
+];
+self.addEventListener('install', event => {{
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).catch(() => null));
+  self.skipWaiting();
+}});
+self.addEventListener('activate', event => {{
+  event.waitUntil(caches.keys().then(keys => Promise.all(
+    keys.filter(key => key.startsWith('ebta-shell-') && key !== CACHE).map(key => caches.delete(key))
+  )));
+  self.clients.claim();
+}});
+self.addEventListener('fetch', event => {{
+  const req = event.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/static/icons/')) {{
+    event.respondWith(
+      caches.match(req).then(hit => hit || fetch(req).then(resp => {{
+        const copy = resp.clone();
+        caches.open(CACHE).then(cache => cache.put(req, copy));
+        return resp;
+      }}))
+    );
+  }}
+}});
+"""
+    resp = make_response(script)
+    resp.headers["Content-Type"] = "application/javascript; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Service-Worker-Allowed"] = "/"
+    return resp
+
+
 def page(title, body_html, extra_head="", extra_js=""):
     current_portal_role = get_logged_in_portal_role()
 
@@ -14707,447 +14892,476 @@ def page(title, body_html, extra_head="", extra_js=""):
     ann_html = ""
     conn = None
     try:
-        conn = get_db(); cur = conn.cursor()
-        # Reuse this page connection instead of opening another SQLite
-        # connection just to read current_month.
-        cur.execute("SELECT value FROM settings WHERE key='current_month' LIMIT 1")
-        _month_row = cur.fetchone()
-        month = _month_row["value"] if _month_row else ""
-
-        if is_student():
-            sid = is_student()
-            
-            cur.execute("""
-                SELECT full_name, grade, phone_whatsapp, profile_picture_path
-                FROM students
-                WHERE id=?
-                LIMIT 1
-            """, (sid,))
-
-            student_sidebar = cur.fetchone()
-
-            student_sidebar_photo = ""
-
-            if student_sidebar and student_sidebar["profile_picture_path"]:
-                student_sidebar_photo = f"""
-                <img src="/profile-picture/{sid}"
-                     style="
-                        width:56px;
-                        height:56px;
-                        border-radius:50%;
-                        object-fit:cover;
-                        border:3px solid #1b5e20;
-                     ">
-                """
-            else:
-                initials = "S"
-
-                if student_sidebar and student_sidebar["full_name"]:
-                    initials = "".join(
-                        x[0].upper()
-                        for x in student_sidebar["full_name"].split()[:2]
-                    )
-
-                student_sidebar_photo = f"""
-                <div style="
-                    width:56px;
-                    height:56px;
-                    border-radius:50%;
-                    background:#eef6ee;
-                    display:flex;
-                    align-items:center;
-                    justify-content:center;
-                    border:3px solid #1b5e20;
-                    font-weight:800;
-                    color:#1b5e20;
-                    font-size:16px;
-                ">
-                    {escape(initials or "S")}
-                </div>
-                """
-
-            student_sidebar_name = student_sidebar["full_name"] if student_sidebar else session.get("student_name", "Student")
-            student_sidebar_grade = grade_label(student_sidebar["grade"]) if student_sidebar and student_sidebar["grade"] else "Student"
-            student_sidebar_phone = student_sidebar["phone_whatsapp"] if student_sidebar and student_sidebar["phone_whatsapp"] else ""
-            student_profile_link = url_for('student_profile_page')
-            
-            month = get_active_month('student')
-            
-            cur.execute("SELECT COUNT(*) FROM enrollments WHERE student_id=? AND month=? AND status='ACTIVE'", (sid, month))
-            active_subjects = cur.fetchone()[0] or 0
-            cur.execute("""
-                SELECT COUNT(*)
-                FROM materials m
-                WHERE (m.is_assignment=1 OR m.kind='assignment') AND m.month=?
-                AND m.subject_id IN (SELECT subject_id FROM enrollments WHERE student_id=? AND month=? AND UPPER(status)='ACTIVE')
-                AND NOT EXISTS (SELECT 1 FROM submissions s WHERE s.material_id=m.id AND s.student_id=?)
-            """, (month, sid, month, sid))
-            pending = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM submissions WHERE student_id=? AND mark IS NOT NULL", (sid,))
-            graded = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM direct_messages WHERE to_role='student' AND to_id=? AND is_read=0", (sid,))
-            unread = cur.fetchone()[0] or 0
-            role_title, user_name = "Student", session.get('student_name','Student')
-
-            links = [
-                ("🏠 Dashboard", url_for('student_home')),
-                ("📊 Academic Progress", url_for('student_academic_progress')),
-            ]
-
-            if rating_window_open(month) and int(active_subjects or 0) > 0:
-                links.append(
-                    (
-                        "⭐ Ratings & Feedback",
-                        url_for('student_home') + "#ratings-feedback"
-                    )
-                )
-
-            links.append(
-                (
-                    "🎁 Discounts & Rewards",
-                    url_for('student_home') + "#discounts-rewards"
-                )
-            )
-
-            links.extend([
-                ("👤 My Profile", url_for('student_profile_page')),
-                ("✅ Status", "#status"),
-                ("📝 Assignments", url_for('student_assignments')),
-                ("🧪 Assessments", url_for('student_assessments')),
-                ("🎮 Learning Games", url_for('student_learning_games')),
-                ("📚 Learning Materials", url_for('student_materials')),
-                ("💬 Messages", "#messages"),
-                ("📤 Upload Report", url_for('student_upload_report')),
-                ("📄 My Reports", url_for('student_my_reports')),
-                ("🤝 My 1-on-1 Requests", url_for('one_on_one_my_requests')),
-                ("🎓 My 1-on-1 Sessions", url_for('one_on_one_my_sessions')),
-                ("🚪 Logout", url_for('student_logout'))
-            ])
-            stats_grid = f"""
-            <div class='stats-mini'>
-            <div class='s'><div class='k'>{active_subjects}</div><div class='t'>Active subjects</div></div>
-            <div class='s'><div class='k'>{pending}</div><div class='t'>Pending tasks</div></div>
-            <div class='s'><div class='k'>{graded}</div><div class='t'>Marks released</div></div>
-            <div class='s'><div class='k'>{unread}</div><div class='t'>Unread messages</div></div>
-            </div>"""
-        elif is_tutor_student_view_mode():
-            tid = is_tutor()
-            month = get_active_month('tutor')
-
-            cur.execute("""
-                SELECT full_name, profile_picture_path
-                FROM tutors
-                WHERE id=?
-                LIMIT 1
-            """, (tid,))
-
-            tutor_sidebar = cur.fetchone()
-            tutor_name_preview = tutor_sidebar["full_name"] if tutor_sidebar else session.get('tutor_name', 'Tutor')
-
-            cur.execute("SELECT COUNT(*) FROM tutor_subjects WHERE tutor_id=?", (tid,))
-            active_subjects = cur.fetchone()[0] or 0
-
-            cur.execute("""
-                SELECT COUNT(*)
-                FROM materials
-                WHERE tutor_id=?
-                  AND month=?
-                  AND (is_assignment=1 OR kind='assignment')
-            """, (tid, month))
-            pending = cur.fetchone()[0] or 0
-
-            cur.execute("""
-                SELECT COUNT(*)
-                FROM assessments
-                WHERE tutor_id=?
-                  AND month=?
-                  AND is_published=1
-            """, (tid, month))
-            graded = cur.fetchone()[0] or 0
-
-            cur.execute("""
-                SELECT COUNT(*)
-                FROM materials
-                WHERE tutor_id=?
-                  AND month=?
-                  AND COALESCE(is_assignment,0)=0
-                  AND kind!='assignment'
-            """, (tid, month))
-            unread = cur.fetchone()[0] or 0
-
-            initials = "".join([
-                x[0].upper()
-                for x in (tutor_name_preview or "Tutor").split()[:2]
-            ])
-
-            if tutor_sidebar and tutor_sidebar["profile_picture_path"]:
-                student_sidebar_photo = f"""
-                <img src="/tutor-profile-picture/{tid}"
-                     style="
-                        width:56px;
-                        height:56px;
-                        border-radius:50%;
-                        object-fit:cover;
-                        border:3px solid #1b5e20;
-                     ">
-                """
-            else:
-                student_sidebar_photo = f"""
-                <div style="
-                    width:56px;
-                    height:56px;
-                    border-radius:50%;
-                    background:#eef6ee;
-                    display:flex;
-                    align-items:center;
-                    justify-content:center;
-                    border:3px solid #1b5e20;
-                    font-weight:800;
-                    color:#1b5e20;
-                    font-size:16px;
-                ">
-                    {escape(initials or "TP")}
-                </div>
-                """
-
-            student_sidebar_name = f"{tutor_name_preview}"
-            student_sidebar_grade = "Tutor Student View"
-            student_sidebar_phone = "Read-only tutor access"
-            student_profile_link = url_for('tutor_student_view') + "#profile"
-
-            role_title, user_name = "Student", tutor_name_preview
-            links = [
-                ("🏠 Dashboard", url_for('tutor_student_view')),
-                ("📊 Academic Progress", url_for('tutor_student_view') + "#progress"),
-                ("👤 My Profile", url_for('tutor_student_view') + "#profile"),
-                ("✅ Status", url_for('tutor_student_view') + "#status"),
-                ("📝 Assignments", url_for('tutor_student_view') + "#assignments"),
-                ("🧪 Assessments", url_for('tutor_student_view') + "#assessments"),
-                ("🎮 Learning Games", url_for('tutor_student_view') + "#games"),
-                ("📚 Learning Materials", url_for('tutor_student_view') + "#materials"),
-                ("💬 Messages", url_for('tutor_student_view') + "#messages"),
-                ("⬅️ Switch to Tutor View", url_for('tutor_switch_tutor_view')),
-                ("🚪 Logout", url_for('tutor_logout'))
-            ]
-
-            stats_grid = f"""
-            <div class='stats-mini'>
-            <div class='s'><div class='k'>{active_subjects}</div><div class='t'>Tutor subjects</div></div>
-            <div class='s'><div class='k'>{pending}</div><div class='t'>Assignments shown</div></div>
-            <div class='s'><div class='k'>{graded}</div><div class='t'>Published assessments</div></div>
-            <div class='s'><div class='k'>{unread}</div><div class='t'>Materials shown</div></div>
-            </div>"""
-
-        elif is_tutor():
-            tid = is_tutor()
-            month = get_active_month('tutor')
-            
-            cur.execute("SELECT COUNT(*) FROM tutor_subjects WHERE tutor_id=?", (tid,))
-            subs = cur.fetchone()[0] or 0
-            cur.execute("""
-                SELECT COUNT(*)
-                FROM submissions s
-                JOIN materials m ON m.id=s.material_id
-                WHERE m.tutor_id=? AND (s.mark IS NULL OR s.mark='')
-            """, (tid,))
-            to_mark = cur.fetchone()[0] or 0
-            cur.execute("""
-                SELECT COUNT(DISTINCT e.student_id)
-                FROM enrollments e
-                WHERE e.month=? AND e.status='ACTIVE'
-                AND e.subject_id IN (SELECT subject_id FROM tutor_subjects WHERE tutor_id=?)
-            """, (month, tid))
-            active_students = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM direct_messages WHERE to_role='tutor' AND to_id=? AND is_read=0", (tid,))
-            unread = cur.fetchone()[0] or 0
-            cur.execute("""
-                SELECT full_name, profile_picture_path
-                FROM tutors
-                WHERE id=?
-                LIMIT 1
-            """, (tid,))
-
-            tutor_sidebar = cur.fetchone()
-
-            role_title = "Tutor"
-            user_name = tutor_sidebar["full_name"] if tutor_sidebar else session.get('tutor_name','Tutor')
-
-            tutor_sidebar_photo = ""
-
-            if tutor_sidebar and tutor_sidebar["profile_picture_path"]:
-                tutor_sidebar_photo = f"""
-                <img src="/tutor-profile-picture/{tid}"
-                     style="
-                        width:56px;
-                        height:56px;
-                        border-radius:50%;
-                        object-fit:cover;
-                        border:3px solid #1b5e20;
-                     ">
-                """
-            else:
-                initials = "".join([
-                    x[0].upper()
-                    for x in (user_name or "Tutor").split()[:2]
-                ])
-
-                tutor_sidebar_photo = f"""
-                <div style="
-                    width:56px;
-                    height:56px;
-                    border-radius:50%;
-                    background:#eef6ee;
-                    display:flex;
-                    align-items:center;
-                    justify-content:center;
-                    border:3px solid #1b5e20;
-                    font-weight:800;
-                    color:#1b5e20;
-                    font-size:16px;
-                ">
-                    {escape(initials or "T")}
-                </div>
-                """
-            links = [
-                ("🏠 Dashboard", url_for('tutor_home')),
-                ("👤 My Profile", url_for('tutor_profile_page')),
-                ("📊 Work Progress", url_for('tutor_work_progress')),
-                ("⭐ Student Reviews", url_for('tutor_student_reviews')),
-                ("👨‍🏫 One-on-One Sessions", "/tutor/one-on-one"),
-                ("⬆️ Upload Material", url_for('tutor_home') + "#upload"),
-                ("📚 My Library", url_for('tutor_uploads_library')),
-                ("📝 Assignments", url_for('tutor_home') + "#assignments"),
-                ("🧪 Assessments", url_for('tutor_assessments')),
-                ("🎮 Game Questions", url_for('tutor_learning_game_questions')),
-                ("💬 Messages", url_for('tutor_home') + "#messages"),
-                ("👥 Students", url_for('tutor_home') + "#students"),
-                ("👀 Student View", url_for('tutor_switch_student_view')),
-                ("🚪 Logout", url_for('tutor_logout'))
-            ]
-
-            stats_grid = f"""
-            <div class='stats-mini'>
-            <div class='s'><div class='k'>{subs}</div><div class='t'>Subjects</div></div>
-            <div class='s'><div class='k'>{to_mark}</div><div class='t'>To mark</div></div>
-            <div class='s'><div class='k'>{active_students}</div><div class='t'>Active students</div></div>
-            <div class='s'><div class='k'>{unread}</div><div class='t'>Unread messages</div></div>
-            </div>"""
-        elif is_admin():
-            month = get_setting('current_month')
-
-            # Current month pending enrollments only
-            cur.execute("""
-                SELECT COUNT(*)
-                FROM enrollments
-                WHERE month = ?
-                  AND status = 'PENDING'
-            """, (month,))
-            pend = cur.fetchone()[0] or 0
-
-            # Current month active enrollments only
-            cur.execute("""
-                SELECT COUNT(*)
-                FROM enrollments
-                WHERE month = ?
-                  AND status = 'ACTIVE'
-            """, (month,))
-            active_enrollments = cur.fetchone()[0] or 0
-
-            # Current month unique students only
-            cur.execute("""
-                SELECT COUNT(DISTINCT student_id)
-                FROM enrollments
-                WHERE month = ?
-            """, (month,))
-            students = cur.fetchone()[0] or 0
-
-            # Current month unique active students only
-            cur.execute("""
-                SELECT COUNT(DISTINCT student_id)
-                FROM enrollments
-                WHERE month = ?
-                  AND status = 'ACTIVE'
-            """, (month,))
-            active_students = cur.fetchone()[0] or 0
-
-            # Total tutors created on the portal
-            cur.execute("""
-                SELECT COUNT(*)
-                FROM tutors
-            """)
-            tutors = cur.fetchone()[0] or 0
-
-            # PIN reset messages are not month-based, keep unresolved only
-            cur.execute("""
-                SELECT COUNT(*)
-                FROM messages
-                WHERE kind IN ('forgot_student_pin','forgot_tutor_pin')
-                  AND resolved = 0
-            """)
-            resets = cur.fetchone()[0] or 0
-
-            role_title, user_name = "Admin", "Administrator"
-
-            links = [
-                ("Manage enrollments", "#enrollments"),
-                ("Students", "#students"),
-                ("Tutors", "#tutors"),
-                ("Group links", "#groups"),
-                ("Sessions & QR", "#sessions"),
-                ("Inbox", "#inbox"),
-                ("Direct messages", "#messages"),
-                ("Student Reports", url_for('admin_reports')),
-                ("Analytics", "#analytics"),
-                ("Settings", url_for('admin_settings')),
-                ("Logout", url_for('admin_logout'))
-            ]
-
-            stats_grid = f"""
-            <div class='stats-mini'>
-                <div class='s'>
-                    <div class='k'>{pend}</div>
-                    <div class='t'>Pending this month</div>
-                </div>
-
-                <div class='s'>
-                    <div class='k'>{active_enrollments}</div>
-                    <div class='t'>Active enrollments</div>
-                </div>
-
-                <div class='s'>
-                    <div class='k'>{students}</div>
-                    <div class='t'>Students this month</div>
-                </div>
-
-                <div class='s'>
-                    <div class='k'>{active_students}</div>
-                    <div class='t'>Active students</div>
-                </div>
-
-                <div class='s'>
-                    <div class='k'>{tutors}</div>
-                    <div class='t'>Tutors this month</div>
-                </div>
-
-                <div class='s'>
-                    <div class='k'>{resets}</div>
-                    <div class='t'>PIN resets</div>
-                </div>
-            </div>"""
-        else:
+        # Only Student, Tutor and Admin use the shared sidebar. Management
+        # portals provide their own navigation, so avoid opening SQLite merely
+        # to discover that there is no shared sidebar to render.
+        _needs_shared_sidebar = bool(is_student() or is_tutor() or is_admin())
+        if not _needs_shared_sidebar:
             role_title = ""
             user_name = ""
             links = []
             stats_grid = ""
+            ann_html = ""
+        else:
+            conn = get_db(); cur = conn.cursor()
+            # Reuse this page connection instead of opening another SQLite
+            # connection just to read current_month.
+            cur.execute("SELECT value FROM settings WHERE key='current_month' LIMIT 1")
+            _month_row = cur.fetchone()
+            month = _month_row["value"] if _month_row else ""
 
-        # Build announcements using the same connection. The previous code
-        # opened another connection on every rendered page and kept both open
-        # until the whole HTML response had been assembled.
-        cur.execute("SELECT payload, created_at FROM messages WHERE kind='announcement' ORDER BY id ASC LIMIT 3")
-        ann = cur.fetchall()
-        if ann:
-            items = "".join([f"<div><div class='mini muted'>{r['created_at'][:16].replace('T',' ')}</div><div>{r['payload']}</div></div>" for r in ann])
-            ann_html = f"<div class='announce'><h3>Announcements</h3>{items}</div>"
+            if is_student():
+                sid = is_student()
+            
+                cur.execute("""
+                    SELECT full_name, grade, phone_whatsapp, profile_picture_path
+                    FROM students
+                    WHERE id=?
+                    LIMIT 1
+                """, (sid,))
+
+                student_sidebar = cur.fetchone()
+
+                student_sidebar_photo = ""
+
+                if student_sidebar and student_sidebar["profile_picture_path"]:
+                    student_sidebar_photo = f"""
+                    <img src="/profile-picture/{sid}"
+                         style="
+                            width:56px;
+                            height:56px;
+                            border-radius:50%;
+                            object-fit:cover;
+                            border:3px solid #1b5e20;
+                         ">
+                    """
+                else:
+                    initials = "S"
+
+                    if student_sidebar and student_sidebar["full_name"]:
+                        initials = "".join(
+                            x[0].upper()
+                            for x in student_sidebar["full_name"].split()[:2]
+                        )
+
+                    student_sidebar_photo = f"""
+                    <div style="
+                        width:56px;
+                        height:56px;
+                        border-radius:50%;
+                        background:#eef6ee;
+                        display:flex;
+                        align-items:center;
+                        justify-content:center;
+                        border:3px solid #1b5e20;
+                        font-weight:800;
+                        color:#1b5e20;
+                        font-size:16px;
+                    ">
+                        {escape(initials or "S")}
+                    </div>
+                    """
+
+                student_sidebar_name = student_sidebar["full_name"] if student_sidebar else session.get("student_name", "Student")
+                student_sidebar_grade = grade_label(student_sidebar["grade"]) if student_sidebar and student_sidebar["grade"] else "Student"
+                student_sidebar_phone = student_sidebar["phone_whatsapp"] if student_sidebar and student_sidebar["phone_whatsapp"] else ""
+                student_profile_link = url_for('student_profile_page')
+            
+                month = get_active_month('student')
+            
+                _student_stats_key = ("student-stats", int(sid), str(month))
+                _student_stats = _ebta_cache_get(_student_stats_key)
+
+                if _student_stats is None:
+                    cur.execute("SELECT COUNT(*) FROM enrollments WHERE student_id=? AND month=? AND status='ACTIVE'", (sid, month))
+                    active_subjects = cur.fetchone()[0] or 0
+                    cur.execute("""
+                        SELECT COUNT(*)
+                        FROM materials m
+                        WHERE (m.is_assignment=1 OR m.kind='assignment') AND m.month=?
+                        AND m.subject_id IN (SELECT subject_id FROM enrollments WHERE student_id=? AND month=? AND UPPER(status)='ACTIVE')
+                        AND NOT EXISTS (SELECT 1 FROM submissions s WHERE s.material_id=m.id AND s.student_id=?)
+                    """, (month, sid, month, sid))
+                    pending = cur.fetchone()[0] or 0
+                    cur.execute("SELECT COUNT(*) FROM submissions WHERE student_id=? AND mark IS NOT NULL", (sid,))
+                    graded = cur.fetchone()[0] or 0
+                    cur.execute("SELECT COUNT(*) FROM direct_messages WHERE to_role='student' AND to_id=? AND is_read=0", (sid,))
+                    unread = cur.fetchone()[0] or 0
+                    _student_stats = _ebta_cache_set(
+                        _student_stats_key,
+                        (active_subjects, pending, graded, unread)
+                    )
+                else:
+                    active_subjects, pending, graded, unread = _student_stats
+                role_title, user_name = "Student", session.get('student_name','Student')
+
+                links = [
+                    ("🏠 Dashboard", url_for('student_home')),
+                    ("📊 Academic Progress", url_for('student_academic_progress')),
+                ]
+
+                if rating_window_open(month) and int(active_subjects or 0) > 0:
+                    links.append(
+                        (
+                            "⭐ Ratings & Feedback",
+                            url_for('student_home') + "#ratings-feedback"
+                        )
+                    )
+
+                links.append(
+                    (
+                        "🎁 Discounts & Rewards",
+                        url_for('student_home') + "#discounts-rewards"
+                    )
+                )
+
+                links.extend([
+                    ("👤 My Profile", url_for('student_profile_page')),
+                    ("✅ Status", "#status"),
+                    ("📝 Assignments", url_for('student_assignments')),
+                    ("🧪 Assessments", url_for('student_assessments')),
+                    ("🎮 Learning Games", url_for('student_learning_games')),
+                    ("📚 Learning Materials", url_for('student_materials')),
+                    ("💬 Messages", "#messages"),
+                    ("📤 Upload Report", url_for('student_upload_report')),
+                    ("📄 My Reports", url_for('student_my_reports')),
+                    ("🤝 My 1-on-1 Requests", url_for('one_on_one_my_requests')),
+                    ("🎓 My 1-on-1 Sessions", url_for('one_on_one_my_sessions')),
+                    ("🚪 Logout", url_for('student_logout'))
+                ])
+                stats_grid = f"""
+                <div class='stats-mini'>
+                <div class='s'><div class='k'>{active_subjects}</div><div class='t'>Active subjects</div></div>
+                <div class='s'><div class='k'>{pending}</div><div class='t'>Pending tasks</div></div>
+                <div class='s'><div class='k'>{graded}</div><div class='t'>Marks released</div></div>
+                <div class='s'><div class='k'>{unread}</div><div class='t'>Unread messages</div></div>
+                </div>"""
+            elif is_tutor_student_view_mode():
+                tid = is_tutor()
+                month = get_active_month('tutor')
+
+                cur.execute("""
+                    SELECT full_name, profile_picture_path
+                    FROM tutors
+                    WHERE id=?
+                    LIMIT 1
+                """, (tid,))
+
+                tutor_sidebar = cur.fetchone()
+                tutor_name_preview = tutor_sidebar["full_name"] if tutor_sidebar else session.get('tutor_name', 'Tutor')
+
+                _preview_stats_key = ("tutor-preview-stats", int(tid), str(month))
+                _preview_stats = _ebta_cache_get(_preview_stats_key)
+
+                if _preview_stats is None:
+                    cur.execute("SELECT COUNT(*) FROM tutor_subjects WHERE tutor_id=?", (tid,))
+                    active_subjects = cur.fetchone()[0] or 0
+
+                    cur.execute("""
+                        SELECT COUNT(*)
+                        FROM materials
+                        WHERE tutor_id=?
+                          AND month=?
+                          AND (is_assignment=1 OR kind='assignment')
+                    """, (tid, month))
+                    pending = cur.fetchone()[0] or 0
+
+                    cur.execute("""
+                        SELECT COUNT(*)
+                        FROM assessments
+                        WHERE tutor_id=?
+                          AND month=?
+                          AND is_published=1
+                    """, (tid, month))
+                    graded = cur.fetchone()[0] or 0
+
+                    cur.execute("""
+                        SELECT COUNT(*)
+                        FROM materials
+                        WHERE tutor_id=?
+                          AND month=?
+                          AND COALESCE(is_assignment,0)=0
+                          AND kind!='assignment'
+                    """, (tid, month))
+                    unread = cur.fetchone()[0] or 0
+
+                    _preview_stats = _ebta_cache_set(
+                        _preview_stats_key,
+                        (active_subjects, pending, graded, unread)
+                    )
+                else:
+                    active_subjects, pending, graded, unread = _preview_stats
+
+                initials = "".join([
+                    x[0].upper()
+                    for x in (tutor_name_preview or "Tutor").split()[:2]
+                ])
+
+                if tutor_sidebar and tutor_sidebar["profile_picture_path"]:
+                    student_sidebar_photo = f"""
+                    <img src="/tutor-profile-picture/{tid}"
+                         style="
+                            width:56px;
+                            height:56px;
+                            border-radius:50%;
+                            object-fit:cover;
+                            border:3px solid #1b5e20;
+                         ">
+                    """
+                else:
+                    student_sidebar_photo = f"""
+                    <div style="
+                        width:56px;
+                        height:56px;
+                        border-radius:50%;
+                        background:#eef6ee;
+                        display:flex;
+                        align-items:center;
+                        justify-content:center;
+                        border:3px solid #1b5e20;
+                        font-weight:800;
+                        color:#1b5e20;
+                        font-size:16px;
+                    ">
+                        {escape(initials or "TP")}
+                    </div>
+                    """
+
+                student_sidebar_name = f"{tutor_name_preview}"
+                student_sidebar_grade = "Tutor Student View"
+                student_sidebar_phone = "Read-only tutor access"
+                student_profile_link = url_for('tutor_student_view') + "#profile"
+
+                role_title, user_name = "Student", tutor_name_preview
+                links = [
+                    ("🏠 Dashboard", url_for('tutor_student_view')),
+                    ("📊 Academic Progress", url_for('tutor_student_view') + "#progress"),
+                    ("👤 My Profile", url_for('tutor_student_view') + "#profile"),
+                    ("✅ Status", url_for('tutor_student_view') + "#status"),
+                    ("📝 Assignments", url_for('tutor_student_view') + "#assignments"),
+                    ("🧪 Assessments", url_for('tutor_student_view') + "#assessments"),
+                    ("🎮 Learning Games", url_for('tutor_student_view') + "#games"),
+                    ("📚 Learning Materials", url_for('tutor_student_view') + "#materials"),
+                    ("💬 Messages", url_for('tutor_student_view') + "#messages"),
+                    ("⬅️ Switch to Tutor View", url_for('tutor_switch_tutor_view')),
+                    ("🚪 Logout", url_for('tutor_logout'))
+                ]
+
+                stats_grid = f"""
+                <div class='stats-mini'>
+                <div class='s'><div class='k'>{active_subjects}</div><div class='t'>Tutor subjects</div></div>
+                <div class='s'><div class='k'>{pending}</div><div class='t'>Assignments shown</div></div>
+                <div class='s'><div class='k'>{graded}</div><div class='t'>Published assessments</div></div>
+                <div class='s'><div class='k'>{unread}</div><div class='t'>Materials shown</div></div>
+                </div>"""
+
+            elif is_tutor():
+                tid = is_tutor()
+                month = get_active_month('tutor')
+            
+                _tutor_stats_key = ("tutor-stats", int(tid), str(month))
+                _tutor_stats = _ebta_cache_get(_tutor_stats_key)
+
+                if _tutor_stats is None:
+                    cur.execute("SELECT COUNT(*) FROM tutor_subjects WHERE tutor_id=?", (tid,))
+                    subs = cur.fetchone()[0] or 0
+                    cur.execute("""
+                        SELECT COUNT(*)
+                        FROM submissions s
+                        JOIN materials m ON m.id=s.material_id
+                        WHERE m.tutor_id=? AND (s.mark IS NULL OR s.mark='')
+                    """, (tid,))
+                    to_mark = cur.fetchone()[0] or 0
+                    cur.execute("""
+                        SELECT COUNT(DISTINCT e.student_id)
+                        FROM enrollments e
+                        WHERE e.month=? AND e.status='ACTIVE'
+                        AND e.subject_id IN (SELECT subject_id FROM tutor_subjects WHERE tutor_id=?)
+                    """, (month, tid))
+                    active_students = cur.fetchone()[0] or 0
+                    cur.execute("SELECT COUNT(*) FROM direct_messages WHERE to_role='tutor' AND to_id=? AND is_read=0", (tid,))
+                    unread = cur.fetchone()[0] or 0
+
+                    _tutor_stats = _ebta_cache_set(
+                        _tutor_stats_key,
+                        (subs, to_mark, active_students, unread)
+                    )
+                else:
+                    subs, to_mark, active_students, unread = _tutor_stats
+                cur.execute("""
+                    SELECT full_name, profile_picture_path
+                    FROM tutors
+                    WHERE id=?
+                    LIMIT 1
+                """, (tid,))
+
+                tutor_sidebar = cur.fetchone()
+
+                role_title = "Tutor"
+                user_name = tutor_sidebar["full_name"] if tutor_sidebar else session.get('tutor_name','Tutor')
+
+                tutor_sidebar_photo = ""
+
+                if tutor_sidebar and tutor_sidebar["profile_picture_path"]:
+                    tutor_sidebar_photo = f"""
+                    <img src="/tutor-profile-picture/{tid}"
+                         style="
+                            width:56px;
+                            height:56px;
+                            border-radius:50%;
+                            object-fit:cover;
+                            border:3px solid #1b5e20;
+                         ">
+                    """
+                else:
+                    initials = "".join([
+                        x[0].upper()
+                        for x in (user_name or "Tutor").split()[:2]
+                    ])
+
+                    tutor_sidebar_photo = f"""
+                    <div style="
+                        width:56px;
+                        height:56px;
+                        border-radius:50%;
+                        background:#eef6ee;
+                        display:flex;
+                        align-items:center;
+                        justify-content:center;
+                        border:3px solid #1b5e20;
+                        font-weight:800;
+                        color:#1b5e20;
+                        font-size:16px;
+                    ">
+                        {escape(initials or "T")}
+                    </div>
+                    """
+                links = [
+                    ("🏠 Dashboard", url_for('tutor_home')),
+                    ("👤 My Profile", url_for('tutor_profile_page')),
+                    ("📊 Work Progress", url_for('tutor_work_progress')),
+                    ("⭐ Student Reviews", url_for('tutor_student_reviews')),
+                    ("👨‍🏫 One-on-One Sessions", "/tutor/one-on-one"),
+                    ("⬆️ Upload Material", url_for('tutor_home') + "#upload"),
+                    ("📚 My Library", url_for('tutor_uploads_library')),
+                    ("📝 Assignments", url_for('tutor_home') + "#assignments"),
+                    ("🧪 Assessments", url_for('tutor_assessments')),
+                    ("🎮 Game Questions", url_for('tutor_learning_game_questions')),
+                    ("💬 Messages", url_for('tutor_home') + "#messages"),
+                    ("👥 Students", url_for('tutor_home') + "#students"),
+                    ("👀 Student View", url_for('tutor_switch_student_view')),
+                    ("🚪 Logout", url_for('tutor_logout'))
+                ]
+
+                stats_grid = f"""
+                <div class='stats-mini'>
+                <div class='s'><div class='k'>{subs}</div><div class='t'>Subjects</div></div>
+                <div class='s'><div class='k'>{to_mark}</div><div class='t'>To mark</div></div>
+                <div class='s'><div class='k'>{active_students}</div><div class='t'>Active students</div></div>
+                <div class='s'><div class='k'>{unread}</div><div class='t'>Unread messages</div></div>
+                </div>"""
+            elif is_admin():
+                month = get_setting('current_month')
+
+                _admin_stats_key = ("admin-stats", str(month))
+                _admin_stats = _ebta_cache_get(_admin_stats_key)
+
+                if _admin_stats is None:
+                    cur.execute("""
+                        SELECT
+                            (SELECT COUNT(*) FROM enrollments WHERE month=? AND status='PENDING') AS pend,
+                            (SELECT COUNT(*) FROM enrollments WHERE month=? AND status='ACTIVE') AS active_enrollments,
+                            (SELECT COUNT(DISTINCT student_id) FROM enrollments WHERE month=?) AS students,
+                            (SELECT COUNT(DISTINCT student_id) FROM enrollments WHERE month=? AND status='ACTIVE') AS active_students,
+                            (SELECT COUNT(*) FROM tutors) AS tutors,
+                            (SELECT COUNT(*) FROM messages WHERE kind IN ('forgot_student_pin','forgot_tutor_pin') AND resolved=0) AS resets
+                    """, (month, month, month, month))
+                    _row = cur.fetchone()
+                    pend = int(_row["pend"] or 0)
+                    active_enrollments = int(_row["active_enrollments"] or 0)
+                    students = int(_row["students"] or 0)
+                    active_students = int(_row["active_students"] or 0)
+                    tutors = int(_row["tutors"] or 0)
+                    resets = int(_row["resets"] or 0)
+                    _admin_stats = _ebta_cache_set(
+                        _admin_stats_key,
+                        (pend, active_enrollments, students, active_students, tutors, resets)
+                    )
+                else:
+                    pend, active_enrollments, students, active_students, tutors, resets = _admin_stats
+
+                role_title, user_name = "Admin", "Administrator"
+
+                links = [
+                    ("Manage enrollments", "#enrollments"),
+                    ("Students", "#students"),
+                    ("Tutors", "#tutors"),
+                    ("Group links", "#groups"),
+                    ("Sessions & QR", "#sessions"),
+                    ("Inbox", "#inbox"),
+                    ("Direct messages", "#messages"),
+                    ("Student Reports", url_for('admin_reports')),
+                    ("Analytics", "#analytics"),
+                    ("Settings", url_for('admin_settings')),
+                    ("Logout", url_for('admin_logout'))
+                ]
+
+                stats_grid = f"""
+                <div class='stats-mini'>
+                    <div class='s'>
+                        <div class='k'>{pend}</div>
+                        <div class='t'>Pending this month</div>
+                    </div>
+
+                    <div class='s'>
+                        <div class='k'>{active_enrollments}</div>
+                        <div class='t'>Active enrollments</div>
+                    </div>
+
+                    <div class='s'>
+                        <div class='k'>{students}</div>
+                        <div class='t'>Students this month</div>
+                    </div>
+
+                    <div class='s'>
+                        <div class='k'>{active_students}</div>
+                        <div class='t'>Active students</div>
+                    </div>
+
+                    <div class='s'>
+                        <div class='k'>{tutors}</div>
+                        <div class='t'>Tutors this month</div>
+                    </div>
+
+                    <div class='s'>
+                        <div class='k'>{resets}</div>
+                        <div class='t'>PIN resets</div>
+                    </div>
+                </div>"""
+            else:
+                role_title = ""
+                user_name = ""
+                links = []
+                stats_grid = ""
+
+            # Build announcements using the same connection. The previous code
+            # opened another connection on every rendered page and kept both open
+            # until the whole HTML response had been assembled.
+            _ann_key = ("announcements",)
+            _ann_cached = _ebta_cache_get(_ann_key)
+
+            if _ann_cached is None:
+                cur.execute("SELECT payload, created_at FROM messages WHERE kind='announcement' ORDER BY id ASC LIMIT 3")
+                ann = cur.fetchall()
+                _ann_cached = [(r["payload"], r["created_at"]) for r in ann]
+                _ebta_cache_set(_ann_key, _ann_cached)
+
+            if _ann_cached:
+                items = "".join([
+                    f"<div><div class='mini muted'>{(created_at or '')[:16].replace('T',' ')}</div><div>{payload or ''}</div></div>"
+                    for payload, created_at in _ann_cached
+                ])
+                ann_html = f"<div class='announce'><h3>Announcements</h3>{items}</div>"
     except Exception:
         role_title = ""
         links = []
@@ -15990,11 +16204,15 @@ def page(title, body_html, extra_head="", extra_js=""):
         else ""
     )
 
+    _math_probe = str(body_html) + str(extra_head) + str(extra_js)
+    _math_needed = ("ebta-math-" in _math_probe or "MathJax" in _math_probe)
+    _math_head = EBTA_MATH_SUPPORT_HEAD if _math_needed else ""
+
     return f"""
     <html><head>
     <meta name='viewport' content='width=device-width, initial-scale=1'/>
     <title>{title}</title>
-    <link rel="icon" type="image/jpeg" href="https://i.imgur.com/SqocnYt.png">
+    <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
     <!-- PWA -->
     <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#0e4325">
@@ -16002,11 +16220,19 @@ def page(title, body_html, extra_head="", extra_js=""):
       if ("serviceWorker" in navigator) {{
         navigator.serviceWorker
           .register(
-            "/static/sw.js?v=409",
-            {{ updateViaCache: "none" }}
+            "/ebta-sw.js?v=20260910-fast3",
+            {{ updateViaCache: "imports" }}
           )
           .then(function(registration) {{
-            registration.update();
+            try {{
+              const key = "ebta_sw_update_checked";
+              const now = Date.now();
+              const last = Number(localStorage.getItem(key) || "0");
+              if (!last || (now - last) > 21600000) {{
+                localStorage.setItem(key, String(now));
+                registration.update().catch(function() {{}});
+              }}
+            }} catch (err) {{}}
           }})
           .catch(function() {{
             // Portal pages remain usable without service-worker support.
@@ -16029,14 +16255,15 @@ def page(title, body_html, extra_head="", extra_js=""):
 
 
     {_chart_script}
-    
-    {GOOGLE_FONTS}{BASE_CSS}{BASE_JS}{EBTA_MATH_SUPPORT_HEAD}{extra_head}{EBTA_UNIFIED_UI_CSS}
+    <link rel="stylesheet" href="/assets/ebta-core.css?v={_EBTA_UI_ASSET_VERSION}">
+    <script src="/assets/ebta-core.js?v={_EBTA_UI_ASSET_VERSION}"></script>
+    {_math_head}{extra_head}
     </head><body class="{body_class}">
     <header class='header'>
         <div class='nav'>
         <div class='brand'>
             <img class='brand-logo'
-                src="https://i.imgur.com/SqocnYt.png"
+                src="/static/icons/icon-192.png"
                 alt="EBTA logo"/>
             <div class='title'>EBTA Portal</div>
         </div>
@@ -16138,7 +16365,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                 </a>
             </div>
         </div>
-    </footer>{upload_feedback_js}{extra_js}{EBTA_UNIFIED_UI_JS}{auto_logout_js}
+    </footer>{upload_feedback_js}{extra_js}{auto_logout_js}
     </body></html>
     """
 
@@ -16335,9 +16562,6 @@ def home():
     if logged_in_role:
         return redirect(home_path_for_logged_in_role(logged_in_role))
 
-    conn = get_db()
-    cur = conn.cursor()
-    
     enrollment_open = get_setting('enrollment_open', '1') == '1'
     enrollment_message = get_setting(
         'enrollment_message',
@@ -16352,75 +16576,21 @@ def home():
     )
 
     
-    # Ensure key subjects exist for all offered grades (idempotent)
-    required_subjects = [
-        # Mathematics
-        ("Mathematics","G8"), ("Mathematics","G9"),
-        ("Mathematics","G10"), ("Mathematics","G11"), ("Mathematics","G12"),("Mathematics","G13"),
+    # Subjects are seeded during init_db(). A public GET must stay read-only:
+    # the previous INSERT OR IGNORE + commit on every homepage view caused
+    # unnecessary SQLite write locks while learners were browsing/enrolling.
+    _public_subjects_key = ("public-subjects",)
+    subjects = _ebta_cache_get(_public_subjects_key)
 
-        # Mathematical Literacy
-        ("Mathematical Literacy","G10"),
-        ("Mathematical Literacy","G11"),
-        ("Mathematical Literacy","G12"),("Mathematical Literacy","G13"),
-
-        # Physical Sciences
-        ("Physical Sciences","G10"),
-        ("Physical Sciences","G11"),
-        ("Physical Sciences","G12"),("Physical Sciences","G13"),
-
-        # Life Sciences
-        ("Life Sciences","G10"),
-        ("Life Sciences","G11"),
-        ("Life Sciences","G12"),("Life Sciences","G13"),
-
-        # Accounting
-        ("Accounting","G10"),
-        ("Accounting","G11"),
-        ("Accounting","G12"),("Accounting","G13"),
-
-        # Geography
-        ("Geography","G12"),
-
-        # Economics
-        ("Economics","G13"),
-
-        # Business Studies
-        #("Business Studies","G11"),
-        ("Business Studies","G12"),
-        ("Business Studies","G13"),
-
-        # Grades 8–9
-        ("EMS","G8"), ("EMS","G9"),
-        ("Natural Sciences","G8"), ("Natural Sciences","G9"),
-        
-        # English FAL
-        ("English FAL","G8"),
-        ("English FAL","G9"),
-        #("English FAL","G10"),
-        ("English FAL","G11"),
-        #("English FAL","G12"),
-        
-        # English HL
-        ("English HL","G8"),
-        ("English HL","G9"),
-        #("English HL","G10"),
-        ("English HL","G11"),
-        ("English HL","G12"),
-        
-        #Afrikaans
-        ("Afrikaans FAL","G9"),
-        ("Afrikaans FAL","G8"),
-    ]
-
-    try:
-        cur.executemany("INSERT OR IGNORE INTO subjects(name,grade) VALUES(?,?)", required_subjects)
-        conn.commit()
-    except Exception:
-        pass
-
-    cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
-    subjects = cur.fetchall()
-    conn.close()
+    if subjects is None:
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id,name,grade FROM subjects ORDER BY grade,name")
+            subjects = cur.fetchall()
+            _ebta_cache_set(_public_subjects_key, subjects)
+        finally:
+            conn.close()
 
     order = ['G8', 'G9', 'G10', 'G11', 'G12','G13']
     grade_names = {
@@ -16631,7 +16801,7 @@ def home():
     </a>
     """
     
-    ebta_loader_logo_url = LOGO_URL
+    ebta_loader_logo_url = "/static/icons/icon-192.png"
     
     enrollment_loader_html = """
 
@@ -16843,15 +17013,13 @@ def home():
                 const loader = document.getElementById("ebtaHomeLoader");
                 if (!loader) return;
 
-                setTimeout(function () {
-                    loader.classList.add("hide");
-                }, 650);
-
+                // Never hold the learner behind an artificial loading screen.
+                loader.classList.add("hide");
                 setTimeout(function () {
                     if (loader && loader.parentNode) {
                         loader.parentNode.removeChild(loader);
                     }
-                }, 1300);
+                }, 180);
             }
 
             if (document.readyState === "loading") {
@@ -21266,18 +21434,29 @@ def student_home():
 
         assignments = cur.fetchall()
 
+        # Fetch all of this learner's submissions for the visible assignments
+        # in one query instead of one SELECT per assignment.
+        _assignment_submission_map = {}
+        _assignment_ids = [int(a["id"]) for a in assignments]
+
+        if _assignment_ids:
+            _assignment_placeholders = ",".join("?" for _ in _assignment_ids)
+            cur.execute(f"""
+                SELECT id, material_id, file_path, mark, feedback,
+                       marked_file_path, is_published
+                FROM submissions
+                WHERE student_id=?
+                  AND material_id IN ({_assignment_placeholders})
+            """, (sid, *_assignment_ids))
+            _assignment_submission_map = {
+                int(row["material_id"]): row
+                for row in cur.fetchall()
+            }
+
         rows = []
 
         for a in assignments:
-
-            # check if student already submitted
-            cur.execute("""
-                SELECT id, file_path, mark, feedback, marked_file_path, is_published
-                FROM submissions
-                WHERE material_id=? AND student_id=?
-            """, (a['id'], sid))
-
-            sub = cur.fetchone()
+            sub = _assignment_submission_map.get(int(a["id"]))
 
             # assignment file
             file_link = "—"
@@ -25144,7 +25323,7 @@ def student_academic_progress():
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
 
     <script>
         const studentProgressCharts = {chart_json};
@@ -27285,6 +27464,41 @@ def tutor_home():
     stu_sections = []
     message_student_options = []
 
+    _tutor_subject_ids = [int(row["subject_id"]) for row in subs]
+    _subject_active_counts = {}
+    _subject_captured_dates = {}
+
+    if _tutor_subject_ids:
+        _subject_ph = ",".join("?" for _ in _tutor_subject_ids)
+
+        cur.execute(f"""
+            SELECT subject_id, COUNT(*) AS c
+            FROM enrollments
+            WHERE subject_id IN ({_subject_ph})
+              AND month=?
+              AND status='ACTIVE'
+            GROUP BY subject_id
+        """, (*_tutor_subject_ids, month))
+        _subject_active_counts = {
+            int(row["subject_id"]): int(row["c"] or 0)
+            for row in cur.fetchall()
+        }
+
+        cur.execute(f"""
+            SELECT subject_id, date
+            FROM attendance_sessions
+            WHERE tutor_id=?
+              AND month=?
+              AND subject_id IN ({_subject_ph})
+            ORDER BY subject_id, date
+        """, (tid, month, *_tutor_subject_ids))
+
+        for _date_row in cur.fetchall():
+            _sid = int(_date_row["subject_id"])
+            _date = str(_date_row["date"] or "")[:10]
+            if _date:
+                _subject_captured_dates.setdefault(_sid, []).append(_date)
+
     for s in subs:
 
         subject_id = s["subject_id"]
@@ -27301,17 +27515,11 @@ def tutor_home():
         if att_page < 1:
             att_page = 1
 
-        # Count total active learners for this subject/month
-        cur.execute("""
-            SELECT COUNT(*) AS c
-            FROM enrollments e
-            JOIN students st ON st.id = e.student_id
-            WHERE e.subject_id = ?
-              AND e.month = ?
-              AND e.status = 'ACTIVE'
-        """, (subject_id, month))
-
-        total_students_for_subject = cur.fetchone()["c"] or 0
+        # Already aggregated once for all tutor subjects above.
+        total_students_for_subject = _subject_active_counts.get(
+            int(subject_id),
+            0
+        )
 
         total_pages = max(1, (total_students_for_subject + per_page - 1) // per_page)
 
@@ -27334,6 +27542,50 @@ def tutor_home():
 
         studs = cur.fetchall()
 
+        # Batch attendance and average marks for the learners visible on this
+        # page. This replaces two SELECTs per learner with two SELECTs total.
+        _student_ids_page = [int(row["id"]) for row in studs]
+        _attendance_dates_by_student = {}
+        _avg_mark_by_student = {}
+
+        if _student_ids_page:
+            _student_ph = ",".join("?" for _ in _student_ids_page)
+
+            cur.execute(f"""
+                SELECT a.student_id, a.date
+                FROM attendance a
+                JOIN sessions se ON se.id=a.session_id
+                WHERE a.student_id IN ({_student_ph})
+                  AND se.subject_id=?
+                  AND substr(a.date,1,7)=?
+                ORDER BY a.student_id, a.date
+            """, (*_student_ids_page, subject_id, month))
+
+            for _att_row in cur.fetchall():
+                _student_key = int(_att_row["student_id"])
+                _att_date = str(_att_row["date"] or "")[:10]
+                if _att_date:
+                    _attendance_dates_by_student.setdefault(
+                        _student_key, []
+                    ).append(_att_date)
+
+            cur.execute(f"""
+                SELECT sub.student_id, AVG(sub.mark) AS avgm
+                FROM submissions sub
+                JOIN materials m ON m.id=sub.material_id
+                WHERE sub.student_id IN ({_student_ph})
+                  AND m.subject_id=?
+                  AND m.month=?
+                  AND sub.mark IS NOT NULL
+                  AND sub.is_published=1
+                GROUP BY sub.student_id
+            """, (*_student_ids_page, subject_id, month))
+
+            _avg_mark_by_student = {
+                int(_mark_row["student_id"]): _mark_row["avgm"]
+                for _mark_row in cur.fetchall()
+            }
+
         showing_from = offset + 1 if total_students_for_subject > 0 else 0
         showing_to = min(offset + per_page, total_students_for_subject)
 
@@ -27342,19 +27594,10 @@ def tutor_home():
         # Grade 13 / Upgrading = 6 classes per month
         monthly_cap = 6 if s["grade"] == "G13" else 4
 
-        # Only count sessions that the tutor has actually captured.
-        # This prevents learners from being marked absent for future sessions.
-        cur.execute("""
-            SELECT DISTINCT date
-            FROM attendance_sessions
-            WHERE subject_id = ?
-              AND tutor_id = ?
-              AND month = ?
-            ORDER BY date
-        """, (s["subject_id"], tid, month))
-
-        captured_class_dates = [str(r["date"])[:10] for r in cur.fetchall()]
-        captured_class_dates = sorted(set(captured_class_dates))
+        # Captured dates were prefetched for every subject in one query.
+        captured_class_dates = sorted(set(
+            _subject_captured_dates.get(int(s["subject_id"]), [])
+        ))
 
         # Keep the cap as a safety limit, but do not create future absences.
         actual_class_dates = captured_class_dates[:monthly_cap]
@@ -27454,23 +27697,9 @@ def tutor_home():
         rows = []
 
         for st in studs:
-            cur.execute("""
-                SELECT DISTINCT a.date
-                FROM attendance a
-                JOIN sessions se ON se.id = a.session_id
-                WHERE a.student_id = ?
-                  AND se.subject_id = ?
-                  AND strftime('%Y-%m', a.date) = ?
-                ORDER BY a.date
-            """, (st["id"], s["subject_id"], month))
-
-            # Normalize dates to YYYY-MM-DD to avoid mismatch issues
-            attended_dates = []
-            for r in cur.fetchall():
-                if r["date"]:
-                    attended_dates.append(str(r["date"])[:10])
-
-            attended_dates = sorted(set(attended_dates))
+            attended_dates = sorted(set(
+                _attendance_dates_by_student.get(int(st["id"]), [])
+            ))
 
             attended_set = set(attended_dates)
             actual_class_set = set(actual_class_dates)
@@ -27503,24 +27732,13 @@ def tutor_home():
             else:
                 missed_classes_html = "<span class='mini muted'>Dates not available</span>"
 
-            cur.execute("""
-                SELECT AVG(mark) AS avgm
-                FROM submissions sub
-                JOIN materials m ON m.id = sub.material_id
-                WHERE sub.student_id = ?
-                  AND m.subject_id = ?
-                  AND m.month = ?
-                  AND sub.mark IS NOT NULL
-                  AND sub.is_published = 1
-            """, (st["id"], s["subject_id"], month))
-
-            avgm = cur.fetchone()["avgm"]
+            avgm = _avg_mark_by_student.get(int(st["id"]))
 
             rows.append(f"""
             <tr>
                 <td>
                     <div style="display:flex;gap:10px;align-items:center">
-                        {student_profile_image_html(st['id'], st['full_name'], 42)}
+                        {student_profile_image_html(st['id'], st['full_name'], 42, st['profile_picture_path'], True)}
 
                         <div>
                             <strong title="{escape(st['full_name'] or 'Learner')}"
@@ -27734,50 +27952,47 @@ def tutor_home():
     # get all conversations
 
     cur.execute("""
-    SELECT DISTINCT
-        CASE
-            WHEN from_role='student' THEN from_id
-            ELSE to_id
-        END AS student_id,
-        st.full_name
-    FROM direct_messages dm
-    JOIN students st
-    ON st.id =
-        CASE
-            WHEN dm.from_role='student' THEN dm.from_id
-            ELSE dm.to_id
-        END
-    WHERE
-        (dm.to_role='tutor' AND dm.to_id=?)
-        OR
-        (dm.from_role='tutor' AND dm.from_id=?)
+    WITH tutor_messages AS (
+        SELECT
+            dm.id,
+            CASE
+                WHEN dm.from_role='student' THEN dm.from_id
+                ELSE dm.to_id
+            END AS student_id,
+            dm.body,
+            dm.created_at
+        FROM direct_messages dm
+        WHERE
+            (dm.to_role='tutor' AND dm.to_id=?)
+            OR
+            (dm.from_role='tutor' AND dm.from_id=?)
+    ),
+    latest AS (
+        SELECT student_id, MAX(id) AS last_id
+        FROM tutor_messages
+        GROUP BY student_id
+    )
+    SELECT
+        latest.student_id,
+        st.full_name,
+        tm.body AS last_body,
+        tm.created_at AS last_created_at
+    FROM latest
+    JOIN tutor_messages tm ON tm.id=latest.last_id
+    JOIN students st ON st.id=latest.student_id
     ORDER BY st.full_name
-    """,(tid,tid))
+    """, (tid, tid))
 
     conversations = cur.fetchall()
 
     selected = request.args.get("chat")
 
-    # build conversation list
-
     chat_list = ""
 
     for c in conversations:
-
-        cur.execute("""
-            SELECT body, created_at
-            FROM direct_messages
-            WHERE
-            (from_role='student' AND from_id=? AND to_role='tutor' AND to_id=?)
-            OR
-            (from_role='tutor' AND from_id=? AND to_role='student' AND to_id=?)
-            ORDER BY created_at DESC LIMIT 1
-        """,(c["student_id"],tid,tid,c["student_id"]))
-
-        last = cur.fetchone()
-
-        preview = (last["body"][:30] + "...") if last else ""
-        time = last["created_at"][11:16] if last else ""
+        last_body = str(c["last_body"] or "")
+        preview = (last_body[:30] + "...") if last_body else ""
+        time = str(c["last_created_at"] or "")[11:16] if c["last_created_at"] else ""
 
         active = "active" if str(c["student_id"]) == str(selected) else ""
 
@@ -31495,6 +31710,15 @@ def tutor_work_progress_data(tutor_id, month):
     Uses existing EBTA tables and does not modify tutor data.
     """
 
+    _progress_cache_key = (
+        "tutor-work-progress",
+        int(tutor_id),
+        str(month)
+    )
+    _progress_cached = _ebta_cache_get(_progress_cache_key)
+    if _progress_cached is not None:
+        return _progress_cached
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -31741,84 +31965,88 @@ def tutor_work_progress_data(tutor_id, month):
     else:
         portal_hours_label = f"{portal_minutes} min"
 
-    # Per-subject breakdown
+    # Per-subject breakdown. Aggregate all tutor subjects in three queries
+    # instead of running six queries for every subject.
     subject_rows = []
+    _wp_materials = {}
+    _wp_submissions = {}
+    _wp_attendance = {}
 
-    for subject in assigned_subjects:
-        subject_id = subject["subject_id"]
+    if assigned_subject_ids:
+        _wp_ph = ",".join("?" for _ in assigned_subject_ids)
 
-        cur.execute("""
-            SELECT COUNT(*) AS c
+        cur.execute(f"""
+            SELECT
+                subject_id,
+                COUNT(*) AS uploads,
+                SUM(CASE
+                    WHEN youtube_url IS NOT NULL AND TRIM(youtube_url)!=''
+                    THEN 1 ELSE 0 END
+                ) AS recordings,
+                SUM(CASE
+                    WHEN is_assignment=1 OR kind='assignment'
+                    THEN 1 ELSE 0 END
+                ) AS assignments
             FROM materials
             WHERE tutor_id=?
-              AND subject_id=?
+              AND subject_id IN ({_wp_ph})
               AND month LIKE ?
-        """, (tutor_id, subject_id, month + "%"))
+            GROUP BY subject_id
+        """, (tutor_id, *assigned_subject_ids, month + "%"))
+        _wp_materials = {
+            int(row["subject_id"]): row
+            for row in cur.fetchall()
+        }
 
-        sub_uploads = cur.fetchone()["c"] or 0
-
-        cur.execute("""
-            SELECT COUNT(*) AS c
-            FROM materials
-            WHERE tutor_id=?
-              AND subject_id=?
-              AND month LIKE ?
-              AND youtube_url IS NOT NULL
-              AND TRIM(youtube_url) != ''
-        """, (tutor_id, subject_id, month + "%"))
-
-        sub_recordings = cur.fetchone()["c"] or 0
-
-        cur.execute("""
-            SELECT COUNT(*) AS c
-            FROM materials
-            WHERE tutor_id=?
-              AND subject_id=?
-              AND month LIKE ?
-              AND (is_assignment=1 OR kind='assignment')
-        """, (tutor_id, subject_id, month + "%"))
-
-        sub_assignments = cur.fetchone()["c"] or 0
-
-        cur.execute("""
-            SELECT COUNT(sub.id) AS c
+        cur.execute(f"""
+            SELECT
+                m.subject_id,
+                COUNT(sub.id) AS submissions,
+                SUM(CASE
+                    WHEN sub.mark IS NOT NULL
+                      OR sub.feedback IS NOT NULL
+                      OR sub.evaluated_at IS NOT NULL
+                    THEN 1 ELSE 0 END
+                ) AS marked
             FROM submissions sub
             JOIN materials m ON m.id=sub.material_id
             WHERE m.tutor_id=?
-              AND m.subject_id=?
+              AND m.subject_id IN ({_wp_ph})
               AND m.month LIKE ?
               AND (m.is_assignment=1 OR m.kind='assignment')
-        """, (tutor_id, subject_id, month + "%"))
+            GROUP BY m.subject_id
+        """, (tutor_id, *assigned_subject_ids, month + "%"))
+        _wp_submissions = {
+            int(row["subject_id"]): row
+            for row in cur.fetchall()
+        }
 
-        sub_submissions = cur.fetchone()["c"] or 0
-
-        cur.execute("""
-            SELECT COUNT(sub.id) AS c
-            FROM submissions sub
-            JOIN materials m ON m.id=sub.material_id
-            WHERE m.tutor_id=?
-              AND m.subject_id=?
-              AND m.month LIKE ?
-              AND (m.is_assignment=1 OR m.kind='assignment')
-              AND (
-                    sub.mark IS NOT NULL
-                    OR sub.feedback IS NOT NULL
-                    OR sub.evaluated_at IS NOT NULL
-              )
-        """, (tutor_id, subject_id, month + "%"))
-
-        sub_marked = cur.fetchone()["c"] or 0
-        sub_marking_rate = percent_value(sub_marked, sub_submissions)
-
-        cur.execute("""
-            SELECT COUNT(*) AS c
+        cur.execute(f"""
+            SELECT subject_id, COUNT(*) AS attendance_logs
             FROM attendance_sessions
             WHERE tutor_id=?
-              AND subject_id=?
+              AND subject_id IN ({_wp_ph})
               AND month=?
-        """, (tutor_id, subject_id, month))
+            GROUP BY subject_id
+        """, (tutor_id, *assigned_subject_ids, month))
+        _wp_attendance = {
+            int(row["subject_id"]): int(row["attendance_logs"] or 0)
+            for row in cur.fetchall()
+        }
 
-        sub_attendance_logs = cur.fetchone()["c"] or 0
+    for subject in assigned_subjects:
+        subject_id = int(subject["subject_id"])
+
+        _mat = _wp_materials.get(subject_id)
+        _sub = _wp_submissions.get(subject_id)
+
+        sub_uploads = int(_mat["uploads"] or 0) if _mat else 0
+        sub_recordings = int(_mat["recordings"] or 0) if _mat else 0
+        sub_assignments = int(_mat["assignments"] or 0) if _mat else 0
+        sub_submissions = int(_sub["submissions"] or 0) if _sub else 0
+        sub_marked = int(_sub["marked"] or 0) if _sub else 0
+        sub_marking_rate = percent_value(sub_marked, sub_submissions)
+        sub_attendance_logs = _wp_attendance.get(subject_id, 0)
 
         sub_assigned_sessions = ebta_expected_monthly_sessions_for_grade(subject["grade"])
         sub_attendance_rate = percent_value(sub_attendance_logs, sub_assigned_sessions)
@@ -31925,7 +32153,7 @@ def tutor_work_progress_data(tutor_id, month):
 
     conn.close()
 
-    return {
+    result = {
         "month": month,
         "assigned_subjects": assigned_subjects,
         "assigned_sessions": assigned_sessions,
@@ -31968,6 +32196,8 @@ def tutor_work_progress_data(tutor_id, month):
         "overall_class": overall_class
     }
 
+    _ebta_cache_set(_progress_cache_key, result)
+    return result
 
 def tutor_manager_work_progress_data(manager_id, month):
     """
@@ -32712,7 +32942,7 @@ def tutor_work_progress():
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
 
     <script>
         const tutorProgressCharts = {chart_json};
@@ -36860,40 +37090,37 @@ def admin_home():
     if r: return r
     month=get_setting('current_month')
     conn=get_db(); cur=conn.cursor()
-    cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=?", (month,))
-    total = cur.fetchone()['c']
-
     cur.execute("""
-        SELECT COUNT(DISTINCT student_id) AS c
-        FROM enrollments
-        WHERE month = ?
-    """, (month,))
-    total_students = cur.fetchone()['c']
-
-    counts = {}
-    for st in ["PENDING","ACTIVE","LAPSED"]:
-        cur.execute("SELECT COUNT(*) AS c FROM enrollments WHERE month=? AND status=?", (month,st)); counts[st]=cur.fetchone()['c']
-
-    cur.execute("""
-        SELECT COUNT(DISTINCT student_id || '-' || month) AS c
-        FROM enrollments
-        WHERE UPPER(status)='ACTIVE'
-          AND month>=?
-    """, (month,))
-    active_student_months = cur.fetchone()['c'] or 0
-
-    cur.execute("""
-        SELECT MAX(month) AS m
-        FROM enrollments
-        WHERE UPPER(status)='ACTIVE'
-          AND month>=?
-    """, (month,))
-    latest_active_until = cur.fetchone()['m'] or month
-
-    cur.execute("SELECT COUNT(*) AS c FROM messages WHERE resolved=0"); msg_count=cur.fetchone()['c']
-    # direct messages count to admin (unread)
-    cur.execute("SELECT COUNT(*) AS c FROM direct_messages WHERE to_role='admin' AND is_read=0"); dm_unread = cur.fetchone()['c']
+        SELECT
+            (SELECT COUNT(*) FROM enrollments WHERE month=?) AS total,
+            (SELECT COUNT(DISTINCT student_id) FROM enrollments WHERE month=?) AS total_students,
+            (SELECT COUNT(*) FROM enrollments WHERE month=? AND status='PENDING') AS pending_count,
+            (SELECT COUNT(*) FROM enrollments WHERE month=? AND status='ACTIVE') AS active_count,
+            (SELECT COUNT(*) FROM enrollments WHERE month=? AND status='LAPSED') AS lapsed_count,
+            (SELECT COUNT(DISTINCT student_id || '-' || month)
+             FROM enrollments
+             WHERE UPPER(status)='ACTIVE' AND month>=?) AS active_student_months,
+            (SELECT MAX(month)
+             FROM enrollments
+             WHERE UPPER(status)='ACTIVE' AND month>=?) AS latest_active_until,
+            (SELECT COUNT(*) FROM messages WHERE resolved=0) AS msg_count,
+            (SELECT COUNT(*) FROM direct_messages
+             WHERE to_role='admin' AND is_read=0) AS dm_unread
+    """, (month, month, month, month, month, month, month))
+    _home = cur.fetchone()
     conn.close()
+
+    total = int(_home["total"] or 0)
+    total_students = int(_home["total_students"] or 0)
+    counts = {
+        "PENDING": int(_home["pending_count"] or 0),
+        "ACTIVE": int(_home["active_count"] or 0),
+        "LAPSED": int(_home["lapsed_count"] or 0),
+    }
+    active_student_months = int(_home["active_student_months"] or 0)
+    latest_active_until = _home["latest_active_until"] or month
+    msg_count = int(_home["msg_count"] or 0)
+    dm_unread = int(_home["dm_unread"] or 0)
     body=fr"""
     <section class='grid'><div class='stats'>
     {stat('Current month', month)}
@@ -50396,17 +50623,18 @@ def admin_message_tutor():
     return redirect(url_for("admin_home"))
 
 
+SMS_QUEUE_WAKE_EVENT = threading.Event()
+
+
 def queue_sms_bulk(phones, body, recipient_type="student"):
 
     conn = get_db()
     cur = conn.cursor()
 
     now = now_utc_iso()
-
     unique = set(phones)
 
     for phone in unique:
-
         if not phone:
             continue
 
@@ -50421,21 +50649,28 @@ def queue_sms_bulk(phones, body, recipient_type="student"):
 
     conn.commit()
     conn.close()
-    
-    
+    SMS_QUEUE_WAKE_EVENT.set()
+
+
 def sms_worker():
     while True:
         try:
-            process_sms_queue(100)
+            processed = process_sms_queue(100)
+            if processed:
+                time.sleep(0.05)
+                continue
         except Exception:
             pass
-        time.sleep(15)
+
+        SMS_QUEUE_WAKE_EVENT.wait(timeout=60.0)
+        SMS_QUEUE_WAKE_EVENT.clear()
 
 
 if not globals().get("_sms_worker_started"):
     threading.Thread(target=sms_worker, daemon=True).start()
     _sms_worker_started = True
-    
+
+
 def process_sms_queue(batch_size=25):
     """Process SMS without keeping an SQLite write lock across network I/O."""
     conn = get_db()
@@ -50496,9 +50731,11 @@ def process_sms_queue(batch_size=25):
 
 def email_worker():
     while True:
-        try: process_email_queue(25)
-        except Exception: pass
-        time.sleep(30)
+        try:
+            process_email_queue(25)
+        except Exception:
+            pass
+        time.sleep(60)
 
 if not globals().get("_email_worker_started"):
     threading.Thread(target=email_worker,daemon=True).start()
@@ -63539,7 +63776,7 @@ def aqm_learners():
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
 
     <script>
         const aqmLearnerCharts = {chart_json};
@@ -71960,7 +72197,7 @@ def treasurer_dashboard():
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
 
     <script>
         const financeCharts = {chart_json};
@@ -89782,7 +90019,7 @@ def coo_dashboard():
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
 
     <script>
         const cooCharts = {chart_json};
@@ -94693,7 +94930,7 @@ def cao_dashboard():
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
 
     <script>
         const caoCharts = {chart_json};
@@ -97222,7 +97459,7 @@ def cao_tutor_performance():
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
 
     <script>
         const tutorPerformanceCharts = {chart_json};
@@ -98867,7 +99104,7 @@ def cao_learner_performance():
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
 
     <script>
         const learnerProgressCharts = {chart_json};
@@ -100427,7 +100664,7 @@ def ceo_dashboard():
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
     <script>
         const ceoCharts = {chart_json};
 
@@ -102105,7 +102342,7 @@ def ceo_finance_analytics():
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
 
     <script>
         const ceoFinanceCharts = {chart_json};
@@ -102566,7 +102803,7 @@ def ceo_risks():
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
     <script>
         const riskCharts = {chart_json};
         const ebtaColors = ["#1b5e20","#2e7d32","#43a047","#f59e0b","#64748b","#0f172a"];
@@ -102970,7 +103207,7 @@ def ceo_goals():
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
     <script>
         const goalCharts = {chart_json};
         const ebtaColors = ["#1b5e20","#2e7d32","#43a047","#f59e0b","#64748b","#0f172a"];
@@ -103428,7 +103665,7 @@ def ceo_budget_plans():
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
     <script>
         const budgetCharts = {chart_json};
         const ebtaColors = ["#1b5e20","#2e7d32","#43a047","#f59e0b","#64748b","#0f172a"];
@@ -103919,7 +104156,7 @@ def ceo_awards():
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
     <script>
         const awardsCharts = {chart_json};
         const ebtaColors = ["#1b5e20","#2e7d32","#43a047","#f59e0b","#64748b","#0f172a"];
@@ -118236,18 +118473,27 @@ def _whatsapp_setting(conn, key, default=""):
     return row["value"] if row else default
 
 
+_WHATSAPP_ENABLED_CACHE = {"ts": 0.0, "value": True}
+_WHATSAPP_ENABLED_CACHE_LOCK = threading.Lock()
+
+
 def whatsapp_bot_enabled(conn=None):
     own = conn is None
 
     if own:
+        now = time.monotonic()
+        with _WHATSAPP_ENABLED_CACHE_LOCK:
+            if (now - _WHATSAPP_ENABLED_CACHE["ts"]) < 5.0:
+                return bool(_WHATSAPP_ENABLED_CACHE["value"])
         conn = _whatsapp_real_db()
 
     try:
-        return _whatsapp_setting(
-            conn,
-            "whatsapp_bot_enabled",
-            "1"
-        ) == "1"
+        enabled = (_whatsapp_setting(conn, "whatsapp_bot_enabled", "1") == "1")
+        if own:
+            with _WHATSAPP_ENABLED_CACHE_LOCK:
+                _WHATSAPP_ENABLED_CACHE["ts"] = time.monotonic()
+                _WHATSAPP_ENABLED_CACHE["value"] = enabled
+        return enabled
     finally:
         if own:
             conn.close()
@@ -118327,86 +118573,94 @@ def whatsapp_bot_verify_signature(raw_body, signature):
     )
 
 
+_WHATSAPP_HTTP_LOCAL = threading.local()
+
+
+def _whatsapp_http_connection(timeout):
+    conn = getattr(_WHATSAPP_HTTP_LOCAL, "connection", None)
+    if conn is None:
+        conn = http.client.HTTPSConnection("graph.facebook.com", timeout=timeout)
+        _WHATSAPP_HTTP_LOCAL.connection = conn
+    else:
+        conn.timeout = timeout
+    return conn
+
+
+def _whatsapp_drop_http_connection():
+    conn = getattr(_WHATSAPP_HTTP_LOCAL, "connection", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    _WHATSAPP_HTTP_LOCAL.connection = None
+
+
 def whatsapp_bot_send_text(phone, message_text):
     cfg = whatsapp_bot_config()
 
-    if not (
-        cfg["access_token"]
-        and cfg["phone_number_id"]
-        and cfg["graph_version"]
-    ):
-        raise RuntimeError(
-            "WhatsApp Cloud API is not fully configured."
-        )
+    if not (cfg["access_token"] and cfg["phone_number_id"] and cfg["graph_version"]):
+        raise RuntimeError("WhatsApp Cloud API is not fully configured.")
 
     phone = str(phone or "").strip()
     message_text = str(message_text or "").strip()
-
     if not phone:
         raise RuntimeError("WhatsApp recipient is missing.")
-
     if not message_text:
         return None
-
-    # Stay comfortably below the WhatsApp text-message size ceiling.
     if len(message_text) > 3500:
         message_text = message_text[:3497] + "..."
-
-    url = (
-        "https://graph.facebook.com/"
-        + cfg["graph_version"]
-        + "/"
-        + cfg["phone_number_id"]
-        + "/messages"
-    )
 
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
         "to": phone,
         "type": "text",
-        "text": {
-            "preview_url": False,
-            "body": message_text,
-        }
+        "text": {"preview_url": False, "body": message_text},
     }
 
-    req = urlreq.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": "Bearer " + cfg["access_token"],
-            "Content-Type": "application/json",
-        },
-        method="POST"
-    )
+    try:
+        timeout = float(os.environ.get("WHATSAPP_HTTP_TIMEOUT", "8") or 8)
+    except Exception:
+        timeout = 8.0
+    timeout = max(3.0, min(timeout, 20.0))
+
+    path = "/" + cfg["graph_version"] + "/" + cfg["phone_number_id"] + "/messages"
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
     try:
-        with urlreq.urlopen(req, timeout=20) as response:
-            data = json.loads(
-                response.read().decode("utf-8")
-            )
-
-    except urlerror.HTTPError as exc:
-        body = ""
-
-        try:
-            body = exc.read().decode("utf-8", errors="ignore")
-        except Exception:
-            pass
-
-        raise RuntimeError(
-            "WhatsApp send failed: "
-            + (body[:500] if body else str(exc))
+        # Reuse one HTTPS/TLS connection per bot worker thread.
+        # This removes a new TLS handshake from most consecutive bot replies.
+        http_conn = _whatsapp_http_connection(timeout)
+        http_conn.request(
+            "POST",
+            path,
+            body=body,
+            headers={
+                "Authorization": "Bearer " + cfg["access_token"],
+                "Content-Type": "application/json",
+                "Content-Length": str(len(body)),
+                "Connection": "keep-alive",
+            },
         )
+        response = http_conn.getresponse()
+        raw = response.read()
+        if response.status >= 400:
+            _whatsapp_drop_http_connection()
+            error_body = raw.decode("utf-8", errors="ignore")
+            raise RuntimeError(
+                "WhatsApp send failed: "
+                + (error_body[:500] if error_body else f"HTTP {response.status}")
+            )
+        data = json.loads(raw.decode("utf-8") or "{}")
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        _whatsapp_drop_http_connection()
+        raise RuntimeError("WhatsApp send failed: " + str(exc))
 
     messages = data.get("messages") or []
-
-    if messages:
-        return messages[0].get("id")
-
-    return None
-
+    return messages[0].get("id") if messages else None
 
 def whatsapp_bot_log_message(
     conn,
@@ -121006,6 +121260,28 @@ def whatsapp_bot_extract_webhook_messages(payload):
     return extracted
 
 
+def _whatsapp_mark_queue_failed(queue_id, exc):
+    conn = _whatsapp_real_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT retry_count FROM whatsapp_bot_queue WHERE id=? LIMIT 1", (queue_id,))
+        row = cur.fetchone()
+        retry_count = int(row["retry_count"] if row else 0) + 1
+        cur.execute("""
+            UPDATE whatsapp_bot_queue
+            SET status='FAILED', retry_count=?, last_error=?
+            WHERE id=?
+        """, (retry_count, str(exc)[:700], queue_id))
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
 def whatsapp_bot_process_one():
     if not whatsapp_bot_enabled():
         return False
@@ -121013,68 +121289,62 @@ def whatsapp_bot_process_one():
     if not whatsapp_bot_setup_status()["ready"]:
         return False
 
+    queue_id = None
     claim_conn = _whatsapp_real_db()
 
     try:
         claim_cur = claim_conn.cursor()
-        claim_cur.execute("BEGIN IMMEDIATE")
-
         claim_cur.execute("""
-            SELECT *
-            FROM whatsapp_bot_queue
-            WHERE status IN ('PENDING','FAILED')
-              AND retry_count < 3
-            ORDER BY id
+            SELECT q.id
+            FROM whatsapp_bot_queue q
+            WHERE q.status IN ('PENDING','FAILED')
+              AND q.retry_count < 3
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM whatsapp_bot_queue earlier
+                  WHERE earlier.phone=q.phone
+                    AND earlier.id < q.id
+                    AND earlier.status IN ('PENDING','FAILED','PROCESSING')
+              )
+            ORDER BY q.id
             LIMIT 1
         """)
-
         row = claim_cur.fetchone()
 
         if not row:
-            claim_conn.commit()
             return False
 
         queue_id = int(row["id"])
 
         claim_cur.execute("""
             UPDATE whatsapp_bot_queue
-            SET status='PROCESSING',
-                attempted_at=?
+            SET status='PROCESSING', attempted_at=?
             WHERE id=?
               AND status IN ('PENDING','FAILED')
-        """, (
-            now_utc_iso(),
-            queue_id
-        ))
+              AND retry_count < 3
+        """, (now_utc_iso(), queue_id))
 
         if int(claim_cur.rowcount or 0) != 1:
-            claim_conn.commit()
+            claim_conn.rollback()
             return False
 
         claim_conn.commit()
-
     finally:
         claim_conn.close()
 
-    conn = _whatsapp_real_db()
-    cur = conn.cursor()
-
+    work_conn = _whatsapp_real_db()
     try:
-        cur.execute("""
-            SELECT *
-            FROM whatsapp_bot_queue
-            WHERE id=?
-            LIMIT 1
-        """, (queue_id,))
-
-        item = cur.fetchone()
+        work_cur = work_conn.cursor()
+        work_cur.execute("SELECT * FROM whatsapp_bot_queue WHERE id=? LIMIT 1", (queue_id,))
+        item = work_cur.fetchone()
 
         if not item:
             return False
 
+        phone = item["phone"]
         reply = whatsapp_bot_rule_reply(
-            conn,
-            item["phone"],
+            work_conn,
+            phone,
             item["profile_name"],
             item["message_text"],
             item["message_type"],
@@ -121082,110 +121352,65 @@ def whatsapp_bot_process_one():
             media_mime_type=item["media_mime_type"] or "",
             media_filename=item["media_filename"] or ""
         )
-
-        # rule_reply can update the enrollment draft. Commit before waiting on
-        # Meta's network response, otherwise SQLite can stay write-locked for
-        # the entire HTTP request (up to the network timeout).
-        conn.commit()
-
-        outbound_id = whatsapp_bot_send_text(
-            item["phone"],
-            reply
-        )
-
-        whatsapp_bot_log_message(
-            conn,
-            outbound_id,
-            item["phone"],
-            "OUTBOUND",
-            "text",
-            reply,
-            "SENT"
-        )
-
-        cur.execute("""
-            UPDATE whatsapp_bot_queue
-            SET status='DONE',
-                last_error=NULL,
-                processed_at=?
-            WHERE id=?
-        """, (
-            now_utc_iso(),
-            queue_id
-        ))
-
-        conn.commit()
-        return True
-
+        work_conn.commit()
     except Exception as exc:
         try:
-            cur.execute("""
-                SELECT retry_count
-                FROM whatsapp_bot_queue
-                WHERE id=?
-                LIMIT 1
-            """, (queue_id,))
-
-            retry_row = cur.fetchone()
-
-            retry_count = int(
-                retry_row["retry_count"]
-                if retry_row
-                else 0
-            ) + 1
-
-            cur.execute("""
-                UPDATE whatsapp_bot_queue
-                SET status='FAILED',
-                    retry_count=?,
-                    last_error=?
-                WHERE id=?
-            """, (
-                retry_count,
-                str(exc)[:700],
-                queue_id
-            ))
-
-            conn.commit()
-
+            work_conn.rollback()
         except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+            pass
+        _whatsapp_mark_queue_failed(queue_id, exc)
+        return False
+    finally:
+        work_conn.close()
 
+    try:
+        outbound_id = whatsapp_bot_send_text(phone, reply)
+    except Exception as exc:
+        _whatsapp_mark_queue_failed(queue_id, exc)
         return False
 
+    finish_conn = _whatsapp_real_db()
+    try:
+        finish_cur = finish_conn.cursor()
+        whatsapp_bot_log_message(
+            finish_conn, outbound_id, phone, "OUTBOUND", "text", reply, "SENT"
+        )
+        finish_cur.execute("""
+            UPDATE whatsapp_bot_queue
+            SET status='DONE', last_error=NULL, processed_at=?
+            WHERE id=?
+        """, (now_utc_iso(), queue_id))
+        finish_conn.commit()
+        return True
+    except Exception as exc:
+        try:
+            finish_conn.rollback()
+        except Exception:
+            pass
+        _whatsapp_mark_queue_failed(queue_id, exc)
+        return False
     finally:
-        conn.close()
+        finish_conn.close()
 
 
 def whatsapp_bot_worker():
-    """Drain queued WhatsApp messages quickly and sleep without touching SQLite."""
     while True:
         try:
             processed_any = False
-
-            # Drain a short burst so a conversation does not wait for a 3-second
-            # polling interval between messages.
-            for _ in range(20):
+            for _ in range(30):
                 processed = whatsapp_bot_process_one()
                 if not processed:
                     break
                 processed_any = True
 
             if processed_any:
-                # Give other request threads a chance, then check once more.
-                time.sleep(0.05)
+                time.sleep(0.02)
                 continue
 
-            # No work: wait for the webhook/admin retry to wake us. The timeout
-            # is only a fallback for another process that may have queued work.
-            WHATSAPP_BOT_WAKE_EVENT.wait(timeout=15.0)
+            WHATSAPP_BOT_WAKE_EVENT.wait(timeout=5.0)
             WHATSAPP_BOT_WAKE_EVENT.clear()
-
         except Exception:
-            WHATSAPP_BOT_WAKE_EVENT.wait(timeout=2.0)
+            WHATSAPP_BOT_WAKE_EVENT.wait(timeout=1.0)
             WHATSAPP_BOT_WAKE_EVENT.clear()
 
 
@@ -121602,12 +121827,21 @@ def admin_whatsapp_bot_retry():
     )
 
 
-# Start the queue worker only after all bot functions/routes exist.
+# Process different conversations in parallel while preserving each phone's order.
 if not globals().get("_whatsapp_bot_worker_started"):
-    threading.Thread(
-        target=whatsapp_bot_worker,
-        daemon=True
-    ).start()
+    try:
+        _whatsapp_worker_count = int(os.environ.get("EBTA_WHATSAPP_WORKERS", "3"))
+    except Exception:
+        _whatsapp_worker_count = 3
+
+    _whatsapp_worker_count = max(1, min(_whatsapp_worker_count, 4))
+
+    for _worker_index in range(_whatsapp_worker_count):
+        threading.Thread(
+            target=whatsapp_bot_worker,
+            daemon=True,
+            name=f"ebta-whatsapp-{_worker_index + 1}"
+        ).start()
 
     _whatsapp_bot_worker_started = True
 
