@@ -14529,7 +14529,8 @@ EBTA_UNIFIED_UI_JS = """
 # =============================================================
 # FAST SHARED PAGE SHELL
 # =============================================================
-_EBTA_UI_ASSET_VERSION = "20260910-fast3"
+# UI visibility/cache hardening: 2026-09-11
+_EBTA_UI_ASSET_VERSION = "20260911-visibility1"
 _EBTA_SIDEBAR_CACHE = {}
 _EBTA_SIDEBAR_CACHE_LOCK = threading.Lock()
 _EBTA_SIDEBAR_CACHE_TTL = 12.0
@@ -14573,10 +14574,276 @@ def _strip_outer_html_tag(value, tag):
     return text
 
 
+_EBTA_VISIBILITY_GUARD_CSS = r"""
+/* =============================================================
+   EBTA GLOBAL VISIBILITY / CONTRAST GUARD
+   Keeps every portal action readable even if a page-specific rule,
+   browser cache, or dynamically-created modal overrides older styles.
+   ============================================================= */
+:root {
+    --ebta-action-green:#176b3a;
+    --ebta-action-green-dark:#0f4d2a;
+    --ebta-action-green-light:#279459;
+    --ebta-action-gold:#e0aa22;
+    --ebta-action-danger:#b42318;
+    --ebta-action-text:#ffffff;
+}
+
+/* Normal/default/success actions: always dark-green with white text. */
+body.ebta-unified-ui .btn,
+body.ebta-unified-ui button.btn,
+body.ebta-unified-ui a.btn,
+body.ebta-unified-ui input[type="submit"].btn {
+    color:#ffffff !important;
+    -webkit-text-fill-color:#ffffff !important;
+    background-color:var(--ebta-action-green) !important;
+    background-image:linear-gradient(135deg,var(--ebta-role-accent, #176b3a),var(--ebta-role-accent-2, #279459)) !important;
+    border-color:transparent !important;
+    text-decoration:none !important;
+    opacity:1;
+}
+
+body.ebta-unified-ui .btn.success,
+body.ebta-unified-ui button.btn.success,
+body.ebta-unified-ui a.btn.success,
+body.ebta-unified-ui input[type="submit"].success {
+    color:#ffffff !important;
+    -webkit-text-fill-color:#ffffff !important;
+    background-color:#176b3a !important;
+    background-image:linear-gradient(135deg,#279459,#176b3a) !important;
+    border-color:#176b3a !important;
+}
+
+/* Secondary actions intentionally remain white, but text/border are always dark enough. */
+body.ebta-unified-ui .btn.secondary,
+body.ebta-unified-ui button.btn.secondary,
+body.ebta-unified-ui a.btn.secondary,
+body.ebta-unified-ui input[type="submit"].secondary {
+    color:#155d32 !important;
+    -webkit-text-fill-color:#155d32 !important;
+    background:#ffffff !important;
+    border:1.5px solid #78a989 !important;
+    text-shadow:none !important;
+}
+
+body.ebta-unified-ui .btn.secondary:hover,
+body.ebta-unified-ui button.btn.secondary:hover,
+body.ebta-unified-ui a.btn.secondary:hover,
+body.ebta-unified-ui .btn.secondary.ebta-active {
+    color:#ffffff !important;
+    -webkit-text-fill-color:#ffffff !important;
+    background:linear-gradient(135deg,#176b3a,#279459) !important;
+    border-color:#176b3a !important;
+}
+
+body.ebta-unified-ui .btn.warn,
+body.ebta-unified-ui button.btn.warn,
+body.ebta-unified-ui a.btn.warn {
+    color:#352400 !important;
+    -webkit-text-fill-color:#352400 !important;
+    background:linear-gradient(135deg,#f8d66d,#e0aa22) !important;
+    border-color:#c89416 !important;
+}
+
+body.ebta-unified-ui .btn.danger,
+body.ebta-unified-ui button.btn.danger,
+body.ebta-unified-ui a.btn.danger {
+    color:#ffffff !important;
+    -webkit-text-fill-color:#ffffff !important;
+    background:linear-gradient(135deg,#c9362b,#a91f16) !important;
+    border-color:#a91f16 !important;
+}
+
+/* Disabled buttons are still clearly readable. */
+body.ebta-unified-ui .btn:disabled,
+body.ebta-unified-ui button.btn:disabled,
+body.ebta-unified-ui input[type="submit"]:disabled,
+body.ebta-unified-ui .btn.disabled,
+body.ebta-unified-ui [aria-disabled="true"].btn {
+    color:#475569 !important;
+    -webkit-text-fill-color:#475569 !important;
+    background:#e5e7eb !important;
+    background-image:none !important;
+    border:1px solid #cbd5e1 !important;
+    box-shadow:none !important;
+    opacity:1 !important;
+    cursor:not-allowed !important;
+    filter:none !important;
+}
+
+/* Submit controls that do not use .btn still receive a safe visual treatment. */
+body.ebta-unified-ui input[type="submit"]:not(.btn) {
+    color:#ffffff !important;
+    -webkit-text-fill-color:#ffffff !important;
+    background:linear-gradient(135deg,#176b3a,#0f4d2a) !important;
+    border:1px solid #0f4d2a !important;
+    border-radius:12px;
+    font-weight:800;
+    cursor:pointer;
+}
+
+/* Text inside form controls must never become transparent or white on white. */
+body.ebta-unified-ui input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]),
+body.ebta-unified-ui select,
+body.ebta-unified-ui textarea {
+    color:#102117 !important;
+    -webkit-text-fill-color:#102117 !important;
+    background-color:#ffffff !important;
+    opacity:1 !important;
+}
+
+body.ebta-unified-ui input::placeholder,
+body.ebta-unified-ui textarea::placeholder {
+    color:#66756c !important;
+    -webkit-text-fill-color:#66756c !important;
+    opacity:1 !important;
+}
+
+body.ebta-unified-ui input:disabled,
+body.ebta-unified-ui select:disabled,
+body.ebta-unified-ui textarea:disabled {
+    color:#475569 !important;
+    -webkit-text-fill-color:#475569 !important;
+    background:#f1f5f9 !important;
+    opacity:1 !important;
+}
+
+/* Keep public header actions readable against the dark green header. */
+body.ebta-unified-ui .header .links a,
+body.ebta-unified-ui .header .links button {
+    color:#ffffff !important;
+    -webkit-text-fill-color:#ffffff !important;
+}
+
+body.ebta-unified-ui .header .links .btn.success {
+    color:#17341f !important;
+    -webkit-text-fill-color:#17341f !important;
+    background:linear-gradient(135deg,#f5d67d,#dfaa22) !important;
+    border-color:#f6df9e !important;
+}
+
+/* High-visibility keyboard focus across every portal. */
+body.ebta-unified-ui .btn:focus-visible,
+body.ebta-unified-ui button:focus-visible,
+body.ebta-unified-ui a:focus-visible,
+body.ebta-unified-ui input:focus-visible,
+body.ebta-unified-ui select:focus-visible,
+body.ebta-unified-ui textarea:focus-visible {
+    outline:3px solid #f3d277 !important;
+    outline-offset:2px !important;
+}
+
+/* Plain form buttons without a class should still be legible. */
+body.ebta-unified-ui form button:not([class]) {
+    color:#ffffff !important;
+    -webkit-text-fill-color:#ffffff !important;
+    background:#176b3a !important;
+    border:1px solid #0f4d2a !important;
+    border-radius:10px;
+    padding:9px 13px;
+    font-weight:800;
+}
+"""
+
+_EBTA_VISIBILITY_GUARD_JS = r"""
+<script>
+(function () {
+    function rgbParts(value) {
+        var match = String(value || '').match(/rgba?\\((\\d+(?:\\.\\d+)?)[, ]+\\s*(\\d+(?:\\.\\d+)?)[, ]+\\s*(\\d+(?:\\.\\d+)?)(?:[, /]+\\s*(\\d+(?:\\.\\d+)?))?\\)/i);
+        if (!match) return null;
+        return [Number(match[1]), Number(match[2]), Number(match[3]), match[4] === undefined ? 1 : Number(match[4])];
+    }
+
+    function luminance(rgb) {
+        if (!rgb) return 0;
+        var channels = rgb.slice(0,3).map(function (v) {
+            v = v / 255;
+            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    }
+
+    function buttonLooksInvisible(el) {
+        if (!el || !window.getComputedStyle) return false;
+        var cs = window.getComputedStyle(el);
+        var fg = rgbParts(cs.color);
+        var bg = rgbParts(cs.backgroundColor);
+        var hasImage = cs.backgroundImage && cs.backgroundImage !== 'none';
+        var fgAlpha = fg ? fg[3] : 1;
+        var bgAlpha = bg ? bg[3] : 0;
+        if (fgAlpha < 0.2) return true;
+        if (!hasImage && bgAlpha < 0.08) return true;
+        if (!hasImage && fg && bg && luminance(fg) > 0.82 && luminance(bg) > 0.82) return true;
+        return false;
+    }
+
+    function repairButton(el) {
+        if (!el || !el.classList || !el.classList.contains('btn')) return;
+        if (el.disabled || el.getAttribute('aria-disabled') === 'true' || el.classList.contains('disabled')) {
+            el.style.setProperty('color', '#475569', 'important');
+            el.style.setProperty('-webkit-text-fill-color', '#475569', 'important');
+            el.style.setProperty('background', '#e5e7eb', 'important');
+            el.style.setProperty('border-color', '#cbd5e1', 'important');
+            el.style.setProperty('opacity', '1', 'important');
+            return;
+        }
+        if (!buttonLooksInvisible(el)) return;
+        if (el.classList.contains('secondary')) {
+            el.style.setProperty('color', '#155d32', 'important');
+            el.style.setProperty('-webkit-text-fill-color', '#155d32', 'important');
+            el.style.setProperty('background', '#ffffff', 'important');
+            el.style.setProperty('border', '1.5px solid #78a989', 'important');
+        } else if (el.classList.contains('danger')) {
+            el.style.setProperty('color', '#ffffff', 'important');
+            el.style.setProperty('-webkit-text-fill-color', '#ffffff', 'important');
+            el.style.setProperty('background', 'linear-gradient(135deg,#c9362b,#a91f16)', 'important');
+        } else if (el.classList.contains('warn')) {
+            el.style.setProperty('color', '#352400', 'important');
+            el.style.setProperty('-webkit-text-fill-color', '#352400', 'important');
+            el.style.setProperty('background', 'linear-gradient(135deg,#f8d66d,#e0aa22)', 'important');
+        } else {
+            el.style.setProperty('color', '#ffffff', 'important');
+            el.style.setProperty('-webkit-text-fill-color', '#ffffff', 'important');
+            el.style.setProperty('background', 'linear-gradient(135deg,#279459,#176b3a)', 'important');
+            el.style.setProperty('border-color', '#176b3a', 'important');
+        }
+    }
+
+    function auditButtons(root) {
+        var scope = root && root.querySelectorAll ? root : document;
+        scope.querySelectorAll('.btn, button.btn').forEach(repairButton);
+    }
+
+    function startVisibilityGuard() {
+        auditButtons(document);
+        if (!window.MutationObserver || !document.body) return;
+        var observer = new MutationObserver(function (mutations) {
+            mutations.forEach(function (mutation) {
+                mutation.addedNodes.forEach(function (node) {
+                    if (!node || node.nodeType !== 1) return;
+                    if (node.matches && node.matches('.btn, button.btn')) repairButton(node);
+                    auditButtons(node);
+                });
+            });
+        });
+        observer.observe(document.body, {childList:true, subtree:true});
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', startVisibilityGuard);
+    } else {
+        startVisibilityGuard();
+    }
+})();
+</script>
+"""
+
 _EBTA_CORE_CSS_TEXT = (
     _strip_outer_html_tag(BASE_CSS, "style")
     + "\\n"
     + _strip_outer_html_tag(EBTA_UNIFIED_UI_CSS, "style")
+    + "\\n"
+    + _EBTA_VISIBILITY_GUARD_CSS
 )
 _EBTA_CORE_JS_TEXT = (
     _strip_outer_html_tag(BASE_JS, "script")
@@ -14598,7 +14865,7 @@ def _cached_asset_response(data, mimetype):
         response = make_response(raw)
 
     response.headers["Content-Type"] = mimetype + "; charset=utf-8"
-    response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    response.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
     response.headers["Content-Length"] = str(len(raw))
     return response
 
@@ -14639,7 +14906,19 @@ self.addEventListener('fetch', event => {{
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/static/icons/')) {{
+  if (url.pathname.startsWith('/assets/')) {{
+    event.respondWith(
+      fetch(req, {{cache:'reload'}}).then(resp => {{
+        if (resp && resp.ok) {{
+          const copy = resp.clone();
+          caches.open(CACHE).then(cache => cache.put(req, copy));
+        }}
+        return resp;
+      }}).catch(() => caches.match(req))
+    );
+    return;
+  }}
+  if (url.pathname.startsWith('/static/icons/')) {{
     event.respondWith(
       caches.match(req).then(hit => hit || fetch(req).then(resp => {{
         const copy = resp.clone();
@@ -16313,11 +16592,24 @@ def page(title, body_html, extra_head="", extra_js=""):
       if ("serviceWorker" in navigator) {{
         navigator.serviceWorker
           .register(
-            "/ebta-sw.js?v=20260910-fast3",
+            "/ebta-sw.js?v={_EBTA_UI_ASSET_VERSION}",
             {{ updateViaCache: "imports" }}
           )
           .then(function(registration) {{
             try {{
+              if ("caches" in window) {{
+                caches.keys().then(function(keys) {{
+                  return Promise.all(
+                    keys
+                      .filter(function(name) {{
+                        return name.startsWith("ebta-shell-") &&
+                               name !== "ebta-shell-{_EBTA_UI_ASSET_VERSION}";
+                      }})
+                      .map(function(name) {{ return caches.delete(name); }})
+                  );
+                }}).catch(function() {{}});
+              }}
+
               const key = "ebta_sw_update_checked";
               const now = Date.now();
               const last = Number(localStorage.getItem(key) || "0");
@@ -16349,7 +16641,9 @@ def page(title, body_html, extra_head="", extra_js=""):
 
     {_chart_script}
     <link rel="stylesheet" href="/assets/ebta-core.css?v={_EBTA_UI_ASSET_VERSION}">
+    <style>{_EBTA_VISIBILITY_GUARD_CSS}</style>
     <script src="/assets/ebta-core.js?v={_EBTA_UI_ASSET_VERSION}"></script>
+    {_EBTA_VISIBILITY_GUARD_JS}
     {_math_head}{extra_head}
     </head><body class="{body_class}">
     <header class='header'>
@@ -19440,6 +19734,10 @@ function showPopup(message, type='info', timeout=4000){
         const btn = document.createElement('button');
         btn.textContent='OK';
         btn.className='btn';
+        btn.style.background='linear-gradient(135deg,#279459,#176b3a)';
+        btn.style.color='#ffffff';
+        btn.style.webkitTextFillColor='#ffffff';
+        btn.style.border='1px solid #176b3a';
         btn.onclick = function(){ document.getElementById('ebta-proceed-modal')?.remove(); };
         box.appendChild(h);
         box.appendChild(btn);
@@ -19493,8 +19791,12 @@ function showPopup(message, type='info', timeout=4000){
       btnRow.style.justifyContent = 'flex-end';
 
       const yesBtn = document.createElement('button');
-      yesBtn.className = 'btn secondary';   // YES now looks like old NO
+      yesBtn.className = 'btn secondary';   // YES stays secondary
       yesBtn.textContent = 'YES';
+      yesBtn.style.background = '#ffffff';
+      yesBtn.style.color = '#155d32';
+      yesBtn.style.webkitTextFillColor = '#155d32';
+      yesBtn.style.border = '1.5px solid #78a989';
       yesBtn.onclick = function(){
         if (typeof showProceedModal === 'function') {
           showProceedModal('You may proceed with the monthly enrollment.');
@@ -19504,8 +19806,12 @@ function showPopup(message, type='info', timeout=4000){
       };
 
       const noBtn = document.createElement('button');
-      noBtn.className = 'btn success';      // NO now takes green emphasis
+      noBtn.className = 'btn success';      // NO takes green emphasis
       noBtn.textContent = 'NO';
+      noBtn.style.background = 'linear-gradient(135deg,#279459,#176b3a)';
+      noBtn.style.color = '#ffffff';
+      noBtn.style.webkitTextFillColor = '#ffffff';
+      noBtn.style.border = '1px solid #176b3a';
       noBtn.onclick = function(){
         ebtaAllowExit = true;
         window.location.href =          'https://docs.google.com/forms/d/e/1FAIpQLScCF4rLX81GxKDhuq2xk0rxYMEognlcytvqKqdLgvzpJ36I3A/viewform?usp=header';
