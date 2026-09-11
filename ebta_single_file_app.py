@@ -139,6 +139,61 @@ def _ebta_request_timer_start():
         pass
 
 
+# =============================================================
+# CRAWLER / PRIVATE PORTAL PROTECTION
+# =============================================================
+_PRIVATE_PORTAL_PREFIXES = (
+    "/admin", "/student", "/tutor", "/manager", "/aqm",
+    "/treasurer", "/secretary", "/social-media", "/duty-admin",
+    "/admission", "/one-on-one-manager", "/hr", "/acc",
+    "/coo", "/cao", "/ceo", "/school"
+)
+
+_CRAWLER_UA_MARKERS = (
+    "bingbot", "googlebot", "duckduckbot", "baiduspider",
+    "yandexbot", "semrushbot", "ahrefsbot", "mj12bot",
+    "dotbot", "petalbot", "bytespider"
+)
+
+def _private_portal_path(path=None):
+    path = str(path if path is not None else request.path or "")
+    return any(path == p or path.startswith(p + "/") for p in _PRIVATE_PORTAL_PREFIXES)
+
+@app.before_request
+def reject_search_crawlers_from_private_portals():
+    # Search engines never need authenticated EBTA dashboards. Returning a tiny
+    # 404 here prevents crawler query spam from rendering login pages or
+    # touching SQLite. WhatsApp webhooks and the public homepage are unaffected.
+    if not _private_portal_path():
+        return None
+
+    user_agent = (request.headers.get("User-Agent") or "").lower()
+    if any(marker in user_agent for marker in _CRAWLER_UA_MARKERS):
+        response = make_response("Not Found", 404)
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+        return response
+
+    return None
+
+
+@app.get('/robots.txt')
+def robots_txt():
+    lines = ["User-agent: *"]
+    lines.extend(f"Disallow: {prefix}/" for prefix in _PRIVATE_PORTAL_PREFIXES)
+    lines.extend([
+        "Disallow: /whatsapp/",
+        "Disallow: /session/",
+        "",
+        "User-agent: bingbot",
+        "Crawl-delay: 10",
+    ])
+    response = make_response("\n".join(lines) + "\n", 200)
+    response.headers["Content-Type"] = "text/plain; charset=utf-8"
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
+
+
 @app.before_request
 def portal_security_guard():
     if not _same_origin_request():
@@ -174,6 +229,8 @@ def apply_security_headers(response):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    if _private_portal_path():
+        response.headers.setdefault("X-Robots-Tag", "noindex, nofollow, noarchive")
     response.headers.setdefault(
         "Permissions-Policy",
         "geolocation=(), payment=(), usb=(), serial=(), hid=()",
@@ -233,7 +290,7 @@ def apply_security_headers(response):
         if started is not None:
             elapsed_ms = (time.perf_counter() - started) * 1000.0
             response.headers["Server-Timing"] = f"app;dur={elapsed_ms:.1f}"
-            if elapsed_ms >= 1200:
+            if elapsed_ms >= 700:
                 print(
                     f"[EBTA SLOW] {request.method} {request.path} "
                     f"{elapsed_ms:.0f}ms",
@@ -250,6 +307,42 @@ def apply_security_headers(response):
 
 BASE_DATA_DIR = os.environ.get("RENDER_DATA_DIR", "/var/data")
 os.makedirs(BASE_DATA_DIR, exist_ok=True)
+
+# Gunicorn may run more than one HTTP worker process. The EBTA SMS, email and
+# WhatsApp queue workers must run in only ONE process, otherwise each Gunicorn
+# worker starts its own background loops against the same SQLite database.
+# An OS file lock elects one process as the background-worker owner and is
+# automatically released if that process exits.
+_EBTA_BG_LOCK_HANDLE = None
+_EBTA_BG_OWNER_PID = None
+
+def ebta_background_worker_owner():
+    global _EBTA_BG_LOCK_HANDLE, _EBTA_BG_OWNER_PID
+
+    pid = os.getpid()
+    if _EBTA_BG_OWNER_PID == pid and _EBTA_BG_LOCK_HANDLE is not None:
+        return True
+
+    try:
+        import fcntl
+    except Exception:
+        # Local/non-Linux development normally has a single process.
+        _EBTA_BG_OWNER_PID = pid
+        return True
+
+    lock_path = os.path.join(BASE_DATA_DIR, ".ebta-background-workers.lock")
+    handle = open(lock_path, "a+")
+
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError):
+        handle.close()
+        return False
+
+    _EBTA_BG_LOCK_HANDLE = handle
+    _EBTA_BG_OWNER_PID = pid
+    print(f"[EBTA WORKERS] background owner pid={pid}", flush=True)
+    return True
 
 DB_PATH = os.path.join(BASE_DATA_DIR, "ebta.db")
 
@@ -50666,8 +50759,8 @@ def sms_worker():
         SMS_QUEUE_WAKE_EVENT.clear()
 
 
-if not globals().get("_sms_worker_started"):
-    threading.Thread(target=sms_worker, daemon=True).start()
+if ebta_background_worker_owner() and not globals().get("_sms_worker_started"):
+    threading.Thread(target=sms_worker, daemon=True, name="ebta-sms").start()
     _sms_worker_started = True
 
 
@@ -50737,9 +50830,9 @@ def email_worker():
             pass
         time.sleep(60)
 
-if not globals().get("_email_worker_started"):
-    threading.Thread(target=email_worker,daemon=True).start()
-    _email_worker_started=True
+if ebta_background_worker_owner() and not globals().get("_email_worker_started"):
+    threading.Thread(target=email_worker, daemon=True, name="ebta-email").start()
+    _email_worker_started = True
 
 
 @app.post('/admin/broadcast-sms')
@@ -121828,13 +121921,14 @@ def admin_whatsapp_bot_retry():
 
 
 # Process different conversations in parallel while preserving each phone's order.
-if not globals().get("_whatsapp_bot_worker_started"):
+# Only the elected Gunicorn process owns these workers.
+if ebta_background_worker_owner() and not globals().get("_whatsapp_bot_worker_started"):
     try:
-        _whatsapp_worker_count = int(os.environ.get("EBTA_WHATSAPP_WORKERS", "3"))
+        _whatsapp_worker_count = int(os.environ.get("EBTA_WHATSAPP_WORKERS", "2"))
     except Exception:
-        _whatsapp_worker_count = 3
+        _whatsapp_worker_count = 2
 
-    _whatsapp_worker_count = max(1, min(_whatsapp_worker_count, 4))
+    _whatsapp_worker_count = max(1, min(_whatsapp_worker_count, 3))
 
     for _worker_index in range(_whatsapp_worker_count):
         threading.Thread(
