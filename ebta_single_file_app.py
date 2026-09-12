@@ -3040,9 +3040,18 @@ def init_db():
     ensure_column(conn, "discount_coupons", "discount_category", "TEXT")
     ensure_column(conn, "discount_coupons", "discount_scope_months", "INTEGER NOT NULL DEFAULT 0")
     
+    # Keep Tutor Manager session logs independent when a tutor is shared
+    # between managers or teaches more than one subject.
+    cur.execute("DROP INDEX IF EXISTS idx_unique_tracker")
     cur.execute("""
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_tracker
-    ON tutor_weekly_tracker(tutor_id, session_date);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_tracker_manager_subject
+        ON tutor_weekly_tracker(
+            manager_id,
+            tutor_id,
+            grade,
+            subject,
+            session_date
+        )
     """)
 
 
@@ -53245,93 +53254,154 @@ def tracker_edit():
 @app.post('/admin/tutor-tracker/save')
 def tracker_save():
 
-    conn=get_db()
-    cur=conn.cursor()
+    r = require_admin()
+    if r:
+        return r
+
+    tutor_id = request.form.get("tutor_id")
+    session_date = request.form.get("date")
+
+    conn = get_db()
+    cur = conn.cursor()
 
     cur.execute("""
-    INSERT INTO tutor_weekly_tracker(
-        tutor_id,
-        session_date,
-        session_held,
-        start_time,
-        end_time,
-        recording_link,
-        students_attended,
-        topic_covered,
-        manager_comments,
-        manager_id,
-        created_at
-    )
-    VALUES(?,?,?,?,?,?,?,?,?,?,?)
-    ON CONFLICT(tutor_id, session_date)
-    DO UPDATE SET
-        session_held=excluded.session_held,
-        start_time=excluded.start_time,
-        end_time=excluded.end_time,
-        recording_link=excluded.recording_link,
-        students_attended=excluded.students_attended,
-        topic_covered=excluded.topic_covered,
-        manager_comments=excluded.manager_comments,
-        manager_id=excluded.manager_id,
-        created_at=excluded.created_at
-    """, (
-        request.form.get("tutor_id"),
-        request.form.get("date"),
-        request.form.get("session_held"),
-        request.form.get("start_time"),
-        request.form.get("end_time"),
-        request.form.get("recording_link"),
-        request.form.get("students_attended"),
-        request.form.get("topic_covered"),
-        request.form.get("manager_comments"),
-        session.get("manager_id"),   # IMPORTANT FIX
-        now_utc_iso()
-    ))
+        SELECT id
+        FROM tutor_weekly_tracker
+        WHERE tutor_id=?
+          AND session_date=?
+          AND manager_id IS NULL
+          AND (subject IS NULL OR TRIM(subject)='')
+          AND (grade IS NULL OR TRIM(grade)='')
+        ORDER BY id DESC
+        LIMIT 1
+    """, (tutor_id, session_date))
+
+    existing = cur.fetchone()
+
+    if existing:
+        cur.execute("""
+            UPDATE tutor_weekly_tracker
+            SET session_held=?,
+                start_time=?,
+                end_time=?,
+                recording_link=?,
+                students_attended=?,
+                topic_covered=?,
+                manager_comments=?,
+                created_at=?
+            WHERE id=?
+        """, (
+            request.form.get("session_held"),
+            request.form.get("start_time"),
+            request.form.get("end_time"),
+            request.form.get("recording_link"),
+            request.form.get("students_attended"),
+            request.form.get("topic_covered"),
+            request.form.get("manager_comments"),
+            now_utc_iso(),
+            existing["id"]
+        ))
+    else:
+        cur.execute("""
+            INSERT INTO tutor_weekly_tracker(
+                tutor_id,
+                session_date,
+                session_held,
+                start_time,
+                end_time,
+                recording_link,
+                students_attended,
+                topic_covered,
+                manager_comments,
+                manager_id,
+                grade,
+                subject,
+                created_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            tutor_id,
+            session_date,
+            request.form.get("session_held"),
+            request.form.get("start_time"),
+            request.form.get("end_time"),
+            request.form.get("recording_link"),
+            request.form.get("students_attended"),
+            request.form.get("topic_covered"),
+            request.form.get("manager_comments"),
+            None,
+            None,
+            None,
+            now_utc_iso()
+        ))
 
     conn.commit()
     conn.close()
 
     return redirect("/admin/tutor-tracker")
 
-  
+
 @app.get('/manager/tracker')
 def manager_tracker():
 
     r = require_manager()
     if r:
         return r
-        
-    selected_date = request.args.get("date")
 
-    if not selected_date:
-        selected_date = datetime.date.today().strftime("%Y-%m-%d")
+    selected_date = (
+        request.args.get("date")
+        or datetime.date.today().strftime("%Y-%m-%d")
+    )
+
+    manager_id = int(session["manager_id"])
 
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-    SELECT t.id, t.full_name
-    FROM tutors t
-    JOIN manager_tutors mt ON mt.tutor_id = t.id
-    WHERE mt.manager_id=?
-    ORDER BY t.full_name
-    """,(session["manager_id"],))
+        SELECT DISTINCT
+            t.id AS tutor_id,
+            t.full_name,
+            sub.id AS subject_id,
+            sub.name AS subject_name,
+            sub.grade
+        FROM tutors t
+        JOIN manager_tutors mt
+          ON mt.tutor_id=t.id
+        JOIN tutor_subjects ts
+          ON ts.tutor_id=t.id
+        JOIN subjects sub
+          ON sub.id=ts.subject_id
+        WHERE mt.manager_id=?
+          AND COALESCE(t.is_active,1)=1
+          AND t.deleted_at IS NULL
+        ORDER BY
+            t.full_name,
+            CAST(REPLACE(sub.grade,'G','') AS INTEGER),
+            sub.name
+    """, (manager_id,))
 
-    tutors = cur.fetchall()
-
+    tutor_subjects = cur.fetchall()
     conn.close()
 
     rows = ""
 
-    for i, t in enumerate(tutors, start=1):
+    for i, row in enumerate(tutor_subjects, start=1):
+        log_url = url_for(
+            "manager_tracker_edit",
+            tutor_id=row["tutor_id"],
+            subject_id=row["subject_id"],
+            date=selected_date
+        )
 
         rows += f"""
         <tr>
             <td>{i}</td>
-            <td>{escape(t['full_name'])}</td>
+            <td>{escape(row['full_name'])}</td>
+            <td>{escape(grade_label(row['grade']))}</td>
+            <td>{escape(row['subject_name'])}</td>
             <td>
-                <a class="btn mini success"
-                   href="/manager/tracker/edit?tutor_id={t['id']}&date={selected_date}">
+                <a class="btn mini success" href="{log_url}">
                     Log Session
                 </a>
             </td>
@@ -53343,7 +53413,7 @@ def manager_tracker():
     {manager_nav()}
 
     <section class='card'>
-    
+
     <div class="toolbar" style="margin-bottom:15px">
 
         <form method="get" style="display:flex;align-items:center;gap:10px">
@@ -53352,7 +53422,7 @@ def manager_tracker():
 
             <input type="date"
                    name="date"
-                   value="{selected_date}"
+                   value="{escape(selected_date)}"
                    onchange="this.form.submit()"
                    style="padding:6px;border-radius:6px;border:1px solid #ccc">
 
@@ -53363,7 +53433,8 @@ def manager_tracker():
     <h1>Tutor Session Tracker</h1>
 
     <p class='muted'>
-    Logged in as {session.get('manager_name')}
+        Logged in as {escape(session.get('manager_name') or 'Tutor Manager')}.
+        Each tutor subject is logged separately.
     </p>
 
     <div class='scroll-x'>
@@ -53374,12 +53445,14 @@ def manager_tracker():
     <tr>
     <th>#</th>
     <th>Tutor</th>
+    <th>Grade</th>
+    <th>Subject</th>
     <th>Action</th>
     </tr>
     </thead>
 
     <tbody>
-    {rows}
+    {rows or "<tr><td colspan='5'>No tutor subjects are assigned to you yet.</td></tr>"}
     </tbody>
 
     </table>
@@ -53389,9 +53462,9 @@ def manager_tracker():
     </section>
     """
 
-    return page("Tutor Tracker",body)   
-    
-    
+    return page("Tutor Tracker",body)
+
+
 @app.route('/manager/login', methods=['GET','POST'])
 def manager_login():
 
@@ -53955,36 +54028,74 @@ def manager_tracker_edit():
     if r:
         return r
 
-    tutor_id = request.args.get("tutor_id")
-    date = request.args.get("date") or datetime.date.today().strftime("%Y-%m-%d")
+    manager_id = int(session["manager_id"])
+
+    try:
+        tutor_id = int(request.args.get("tutor_id"))
+        subject_id = int(request.args.get("subject_id"))
+    except Exception:
+        return page(
+            "Invalid Session",
+            card_msg("Please select a tutor and subject from the Tutor Session Tracker.")
+        )
+
+    date = (
+        request.args.get("date")
+        or datetime.date.today().strftime("%Y-%m-%d")
+    )
 
     conn = get_db()
     cur = conn.cursor()
-    
-    cur.execute("""
-    SELECT *
-    FROM tutor_weekly_tracker
-    WHERE tutor_id=? AND session_date=?
-    """, (tutor_id, date))
-
-    s = cur.fetchone()
 
     cur.execute("""
-    SELECT t.full_name
-    FROM tutors t
-    JOIN manager_tutors mt ON mt.tutor_id = t.id
-    WHERE t.id=? AND mt.manager_id=?
-    """,(tutor_id, session["manager_id"]))
+        SELECT
+            t.full_name,
+            sub.id AS subject_id,
+            sub.name AS subject_name,
+            sub.grade
+        FROM tutors t
+        JOIN manager_tutors mt
+          ON mt.tutor_id=t.id
+         AND mt.manager_id=?
+        JOIN tutor_subjects ts
+          ON ts.tutor_id=t.id
+        JOIN subjects sub
+          ON sub.id=ts.subject_id
+        WHERE t.id=?
+          AND sub.id=?
+          AND COALESCE(t.is_active,1)=1
+          AND t.deleted_at IS NULL
+        LIMIT 1
+    """, (manager_id, tutor_id, subject_id))
 
-    tutor = cur.fetchone()
+    tutor_subject = cur.fetchone()
 
-    if not tutor:
+    if not tutor_subject:
         conn.close()
         return page(
-            "Access denied",
-            "<section class='card'><h1>Unauthorized tutor</h1></section>"
+            "Access Denied",
+            card_msg("This tutor/subject is not available in your Tutor Manager workspace.")
         )
 
+    cur.execute("""
+        SELECT *
+        FROM tutor_weekly_tracker
+        WHERE manager_id=?
+          AND tutor_id=?
+          AND grade=?
+          AND subject=?
+          AND session_date=?
+        ORDER BY id DESC
+        LIMIT 1
+    """, (
+        manager_id,
+        tutor_id,
+        tutor_subject["grade"],
+        tutor_subject["subject_name"],
+        date
+    ))
+
+    s = cur.fetchone()
     conn.close()
 
     body = f"""
@@ -53993,25 +54104,31 @@ def manager_tracker_edit():
 
     <section class='card'>
 
-    <h1>{tutor['full_name']} — Session Entry</h1>
+    <h1>{escape(tutor_subject['full_name'])} — Session Entry</h1>
+
+    <div class="card soft" style="margin-bottom:14px;border-left:5px solid #1b5e20">
+        <strong>{escape(grade_label(tutor_subject['grade']))} — {escape(tutor_subject['subject_name'])}</strong>
+        <div class="mini muted">
+            This session log belongs only to your Tutor Manager account and this subject.
+        </div>
+    </div>
 
     <div class='toolbar'>
-
-        <a class="btn mini" href="/manager/tracker?date={date}">
-        ← Back to Tracker
+        <a class="btn mini" href="/manager/tracker?date={escape(date)}">
+            ← Back to Tracker
         </a>
-
     </div>
 
     <form method="post" action="/manager/tracker/save">
 
     <input type="hidden" name="tutor_id" value="{tutor_id}">
+    <input type="hidden" name="subject_id" value="{subject_id}">
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
 
         <div>
         <label>Session Date</label>
-        <input type="date" name="date" value="{s['session_date'] if s else date}" required>
+        <input type="date" name="date" value="{escape(s['session_date'] if s else date)}" required>
         </div>
 
         <div>
@@ -54024,17 +54141,17 @@ def manager_tracker_edit():
 
         <div>
         <label>Start Time</label>
-        <input type="time" name="start_time" value="{s['start_time'] if s else ''}">
+        <input type="time" name="start_time" value="{escape(s['start_time'] if s else '')}">
         </div>
 
         <div>
         <label>End Time</label>
-        <input type="time" name="end_time" value="{s['end_time'] if s else ''}">
+        <input type="time" name="end_time" value="{escape(s['end_time'] if s else '')}">
         </div>
 
         <div>
         <label>Students Attended</label>
-        <input type="number" name="students_attended" value="{s['students_attended'] if s else ''}" min="0">
+        <input type="number" name="students_attended" value="{escape(str(s['students_attended']) if s and s['students_attended'] is not None else '')}" min="0">
         </div>
 
         <div>
@@ -54050,13 +54167,13 @@ def manager_tracker_edit():
     <br>
 
     <label>Topic Covered</label>
-    <input name="topic_covered" value="{s['topic_covered'] if s else ''}">
+    <input name="topic_covered" value="{escape(s['topic_covered'] if s else '')}">
 
     <label>Manager Comments</label>
-    <textarea name="manager_comments">{s['manager_comments'] if s else ''}</textarea>
+    <textarea name="manager_comments">{escape(s['manager_comments'] if s else '')}</textarea>
 
     <br>
-    
+
     <label>Manager Rating (1.0–5.0)</label>
     <select name="manager_rating">
     <option value="">Not rated</option>
@@ -54070,10 +54187,8 @@ def manager_tracker_edit():
     <option value="4.5" {"selected" if s and s["manager_rating"] is not None and float(s["manager_rating"]) == 4.5 else ""}>4.5</option>
     <option value="5.0" {"selected" if s and s["manager_rating"] is not None and float(s["manager_rating"]) == 5.0 else ""}>5.0</option>
     </select>
-    
-    <button class="btn success">
-    Save Session
-    </button>
+
+    <button class="btn success">Save Session</button>
 
     </form>
 
@@ -54081,7 +54196,7 @@ def manager_tracker_edit():
     """
 
     return page("Tracker Entry", body)
-    
+
 
 @app.post('/manager/tracker/save')
 def manager_tracker_save():
@@ -54090,77 +54205,99 @@ def manager_tracker_save():
     if r:
         return r
 
-    manager_rating_raw = request.form.get(
-        "manager_rating",
-        ""
-    ).strip()
+    manager_id = int(session["manager_id"])
 
+    try:
+        tutor_id = int(request.form.get("tutor_id"))
+        subject_id = int(request.form.get("subject_id"))
+    except Exception:
+        return page("Invalid Session", card_msg("Please select the tutor and subject again."))
+
+    session_date = (request.form.get("date") or "").strip()
+
+    try:
+        datetime.datetime.strptime(session_date, "%Y-%m-%d")
+    except Exception:
+        return page("Invalid Date", card_msg("Please enter a valid session date."))
+
+    manager_rating_raw = request.form.get("manager_rating", "").strip()
     manager_rating = None
 
     if manager_rating_raw:
         try:
-            manager_rating = float(
-                manager_rating_raw
-            )
+            manager_rating = float(manager_rating_raw)
         except Exception:
-            return page(
-                "Invalid Rating",
-                card_msg(
-                    "Manager Rating must be between 1.0 and 5.0 in 0.5 increments."
-                )
-            )
+            return page("Invalid Rating", card_msg("Please select a valid manager rating."))
 
-        allowed_manager_ratings = {
-            1.0, 1.5,
-            2.0, 2.5,
-            3.0, 3.5,
-            4.0, 4.5,
-            5.0
-        }
-
-        if manager_rating not in allowed_manager_ratings:
-            return page(
-                "Invalid Rating",
-                card_msg(
-                    "Manager Rating must be 1.0, 1.5, 2.0, 2.5, 3.0, "
-                    "3.5, 4.0, 4.5 or 5.0."
-                )
-            )
+        if manager_rating not in {1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0}:
+            return page("Invalid Rating", card_msg("Please select a valid manager rating."))
 
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-    INSERT INTO tutor_weekly_tracker(
-        tutor_id,
-        session_date,
-        session_held,
-        start_time,
-        end_time,
-        recording_link,
-        students_attended,
-        topic_covered,
-        manager_comments,
-        manager_id,
-        manager_rating,
-        created_at
-    )
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-    ON CONFLICT(tutor_id, session_date)
-    DO UPDATE SET
-        session_held=excluded.session_held,
-        start_time=excluded.start_time,
-        end_time=excluded.end_time,
-        recording_link=excluded.recording_link,
-        students_attended=excluded.students_attended,
-        topic_covered=excluded.topic_covered,
-        manager_comments=excluded.manager_comments,
-        manager_id=excluded.manager_id,
-        manager_rating=excluded.manager_rating,
-        created_at=excluded.created_at
+        SELECT
+            sub.name AS subject_name,
+            sub.grade
+        FROM manager_tutors mt
+        JOIN tutor_subjects ts
+          ON ts.tutor_id=mt.tutor_id
+        JOIN subjects sub
+          ON sub.id=ts.subject_id
+        JOIN tutors t
+          ON t.id=mt.tutor_id
+        WHERE mt.manager_id=?
+          AND mt.tutor_id=?
+          AND sub.id=?
+          AND COALESCE(t.is_active,1)=1
+          AND t.deleted_at IS NULL
+        LIMIT 1
+    """, (manager_id, tutor_id, subject_id))
+
+    subject_row = cur.fetchone()
+
+    if not subject_row:
+        conn.close()
+        return page("Access Denied", card_msg("You cannot log a session for this tutor/subject."))
+
+    subject_name = subject_row["subject_name"]
+    grade = subject_row["grade"]
+
+    cur.execute("""
+        INSERT INTO tutor_weekly_tracker(
+            tutor_id,
+            manager_id,
+            grade,
+            subject,
+            session_date,
+            session_held,
+            start_time,
+            end_time,
+            recording_link,
+            students_attended,
+            topic_covered,
+            manager_comments,
+            manager_rating,
+            created_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(manager_id, tutor_id, grade, subject, session_date)
+        DO UPDATE SET
+            session_held=excluded.session_held,
+            start_time=excluded.start_time,
+            end_time=excluded.end_time,
+            recording_link=excluded.recording_link,
+            students_attended=excluded.students_attended,
+            topic_covered=excluded.topic_covered,
+            manager_comments=excluded.manager_comments,
+            manager_rating=excluded.manager_rating,
+            created_at=excluded.created_at
     """, (
-        request.form.get("tutor_id"),
-        request.form.get("date"),
+        tutor_id,
+        manager_id,
+        grade,
+        subject_name,
+        session_date,
         request.form.get("session_held"),
         request.form.get("start_time"),
         request.form.get("end_time"),
@@ -54168,7 +54305,6 @@ def manager_tracker_save():
         request.form.get("students_attended"),
         request.form.get("topic_covered"),
         request.form.get("manager_comments"),
-        session.get("manager_id"),
         manager_rating,
         now_utc_iso()
     ))
@@ -54176,7 +54312,15 @@ def manager_tracker_save():
     conn.commit()
     conn.close()
 
-    return redirect(f"/manager/tracker?date={request.form.get('date')}")
+    return redirect(
+        url_for(
+            "manager_tracker_edit",
+            tutor_id=tutor_id,
+            subject_id=subject_id,
+            date=session_date
+        )
+    )
+
 
 @app.post('/admin/managers/add')
 @require_high_admin
@@ -54515,6 +54659,9 @@ def admin_tutor_operations():
 
         LEFT JOIN tutor_weekly_tracker tw
         ON tw.tutor_id = t.id
+        AND tw.manager_id = tm.id
+        AND COALESCE(tw.grade,'') = COALESCE(s.grade,'')
+        AND COALESCE(tw.subject,'') = COALESCE(s.name,'')
         AND tw.session_date IN (?,?,?)
 
         {where_clause}
@@ -56188,42 +56335,54 @@ def manager_tracker_history():
     if r:
         return r
 
-    page_num = int(request.args.get("page", 1))
+    try:
+        page_num = max(1, int(request.args.get("page", 1)))
+    except Exception:
+        page_num = 1
+
     f_tutor = request.args.get("tutor", "")
     f_date = request.args.get("date", "")
+    f_grade = request.args.get("grade", "")
+    f_subject = request.args.get("subject", "")
 
     limit = 25
     offset = (page_num - 1) * limit
+    manager_id = int(session["manager_id"])
 
     conn = get_db()
     cur = conn.cursor()
 
-    # -----------------------
-    # Load filter lists
-    # -----------------------
-
     cur.execute("""
         SELECT DISTINCT t.full_name
-        FROM tutors t
-        JOIN manager_tutors mt ON mt.tutor_id=t.id
-        WHERE mt.manager_id=?
+        FROM tutor_weekly_tracker tw
+        JOIN tutors t ON t.id=tw.tutor_id
+        WHERE tw.manager_id=?
         ORDER BY t.full_name
-    """,(session["manager_id"],))
+    """, (manager_id,))
+    tutors = [row["full_name"] for row in cur.fetchall()]
 
-    tutors=[r["full_name"] for r in cur.fetchall()]
+    cur.execute("""
+        SELECT DISTINCT grade
+        FROM tutor_weekly_tracker
+        WHERE manager_id=?
+          AND grade IS NOT NULL
+          AND TRIM(grade)!=''
+        ORDER BY grade
+    """, (manager_id,))
+    grades = [row["grade"] for row in cur.fetchall()]
 
-    cur.execute("SELECT DISTINCT grade FROM tutor_weekly_tracker ORDER BY grade")
-    grades=[r["grade"] for r in cur.fetchall()]
+    cur.execute("""
+        SELECT DISTINCT subject
+        FROM tutor_weekly_tracker
+        WHERE manager_id=?
+          AND subject IS NOT NULL
+          AND TRIM(subject)!=''
+        ORDER BY subject
+    """, (manager_id,))
+    subjects = [row["subject"] for row in cur.fetchall()]
 
-    cur.execute("SELECT DISTINCT subject FROM tutor_weekly_tracker ORDER BY subject")
-    subjects=[r["subject"] for r in cur.fetchall()]
-
-    # -----------------------
-    # Build filters
-    # -----------------------
-
-    where=["mt.manager_id=?"]
-    params=[session["manager_id"]]
+    where = ["tw.manager_id=?"]
+    params = [manager_id]
 
     if f_tutor:
         where.append("t.full_name=?")
@@ -56233,138 +56392,119 @@ def manager_tracker_history():
         where.append("tw.session_date=?")
         params.append(f_date)
 
-    where_sql="WHERE " + " AND ".join(where)
+    if f_grade:
+        where.append("tw.grade=?")
+        params.append(f_grade)
 
-    # -----------------------
-    # Count total rows
-    # -----------------------
+    if f_subject:
+        where.append("tw.subject=?")
+        params.append(f_subject)
+
+    where_sql = "WHERE " + " AND ".join(where)
 
     cur.execute(f"""
         SELECT COUNT(*) AS c
         FROM tutor_weekly_tracker tw
         JOIN tutors t ON tw.tutor_id=t.id
-        JOIN manager_tutors mt ON mt.tutor_id=t.id
         {where_sql}
-    """,params)
+    """, params)
 
-    total=cur.fetchone()["c"]
-    total_pages=max(1,(total+limit-1)//limit)
-
-    # -----------------------
-    # Fetch page
-    # -----------------------
-
-    data_params=params+[limit,offset]
+    total = int(cur.fetchone()["c"] or 0)
+    total_pages = max(1, (total + limit - 1) // limit)
 
     cur.execute(f"""
-    SELECT
-        tw.id,
-        tw.tutor_id,   -- ADD THIS
-        tw.session_date,
-        tw.start_time,
-        tw.end_time,
-        tw.students_attended,
-        tw.recording_link,
-        tw.grade,
-        tw.subject,
-        t.full_name AS tutor
+        SELECT
+            tw.id,
+            tw.tutor_id,
+            tw.session_date,
+            tw.start_time,
+            tw.end_time,
+            tw.students_attended,
+            tw.recording_link,
+            tw.grade,
+            tw.subject,
+            tw.session_held,
+            tw.manager_rating,
+            t.full_name AS tutor
+        FROM tutor_weekly_tracker tw
+        JOIN tutors t ON tw.tutor_id=t.id
+        {where_sql}
+        ORDER BY tw.session_date DESC, t.full_name, tw.grade, tw.subject, tw.id DESC
+        LIMIT ? OFFSET ?
+    """, params + [limit, offset])
 
-    FROM tutor_weekly_tracker tw
-    JOIN tutors t ON tw.tutor_id = t.id
-    JOIN manager_tutors mt ON mt.tutor_id = t.id
-
-    {where_sql}
-
-    ORDER BY tw.session_date DESC
-    LIMIT ? OFFSET ?
-    """,data_params)
-
-    rows=cur.fetchall()
+    rows = cur.fetchall()
     conn.close()
 
-    table_rows=""
+    table_rows = ""
 
-    for r in rows:
-
-        edit_url = url_for('manager_tracker_edit', tutor_id=r['tutor_id'], date=r['session_date'])
-        delete_url = url_for('manager_tracker_delete', tracker_id=r['id'])
+    for row in rows:
+        edit_url = url_for("manager_edit_logged_session", id=row["id"])
+        delete_url = url_for("manager_tracker_delete", tracker_id=row["id"])
 
         table_rows += f"""
         <tr>
-        <td>{r['session_date']}</td>
-        <td>{r['tutor']}</td>
-        <td>{r['start_time'] or '-'}</td>
-        <td>{r['end_time'] or '-'}</td>
-        <td>{r['students_attended'] or '-'}</td>
-        <td>{'✓' if r['recording_link'] else '-'}</td>
+            <td>{escape(row['session_date'] or '-')}</td>
+            <td>{escape(row['tutor'] or '-')}</td>
+            <td>{escape(grade_label(row['grade'])) if row['grade'] else '-'}</td>
+            <td>{escape(row['subject'] or '-')}</td>
+            <td>{escape(row['start_time'] or '-')}</td>
+            <td>{escape(row['end_time'] or '-')}</td>
+            <td>{row['students_attended'] if row['students_attended'] is not None else '-'}</td>
+            <td>{'✓' if row['recording_link'] else '-'}</td>
+            <td>
+                <a href="{edit_url}" class="btn mini">Edit</a>
 
-        <td>
-
-            <a href="{edit_url}" class="btn mini">Edit</a>
-
-            <form method="POST"
-                  action="{delete_url}"
-                  onsubmit="return confirm('Are you sure you want to delete this session?');"
-                  style="display:inline;">
-
-                <button type="submit" class="btn danger mini">Delete</button>
-
-            </form>
-
-        </td>
-
+                <form method="POST"
+                      action="{delete_url}"
+                      onsubmit="return confirm('Are you sure you want to delete this session?');"
+                      style="display:inline;">
+                    <button type="submit" class="btn danger mini">Delete</button>
+                </form>
+            </td>
         </tr>
         """
 
-    # -----------------------
-    # Pagination links
-    # -----------------------
-
-    query_string=""
-
+    filter_qs = {}
     if f_tutor:
-        query_string+=f"&tutor={f_tutor}"
-
+        filter_qs["tutor"] = f_tutor
     if f_date:
-        query_string+=f"&date={f_date}"
+        filter_qs["date"] = f_date
+    if f_grade:
+        filter_qs["grade"] = f_grade
+    if f_subject:
+        filter_qs["subject"] = f_subject
 
-    start=max(1,page_num-3)
-    end=min(total_pages,page_num+3)
+    suffix = "&" + urlencode(filter_qs) if filter_qs else ""
 
-    page_links=[]
+    start_page = max(1, page_num - 3)
+    end_page = min(total_pages, page_num + 3)
+    page_links = []
 
-    if page_num>1:
-        page_links.append(f"<a class='links' href='?page=1{query_string}'>« First</a>")
-        page_links.append(f"<a class='links' href='?page={page_num-1}{query_string}'>‹ Prev</a>")
+    if page_num > 1:
+        page_links.append(f"<a class='links' href='?page=1{suffix}'>« First</a>")
+        page_links.append(f"<a class='links' href='?page={page_num-1}{suffix}'>‹ Prev</a>")
 
-    for p in range(start,end+1):
-
-        if p==page_num:
+    for p in range(start_page, end_page + 1):
+        if p == page_num:
             page_links.append(
-            f"<span class='current' style='padding:4px 8px;background:#0f172a;color:white;border-radius:6px'>{p}</span>"
+                f"<span class='current' style='padding:4px 8px;background:#0f172a;color:white;border-radius:6px'>{p}</span>"
             )
         else:
-            page_links.append(
-            f"<a class='links' href='?page={p}{query_string}'>{p}</a>"
-            )
+            page_links.append(f"<a class='links' href='?page={p}{suffix}'>{p}</a>")
 
-    if page_num<total_pages:
-        page_links.append(f"<a class='links' href='?page={page_num+1}{query_string}'>Next ›</a>")
-        page_links.append(f"<a class='links' href='?page={total_pages}{query_string}'>Last »</a>")
+    if page_num < total_pages:
+        page_links.append(f"<a class='links' href='?page={page_num+1}{suffix}'>Next ›</a>")
+        page_links.append(f"<a class='links' href='?page={total_pages}{suffix}'>Last »</a>")
 
-    nav=f"""
-    <div class='pager' style="display:flex;gap:8px;margin:10px 0">
-
-    <span class="mini muted">
-    Page {page_num} of {total_pages}
-    </span>
-
-    {"".join(page_links)}
-
+    nav = f"""
+    <div class='pager' style="display:flex;gap:8px;margin:10px 0;flex-wrap:wrap">
+        <span class="mini muted">Page {page_num} of {total_pages}</span>
+        {''.join(page_links)}
     </div>
     """
 
-    body=f"""
+    body = f"""
 
     {manager_nav()}
 
@@ -56372,18 +56512,36 @@ def manager_tracker_history():
 
     <h1>Session History</h1>
 
+    <p class="mini muted">
+        Only session logs captured by your Tutor Manager account are shown here.
+    </p>
+
     <div class='toolbar'>
 
         <form method="get" style="display:flex;gap:8px;flex-wrap:wrap">
 
             <select name="tutor">
                 <option value="">All Tutors</option>
-                {''.join(f"<option value='{t}' {'selected' if t==f_tutor else ''}>{t}</option>" for t in tutors)}
+                {''.join(f"<option value='{escape(t, quote=True)}' {'selected' if t==f_tutor else ''}>{escape(t)}</option>" for t in tutors)}
             </select>
 
-            <input type="date" name="date" value="{f_date}">
+            <select name="grade">
+                <option value="">All Grades</option>
+                {''.join(f"<option value='{escape(g, quote=True)}' {'selected' if g==f_grade else ''}>{escape(grade_label(g))}</option>" for g in grades)}
+            </select>
+
+            <select name="subject">
+                <option value="">All Subjects</option>
+                {''.join(f"<option value='{escape(s, quote=True)}' {'selected' if s==f_subject else ''}>{escape(s)}</option>" for s in subjects)}
+            </select>
+
+            <input type="date" name="date" value="{escape(f_date)}">
 
             <button class="btn mini">Filter</button>
+
+            <a class="btn mini secondary" href="{url_for('manager_tracker_history')}">
+                Clear
+            </a>
 
         </form>
 
@@ -56391,12 +56549,15 @@ def manager_tracker_history():
 
     {nav}
 
+    <div class="scroll-x">
     <table>
 
     <thead>
     <tr>
     <th>Date</th>
     <th>Tutor</th>
+    <th>Grade</th>
+    <th>Subject</th>
     <th>Start</th>
     <th>End</th>
     <th>Students</th>
@@ -56406,10 +56567,11 @@ def manager_tracker_history():
     </thead>
 
     <tbody>
-    {table_rows or "<tr><td colspan='7'>No sessions found.</td></tr>"}
+    {table_rows or "<tr><td colspan='9'>No sessions found.</td></tr>"}
     </tbody>
 
     </table>
+    </div>
 
     {nav}
 
@@ -56417,7 +56579,7 @@ def manager_tracker_history():
     """
 
     return page("Session History", body)
-    
+
 
 @app.get('/manager/tracker/edit-session')
 def manager_edit_logged_session():
@@ -56427,21 +56589,37 @@ def manager_edit_logged_session():
         return r
 
     session_id = request.args.get("id")
+    manager_id = int(session["manager_id"])
 
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-    SELECT *
-    FROM tutor_weekly_tracker
-    WHERE id=? AND manager_id=?
-    """,(session_id, session["manager_id"]))
+        SELECT
+            tw.*,
+            t.full_name AS tutor_name
+        FROM tutor_weekly_tracker tw
+        JOIN tutors t ON t.id=tw.tutor_id
+        WHERE tw.id=?
+          AND tw.manager_id=?
+        LIMIT 1
+    """, (session_id, manager_id))
 
     s = cur.fetchone()
     conn.close()
 
     if not s:
-        return page("Error","<section class='card'>Session not found</section>")
+        return page(
+            "Session Not Found",
+            card_msg("This session does not belong to your Tutor Manager account.")
+        )
+
+    rating_options = "".join(
+        f"<option value='{rating:.1f}' "
+        f"{'selected' if s['manager_rating'] is not None and float(s['manager_rating']) == rating else ''}>"
+        f"{rating:.1f}</option>"
+        for rating in (1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0)
+    )
 
     body=f"""
 
@@ -56451,12 +56629,20 @@ def manager_edit_logged_session():
 
     <h1>Edit Session</h1>
 
+    <div class="card soft" style="border-left:5px solid #1b5e20;margin-bottom:14px">
+        <strong>{escape(s['tutor_name'])}</strong><br>
+        <span class="mini muted">
+            {escape(grade_label(s['grade'])) if s['grade'] else 'Grade not recorded'}
+            — {escape(s['subject'] or 'Subject not recorded')}
+        </span>
+    </div>
+
     <form method="post" action="/manager/tracker/update">
 
     <input type="hidden" name="id" value="{s['id']}">
 
     <label>Session Date</label>
-    <input type="date" name="date" value="{s['session_date']}" required>
+    <input type="date" name="date" value="{escape(s['session_date'] or '')}" required>
 
     <label>Session Held</label>
     <select name="session_held">
@@ -56465,26 +56651,33 @@ def manager_edit_logged_session():
     </select>
 
     <label>Start Time</label>
-    <input type="time" name="start_time" value="{s['start_time'] or ''}">
+    <input type="time" name="start_time" value="{escape(s['start_time'] or '')}">
 
     <label>End Time</label>
-    <input type="time" name="end_time" value="{s['end_time'] or ''}">
+    <input type="time" name="end_time" value="{escape(s['end_time'] or '')}">
 
     <label>Students</label>
-    <input type="number" name="students_attended" value="{s['students_attended'] or ''}">
+    <input type="number" min="0" name="students_attended" value="{escape(str(s['students_attended']) if s['students_attended'] is not None else '')}">
 
     <label>Recording Uploaded</label>
     <select name="recording_link">
-    <option value="">No</option>
+    <option value="" {"selected" if not s["recording_link"] else ""}>No</option>
     <option value="YES" {"selected" if s["recording_link"] else ""}>Yes</option>
     </select>
 
-    <label>Comments</label>
-    <textarea name="manager_comments">{s['manager_comments'] or ''}</textarea>
+    <label>Topic Covered</label>
+    <input name="topic_covered" value="{escape(s['topic_covered'] or '')}">
 
-    <button class="btn success">
-    Update Session
-    </button>
+    <label>Comments</label>
+    <textarea name="manager_comments">{escape(s['manager_comments'] or '')}</textarea>
+
+    <label>Manager Rating (1.0–5.0)</label>
+    <select name="manager_rating">
+        <option value="">Not rated</option>
+        {rating_options}
+    </select>
+
+    <button class="btn success">Update Session</button>
 
     </form>
 
@@ -56492,8 +56685,8 @@ def manager_edit_logged_session():
     """
 
     return page("Edit Session", body)
-    
-    
+
+
 @app.post('/manager/tracker/update')
 def manager_update_session():
 
@@ -56501,41 +56694,108 @@ def manager_update_session():
     if r:
         return r
 
+    manager_id = int(session["manager_id"])
+    tracker_id = request.form.get("id")
+    new_date = (request.form.get("date") or "").strip()
+
+    try:
+        datetime.datetime.strptime(new_date, "%Y-%m-%d")
+    except Exception:
+        return page("Invalid Date", card_msg("Please enter a valid session date."))
+
+    manager_rating_raw = request.form.get("manager_rating", "").strip()
+    manager_rating = None
+
+    if manager_rating_raw:
+        try:
+            manager_rating = float(manager_rating_raw)
+        except Exception:
+            return page("Invalid Rating", card_msg("Please select a valid manager rating."))
+
+        if manager_rating not in {1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0}:
+            return page("Invalid Rating", card_msg("Please select a valid manager rating."))
+
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-    UPDATE tutor_weekly_tracker
+        SELECT id, tutor_id, grade, subject
+        FROM tutor_weekly_tracker
+        WHERE id=?
+          AND manager_id=?
+        LIMIT 1
+    """, (tracker_id, manager_id))
 
-    SET
-        session_date=?,
-        session_held=?,
-        start_time=?,
-        end_time=?,
-        students_attended=?,
-        recording_link=?,
-        manager_comments=?
+    owned = cur.fetchone()
 
-    WHERE id=? AND manager_id=?
+    if not owned:
+        conn.close()
+        return page(
+            "Access Denied",
+            card_msg("This session does not belong to your Tutor Manager account.")
+        )
 
-    """,(
+    cur.execute("""
+        SELECT id
+        FROM tutor_weekly_tracker
+        WHERE manager_id=?
+          AND tutor_id=?
+          AND COALESCE(grade,'')=COALESCE(?, '')
+          AND COALESCE(subject,'')=COALESCE(?, '')
+          AND session_date=?
+          AND id<>?
+        LIMIT 1
+    """, (
+        manager_id,
+        owned["tutor_id"],
+        owned["grade"],
+        owned["subject"],
+        new_date,
+        tracker_id
+    ))
 
-    request.form.get("date"),
-    request.form.get("session_held"),
-    request.form.get("start_time"),
-    request.form.get("end_time"),
-    request.form.get("students_attended"),
-    request.form.get("recording_link"),
-    request.form.get("manager_comments"),
-    request.form.get("id"),
-    session["manager_id"]
+    if cur.fetchone():
+        conn.close()
+        return page(
+            "Session Already Logged",
+            card_msg(
+                "You already have a session log for this tutor, subject and date. "
+                "Open that session from Session History instead."
+            )
+        )
 
+    cur.execute("""
+        UPDATE tutor_weekly_tracker
+        SET session_date=?,
+            session_held=?,
+            start_time=?,
+            end_time=?,
+            students_attended=?,
+            recording_link=?,
+            topic_covered=?,
+            manager_comments=?,
+            manager_rating=?
+        WHERE id=?
+          AND manager_id=?
+    """, (
+        new_date,
+        request.form.get("session_held"),
+        request.form.get("start_time"),
+        request.form.get("end_time"),
+        request.form.get("students_attended"),
+        request.form.get("recording_link"),
+        request.form.get("topic_covered"),
+        request.form.get("manager_comments"),
+        manager_rating,
+        tracker_id,
+        manager_id
     ))
 
     conn.commit()
     conn.close()
 
     return redirect("/manager/tracker/history")
+
 
 @app.post("/manager/tracker/delete/<int:tracker_id>")
 def manager_tracker_delete(tracker_id):
@@ -56544,17 +56804,17 @@ def manager_tracker_delete(tracker_id):
     if r:
         return r
 
-    manager_id = session.get("manager_id")
+    manager_id = int(session["manager_id"])
 
     conn = get_db()
     cur = conn.cursor()
 
-    # SECURITY: ensure this tracker belongs to this manager
     cur.execute("""
-        SELECT t.id
-        FROM tutor_weekly_tracker t
-        JOIN manager_tutors mt ON mt.tutor_id = t.tutor_id
-        WHERE t.id = ? AND mt.manager_id = ?
+        SELECT id
+        FROM tutor_weekly_tracker
+        WHERE id=?
+          AND manager_id=?
+        LIMIT 1
     """, (tracker_id, manager_id))
 
     row = cur.fetchone()
@@ -56562,15 +56822,19 @@ def manager_tracker_delete(tracker_id):
     if not row:
         conn.close()
         flash("You are not allowed to delete this session.", "danger")
-        return redirect(url_for("manager_dashboard"))
+        return redirect(url_for("manager_tracker_history"))
 
-    # DELETE
-    cur.execute("DELETE FROM tutor_weekly_tracker WHERE id = ?", (tracker_id,))
+    cur.execute("""
+        DELETE FROM tutor_weekly_tracker
+        WHERE id=?
+          AND manager_id=?
+    """, (tracker_id, manager_id))
+
     conn.commit()
     conn.close()
 
     flash("Session deleted successfully.", "success")
-    return redirect(url_for("manager_dashboard"))
+    return redirect(url_for("manager_tracker_history"))
 
 
 def is_manager():
