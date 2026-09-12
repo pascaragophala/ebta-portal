@@ -3032,6 +3032,11 @@ def init_db():
     ensure_column(conn, "discount_coupons", "sms_sent_by_role", "TEXT")
     ensure_column(conn, "discount_coupons", "sms_sent_by_id", "INTEGER")
     ensure_column(conn, "discount_coupons", "sms_last_error", "TEXT")
+    ensure_column(conn, "discount_coupons", "email_sent", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "discount_coupons", "email_sent_at", "TEXT")
+    ensure_column(conn, "discount_coupons", "email_sent_by_role", "TEXT")
+    ensure_column(conn, "discount_coupons", "email_sent_by_id", "INTEGER")
+    ensure_column(conn, "discount_coupons", "email_last_error", "TEXT")
     ensure_column(conn, "discount_coupons", "discount_category", "TEXT")
     ensure_column(conn, "discount_coupons", "discount_scope_months", "INTEGER NOT NULL DEFAULT 0")
     
@@ -6494,15 +6499,46 @@ def process_email_queue(batch_size=25):
     ids=[int(r["id"]) for r in cur.fetchall()]
     processed=0
     for email_id in ids:
+        row = None
         try:
             cur.execute("UPDATE email_queue SET status='SENDING',attempted_at=? WHERE id=? AND status IN ('PENDING','FAILED') AND retry_count<5",(now_utc_iso(),email_id))
             if int(cur.rowcount or 0)!=1: conn.commit(); continue
             conn.commit(); cur.execute("SELECT * FROM email_queue WHERE id=? LIMIT 1",(email_id,)); row=cur.fetchone()
             if not row: continue
             send_email_queue_row(row)
-            cur.execute("UPDATE email_queue SET status='SENT',sent_at=?,last_error=NULL WHERE id=?",(now_utc_iso(),email_id)); conn.commit(); processed+=1
+
+            sent_at = now_utc_iso()
+            cur.execute("UPDATE email_queue SET status='SENT',sent_at=?,last_error=NULL WHERE id=?",(sent_at,email_id))
+
+            if row["related_type"] == "discount_coupon" and row["related_id"]:
+                try:
+                    cur.execute("""
+                        UPDATE discount_coupons
+                        SET email_sent=1,
+                            email_sent_at=?,
+                            email_last_error=NULL
+                        WHERE id=?
+                    """, (sent_at, int(row["related_id"])))
+                except Exception:
+                    pass
+
+            conn.commit(); processed+=1
         except Exception as exc:
-            try: cur.execute("UPDATE email_queue SET status='FAILED',retry_count=retry_count+1,last_error=? WHERE id=?",(str(exc)[:500],email_id)); conn.commit()
+            try:
+                error_text = str(exc)[:500]
+                cur.execute("UPDATE email_queue SET status='FAILED',retry_count=retry_count+1,last_error=? WHERE id=?",(error_text,email_id))
+
+                if row is not None and row["related_type"] == "discount_coupon" and row["related_id"]:
+                    try:
+                        cur.execute("""
+                            UPDATE discount_coupons
+                            SET email_last_error=?
+                            WHERE id=?
+                        """, (error_text[:300], int(row["related_id"])))
+                    except Exception:
+                        pass
+
+                conn.commit()
             except Exception:
                 try: conn.rollback()
                 except Exception: pass
@@ -85648,6 +85684,8 @@ def admin_discounts_control():
 
     create_locked = get_setting("discounts_locked", "1")
     delete_locked = get_setting("discounts_delete_locked", "1")
+    bulk_sms_locked = get_setting("discounts_bulk_sms_locked", "0")
+    bulk_email_locked = get_setting("discounts_bulk_email_locked", "0")
 
     create_status_html = (
         "<span class='chip lapsed'>Creation Locked</span>"
@@ -85659,6 +85697,18 @@ def admin_discounts_control():
         "<span class='chip lapsed'>Delete Locked</span>"
         if delete_locked == "1"
         else "<span class='chip active'>Delete Unlocked</span>"
+    )
+
+    bulk_sms_status_html = (
+        "<span class='chip lapsed'>Bulk SMS Locked</span>"
+        if bulk_sms_locked == "1"
+        else "<span class='chip active'>Bulk SMS Unlocked</span>"
+    )
+
+    bulk_email_status_html = (
+        "<span class='chip lapsed'>Bulk Email Locked</span>"
+        if bulk_email_locked == "1"
+        else "<span class='chip active'>Bulk Email Unlocked</span>"
     )
 
     body = f"""
@@ -85705,6 +85755,42 @@ def admin_discounts_control():
                 </form>
             </div>
 
+        </div>
+
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
+            <div class="card soft" style="border-left:5px solid #2563eb">
+                <h2>Bulk Discount SMS Button</h2>
+
+                <p>{bulk_sms_status_html}</p>
+
+                <p class="muted">
+                    Controls the Admission Coordinator button that sends SMS messages
+                    to all active, unused discount codes that have not been sent yet.
+                </p>
+
+                <form method="post" action="{url_for('admin_discounts_bulk_sms_toggle')}">
+                    <button class="btn {'success' if bulk_sms_locked == '1' else 'danger'}">
+                        {'Unlock Bulk Discount SMS' if bulk_sms_locked == '1' else 'Lock Bulk Discount SMS'}
+                    </button>
+                </form>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid #7c3aed">
+                <h2>Bulk Discount Email Button</h2>
+
+                <p>{bulk_email_status_html}</p>
+
+                <p class="muted">
+                    Controls the Admission Coordinator button that emails all students
+                    with active, unused discount codes that have not been emailed yet.
+                </p>
+
+                <form method="post" action="{url_for('admin_discounts_bulk_email_toggle')}">
+                    <button class="btn {'success' if bulk_email_locked == '1' else 'danger'}">
+                        {'Unlock Bulk Discount Email' if bulk_email_locked == '1' else 'Lock Bulk Discount Email'}
+                    </button>
+                </form>
+            </div>
         </div>
 
         <div class="card soft" style="border-left:5px solid #f59e0b;margin-top:14px">
@@ -85826,6 +85912,32 @@ def admin_discounts_delete_toggle():
     return redirect(url_for("admin_discounts_control"))
 
 
+@app.post('/admin/discounts-control/bulk-sms-toggle')
+@require_high_admin
+def admin_discounts_bulk_sms_toggle():
+    r = require_admin()
+    if r:
+        return r
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can update bulk discount SMS settings."))
+    current = get_setting("discounts_bulk_sms_locked", "0")
+    set_setting("discounts_bulk_sms_locked", "0" if current == "1" else "1")
+    return redirect(url_for("admin_discounts_control"))
+
+
+@app.post('/admin/discounts-control/bulk-email-toggle')
+@require_high_admin
+def admin_discounts_bulk_email_toggle():
+    r = require_admin()
+    if r:
+        return r
+    if not is_high_admin():
+        return page("Access Denied", card_msg("Only high admin can update bulk discount email settings."))
+    current = get_setting("discounts_bulk_email_locked", "0")
+    set_setting("discounts_bulk_email_locked", "0" if current == "1" else "1")
+    return redirect(url_for("admin_discounts_control"))
+
+
 @app.get('/admission/discounts')
 def admission_discounts():
 
@@ -85837,6 +85949,8 @@ def admission_discounts():
     grade_filter = request.args.get("grade", "").strip()
     locked = get_setting("discounts_locked", "1")
     delete_locked = get_setting("discounts_delete_locked", "1")
+    bulk_sms_locked = get_setting("discounts_bulk_sms_locked", "0")
+    bulk_email_locked = get_setting("discounts_bulk_email_locked", "0")
 
     try:
         students_page = int(request.args.get("students_page", 1))
@@ -86066,6 +86180,7 @@ def admission_discounts():
         SELECT
             dc.*,
             s.full_name AS target_name,
+            s.email AS target_email,
             owner.full_name AS owner_name,
             sub.name AS subject_name,
             sub.grade AS subject_grade
@@ -86294,6 +86409,31 @@ def admission_discounts():
                 </div>
                 """
 
+        email_status_html = ""
+
+        if not (c["target_email"] or "").strip():
+            email_status_html = """
+            <span class="chip lapsed">No Email Address</span>
+            """
+        elif int(c["email_sent"] or 0) == 1:
+            email_status_html = f"""
+            <span class="chip active">Email Sent</span>
+            <div class="mini muted">
+                {escape((c["email_sent_at"] or "")[:16].replace("T", " "))}
+            </div>
+            """
+        else:
+            email_status_html = """
+            <span class="chip lapsed">Email Not Sent</span>
+            """
+
+            if c["email_last_error"]:
+                email_status_html += f"""
+                <div class="mini muted" style="color:#b91c1c">
+                    Last error: {escape(c["email_last_error"])}
+                </div>
+                """
+
         sms_button = ""
 
         if c["target_student_id"] and c["status"] == "ACTIVE":
@@ -86381,6 +86521,8 @@ def admission_discounts():
 
             <td>{sms_status_html}</td>
 
+            <td>{email_status_html}</td>
+
             <td>
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
                     {sms_button}
@@ -86463,6 +86605,46 @@ def admission_discounts():
         for g in ["G8", "G9", "G10", "G11", "G12", "G13"]
     )
 
+    bulk_sms_button_html = (
+        f"""
+        <form method="post"
+              action="{url_for('admission_discount_sms_all')}"
+              onsubmit="return confirm('Send SMS to all active, unused discount codes that have not been sent yet?');">
+            <button class="btn success">
+                Send SMS to All Unsent Discount Codes
+            </button>
+        </form>
+        """
+        if bulk_sms_locked == "0"
+        else """
+        <button class="btn secondary" type="button" disabled
+                title="Locked by High Admin"
+                style="opacity:.55;cursor:not-allowed">
+            Send SMS to All Unsent Discount Codes (Locked)
+        </button>
+        """
+    )
+
+    bulk_email_button_html = (
+        f"""
+        <form method="post"
+              action="{url_for('admission_discount_email_all')}"
+              onsubmit="return confirm('Send email to all students with active, unused discount codes that have not been emailed yet?');">
+            <button class="btn success">
+                Send Email to All Unsent Discount Codes
+            </button>
+        </form>
+        """
+        if bulk_email_locked == "0"
+        else """
+        <button class="btn secondary" type="button" disabled
+                title="Locked by High Admin"
+                style="opacity:.55;cursor:not-allowed">
+            Send Email to All Unsent Discount Codes (Locked)
+        </button>
+        """
+    )
+
     body = f"""
     {admission_nav()}
 
@@ -86478,14 +86660,15 @@ def admission_discounts():
             {"Unlocked" if delete_locked == "0" else "Locked by High Admin"}
         </div>
         
-        <div class="toolbar" style="margin-bottom:12px">
-            <form method="post"
-                  action="{url_for('admission_discount_sms_all')}"
-                  onsubmit="return confirm('Send SMS to all active, unused discount codes that have not been sent yet?');">
-                <button class="btn success">
-                    Send SMS to All Unsent Discount Codes
-                </button>
-            </form>
+        <div class="mini muted" style="margin-bottom:10px">
+            Bulk notifications:
+            SMS {"Unlocked" if bulk_sms_locked == "0" else "Locked by High Admin"}
+            · Email {"Unlocked" if bulk_email_locked == "0" else "Locked by High Admin"}
+        </div>
+
+        <div class="toolbar" style="margin-bottom:12px;gap:10px;flex-wrap:wrap">
+            {bulk_sms_button_html}
+            {bulk_email_button_html}
         </div>
 
         {create_form}
@@ -86533,12 +86716,13 @@ def admission_discounts():
                             <th>Status</th>
                             <th>Usage</th>
                             <th>SMS Status</th>
+                            <th>Email Status</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
 
                     <tbody>
-                        {coupon_rows or "<tr><td colspan='9'>No discount codes found.</td></tr>"}
+                        {coupon_rows or "<tr><td colspan='10'>No discount codes found.</td></tr>"}
                     </tbody>
                 </table>
             </div>
@@ -87058,6 +87242,19 @@ def admission_discount_sms_all():
     if r:
         return r
 
+    if get_setting("discounts_bulk_sms_locked", "0") == "1":
+        return page(
+            "Bulk Discount SMS Locked",
+            f"""
+            {admission_nav()}
+            <section class="card">
+                <h1>Bulk Discount SMS Locked</h1>
+                <p class="muted">High Admin has locked the bulk discount SMS button.</p>
+                <a class="btn secondary" href="{url_for('admission_discounts')}">Back to Discount Codes</a>
+            </section>
+            """
+        )
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -87154,6 +87351,196 @@ def admission_discount_sms_all():
             <a class="btn" href="{url_for('admission_discounts')}">
                 Back to Discount Codes
             </a>
+        </section>
+        """
+    )
+
+
+@app.post('/admission/discounts/email-all')
+def admission_discount_email_all():
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    if get_setting("discounts_bulk_email_locked", "0") == "1":
+        return page(
+            "Bulk Discount Email Locked",
+            f"""
+            {admission_nav()}
+            <section class="card">
+                <h1>Bulk Discount Email Locked</h1>
+                <p class="muted">High Admin has locked the bulk discount email button.</p>
+                <a class="btn secondary" href="{url_for('admission_discounts')}">Back to Discount Codes</a>
+            </section>
+            """
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            dc.id, dc.code, dc.discount_percent, dc.applies_to,
+            dc.discount_category, dc.source, dc.discount_scope_months,
+            dc.email_sent,
+            s.id AS student_id, s.full_name, s.email,
+            sub.name AS subject_name, sub.grade AS subject_grade
+        FROM discount_coupons dc
+        JOIN students s ON s.id = dc.target_student_id
+        LEFT JOIN subjects sub ON sub.id = dc.subject_id
+        WHERE dc.status='ACTIVE'
+          AND dc.used_count < dc.max_uses
+          AND COALESCE(dc.email_sent, 0) = 0
+        ORDER BY dc.created_at DESC
+    """)
+    rows = cur.fetchall()
+
+    queued_count = 0
+    already_queued_count = 0
+    missing_email_count = 0
+    failed_count = 0
+
+    for row in rows:
+        recipient_email = normalize_email_address(row["email"])
+        if not recipient_email:
+            missing_email_count += 1
+            continue
+
+        if row["subject_name"]:
+            applies_to_text = (
+                f"{grade_label(row['subject_grade'])} - {row['subject_name']}"
+                if row["subject_grade"] else row["subject_name"]
+            )
+        elif row["applies_to"] == "ANY_SUBJECT":
+            applies_to_text = "Any one selected subject"
+        elif row["applies_to"] == "SUBJECT":
+            applies_to_text = "The subject linked to this discount code"
+        else:
+            applies_to_text = "Eligible selected subject(s)"
+
+        category_text = (
+            row["discount_category"]
+            or ("Referral Reward" if row["source"] == "REFERRAL_REWARD" else "EBTA Discount")
+        )
+
+        dedupe_key = f"discount_coupon_email:{row['id']}"
+
+        cur.execute("""
+            SELECT id, status, retry_count
+            FROM email_queue
+            WHERE dedupe_key=?
+            LIMIT 1
+        """, (dedupe_key,))
+        existing_email = cur.fetchone()
+
+        if existing_email:
+            if existing_email["status"] == "SENT":
+                cur.execute("""
+                    UPDATE discount_coupons
+                    SET email_sent=1,
+                        email_sent_at=COALESCE(email_sent_at, ?),
+                        email_last_error=NULL
+                    WHERE id=?
+                """, (now_utc_iso(), row["id"]))
+                already_queued_count += 1
+                continue
+
+            if existing_email["status"] in ("PENDING", "SENDING"):
+                already_queued_count += 1
+                continue
+
+            if existing_email["status"] == "FAILED":
+                cur.execute("""
+                    UPDATE email_queue
+                    SET status='PENDING',
+                        retry_count=0,
+                        last_error=NULL,
+                        attempted_at=NULL
+                    WHERE id=?
+                """, (existing_email["id"],))
+                cur.execute("""
+                    UPDATE discount_coupons
+                    SET email_last_error=NULL,
+                        email_sent_by_role='admission',
+                        email_sent_by_id=?
+                    WHERE id=?
+                """, (session.get("admission_coordinator_id"), row["id"]))
+                queued_count += 1
+                continue
+
+        try:
+            queued = queue_email_notification(
+                recipient_email,
+                f"Your EBTA Discount Code - {row['code']}",
+                (
+                    "Congratulations. You have received an EBTA discount code. "
+                    "Use the code below in the Coupon / Referral Code section when enrolling."
+                ),
+                "discount_code",
+                recipient_name=row["full_name"],
+                details=[
+                    ("Discount Code", row["code"]),
+                    ("Discount", f"{row['discount_percent']}%"),
+                    ("Award / Category", category_text),
+                    ("Applies To", applies_to_text),
+                    (
+                        "Validity",
+                        "One month and one use"
+                        if int(row["discount_scope_months"] or 0) == 1
+                        else "One use while the code remains active"
+                    ),
+                ],
+                action_path="/",
+                action_label="Open EBTA Enrollment",
+                recipient_type="student",
+                related_type="discount_coupon",
+                related_id=row["id"],
+                dedupe_key=dedupe_key,
+                conn=conn,
+                force=True
+            )
+
+            if queued:
+                cur.execute("""
+                    UPDATE discount_coupons
+                    SET email_sent_by_role='admission',
+                        email_sent_by_id=?,
+                        email_last_error=NULL
+                    WHERE id=?
+                """, (session.get("admission_coordinator_id"), row["id"]))
+                queued_count += 1
+            else:
+                failed_count += 1
+
+        except Exception as exc:
+            print("Bulk discount email queue error:", exc, flush=True)
+            cur.execute("""
+                UPDATE discount_coupons
+                SET email_last_error=?
+                WHERE id=?
+            """, (str(exc)[:300], row["id"]))
+            failed_count += 1
+
+    conn.commit()
+    conn.close()
+
+    return page(
+        "Bulk Discount Email Queued",
+        f"""
+        {admission_nav()}
+        <section class="card">
+            <h1>Bulk Discount Email Queued</h1>
+            <div class="card soft" style="border-left:5px solid #1b5e20">
+                <p><b>Queued for sending:</b> {queued_count}</p>
+                <p><b>Already queued / already sent:</b> {already_queued_count}</p>
+                <p><b>Skipped because no valid student email is saved:</b> {missing_email_count}</p>
+                <p><b>Could not queue:</b> {failed_count}</p>
+                <p class="muted">
+                    Emails are processed by the EBTA background email worker so the portal stays responsive.
+                    Failed email deliveries are retried automatically.
+                </p>
+            </div>
+            <a class="btn" href="{url_for('admission_discounts')}">Back to Discount Codes</a>
         </section>
         """
     )
