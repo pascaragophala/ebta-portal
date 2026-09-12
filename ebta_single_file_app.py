@@ -28116,10 +28116,14 @@ def tutor_home():
                  AND kind != 'assignment'
                 THEN 1 ELSE 0
             END) AS document_count
-        FROM materials
-        WHERE tutor_id=?
-          AND month LIKE ?
-    """, (tid, month + "%"))
+        FROM materials m
+        WHERE m.subject_id IN (
+            SELECT subject_id
+            FROM tutor_subjects
+            WHERE tutor_id=?
+        )
+          AND substr(m.month,1,7)=?
+    """, (tid, month))
 
     upload_stats = cur.fetchone()
 
@@ -28132,9 +28136,9 @@ def tutor_home():
     <div class="card" style="border-left:5px solid #2563eb">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
             <div>
-                <h2 style="margin-bottom:4px">Your Upload Library</h2>
+                <h2 style="margin-bottom:4px">My Library</h2>
                 <p class="muted">
-                    View and manage your uploaded assignments, recordings, and documents for {pretty_month_label(month)}.
+                    View materials available for your assigned subjects in {pretty_month_label(month)}, including resources uploaded by previous tutors.
                 </p>
             </div>
 
@@ -30001,17 +30005,75 @@ def tutor_uploads_library():
         return r
 
     tid = is_tutor()
-    month = get_active_month('tutor')
 
     q = request.args.get("q", "").strip()
     kind = request.args.get("kind", "all").strip()
+    requested_month = request.args.get("month", "").strip()
 
     if kind not in ["all", "assignments", "recordings", "documents"]:
         kind = "all"
 
+    conn = get_db()
+    cur = conn.cursor()
+
+    # The library belongs to the tutor's CURRENT SUBJECT ASSIGNMENTS rather
+    # than to the tutor account that originally uploaded each material.
+    # This preserves continuity when a tutor leaves and a new tutor takes over.
+    cur.execute("""
+        SELECT DISTINCT
+            substr(m.month,1,7) AS month_key
+        FROM materials m
+        WHERE m.subject_id IN (
+            SELECT subject_id
+            FROM tutor_subjects
+            WHERE tutor_id=?
+        )
+          AND m.month IS NOT NULL
+          AND length(trim(m.month)) >= 7
+        ORDER BY month_key DESC
+    """, (tid,))
+
+    content_months = [
+        row["month_key"]
+        for row in cur.fetchall()
+        if row["month_key"] and re.match(r"^\d{4}-\d{2}$", row["month_key"])
+    ]
+
+    # Also expose every calendar month in the current/system year so tutors can
+    # move freely between months even before content is uploaded.
+    system_month = get_setting("current_month") or datetime.datetime.now(
+        ZoneInfo("Africa/Johannesburg")
+    ).strftime("%Y-%m")
+
+    try:
+        system_year = int(str(system_month).split("-")[0])
+    except Exception:
+        system_year = datetime.datetime.now(
+            ZoneInfo("Africa/Johannesburg")
+        ).year
+
+    calendar_months = all_months_for_year(system_year)
+    available_months = sorted(
+        set(content_months + calendar_months),
+        reverse=True
+    )
+
+    # "all" is supported for tutors who want to browse the whole subject archive.
+    if requested_month == "all":
+        month = "all"
+    elif re.match(r"^\d{4}-\d{2}$", requested_month):
+        month = requested_month
+    else:
+        active_month = get_active_month("tutor")
+        month = (
+            active_month
+            if re.match(r"^\d{4}-\d{2}$", str(active_month or ""))
+            else system_month
+        )
+
     try:
         page_num = int(request.args.get("page", 1))
-    except:
+    except Exception:
         page_num = 1
 
     if page_num < 1:
@@ -30020,15 +30082,18 @@ def tutor_uploads_library():
     per_page = 10
     offset = (page_num - 1) * per_page
 
-    conn = get_db()
-    cur = conn.cursor()
-
     where = [
-        "m.tutor_id = ?",
-        "m.month LIKE ?"
+        """m.subject_id IN (
+            SELECT subject_id
+            FROM tutor_subjects
+            WHERE tutor_id=?
+        )"""
     ]
+    params = [tid]
 
-    params = [tid, month + "%"]
+    if month != "all":
+        where.append("substr(m.month,1,7)=?")
+        params.append(month)
 
     if q:
         search = f"%{q}%"
@@ -30038,9 +30103,10 @@ def tutor_uploads_library():
                 OR s.name LIKE ?
                 OR s.grade LIKE ?
                 OR m.kind LIKE ?
+                OR COALESCE(uploader.full_name,'') LIKE ?
             )
         """)
-        params += [search, search, search, search]
+        params += [search, search, search, search, search]
 
     if kind == "assignments":
         where.append("(m.is_assignment = 1 OR m.kind = 'assignment')")
@@ -30063,6 +30129,7 @@ def tutor_uploads_library():
         SELECT COUNT(*) AS c
         FROM materials m
         JOIN subjects s ON s.id = m.subject_id
+        LEFT JOIN tutors uploader ON uploader.id = m.tutor_id
         {where_sql}
     """, params)
 
@@ -30080,11 +30147,15 @@ def tutor_uploads_library():
         SELECT
             m.*,
             s.name AS subject_name,
-            s.grade
+            s.grade,
+            uploader.full_name AS uploader_name,
+            COALESCE(uploader.is_active,1) AS uploader_is_active,
+            uploader.deleted_at AS uploader_deleted_at
         FROM materials m
         JOIN subjects s ON s.id = m.subject_id
+        LEFT JOIN tutors uploader ON uploader.id = m.tutor_id
         {where_sql}
-        ORDER BY m.created_at DESC
+        ORDER BY substr(m.month,1,7) DESC, s.grade, s.name, m.created_at DESC
         LIMIT ? OFFSET ?
     """, data_params)
 
@@ -30105,6 +30176,7 @@ def tutor_uploads_library():
 
     for m in rows:
         when = (m["created_at"] or "")[:16].replace("T", " ")
+        material_month = substr_month = str(m["month"] or "")[:7]
 
         is_assignment = (m["is_assignment"] == 1 or m["kind"] == "assignment")
         is_recording = bool(m["youtube_url"])
@@ -30149,7 +30221,9 @@ def tutor_uploads_library():
         </a>
         """
 
-        if can_delete(m["created_at"], m["admin_unlocked"]):
+        is_original_uploader = int(m["tutor_id"] or 0) == int(tid)
+
+        if is_original_uploader and can_delete(m["created_at"], m["admin_unlocked"]):
             action = f"""
             <form method="post"
                   action="{url_for('tutor_delete_material', mid=m['id'])}"
@@ -30158,8 +30232,22 @@ def tutor_uploads_library():
                 <button class="btn danger mini">Delete</button>
             </form>
             """
+        elif is_original_uploader:
+            action = "<span class='muted mini'>Delete locked</span>"
         else:
-            action = "<span class='muted mini'>Locked</span>"
+            action = "<span class='chip active'>Subject Library</span>"
+
+        uploader_name = m["uploader_name"] or "Previous tutor"
+        inherited_label = ""
+
+        if not is_original_uploader:
+            inherited_label = """
+            <span class="chip" style="margin-left:5px">Inherited</span>
+            """
+
+        uploader_state = ""
+        if m["uploader_deleted_at"] or int(m["uploader_is_active"] or 0) != 1:
+            uploader_state = " · Previous tutor"
 
         trs += f"""
         <tr>
@@ -30172,6 +30260,11 @@ def tutor_uploads_library():
                 <strong>{icon} {escape(m['title'] or 'Untitled')}</strong>
                 <div class="mini muted">
                     {grade_label(m['grade'])} — {escape(m['subject_name'])}
+                </div>
+                <div class="mini muted" style="margin-top:4px">
+                    {escape(pretty_month_label(material_month))}
+                    · Uploaded by {escape(uploader_name)}{escape(uploader_state)}
+                    {inherited_label}
                 </div>
             </td>
 
@@ -30201,14 +30294,33 @@ def tutor_uploads_library():
         <option value="documents" {'selected' if kind == 'documents' else ''}>Documents</option>
     """
 
+    month_options = (
+        f"<option value='all' {'selected' if month == 'all' else ''}>All Months</option>"
+        + "".join(
+            f"<option value='{escape(m_key, quote=True)}' "
+            f"{'selected' if m_key == month else ''}>"
+            f"{escape(pretty_month_label(m_key))}"
+            f"{' ✓' if m_key in content_months else ' (no uploads)'}"
+            f"</option>"
+            for m_key in available_months
+        )
+    )
+
+    selected_month_label = (
+        "All Months"
+        if month == "all"
+        else pretty_month_label(month)
+    )
+
     body = f"""
 
     <section class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
             <div>
-                <h1>Upload Library</h1>
+                <h1>My Library</h1>
                 <p class="muted">
-                    Manage your uploaded assignments, recordings, documents and resources for {pretty_month_label(month)}.
+                    Browse the complete material history for your currently assigned subjects.
+                    Resources stay with the subject even when tutors change.
                 </p>
             </div>
 
@@ -30217,10 +30329,51 @@ def tutor_uploads_library():
             </a>
         </div>
 
+        <div class="card soft"
+             style="border-left:5px solid #2563eb;margin-top:14px;margin-bottom:14px">
+            <div style="font-weight:700;font-size:16px;margin-bottom:5px">
+                Library Month
+            </div>
+
+            <div class="mini muted" style="margin-bottom:10px">
+                Switch to any month to view historical material for your assigned subjects.
+            </div>
+
+            <form method="get"
+                  action="{url_for('tutor_uploads_library')}"
+                  style="display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:10px;align-items:end">
+
+                <input type="hidden" name="q" value="{escape(q, quote=True)}">
+                <input type="hidden" name="kind" value="{escape(kind, quote=True)}">
+
+                <div>
+                    <label>Viewing</label>
+                    <select name="month"
+                            onchange="this.form.submit()"
+                            style="width:100%;padding:11px;border-radius:9px">
+                        {month_options}
+                    </select>
+                </div>
+
+                <button class="btn success">
+                    Open Month
+                </button>
+            </form>
+        </div>
+
+        <div class="card soft" style="border-left:5px solid #16a34a;margin-bottom:14px">
+            <strong>{escape(selected_month_label)}</strong>
+            <div class="mini muted">
+                Showing materials by subject, not only material uploaded by the currently logged-in tutor.
+            </div>
+        </div>
+
         <form method="get" class="toolbar" style="margin-top:14px">
+            <input type="hidden" name="month" value="{escape(month, quote=True)}">
+
             <input name="q"
                    value="{escape(q)}"
-                   placeholder="Search title, subject, grade or type">
+                   placeholder="Search title, subject, grade, type or uploader">
 
             <select name="kind">
                 {kind_options}
@@ -30228,23 +30381,29 @@ def tutor_uploads_library():
 
             <button class="btn mini">Search</button>
 
-            <a class="btn mini secondary" href="{url_for('tutor_uploads_library')}">
-                Clear
+            <a class="btn mini secondary"
+               href="{url_for('tutor_uploads_library')}?month={escape(month, quote=True)}">
+                Clear Search
             </a>
         </form>
 
         <div class="mini muted" style="margin:10px 0">
-            Showing {len(rows)} of {total_records} upload(s).
+            Showing {len(rows)} of {total_records} material item(s).
         </div>
 
-        {pagination_controls("/tutor/uploads", page_num, total_pages, {"q": q, "kind": kind})}
+        {pagination_controls(
+            "/tutor/uploads",
+            page_num,
+            total_pages,
+            {"q": q, "kind": kind, "month": month}
+        )}
 
         <div class="scroll-x">
             <table>
                 <thead>
                     <tr>
                         <th>Type</th>
-                        <th>Upload</th>
+                        <th>Material</th>
                         <th>File / Link</th>
                         <th>Views</th>
                         <th>Uploaded</th>
@@ -30253,16 +30412,21 @@ def tutor_uploads_library():
                 </thead>
 
                 <tbody>
-                    {trs or "<tr><td colspan='6'>No uploads found.</td></tr>"}
+                    {trs or "<tr><td colspan='6'>No materials found for this month.</td></tr>"}
                 </tbody>
             </table>
         </div>
 
-        {pagination_controls("/tutor/uploads", page_num, total_pages, {"q": q, "kind": kind})}
+        {pagination_controls(
+            "/tutor/uploads",
+            page_num,
+            total_pages,
+            {"q": q, "kind": kind, "month": month}
+        )}
     </section>
     """
 
-    return page("Tutor Upload Library", body)
+    return page("Tutor My Library", body)
 
 
 @app.get('/tutor/material/<int:mid>/views')
@@ -30277,11 +30441,22 @@ def tutor_material_views(mid):
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT m.*, s.name AS subject_name, s.grade
+        SELECT
+            m.*,
+            s.name AS subject_name,
+            s.grade,
+            uploader.full_name AS uploader_name
         FROM materials m
         JOIN subjects s ON s.id = m.subject_id
+        LEFT JOIN tutors uploader ON uploader.id = m.tutor_id
         WHERE m.id = ?
-          AND m.tutor_id = ?
+          AND EXISTS (
+              SELECT 1
+              FROM tutor_subjects ts
+              WHERE ts.tutor_id=?
+                AND ts.subject_id=m.subject_id
+          )
+        LIMIT 1
     """, (mid, tid))
 
     material = cur.fetchone()
@@ -43052,9 +43227,14 @@ def admin_tutor_delete(tid: int):
         conn.close()
         return page("Error", card_msg("Tutor not found."))
 
-    # Archive ONLY the login account. Keep sessions, attendance, subject
-    # assignments, manager assignments, materials, submissions, ratings,
-    # referrals, messages and every uploaded file/history record.
+    # Archive ONLY the tutor login account.
+    #
+    # IMPORTANT DATA-RETENTION RULE:
+    # Never delete this tutor's materials or uploaded files here. Teaching
+    # materials remain attached to their subject so a replacement tutor can
+    # browse the historical library by month after being assigned that subject.
+    # Keep sessions, attendance, subject assignments, manager assignments,
+    # materials, submissions, ratings, referrals, messages and uploads.
     cur.execute("""
         UPDATE tutors
         SET is_active=0,
