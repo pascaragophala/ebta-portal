@@ -10457,7 +10457,8 @@ overflow:auto;
 .side-links a{
 display:block; text-decoration:none; padding:10px 12px;
 border:1px solid var(--border); border-radius:12px; font-weight:600;
-color:var(--text); background:#fff; transition:var(--transition)
+color:var(--text); background:#fff; transition:var(--transition);
+position:relative; z-index:2; pointer-events:auto; cursor:pointer;
 }
 .side-links a:hover{transform:translateY(-1px); box-shadow:var(--shadow-sm); border-color:var(--primary)}
 .stats-mini{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px}
@@ -10485,6 +10486,13 @@ background: linear-gradient(135deg,#ffd54f,#2e7d32);
 -webkit-mask-composite: xor; mask-composite: exclude;
 }
 .side-links a.active{ outline:2px solid #2e7d32; background:#f0fff4; }
+
+/* Keep current Admin/Student/Tutor sidebar destination visibly active. */
+.side-links a[aria-current="page"]{
+outline:2px solid #2e7d32;
+background:#f0fff4;
+border-color:#2e7d32;
+}
 
 /* === EBTA wide-mode & sidebar collapse enhancements (kept INSIDE <style>) === */
 :root { --page-max: 1280px; }
@@ -14530,7 +14538,7 @@ EBTA_UNIFIED_UI_JS = """
 # FAST SHARED PAGE SHELL
 # =============================================================
 # UI visibility/cache hardening: 2026-09-11
-_EBTA_UI_ASSET_VERSION = "20260911-visibility1"
+_EBTA_UI_ASSET_VERSION = "20260912-sidebar1"
 _EBTA_SIDEBAR_CACHE = {}
 _EBTA_SIDEBAR_CACHE_LOCK = threading.Lock()
 _EBTA_SIDEBAR_CACHE_TTL = 12.0
@@ -15389,12 +15397,12 @@ def page(title, body_html, extra_head="", extra_js=""):
 
                 links.extend([
                     ("👤 My Profile", url_for('student_profile_page')),
-                    ("✅ Status", "#status"),
+                    ("✅ Status", url_for('student_home') + "#status"),
                     ("📝 Assignments", url_for('student_assignments')),
                     ("🧪 Assessments", url_for('student_assessments')),
                     ("🎮 Learning Games", url_for('student_learning_games')),
                     ("📚 Learning Materials", url_for('student_materials')),
-                    ("💬 Messages", "#messages"),
+                    ("💬 Messages", url_for('student_home') + "#messages"),
                     ("📤 Upload Report", url_for('student_upload_report')),
                     ("📄 My Reports", url_for('student_my_reports')),
                     ("🤝 My 1-on-1 Requests", url_for('one_on_one_my_requests')),
@@ -15664,19 +15672,30 @@ def page(title, body_html, extra_head="", extra_js=""):
 
                 role_title, user_name = "Admin", "Administrator"
 
+                # Use real routes in the Admin/High Admin sidebar.
+                # The old hash-only links (for example #students and #tutors)
+                # depended on matching cards being present on the current page,
+                # so they did nothing on most admin sub-pages.
                 links = [
-                    ("Manage enrollments", "#enrollments"),
-                    ("Students", "#students"),
-                    ("Tutors", "#tutors"),
-                    ("Group links", "#groups"),
-                    ("Sessions & QR", "#sessions"),
-                    ("Inbox", "#inbox"),
-                    ("Direct messages", "#messages"),
+                    ("Dashboard", url_for('admin_home')),
+                    ("Manage enrollments", url_for('admin_enrollments')),
+                    ("Students", url_for('admin_students')),
+                    ("Inbox", url_for('admin_messages')),
+                    ("Direct messages", url_for('admin_direct_messages')),
                     ("Student Reports", url_for('admin_reports')),
-                    ("Analytics", "#analytics"),
-                    ("Settings", url_for('admin_settings')),
-                    ("Logout", url_for('admin_logout'))
                 ]
+
+                if is_high_admin():
+                    links.extend([
+                        ("Tutors", url_for('admin_tutors')),
+                        ("Group links", url_for('admin_groups')),
+                        ("Sessions & QR", url_for('admin_sessions')),
+                        ("Analytics", url_for('admin_analytics')),
+                        ("WhatsApp Bot", url_for('admin_whatsapp_bot')),
+                        ("Settings", url_for('admin_settings')),
+                    ])
+
+                links.append(("Logout", url_for('admin_logout')))
 
                 stats_grid = f"""
                 <div class='stats-mini'>
@@ -15747,8 +15766,25 @@ def page(title, body_html, extra_head="", extra_js=""):
             pass
 
     if role_title:
+        def _sidebar_link_html(label, href):
+            try:
+                href_text = str(href or "")
+                href_path = href_text.split("#", 1)[0].split("?", 1)[0] or request.path
+                # Fragment links point to a section on a page, so the server
+                # cannot know which fragment is active. Only mark full-page
+                # destinations as the current sidebar page.
+                is_current = ("#" not in href_text) and (href_path == request.path)
+            except Exception:
+                is_current = False
+
+            current_attr = " aria-current='page'" if is_current else ""
+            return (
+                f"<a class='portal-menu-link' href='{escape(str(href), quote=True)}'"
+                f"{current_attr} onclick='closePortalMenu()'>{label}</a>"
+            )
+
         links_html = "".join([
-            f"<a class='portal-menu-link' href='{href}' onclick='closePortalMenu()'>{label}</a>"
+            _sidebar_link_html(label, href)
             for (label, href) in links
         ])
 
