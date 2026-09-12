@@ -121270,6 +121270,37 @@ def whatsapp_bot_rule_reply(
         phone
     )
 
+    # Exact menu commands stay available during an enrollment. This prevents
+    # commands such as SUBJECTS from being stored as learner answers.
+    if clean in {"", "hi", "hello", "hey", "start", "menu", "help"}:
+        menu_text = whatsapp_bot_menu(conn)
+        if active_draft:
+            menu_text += "\n\nYour unfinished enrollment is still saved. Reply RESET to clear it."
+        return menu_text
+
+    if clean == "subjects":
+        return whatsapp_bot_subjects_reply(conn, message_text)
+
+    if clean in {"fees", "fee", "prices", "price", "costs", "cost"}:
+        return whatsapp_bot_fee_reply()
+
+    if clean in {"payment", "bank", "banking", "bank details", "banking details"}:
+        return whatsapp_bot_payment_reply(conn)
+
+    if clean in {"registration", "annual registration"}:
+        return (
+            "EBTA annual registration is R50 for a learner who is "
+            "not yet registered for the current year. During a WhatsApp "
+            "enrollment the bot checks this automatically and includes it "
+            "in the total when it is due."
+        )
+
+    if clean == "status":
+        return (
+            "After a WhatsApp enrollment is submitted, I send you an enrollment status link. "
+            "You can also use the Student Portal:\n" + whatsapp_bot_base_url() + "/student/login"
+        )
+
     if active_draft:
         return whatsapp_enrollment_handle(
             conn,
@@ -121288,7 +121319,6 @@ def whatsapp_bot_rule_reply(
         "enrollment",
         "enrolment",
         "register",
-        "registration",
         "start enrollment",
         "start enrolment",
         "start registration",
@@ -121340,6 +121370,13 @@ def whatsapp_bot_rule_reply(
     parsed_grade = whatsapp_enrollment_parse_grade(
         message_text
     )
+
+    # Natural follow-up to SUBJECTS: a bare grade such as 8 or Grade 12.
+    if parsed_grade and re.fullmatch(
+        r"(?:(?:grade\s*)?(?:8|9|10|11|12|13)|g(?:8|9|10|11|12|13)|upgrading)",
+        clean
+    ):
+        return whatsapp_enrollment_subject_prompt(conn, parsed_grade)
 
     if parsed_grade and (
         "what do you offer" in clean
@@ -121672,6 +121709,10 @@ def _whatsapp_mark_queue_failed(queue_id, exc):
             WHERE id=?
         """, (retry_count, str(exc)[:700], queue_id))
         conn.commit()
+        print(
+            f"[EBTA WHATSAPP FAILED] queue_id={queue_id} retry={retry_count} error={str(exc)[:500]}",
+            flush=True
+        )
     except Exception:
         try:
             conn.rollback()
@@ -121703,7 +121744,11 @@ def whatsapp_bot_process_one():
                   FROM whatsapp_bot_queue earlier
                   WHERE earlier.phone=q.phone
                     AND earlier.id < q.id
-                    AND earlier.status IN ('PENDING','FAILED','PROCESSING')
+                    AND (
+                        earlier.status='PROCESSING'
+                        OR earlier.status='PENDING'
+                        OR (earlier.status='FAILED' AND earlier.retry_count < 3)
+                    )
               )
             ORDER BY q.id
             LIMIT 1
@@ -121792,6 +121837,37 @@ def whatsapp_bot_process_one():
         finish_conn.close()
 
 
+def whatsapp_bot_recover_stale_queue():
+    """Recover jobs abandoned when a previous deploy stopped mid-message."""
+    conn = _whatsapp_real_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE whatsapp_bot_queue
+            SET status='PENDING',
+                last_error=CASE
+                    WHEN COALESCE(last_error,'')=''
+                    THEN 'Recovered automatically after worker restart.'
+                    ELSE last_error
+                END
+            WHERE status='PROCESSING'
+        """)
+        recovered = int(cur.rowcount or 0)
+        conn.commit()
+        if recovered:
+            print(f"[EBTA WHATSAPP] recovered {recovered} abandoned queue item(s)", flush=True)
+        return recovered
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f"[EBTA WHATSAPP] queue recovery warning: {str(exc)[:300]}", flush=True)
+        return 0
+    finally:
+        conn.close()
+
+
 def whatsapp_bot_worker():
     while True:
         try:
@@ -121806,10 +121882,19 @@ def whatsapp_bot_worker():
                 time.sleep(0.02)
                 continue
 
-            WHATSAPP_BOT_WAKE_EVENT.wait(timeout=5.0)
+            # Gunicorn workers are separate processes. A webhook handled by a
+            # non-owner process cannot set the owner's in-memory Event, so keep
+            # a short indexed queue poll as an inter-process fallback.
+            try:
+                idle_wait = float(os.environ.get('EBTA_WHATSAPP_POLL_SECONDS', '0.5') or 0.5)
+            except Exception:
+                idle_wait = 0.5
+            idle_wait = max(0.20, min(idle_wait, 2.0))
+            WHATSAPP_BOT_WAKE_EVENT.wait(timeout=idle_wait)
             WHATSAPP_BOT_WAKE_EVENT.clear()
-        except Exception:
-            WHATSAPP_BOT_WAKE_EVENT.wait(timeout=1.0)
+        except Exception as exc:
+            print(f"[EBTA WHATSAPP WORKER] {str(exc)[:500]}", flush=True)
+            WHATSAPP_BOT_WAKE_EVENT.wait(timeout=0.5)
             WHATSAPP_BOT_WAKE_EVENT.clear()
 
 
@@ -121950,6 +122035,15 @@ def admin_whatsapp_bot():
     """)
 
     recent = cur.fetchall()
+
+    cur.execute("""
+        SELECT id, phone, status, retry_count, last_error, attempted_at, created_at
+        FROM whatsapp_bot_queue
+        WHERE status IN ('FAILED','PROCESSING')
+        ORDER BY id DESC
+        LIMIT 20
+    """)
+    queue_issues = cur.fetchall()
     conn.close()
 
     rows = ""
@@ -121991,6 +122085,34 @@ def admin_whatsapp_bot():
             "No WhatsApp bot messages yet."
             "</td></tr>"
         )
+
+    queue_issue_rows = ""
+    for item in queue_issues:
+        queue_issue_rows += f"""
+        <tr>
+            <td>{int(item['id'])}</td>
+            <td>{escape(whatsapp_bot_mask_phone(item['phone']))}</td>
+            <td>{escape(item['status'] or '')}</td>
+            <td>{int(item['retry_count'] or 0)}</td>
+            <td style='max-width:520px;white-space:normal;word-break:break-word'>{escape(item['last_error'] or '—')}</td>
+            <td class='mini'>{escape((item['attempted_at'] or item['created_at'] or '')[:19].replace('T',' '))}</td>
+        </tr>
+        """
+
+    queue_diagnostics_html = ""
+    if queue_issue_rows:
+        queue_diagnostics_html = f"""
+        <section class='card'>
+            <h2>Queue Issues</h2>
+            <p class='mini muted'>Failed/interrupted WhatsApp jobs and the actual bot/Meta API error.</p>
+            <div class='scroll-x'>
+                <table style='min-width:850px'>
+                    <thead><tr><th>Queue ID</th><th>Number</th><th>Status</th><th>Retries</th><th>Last error</th><th>Last attempt</th></tr></thead>
+                    <tbody>{queue_issue_rows}</tbody>
+                </table>
+            </div>
+        </section>
+        """
 
     configured_items = [
         ("Access Token", bool(cfg["access_token"])),
@@ -122052,6 +122174,7 @@ def admin_whatsapp_bot():
             {stat('Pending', counts.get('PENDING',0))}
             {stat('Done', counts.get('DONE',0))}
             {stat('Failed', counts.get('FAILED',0))}
+            {stat('Processing', counts.get('PROCESSING',0))}
             {stat('Enrollments in Progress', active_enrollments)}
         </div>
     </section>
@@ -122116,6 +122239,8 @@ def admin_whatsapp_bot():
         </div>
     </section>
 
+    {queue_diagnostics_html}
+
     <section class='card'>
         <div style='display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap'>
             <h2 style='margin:0'>Recent Bot Messages</h2>
@@ -122124,7 +122249,7 @@ def admin_whatsapp_bot():
                   action='{url_for("admin_whatsapp_bot_retry")}'
                   style='margin:0'>
                 <button class='btn mini secondary'>
-                    Retry Failed
+                    Retry Failed / Stuck
                 </button>
             </form>
         </div>
@@ -122229,6 +122354,7 @@ def admin_whatsapp_bot_retry():
 # Process different conversations in parallel while preserving each phone's order.
 # Only the elected Gunicorn process owns these workers.
 if ebta_background_worker_owner() and not globals().get("_whatsapp_bot_worker_started"):
+    whatsapp_bot_recover_stale_queue()
     try:
         _whatsapp_worker_count = int(os.environ.get("EBTA_WHATSAPP_WORKERS", "2"))
     except Exception:
