@@ -119746,8 +119746,7 @@ def admission_school_movement():
 
 
 # =============================================================
-# FREE RULE-BASED WHATSAPP ENROLLMENT BOT
-# No OpenAI API is required.
+# WHATSAPP ENROLLMENT BOT
 # =============================================================
 
 WHATSAPP_ENROLLMENT_MEDIA_MIME_MAP = {
@@ -123090,7 +123089,7 @@ def admin_whatsapp_bot():
             <div>
                 <h1 style='margin-bottom:4px'>WhatsApp Enrollment Bot</h1>
                 <p class='muted' style='margin-top:0'>
-                    Rule-based enrollment assistant. No OpenAI API is required.
+                    Automated WhatsApp enrollment assistant for learner support and enrollment.
                 </p>
             </div>
             {ready_chip}
@@ -123161,7 +123160,6 @@ def admin_whatsapp_bot():
             WHATSAPP_GRAPH_VERSION,
             EBTA_WHATSAPP_BOT_NUMBER,
             EBTA_PORTAL_BASE_URL.
-            No OpenAI key is required.
         </div>
     </section>
 
