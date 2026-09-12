@@ -6001,6 +6001,88 @@ def set_setting(key, value):
         _SETTINGS_CACHE.pop(key, None)
 
 
+# =============================================================
+# GLOBAL OUTBOUND COMMUNICATION CONTROL
+# =============================================================
+# High Admin can pause SMS and/or email across the entire portal.
+# Queued messages are preserved and resume when the channel is enabled again.
+EMAIL_QUEUE_WAKE_EVENT = threading.Event()
+
+
+class OutboundChannelPaused(RuntimeError):
+    """Raised when High Admin has globally paused an outbound channel."""
+    pass
+
+
+_OUTBOUND_CHANNEL_SETTING_KEYS = {
+    "sms": "outbound_sms_enabled",
+    "email": "outbound_email_enabled",
+}
+
+
+def outbound_channel_enabled(channel, fresh=False):
+    """
+    Return True when the requested outbound channel is enabled.
+
+    fresh=True bypasses the small settings cache and reads SQLite directly.
+    The actual network send functions use fresh=True so a High Admin pause
+    takes effect across all Gunicorn workers as soon as the setting is saved.
+    """
+    channel = str(channel or "").strip().lower()
+    key = _OUTBOUND_CHANNEL_SETTING_KEYS.get(channel)
+
+    if not key:
+        return True
+
+    if not fresh:
+        return get_setting(key, "1") == "1"
+
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=2.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=2000")
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key=? LIMIT 1",
+            (key,)
+        ).fetchone()
+        return (row["value"] if row else "1") == "1"
+    except Exception:
+        # Failing open avoids taking portal workflows down because of a
+        # transient settings read. The sender checks again before provider I/O.
+        return get_setting(key, "1") == "1"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def set_outbound_channel_enabled(channel, enabled, changed_by="High Admin"):
+    channel = str(channel or "").strip().lower()
+    key = _OUTBOUND_CHANNEL_SETTING_KEYS.get(channel)
+
+    if not key:
+        raise ValueError("Unknown outbound communication channel.")
+
+    set_setting(key, "1" if enabled else "0")
+    set_setting(f"{key}_changed_at", now_utc_iso())
+    set_setting(f"{key}_changed_by", str(changed_by or "High Admin"))
+
+    # Wake the queue immediately when a channel is resumed.
+    if enabled:
+        if channel == "sms":
+            try:
+                SMS_QUEUE_WAKE_EVENT.set()
+            except Exception:
+                pass
+        elif channel == "email":
+            try:
+                EMAIL_QUEUE_WAKE_EVENT.set()
+            except Exception:
+                pass
+
 
 # =============================================================
 # EMAIL NOTIFICATIONS
@@ -6151,6 +6233,10 @@ def queue_email_notification(recipient_email, subject, message, event_key,
         ))
         if own:
             conn.commit()
+        try:
+            EMAIL_QUEUE_WAKE_EVENT.set()
+        except Exception:
+            pass
         return True
     except sqlite3.IntegrityError:
         if own:
@@ -6463,6 +6549,11 @@ def email_smtp_ready(conn=None):
 
 
 def send_email_queue_row(row):
+    if not outbound_channel_enabled("email", fresh=True):
+        raise OutboundChannelPaused(
+            "Outbound email is paused by High Admin."
+        )
+
     cfg=email_smtp_config()
     if not email_smtp_ready(): raise RuntimeError("Email SMTP is not configured.")
     msg=EmailMessage(); msg["Subject"]=row["subject"]; msg["From"]=formataddr((cfg["sender_name"],cfg["sender_email"])); msg["To"]=row["recipient_email"]
@@ -6473,13 +6564,20 @@ def send_email_queue_row(row):
     try:
         smtp.ehlo()
         if cfg["security"]=="STARTTLS": smtp.starttls(); smtp.ehlo()
-        smtp.login(cfg["username"],cfg["password"]); smtp.send_message(msg)
+        smtp.login(cfg["username"],cfg["password"])
+        if not outbound_channel_enabled("email", fresh=True):
+            raise OutboundChannelPaused(
+                "Outbound email was paused before provider delivery."
+            )
+        smtp.send_message(msg)
     finally:
         try: smtp.quit()
         except Exception: pass
 
 
 def process_email_queue(batch_size=25):
+    if not outbound_channel_enabled("email", fresh=True):
+        return 0
     if not email_smtp_ready(): return 0
     conn=sqlite3.connect(DB_PATH,timeout=10.0); conn.row_factory=sqlite3.Row
     try: conn.execute("PRAGMA busy_timeout=10000")
@@ -6499,6 +6597,9 @@ def process_email_queue(batch_size=25):
     ids=[int(r["id"]) for r in cur.fetchall()]
     processed=0
     for email_id in ids:
+        if not outbound_channel_enabled("email", fresh=True):
+            break
+
         row = None
         try:
             cur.execute("UPDATE email_queue SET status='SENDING',attempted_at=? WHERE id=? AND status IN ('PENDING','FAILED') AND retry_count<5",(now_utc_iso(),email_id))
@@ -6523,6 +6624,20 @@ def process_email_queue(batch_size=25):
                     pass
 
             conn.commit(); processed+=1
+        except OutboundChannelPaused:
+            try:
+                cur.execute("""
+                    UPDATE email_queue
+                    SET status='PENDING',
+                        attempted_at=NULL,
+                        last_error=NULL
+                    WHERE id=?
+                """, (email_id,))
+                conn.commit()
+            except Exception:
+                try: conn.rollback()
+                except Exception: pass
+            break
         except Exception as exc:
             try:
                 error_text = str(exc)[:500]
@@ -10291,6 +10406,10 @@ def expected_class_dates_for_subject(cur, subject_id, tutor_id, month, expected_
 # ===================== Notifications (Email & SMS) ==============
 def send_email_notification(to_email: str, subject: str, body: str):
     # Best-effort email sender.
+    if not outbound_channel_enabled("email", fresh=True):
+        raise OutboundChannelPaused(
+            "Outbound email is paused by High Admin."
+        )
     # Uses SMTP settings from environment if configured, otherwise logs into the messages table.
     # Env vars for real sending:
     #   EBTA_SMTP_HOST, EBTA_SMTP_PORT, EBTA_SMTP_USER, EBTA_SMTP_PASS, EBTA_SMTP_FROM (optional, falls back to user).
@@ -10335,7 +10454,13 @@ def send_email_notification(to_email: str, subject: str, body: str):
             s.starttls()
             s.ehlo()
             s.login(user, pwd)
+            if not outbound_channel_enabled("email", fresh=True):
+                raise OutboundChannelPaused(
+                    "Outbound email was paused before provider delivery."
+                )
             s.send_message(msg)
+    except OutboundChannelPaused:
+        raise
     except Exception as e:
         # Log error so admin can see what went wrong
         try:
@@ -10354,6 +10479,10 @@ def send_email_notification(to_email: str, subject: str, body: str):
 
 def send_sms_notification(to_phone: str, body: str):
     # Best-effort SMS sender with automatic SA phone normalization.
+    if not outbound_channel_enabled("sms", fresh=True):
+        raise OutboundChannelPaused(
+            "Outbound SMS is paused by High Admin."
+        )
     # Demo users must never trigger Twilio or real SMS traffic.
     if demo_workspace_active():
         return
@@ -10423,6 +10552,11 @@ def send_sms_notification(to_phone: str, body: str):
 
         client = Client(account_sid, auth_token)
 
+        if not outbound_channel_enabled("sms", fresh=True):
+            raise OutboundChannelPaused(
+                "Outbound SMS was paused before provider delivery."
+            )
+
         client.messages.create(
             from_=from_number,
             to=to_phone,
@@ -10440,6 +10574,8 @@ def send_sms_notification(to_phone: str, body: str):
         conn.commit()
         conn.close()
 
+    except OutboundChannelPaused:
+        raise
     except Exception as e:
         try:
             conn = get_db()
@@ -34030,6 +34166,7 @@ def admin_nav():
                 [
                     ("Settings", "admin_settings", "/admin/settings"),
                     ("Portal Activity", "admin_portal_activity", "/admin/portal-activity"),
+                    ("SMS & Email Control", "admin_communications_control", "/admin/communications-control"),
                     ("SMS Dashboard", "admin_sms_dashboard", "/admin/sms-dashboard"),
                     ("Email Notifications", "admin_email_notifications", "/admin/email-notifications"),
                     ("WhatsApp Enrollment Bot", "admin_whatsapp_bot", "/admin/whatsapp-bot"),
@@ -51251,6 +51388,9 @@ def sms_worker():
 
 def process_sms_queue(batch_size=25):
     """Process SMS without keeping an SQLite write lock across network I/O."""
+    if not outbound_channel_enabled("sms", fresh=True):
+        return 0
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -51264,8 +51404,12 @@ def process_sms_queue(batch_size=25):
     """, (int(batch_size),))
 
     rows = cur.fetchall()
+    processed = 0
 
     for r in rows:
+        if not outbound_channel_enabled("sms", fresh=True):
+            break
+
         try:
             # Claim and commit before calling Twilio so the portal stays free.
             cur.execute("""
@@ -51287,6 +51431,23 @@ def process_sms_queue(batch_size=25):
                 WHERE id=?
             """, (now_utc_iso(), r["id"]))
             conn.commit()
+            processed += 1
+
+        except OutboundChannelPaused:
+            try:
+                cur.execute("""
+                    UPDATE sms_queue
+                    SET status='PENDING'
+                    WHERE id=?
+                      AND status='SENDING'
+                """, (r["id"],))
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            break
 
         except Exception:
             try:
@@ -51304,16 +51465,21 @@ def process_sms_queue(batch_size=25):
                     pass
 
     conn.close()
-    return len(rows)
+    return processed
 
 
 def email_worker():
     while True:
         try:
-            process_email_queue(25)
+            processed = process_email_queue(25)
+            if processed:
+                time.sleep(0.05)
+                continue
         except Exception:
             pass
-        time.sleep(60)
+
+        EMAIL_QUEUE_WAKE_EVENT.wait(timeout=60.0)
+        EMAIL_QUEUE_WAKE_EVENT.clear()
 
 @app.post('/admin/broadcast-sms')
 def admin_broadcast_sms():
@@ -51395,6 +51561,236 @@ def admin_process_sms():
     
     
     
+@app.get('/admin/communications-control')
+@require_high_admin
+def admin_communications_control():
+
+    r = require_admin()
+    if r:
+        return r
+
+    if not is_high_admin():
+        return page(
+            "Access Denied",
+            card_msg("Only High Admin can control outbound SMS and email.")
+        )
+
+    sms_enabled = outbound_channel_enabled("sms", fresh=True)
+    email_enabled = outbound_channel_enabled("email", fresh=True)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            SUM(CASE WHEN status='PENDING' THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN status='SENT' THEN 1 ELSE 0 END) AS sent
+        FROM sms_queue
+    """)
+    sms_stats = cur.fetchone()
+
+    cur.execute("""
+        SELECT
+            SUM(CASE WHEN status='PENDING' THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN status='SENT' THEN 1 ELSE 0 END) AS sent
+        FROM email_queue
+    """)
+    email_stats = cur.fetchone()
+    conn.close()
+
+    sms_pending = int((sms_stats["pending"] if sms_stats else 0) or 0)
+    sms_failed = int((sms_stats["failed"] if sms_stats else 0) or 0)
+    sms_sent = int((sms_stats["sent"] if sms_stats else 0) or 0)
+
+    email_pending = int((email_stats["pending"] if email_stats else 0) or 0)
+    email_failed = int((email_stats["failed"] if email_stats else 0) or 0)
+    email_sent = int((email_stats["sent"] if email_stats else 0) or 0)
+
+    sms_changed_at = get_setting("outbound_sms_enabled_changed_at", "")
+    sms_changed_by = get_setting("outbound_sms_enabled_changed_by", "")
+    email_changed_at = get_setting("outbound_email_enabled_changed_at", "")
+    email_changed_by = get_setting("outbound_email_enabled_changed_by", "")
+
+    sms_state = (
+        "<span class='chip active'>ACTIVE</span>"
+        if sms_enabled
+        else "<span class='chip lapsed'>PAUSED</span>"
+    )
+    email_state = (
+        "<span class='chip active'>ACTIVE</span>"
+        if email_enabled
+        else "<span class='chip lapsed'>PAUSED</span>"
+    )
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>SMS & Email Control</h1>
+
+        <p class="muted">
+            High Admin master controls for all outbound SMS and email across the
+            entire EBTA portal.
+        </p>
+
+        <div class="card soft" style="border-left:5px solid #dc2626;margin-bottom:14px">
+            <strong>Important:</strong>
+            Pausing a channel stops new provider sends across the portal.
+            Messages already waiting in the queue stay saved and will continue
+            when the channel is resumed. WhatsApp is not affected.
+        </div>
+
+        <div class="toolbar" style="gap:10px;flex-wrap:wrap;margin-bottom:16px">
+            <form method="post"
+                  action="{url_for('admin_communications_all')}"
+                  onsubmit="return confirm('Pause ALL outbound SMS and email across EBTA?');">
+                <input type="hidden" name="action" value="pause">
+                <button class="btn danger">Pause All SMS & Email</button>
+            </form>
+
+            <form method="post"
+                  action="{url_for('admin_communications_all')}"
+                  onsubmit="return confirm('Resume ALL outbound SMS and email across EBTA? Pending queues will start sending again.');">
+                <input type="hidden" name="action" value="resume">
+                <button class="btn success">Resume All SMS & Email</button>
+            </form>
+        </div>
+
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px">
+            <div class="card soft" style="border-left:5px solid {'#16a34a' if sms_enabled else '#dc2626'}">
+                <h2>SMS Master Switch</h2>
+                <p>{sms_state}</p>
+
+                <p class="muted">
+                    Controls Twilio/direct SMS and the EBTA SMS queue throughout
+                    the whole application.
+                </p>
+
+                <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0">
+                    <div class="card" style="padding:10px"><b>{sms_pending}</b><div class="mini muted">Pending</div></div>
+                    <div class="card" style="padding:10px"><b>{sms_failed}</b><div class="mini muted">Failed</div></div>
+                    <div class="card" style="padding:10px"><b>{sms_sent}</b><div class="mini muted">Sent</div></div>
+                </div>
+
+                <form method="post"
+                      action="{url_for('admin_communications_sms_toggle')}"
+                      onsubmit="return confirm('{'Resume' if not sms_enabled else 'Pause'} outbound SMS for the entire EBTA portal?');">
+                    <button class="btn {'success' if not sms_enabled else 'danger'}">
+                        {'Resume All SMS' if not sms_enabled else 'Pause All SMS'}
+                    </button>
+                </form>
+
+                <div class="mini muted" style="margin-top:10px">
+                    Last changed: {escape(sms_changed_at[:19].replace('T',' ') if sms_changed_at else 'Not changed yet')}
+                    {(' by ' + escape(sms_changed_by)) if sms_changed_by else ''}
+                </div>
+            </div>
+
+            <div class="card soft" style="border-left:5px solid {'#16a34a' if email_enabled else '#dc2626'}">
+                <h2>Email Master Switch</h2>
+                <p>{email_state}</p>
+
+                <p class="muted">
+                    Controls SMTP/direct email and the EBTA email queue throughout
+                    the whole application.
+                </p>
+
+                <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0">
+                    <div class="card" style="padding:10px"><b>{email_pending}</b><div class="mini muted">Pending</div></div>
+                    <div class="card" style="padding:10px"><b>{email_failed}</b><div class="mini muted">Failed</div></div>
+                    <div class="card" style="padding:10px"><b>{email_sent}</b><div class="mini muted">Sent</div></div>
+                </div>
+
+                <form method="post"
+                      action="{url_for('admin_communications_email_toggle')}"
+                      onsubmit="return confirm('{'Resume' if not email_enabled else 'Pause'} outbound email for the entire EBTA portal?');">
+                    <button class="btn {'success' if not email_enabled else 'danger'}">
+                        {'Resume All Email' if not email_enabled else 'Pause All Email'}
+                    </button>
+                </form>
+
+                <div class="mini muted" style="margin-top:10px">
+                    Last changed: {escape(email_changed_at[:19].replace('T',' ') if email_changed_at else 'Not changed yet')}
+                    {(' by ' + escape(email_changed_by)) if email_changed_by else ''}
+                </div>
+            </div>
+        </div>
+
+        <div class="card soft" style="margin-top:14px">
+            <h2>How Pause / Resume Works</h2>
+            <p class="mini muted" style="margin-bottom:6px">
+                • Pause SMS: no new Twilio SMS send is allowed anywhere in EBTA.
+            </p>
+            <p class="mini muted" style="margin-bottom:6px">
+                • Pause Email: no new SMTP email send is allowed anywhere in EBTA.
+            </p>
+            <p class="mini muted" style="margin-bottom:6px">
+                • Queued notifications remain stored instead of being deleted.
+            </p>
+            <p class="mini muted" style="margin-bottom:0">
+                • Resume wakes the relevant queue worker so pending notifications can continue.
+            </p>
+        </div>
+    </section>
+    """
+
+    return page("SMS & Email Control", body)
+
+
+@app.post('/admin/communications-control/sms-toggle')
+@require_high_admin
+def admin_communications_sms_toggle():
+
+    r = require_admin()
+    if r:
+        return r
+
+    current = outbound_channel_enabled("sms", fresh=True)
+    changed_by = session.get("admin_username") or "High Admin"
+    set_outbound_channel_enabled("sms", not current, changed_by)
+
+    return redirect(url_for("admin_communications_control"))
+
+
+@app.post('/admin/communications-control/email-toggle')
+@require_high_admin
+def admin_communications_email_toggle():
+
+    r = require_admin()
+    if r:
+        return r
+
+    current = outbound_channel_enabled("email", fresh=True)
+    changed_by = session.get("admin_username") or "High Admin"
+    set_outbound_channel_enabled("email", not current, changed_by)
+
+    return redirect(url_for("admin_communications_control"))
+
+
+@app.post('/admin/communications-control/all')
+@require_high_admin
+def admin_communications_all():
+
+    r = require_admin()
+    if r:
+        return r
+
+    action = str(request.form.get("action") or "").strip().lower()
+
+    if action not in ("pause", "resume"):
+        return page("Invalid Action", card_msg("Choose pause or resume."))
+
+    enabled = action == "resume"
+    changed_by = session.get("admin_username") or "High Admin"
+
+    set_outbound_channel_enabled("sms", enabled, changed_by)
+    set_outbound_channel_enabled("email", enabled, changed_by)
+
+    return redirect(url_for("admin_communications_control"))
+
+
 @app.get('/admin/sms-dashboard')
 @require_high_admin
 def admin_sms_dashboard():
