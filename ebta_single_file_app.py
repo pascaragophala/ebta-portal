@@ -51065,11 +51065,6 @@ def sms_worker():
         SMS_QUEUE_WAKE_EVENT.clear()
 
 
-if ebta_background_worker_owner() and not globals().get("_sms_worker_started"):
-    threading.Thread(target=sms_worker, daemon=True, name="ebta-sms").start()
-    _sms_worker_started = True
-
-
 def process_sms_queue(batch_size=25):
     """Process SMS without keeping an SQLite write lock across network I/O."""
     conn = get_db()
@@ -51135,11 +51130,6 @@ def email_worker():
         except Exception:
             pass
         time.sleep(60)
-
-if ebta_background_worker_owner() and not globals().get("_email_worker_started"):
-    threading.Thread(target=email_worker, daemon=True, name="ebta-email").start()
-    _email_worker_started = True
-
 
 @app.post('/admin/broadcast-sms')
 def admin_broadcast_sms():
@@ -122351,25 +122341,114 @@ def admin_whatsapp_bot_retry():
     )
 
 
-# Process different conversations in parallel while preserving each phone's order.
-# Only the elected Gunicorn process owns these workers.
-if ebta_background_worker_owner() and not globals().get("_whatsapp_bot_worker_started"):
-    whatsapp_bot_recover_stale_queue()
+# =============================================================
+# LAZY BACKGROUND WORKER STARTUP (GUNICORN SAFE)
+# =============================================================
+# Do NOT start threads while this module is being imported. Gunicorn can import
+# the WSGI application before it has fully booted/forked its HTTP workers.
+# Starting threads at import time can delay/ destabilise boot and makes Render's
+# port detection less reliable. Instead, start the queues lazily from the first
+# real request handled by a fully booted worker. The existing OS file lock still
+# guarantees that only one Gunicorn worker owns SMS/email/WhatsApp background
+# processing at a time.
+
+_EBTA_BACKGROUND_START_LOCK = threading.Lock()
+_EBTA_BACKGROUND_START_RETRY_AT = 0.0
+
+
+def ensure_ebta_background_workers_started():
+    global _EBTA_BACKGROUND_START_RETRY_AT
+
+    if globals().get("_ebta_background_workers_started"):
+        return True
+
+    now_mono = time.monotonic()
+    if now_mono < float(_EBTA_BACKGROUND_START_RETRY_AT or 0):
+        return False
+
+    with _EBTA_BACKGROUND_START_LOCK:
+        if globals().get("_ebta_background_workers_started"):
+            return True
+
+        # Only one Gunicorn worker process may own the queues.
+        if not ebta_background_worker_owner():
+            # Avoid opening the lock file on every single request in a
+            # non-owner worker, while still allowing takeover if the owner dies.
+            _EBTA_BACKGROUND_START_RETRY_AT = time.monotonic() + 5.0
+            return False
+
+        if not globals().get("_sms_worker_started"):
+            threading.Thread(
+                target=sms_worker,
+                daemon=True,
+                name="ebta-sms"
+            ).start()
+            _sms_worker_started = True
+
+        if not globals().get("_email_worker_started"):
+            threading.Thread(
+                target=email_worker,
+                daemon=True,
+                name="ebta-email"
+            ).start()
+            _email_worker_started = True
+
+        if not globals().get("_whatsapp_bot_worker_started"):
+            whatsapp_bot_recover_stale_queue()
+            try:
+                _whatsapp_worker_count = int(
+                    os.environ.get("EBTA_WHATSAPP_WORKERS", "2")
+                )
+            except Exception:
+                _whatsapp_worker_count = 2
+
+            _whatsapp_worker_count = max(
+                1,
+                min(_whatsapp_worker_count, 3)
+            )
+
+            for _worker_index in range(_whatsapp_worker_count):
+                threading.Thread(
+                    target=whatsapp_bot_worker,
+                    daemon=True,
+                    name=f"ebta-whatsapp-{_worker_index + 1}"
+                ).start()
+
+            _whatsapp_bot_worker_started = True
+
+        _ebta_background_workers_started = True
+        print(
+            f"[EBTA WORKERS] queues started after HTTP worker boot pid={os.getpid()}",
+            flush=True
+        )
+        return True
+
+
+@app.before_request
+def _ebta_lazy_background_worker_start():
+    # Keep health checks extremely cheap. A normal portal/webhook request will
+    # start the queues immediately after the worker has booted.
+    if request.path == "/healthz":
+        return None
+
     try:
-        _whatsapp_worker_count = int(os.environ.get("EBTA_WHATSAPP_WORKERS", "2"))
-    except Exception:
-        _whatsapp_worker_count = 2
+        ensure_ebta_background_workers_started()
+    except Exception as exc:
+        # Background services must never prevent the web portal from loading.
+        print(
+            f"[EBTA WORKERS] lazy-start warning: {str(exc)[:500]}",
+            flush=True
+        )
+    return None
 
-    _whatsapp_worker_count = max(1, min(_whatsapp_worker_count, 3))
 
-    for _worker_index in range(_whatsapp_worker_count):
-        threading.Thread(
-            target=whatsapp_bot_worker,
-            daemon=True,
-            name=f"ebta-whatsapp-{_worker_index + 1}"
-        ).start()
-
-    _whatsapp_bot_worker_started = True
+@app.get('/healthz')
+def ebta_healthz():
+    """Render health check: intentionally does not touch SQLite or external APIs."""
+    response = make_response("ok", 200)
+    response.headers["Content-Type"] = "text/plain; charset=utf-8"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # --- Payfast IPN stub ---
