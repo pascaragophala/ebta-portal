@@ -53852,7 +53852,7 @@ def manager_dashboard():
 
     for tutor in tutors:
 
-        progress = tutor_work_progress_data(tutor["id"], month)
+        progress = manager_tutor_subject_progress_data(tutor["id"], month)
         active_learners = manager_count_active_learners_for_tutor(tutor["id"], month)
         followups = manager_get_tutor_followups(progress, active_learners)
 
@@ -53922,7 +53922,7 @@ def manager_dashboard():
 
                     <div class="tm-small-stat">
                         <div class="k">{progress["total_uploads"]}</div>
-                        <div class="t">LMS Materials</div>
+                        <div class="t">Subject Materials</div>
                     </div>
 
                     <div class="tm-small-stat">
@@ -53965,8 +53965,8 @@ def manager_dashboard():
                     </a>
 
                     <a class="btn mini success"
-                       href="/manager/tracker/edit?tutor_id={tutor["id"]}&date={datetime.date.today().strftime('%Y-%m-%d')}">
-                        Log Follow-Up
+                       href="/manager/tracker?date={datetime.date.today().strftime('%Y-%m-%d')}">
+                        Open Session Tracker
                     </a>
                 </div>
 
@@ -54126,7 +54126,7 @@ def manager_dashboard():
 
             <div class="tm-stat">
                 <div class="k">{total_materials}</div>
-                <div class="t">Materials</div>
+                <div class="t">Subject Materials</div>
             </div>
 
             <div class="tm-stat">
@@ -57091,6 +57091,158 @@ def manager_month_selector(month, action_url):
     """
 
 
+def manager_tutor_subject_progress_data(tutor_id, month):
+    """
+    Tutor Manager view of one tutor's progress.
+
+    Learning content is subject-owned for continuity:
+    if a replacement tutor is assigned to a subject, historical/current-month
+    resources uploaded by a previous tutor remain visible and count as available
+    subject resources.
+
+    Tutor-owned operational work (attendance, tracker logs, marking, etc.)
+    remains tutor-specific so another tutor's operational work is never credited
+    to the current tutor.
+    """
+
+    base = dict(tutor_work_progress_data(tutor_id, month))
+
+    assigned_subjects = base.get("assigned_subjects") or []
+    subject_ids = [
+        int(row["subject_id"])
+        for row in assigned_subjects
+        if row["subject_id"] is not None
+    ]
+
+    # Preserve the tutor's personal upload counts for transparent display.
+    base["own_total_uploads"] = int(base.get("total_uploads") or 0)
+    base["own_recordings_uploaded"] = int(base.get("recordings_uploaded") or 0)
+    base["own_assignments_uploaded"] = int(base.get("assignments_uploaded") or 0)
+
+    subject_total_uploads = 0
+    subject_recordings = 0
+    subject_assignments = 0
+    subject_material_views = 0
+    subject_uploader_count = 0
+
+    if subject_ids:
+        conn = get_db()
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in subject_ids)
+
+        cur.execute(f"""
+            SELECT
+                COUNT(*) AS total_uploads,
+                COALESCE(SUM(
+                    CASE
+                        WHEN youtube_url IS NOT NULL
+                         AND TRIM(youtube_url) != ''
+                        THEN 1 ELSE 0
+                    END
+                ),0) AS recordings,
+                COALESCE(SUM(
+                    CASE
+                        WHEN is_assignment=1 OR kind='assignment'
+                        THEN 1 ELSE 0
+                    END
+                ),0) AS assignments,
+                COUNT(DISTINCT tutor_id) AS uploader_count
+            FROM materials
+            WHERE subject_id IN ({placeholders})
+              AND substr(month,1,7)=?
+        """, (*subject_ids, month))
+
+        row = cur.fetchone()
+
+        if row:
+            subject_total_uploads = int(row["total_uploads"] or 0)
+            subject_recordings = int(row["recordings"] or 0)
+            subject_assignments = int(row["assignments"] or 0)
+            subject_uploader_count = int(row["uploader_count"] or 0)
+
+        cur.execute(f"""
+            SELECT COUNT(DISTINCT mv.id) AS c
+            FROM material_views mv
+            JOIN materials m ON m.id=mv.material_id
+            WHERE m.subject_id IN ({placeholders})
+              AND substr(m.month,1,7)=?
+        """, (*subject_ids, month))
+
+        subject_material_views = int(cur.fetchone()["c"] or 0)
+        conn.close()
+
+    inherited_uploads = max(
+        0,
+        subject_total_uploads - base["own_total_uploads"]
+    )
+    inherited_recordings = max(
+        0,
+        subject_recordings - base["own_recordings_uploaded"]
+    )
+    inherited_assignments = max(
+        0,
+        subject_assignments - base["own_assignments_uploaded"]
+    )
+
+    base["total_uploads"] = subject_total_uploads
+    base["recordings_uploaded"] = subject_recordings
+    base["assignments_uploaded"] = subject_assignments
+    base["documents_uploaded"] = max(
+        0,
+        subject_total_uploads - subject_recordings - subject_assignments
+    )
+    base["material_views"] = subject_material_views
+
+    base["inherited_uploads"] = inherited_uploads
+    base["inherited_recordings"] = inherited_recordings
+    base["inherited_assignments"] = inherited_assignments
+    base["subject_uploader_count"] = subject_uploader_count
+    base["uses_subject_library"] = True
+
+    # Recalculate the Manager-facing progress score so inherited subject
+    # resources satisfy the CONTENT AVAILABILITY component, while operational
+    # components still belong to this tutor only.
+    components = []
+
+    components.append(
+        min(100, percent_value(subject_total_uploads, 4))
+    )
+
+    if int(base.get("assigned_sessions") or 0) > 0:
+        components.append(
+            min(100, int(base.get("attendance_log_rate") or 0))
+        )
+
+    if int(base.get("submissions_received") or 0) > 0:
+        components.append(
+            int(base.get("marking_rate") or 0)
+        )
+
+    if (
+        int(base.get("tracker_logs") or 0) > 0
+        or int(base.get("assigned_sessions") or 0) > 0
+    ):
+        components.append(
+            min(100, int(base.get("tracker_completion_rate") or 0))
+        )
+
+    components.append(100 if subject_recordings > 0 else 0)
+
+    overall_rate = (
+        round(sum(components) / len(components))
+        if components
+        else 0
+    )
+
+    overall_class, overall_status = tutor_work_band(overall_rate)
+
+    base["overall_rate"] = overall_rate
+    base["overall_class"] = overall_class
+    base["overall_status"] = overall_status
+
+    return base
+
+
 def manager_count_active_learners_for_tutor(tutor_id, month):
     """
     Counts active learners under one tutor for the selected month.
@@ -57117,17 +57269,21 @@ def manager_count_active_learners_for_tutor(tutor_id, month):
 def manager_get_tutor_followups(progress, active_learners):
     """
     Creates practical follow-up actions for the Tutor Manager.
+
+    On Tutor Manager pages, content availability can come from the shared
+    subject library. This prevents a replacement tutor from being flagged as
+    having no content simply because a previous tutor uploaded the resources.
     """
     tasks = []
 
     if progress["total_uploads"] == 0:
-        tasks.append("Follow up with the tutor because no learning materials have been uploaded for this month.")
+        tasks.append("Follow up because this subject has no learning materials available for this month.")
 
     if progress["recordings_uploaded"] == 0:
-        tasks.append("Follow up with the tutor because no class recordings have been posted.")
+        tasks.append("Follow up because this subject has no class recordings available for this month.")
 
     if progress["assignments_uploaded"] == 0:
-        tasks.append("Encourage the tutor to upload at least one activity, quiz, assignment, or revision task.")
+        tasks.append("Ensure at least one activity, quiz, assignment, or revision task is available for this subject.")
 
     if progress["unmarked_submissions"] > 0:
         tasks.append(f"Ask the tutor to mark {progress['unmarked_submissions']} pending submission(s).")
@@ -57136,13 +57292,20 @@ def manager_get_tutor_followups(progress, active_learners):
         tasks.append("Ask the tutor to improve attendance logging for their sessions.")
 
     if active_learners > 0 and progress["total_uploads"] > 0 and progress["material_views"] == 0:
-        tasks.append("Learners are not viewing uploaded materials. Ask the tutor to remind learners to open the portal and check recordings/materials.")
+        tasks.append("Learners are not viewing the available subject materials. Ask the tutor to remind learners to open the portal and use the resources.")
 
     if active_learners > 0 and progress["recordings_uploaded"] > 0 and progress["material_views"] < active_learners:
-        tasks.append("Learner engagement is low. Encourage the tutor to push learners to watch recordings and use the portal consistently.")
+        tasks.append("Learner engagement is low. Encourage the tutor to guide learners to the available recordings and portal resources.")
+
+    inherited = int(progress.get("inherited_uploads") or 0)
 
     if not tasks:
-        tasks.append("Progress looks healthy. Continue monitoring uploads, recordings, attendance, marking, and learner engagement.")
+        if inherited > 0:
+            tasks.append(
+                f"Subject resources are available, including {inherited} inherited item(s) from previous tutor uploads. Continue monitoring attendance, learner engagement and current teaching activity."
+            )
+        else:
+            tasks.append("Progress looks healthy. Continue monitoring uploads, recordings, attendance, marking, and learner engagement.")
 
     return tasks
 
@@ -59026,7 +59189,7 @@ def manager_tutors():
 
     for tutor in tutors:
 
-        progress = tutor_work_progress_data(tutor["id"], month)
+        progress = manager_tutor_subject_progress_data(tutor["id"], month)
         active_learners = manager_count_active_learners_for_tutor(tutor["id"], month)
         followups = manager_get_tutor_followups(progress, active_learners)
 
@@ -59061,7 +59224,7 @@ def manager_tutors():
 
                 <div class="tm-small-stat">
                     <div class="k">{progress["total_uploads"]}</div>
-                    <div class="t">LMS Materials</div>
+                    <div class="t">Subject Materials</div>
                 </div>
 
                 <div class="tm-small-stat">
@@ -59096,8 +59259,8 @@ def manager_tutors():
                 </a>
 
                 <a class="btn mini success"
-                   href="/manager/tracker/edit?tutor_id={tutor["id"]}&date={datetime.date.today().strftime('%Y-%m-%d')}">
-                    Log Follow-Up
+                   href="/manager/tracker?date={datetime.date.today().strftime('%Y-%m-%d')}">
+                    Open Session Tracker
                 </a>
             </div>
 
@@ -59180,7 +59343,31 @@ def manager_view_tutor(tid):
     except Exception:
         year = portal_today_date().year
 
-    all_months = all_months_for_year(year)
+    # Include historical months that contain material for the tutor's
+    # currently assigned subjects, not only the calendar months of one year.
+    cur.execute("""
+        SELECT DISTINCT substr(m.month,1,7) AS month_key
+        FROM materials m
+        WHERE m.subject_id IN (
+            SELECT subject_id
+            FROM tutor_subjects
+            WHERE tutor_id=?
+        )
+          AND m.month IS NOT NULL
+          AND length(trim(m.month)) >= 7
+        ORDER BY month_key DESC
+    """, (tid,))
+
+    content_months = [
+        row["month_key"]
+        for row in cur.fetchall()
+        if row["month_key"] and re.match(r"^\d{4}-\d{2}$", row["month_key"])
+    ]
+
+    all_months = sorted(
+        set(all_months_for_year(year) + content_months),
+        reverse=True
+    )
 
     month_selector = f"""
     <form method="get" action="/manager/tutor/{tid}" style="margin-top:10px">
@@ -59207,13 +59394,24 @@ def manager_view_tutor(tid):
     """
 
     cur.execute("""
-        SELECT m.*, s.name AS subject_name, s.grade
+        SELECT
+            m.*,
+            s.name AS subject_name,
+            s.grade,
+            uploader.full_name AS uploader_name,
+            COALESCE(uploader.is_active,1) AS uploader_is_active,
+            uploader.deleted_at AS uploader_deleted_at
         FROM materials m
         JOIN subjects s ON s.id = m.subject_id
-        WHERE m.tutor_id=?
+        LEFT JOIN tutors uploader ON uploader.id = m.tutor_id
+        WHERE m.subject_id IN (
+            SELECT subject_id
+            FROM tutor_subjects
+            WHERE tutor_id=?
+        )
           AND substr(m.month,1,7)=?
-        ORDER BY m.created_at DESC
-        LIMIT 50
+        ORDER BY s.grade, s.name, m.created_at DESC
+        LIMIT 100
     """, (tid, month))
 
     uploads = cur.fetchall()
@@ -59237,10 +59435,29 @@ def manager_view_tutor(tid):
         else:
             action = "<span class='muted'>No file</span>"
 
+        uploader_name = m["uploader_name"] or "Previous tutor"
+        inherited = int(m["tutor_id"] or 0) != int(tid)
+
+        source_html = (
+            f"<span class='chip'>Inherited</span>"
+            if inherited
+            else "<span class='chip active'>Current Tutor</span>"
+        )
+
+        uploader_state = ""
+        if m["uploader_deleted_at"] or int(m["uploader_is_active"] or 0) != 1:
+            uploader_state = " · Previous tutor account"
+
         row = f"""
         <tr>
-            <td>{grade_label(m['grade'])} — {m['subject_name']}</td>
-            <td>{m['title']}</td>
+            <td>{grade_label(m['grade'])} — {escape(m['subject_name'])}</td>
+            <td>
+                <strong>{escape(m['title'])}</strong>
+                <div class="mini muted" style="margin-top:4px">
+                    Uploaded by {escape(uploader_name)}{escape(uploader_state)}
+                </div>
+                <div style="margin-top:5px">{source_html}</div>
+            </td>
             <td>{action}</td>
             <td>{when}</td>
         </tr>
@@ -59334,7 +59551,7 @@ def manager_view_tutor(tid):
 
     conn.close()
 
-    progress = tutor_work_progress_data(tid, month)
+    progress = manager_tutor_subject_progress_data(tid, month)
     active_learners = manager_count_active_learners_for_tutor(tid, month)
     status_class, status_label = tutor_work_band(progress["overall_rate"])
     followups = manager_get_tutor_followups(progress, active_learners)
@@ -59370,7 +59587,7 @@ def manager_view_tutor(tid):
 
             <div class="stat">
                 <div class="k">{progress["total_uploads"]}</div>
-                <div class="t">Materials</div>
+                <div class="t">Subject Materials</div>
             </div>
 
             <div class="stat">
@@ -59398,6 +59615,15 @@ def manager_view_tutor(tid):
                 <div class="t">Unmarked</div>
             </div>
 
+        </div>
+
+        <div class="card" style="margin-top:12px;background:#eff6ff;border:1px solid #bfdbfe">
+            <strong>Subject Library</strong>
+            <div class="mini muted" style="margin-top:6px;line-height:1.45">
+                {progress["total_uploads"]} material(s) are available across this tutor's assigned subject(s) for {pretty_month_label(month)}.
+                Uploaded by this tutor: {progress.get("own_total_uploads", 0)}.
+                Inherited from other/previous tutors: {progress.get("inherited_uploads", 0)}.
+            </div>
         </div>
 
         <div class="card" style="margin-top:12px;background:#f8fafc;border:1px solid #e2e8f0">
@@ -59437,7 +59663,10 @@ def manager_view_tutor(tid):
         {progress_html}
 
         <div class="card soft" style="border-left:5px solid #22c55e">
-            <h3>Uploads — {pretty_month_label(month)}</h3>
+            <h3>Subject Library — {pretty_month_label(month)}</h3>
+            <div class="mini muted" style="margin-bottom:10px">
+                Includes current and previous tutor uploads for the subject(s) assigned to this tutor.
+            </div>
             {uploads_html}
         </div>
 
