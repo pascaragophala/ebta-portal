@@ -121692,12 +121692,25 @@ def _whatsapp_mark_queue_failed(queue_id, exc):
         cur = conn.cursor()
         cur.execute("SELECT retry_count FROM whatsapp_bot_queue WHERE id=? LIMIT 1", (queue_id,))
         row = cur.fetchone()
+        error_text = str(exc)[:700]
         retry_count = int(row["retry_count"] if row else 0) + 1
+
+        # Meta error 131037 is not transient: WhatsApp-provided 555 numbers
+        # cannot send until Meta approves the display name. Avoid hammering
+        # Meta three times for every inbound message. High Admin can retry
+        # failed items after approval.
+        terminal_display_name_error = (
+            "131037" in error_text
+            or "display name approval" in error_text.lower()
+        )
+        if terminal_display_name_error:
+            retry_count = 3
+
         cur.execute("""
             UPDATE whatsapp_bot_queue
             SET status='FAILED', retry_count=?, last_error=?
             WHERE id=?
-        """, (retry_count, str(exc)[:700], queue_id))
+        """, (retry_count, error_text, queue_id))
         conn.commit()
         print(
             f"[EBTA WHATSAPP FAILED] queue_id={queue_id} retry={retry_count} error={str(exc)[:500]}",
@@ -122358,6 +122371,10 @@ _EBTA_BACKGROUND_START_RETRY_AT = 0.0
 
 def ensure_ebta_background_workers_started():
     global _EBTA_BACKGROUND_START_RETRY_AT
+    global _sms_worker_started
+    global _email_worker_started
+    global _whatsapp_bot_worker_started
+    global _ebta_background_workers_started
 
     if globals().get("_ebta_background_workers_started"):
         return True
