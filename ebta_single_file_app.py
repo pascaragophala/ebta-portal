@@ -17386,10 +17386,9 @@ def home():
     )
     enrollment_month_labels_json = json.dumps({m: pretty_month_label(m) for m in enrollment_start_months})
     
-    HELP_WHATSAPP_NUMBER = (
-        os.environ.get("EBTA_WHATSAPP_BOT_NUMBER", "").strip()
-        or "27828353443"
-    )
+    # Dedicated WhatsApp support number for the enrollment help button.
+    # wa.me requires the international number in digits only.
+    HELP_WHATSAPP_NUMBER = "27828353443"
 
     help_message = quote_from_bytes(
         "Hi EBTA, I need help with enrollment.".encode("utf-8")
