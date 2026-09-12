@@ -884,6 +884,98 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return _configure_sqlite_connection(conn, demo=is_demo)
 
+
+# Check archived/inactive account access at most once per minute per session.
+# This revokes an already-open browser session shortly after High Admin deletes
+# (archives) the account, without adding a database read to every page request.
+_ACCOUNT_STATUS_CHECK_SECONDS = 60
+_ACCOUNT_STATUS_TABLES = {
+    "student": ("students", "student_id"),
+    "tutor": ("tutors", "tutor_id"),
+    "manager": ("tutor_managers", "manager_id"),
+    "aqm": ("academic_quality_managers", "aqm_id"),
+    "treasurer": ("treasurers", "treasurer_id"),
+    "secretary": ("secretaries", "secretary_id"),
+    "social_media": ("social_media_managers", "social_media_manager_id"),
+    "duty_admin": ("duty_admins", "duty_admin_id"),
+    "admission": ("admission_coordinators", "admission_coordinator_id"),
+    "one_on_one_manager": ("one_on_one_managers", "one_on_one_manager_id"),
+    "hr": ("human_resources", "hr_id"),
+    "acc": ("admission_content_coordinators", "acc_id"),
+    "coo": ("coos", "coo_id"),
+    "cao": ("caos", "cao_id"),
+    "ceo": ("ceos", "ceo_id"),
+    "school_manager": ("school_managements", "school_manager_id"),
+}
+
+
+@app.before_request
+def enforce_archived_account_access():
+    path = request.path or ""
+    if (
+        path.startswith("/static/")
+        or path.startswith("/assets/")
+        or path.startswith("/uploads/")
+        or path.startswith("/profile-picture/")
+        or path.startswith("/tutor-profile-picture/")
+        or path.startswith("/whatsapp/")
+        or path == "/healthz"
+    ):
+        return None
+
+    role = get_logged_in_portal_role()
+    account = _ACCOUNT_STATUS_TABLES.get(role)
+
+    # Admin/High Admin accounts are managed separately and are not part of the
+    # user-table archive system below.
+    if not account:
+        return None
+
+    now_ts = time.time()
+    try:
+        checked_at = float(session.get("_account_status_checked_at", 0) or 0)
+    except Exception:
+        checked_at = 0
+
+    if now_ts - checked_at < _ACCOUNT_STATUS_CHECK_SECONDS:
+        return None
+
+    table_name, id_field = account
+    user_id = session.get(id_field)
+
+    if user_id in (None, ""):
+        return None
+
+    conn = None
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT COALESCE(is_active,1) AS is_active, deleted_at
+            FROM {table_name}
+            WHERE id=?
+            LIMIT 1
+            """,
+            (user_id,)
+        )
+        row = cur.fetchone()
+    except Exception:
+        # A status-check failure must not take the whole portal offline.
+        row = None
+    finally:
+        if conn is not None:
+            conn.close()
+
+    if row is None or int(row["is_active"] or 0) != 1 or row["deleted_at"]:
+        login_path = login_path_for_role(role)
+        session.clear()
+        return redirect(login_path)
+
+    session["_account_status_checked_at"] = now_ts
+    return None
+
+
 def now_utc_iso():
     """Return ISO timestamp in Africa/Johannesburg timezone (UTC+02:00)."""
     try:
@@ -2860,6 +2952,70 @@ def init_db():
     
     ensure_column(conn, "tutors", "is_active", "INTEGER NOT NULL DEFAULT 1")
     ensure_column(conn, "tutors", "deleted_at", "TEXT")
+
+    # =========================================================
+    # USER ACCOUNT ARCHIVE / DATA RETENTION
+    # =========================================================
+    # Deleting a portal user must remove only portal access. The user row is
+    # retained as a historical identity so every linked upload, message,
+    # attendance record, assessment, submission, enrollment, finance record,
+    # report and audit trail stays intact.
+    ensure_column(conn, "students", "is_active", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "students", "deleted_at", "TEXT")
+    ensure_column(conn, "tutor_managers", "is_active", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "tutor_managers", "deleted_at", "TEXT")
+    ensure_column(conn, "academic_quality_managers", "is_active", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "academic_quality_managers", "deleted_at", "TEXT")
+    ensure_column(conn, "treasurers", "deleted_at", "TEXT")
+
+    # Future-proof the remaining staff account tables. They already use
+    # is_active; deleted_at gives them the same non-destructive archive model.
+    for _account_table in (
+        "secretaries",
+        "social_media_managers",
+        "duty_admins",
+        "admission_coordinators",
+        "one_on_one_managers",
+        "human_resources",
+        "coos",
+        "caos",
+        "admission_content_coordinators",
+        "ceos",
+        "school_managements",
+    ):
+        ensure_column(conn, _account_table, "deleted_at", "TEXT")
+
+    # Database-level safety net. Even if a future route accidentally issues a
+    # DELETE statement against a portal account table, SQLite blocks it before
+    # ON DELETE CASCADE can erase historical child records.
+    for _account_table in (
+        "students",
+        "tutors",
+        "tutor_managers",
+        "academic_quality_managers",
+        "treasurers",
+        "secretaries",
+        "social_media_managers",
+        "duty_admins",
+        "admission_coordinators",
+        "one_on_one_managers",
+        "human_resources",
+        "coos",
+        "caos",
+        "admission_content_coordinators",
+        "ceos",
+        "school_managements",
+    ):
+        cur.execute(f"""
+            CREATE TRIGGER IF NOT EXISTS protect_{_account_table}_hard_delete
+            BEFORE DELETE ON {_account_table}
+            BEGIN
+                SELECT RAISE(
+                    ABORT,
+                    'EBTA user hard-delete blocked; archive/deactivate the account instead'
+                );
+            END;
+        """)
 
     # One-time migration of existing sessions plus ongoing repair/sync.
     migrate_existing_sessions_to_subject_templates(conn)
@@ -20323,12 +20479,22 @@ def register():
     placeholders = ",".join("?" * len(variants))
 
     cur.execute(f"""
-        SELECT id, pin
+        SELECT id, pin, COALESCE(is_active,1) AS is_active, deleted_at
         FROM students
         WHERE phone_whatsapp IN ({placeholders})
         LIMIT 1
     """, variants)
     srow = cur.fetchone()
+
+    if srow and (int(srow["is_active"] or 0) != 1 or srow["deleted_at"]):
+        conn.close()
+        return page(
+            "Account Archived",
+            card_msg(
+                "This learner account has been archived by EBTA. "
+                "Please contact the EBTA team if portal access needs to be restored."
+            )
+        )
 
     # Derive grade from first selected subject.
     cur.execute("SELECT grade FROM subjects WHERE id=?", (subject_ids[0],))
@@ -21127,6 +21293,8 @@ def student_login_post():
         SELECT id, pin, full_name
         FROM students
         WHERE phone_whatsapp IN ({placeholders})
+          AND COALESCE(is_active,1)=1
+          AND deleted_at IS NULL
         ORDER BY id DESC
     """, variants)
 
@@ -21170,6 +21338,8 @@ def student_forgot_pin():
         SELECT id, full_name, phone_whatsapp, pin
         FROM students
         WHERE phone_whatsapp IN ({placeholders})
+          AND COALESCE(is_active,1)=1
+          AND deleted_at IS NULL
         LIMIT 1
     """, variants)
 
@@ -26070,6 +26240,7 @@ def tutor_login_post():
         FROM tutors
         WHERE phone IN ({placeholders})
           AND COALESCE(is_active, 1) = 1
+          AND deleted_at IS NULL
         LIMIT 1
     """, variants)
 
@@ -38333,7 +38504,10 @@ def admin_students():
 
     def build_where():
         params = []
-        where_clauses = []
+        where_clauses = [
+            "COALESCE(s.is_active,1)=1",
+            "s.deleted_at IS NULL"
+        ]
 
         if selected_month:
             where_clauses.append("e.month = ?")
@@ -38362,7 +38536,9 @@ def admin_students():
                 LOWER(TRIM(s.full_name)) IN (
                     SELECT LOWER(TRIM(full_name))
                     FROM students
-                    WHERE full_name IS NOT NULL
+                    WHERE COALESCE(is_active,1)=1
+                      AND deleted_at IS NULL
+                      AND full_name IS NOT NULL
                       AND TRIM(full_name) != ''
                     GROUP BY LOWER(TRIM(full_name))
                     HAVING COUNT(*) >= 2
@@ -38384,7 +38560,9 @@ def admin_students():
                         ')', ''),
                     -9)
                     FROM students
-                    WHERE phone_whatsapp IS NOT NULL
+                    WHERE COALESCE(is_active,1)=1
+                      AND deleted_at IS NULL
+                      AND phone_whatsapp IS NOT NULL
                       AND TRIM(phone_whatsapp) != ''
                       AND LENGTH(
                         REPLACE(
@@ -38522,14 +38700,18 @@ def admin_students():
             (
                 SELECT COUNT(*)
                 FROM students s2
-                WHERE LOWER(TRIM(s2.full_name)) = LOWER(TRIM(s.full_name))
+                WHERE COALESCE(s2.is_active,1)=1
+                  AND s2.deleted_at IS NULL
+                  AND LOWER(TRIM(s2.full_name)) = LOWER(TRIM(s.full_name))
                   AND TRIM(COALESCE(s2.full_name,'')) != ''
             ) AS duplicate_name_count,
 
             (
                 SELECT COUNT(*)
                 FROM students s2
-                WHERE SUBSTR({phone_clean_expr_s2}, -9) = SUBSTR({phone_clean_expr}, -9)
+                WHERE COALESCE(s2.is_active,1)=1
+                  AND s2.deleted_at IS NULL
+                  AND SUBSTR({phone_clean_expr_s2}, -9) = SUBSTR({phone_clean_expr}, -9)
                   AND LENGTH({phone_clean_expr_s2}) >= 9
                   AND LENGTH({phone_clean_expr}) >= 9
             ) AS duplicate_phone9_count,
@@ -38635,7 +38817,7 @@ def admin_students():
         """
 
         delete_warning = (
-            "Delete this student record? Please make sure you are deleting the unused duplicate record, not the active learner profile."
+            "Delete this learner account from active access? All enrollments, reports, submissions, payments, messages and uploads will be retained."
         )
 
         trs.append(f"""
@@ -40781,6 +40963,33 @@ def admin_student_add():
     cur.execute("SELECT pin FROM tutors WHERE pin IS NOT NULL")
     pins |= {r['pin'] for r in cur.fetchall()}
     pin = gen_pin(pins)
+
+    # A soft-deleted account keeps its phone number so historical records remain
+    # linked to the same identity. Do not create a second account silently.
+    variants = phone_variants(phone)
+    if variants:
+        qmarks = ",".join("?" * len(variants))
+        cur.execute(f"""
+            SELECT id, deleted_at, COALESCE(is_active,1) AS is_active
+            FROM students
+            WHERE phone_whatsapp IN ({qmarks})
+            ORDER BY id DESC
+            LIMIT 1
+        """, variants)
+        existing_account = cur.fetchone()
+        if existing_account and (
+            int(existing_account["is_active"] or 0) != 1
+            or existing_account["deleted_at"]
+        ):
+            conn.close()
+            return page(
+                "Archived Account Exists",
+                card_msg(
+                    "A learner account with this phone number is archived. "
+                    "Its historical records are still retained; restore that account instead of creating a duplicate."
+                )
+            )
+
     try:
         cur.execute("""
             INSERT INTO students(full_name,phone_whatsapp,guardian_phone,email,grade,pin,created_at)
@@ -40817,76 +41026,18 @@ def admin_student_reset_pin(sid:int):
 
 def delete_student_record_safely(cur, sid):
     """
-    Deletes a student record using the same cleanup logic as the normal High Admin delete.
-    This function does not commit. The route calling it must commit or rollback.
+    Archive a learner account without deleting any historical EBTA data.
+
+    Nothing linked to this student is removed. Enrollments, proofs of payment,
+    payments, reports, submissions, assessments, attendance, ratings, direct
+    messages, referrals and uploaded files all remain available to EBTA.
     """
-
-    # 1. Delete attendance
-    cur.execute("DELETE FROM attendance WHERE student_id=?", (sid,))
-
-    # 2. Delete submissions
-    cur.execute("DELETE FROM submissions WHERE student_id=?", (sid,))
-
-    # 3. Delete lesson ratings
-    cur.execute("DELETE FROM lesson_ratings WHERE student_id=?", (sid,))
-
-    # 4. Delete enrollment files
     cur.execute("""
-        DELETE FROM enrollment_files
-        WHERE enrollment_id IN (
-            SELECT id FROM enrollments WHERE student_id=?
-        )
-    """, (sid,))
-
-    # 5. Delete payments
-    cur.execute("""
-        DELETE FROM payments
-        WHERE enrollment_id IN (
-            SELECT id FROM enrollments WHERE student_id=?
-        )
-    """, (sid,))
-
-    # 6. Delete enrollments
-    cur.execute("DELETE FROM enrollments WHERE student_id=?", (sid,))
-
-    # 7. Delete registrations
-    cur.execute("DELETE FROM registrations WHERE student_id=?", (sid,))
-
-    # 8. Delete direct messages
-    cur.execute("""
-        DELETE FROM direct_messages
-        WHERE (from_role='student' AND from_id=?)
-           OR (to_role='student' AND to_id=?)
-    """, (sid, sid))
-
-    # 9. Delete referral usage where this student appears
-    cur.execute("""
-        DELETE FROM referral_uses
-        WHERE referrer_student_id=?
-           OR referred_student_id=?
-    """, (sid, sid))
-
-    # 10. Delete tutor referral usage where this student was referred
-    cur.execute("""
-        DELETE FROM tutor_referral_uses
-        WHERE referred_student_id=?
-    """, (sid,))
-
-    # 11. Detach coupons linked to this student
-    cur.execute("""
-        UPDATE discount_coupons
-        SET target_student_id=NULL
-        WHERE target_student_id=?
-    """, (sid,))
-
-    cur.execute("""
-        UPDATE discount_coupons
-        SET owner_student_id=NULL
-        WHERE owner_student_id=?
-    """, (sid,))
-
-    # 12. Finally delete student
-    cur.execute("DELETE FROM students WHERE id=?", (sid,))
+        UPDATE students
+        SET is_active=0,
+            deleted_at=?
+        WHERE id=?
+    """, (now_utc_iso(), sid))
 
 
 @app.post('/admin/students/<int:sid>/delete')
@@ -40981,7 +41132,7 @@ def admin_students_bulk_delete_selected():
             </p>
 
             <p class="muted">
-                The selected student records were deleted together with their linked portal data.
+                The selected learner accounts were archived. Their linked portal data and uploaded files were retained.
             </p>
 
             <a class="btn secondary" href="{url_for('admin_students', duplicates='either')}">
@@ -41030,7 +41181,9 @@ def admin_students_auto_delete_zero_phone_duplicates():
                 -9) AS phone_last9,
                 COUNT(*) AS c
             FROM students
-            WHERE phone_whatsapp IS NOT NULL
+            WHERE COALESCE(is_active,1)=1
+              AND deleted_at IS NULL
+              AND phone_whatsapp IS NOT NULL
               AND TRIM(phone_whatsapp) != ''
               AND LENGTH(
                     REPLACE(
@@ -41067,7 +41220,9 @@ def admin_students_auto_delete_zero_phone_duplicates():
                         '(', ''),
                     ')', '') AS clean_phone
                 FROM students s
-                WHERE SUBSTR(
+                WHERE COALESCE(s.is_active,1)=1
+                  AND s.deleted_at IS NULL
+                  AND SUBSTR(
                     REPLACE(
                         REPLACE(
                             REPLACE(
@@ -41115,10 +41270,10 @@ def admin_students_auto_delete_zero_phone_duplicates():
 
             <div class="card soft" style="border-left:5px solid #1b5e20">
                 <p><strong>{reviewed_groups}</strong> duplicate phone group(s) reviewed.</p>
-                <p><strong>{deleted}</strong> zero-format duplicate record(s) deleted.</p>
+                <p><strong>{deleted}</strong> zero-format duplicate account(s) archived.</p>
 
                 <p class="muted">
-                    The system deleted records starting with 0 where a matching +27 version existed
+                    The system archived duplicate accounts starting with 0 where a matching +27 version existed
                     using the same last 9 phone digits.
                 </p>
 
@@ -41827,13 +41982,14 @@ def admin_tutors():
         SELECT COUNT(*) AS c
         FROM tutors
         WHERE COALESCE(is_active, 1) = 1
+          AND deleted_at IS NULL
     """)
 
     total_tutors = cur.fetchone()["c"] or 0
 
     # Build filtered tutor query
     params = []
-    where = ["COALESCE(t.is_active, 1) = 1"]
+    where = ["COALESCE(t.is_active, 1) = 1", "t.deleted_at IS NULL"]
 
     if q:
         where.append("(t.full_name LIKE ? OR t.phone LIKE ?)")
@@ -42065,7 +42221,7 @@ def admin_tutors():
                     <form method='post'
                           action='{url_for('admin_tutor_delete', tid=t['id'])}'
                           style='display:inline'
-                          onsubmit="return confirm('Delete this tutor from the portal? Their uploaded materials will NOT be deleted. The tutor will be removed from active sessions and subject assignments.');">
+                          onsubmit="return confirm('Delete this tutor account from active access? All sessions, attendance, subject assignments, materials, submissions, messages and uploads will be retained.');">
                         <button class='btn danger mini'>
                             Delete Tutor
                         </button>
@@ -42715,61 +42871,15 @@ def admin_tutor_delete(tid: int):
         conn.close()
         return page("Error", card_msg("Tutor not found."))
 
-    # Get sessions linked to this tutor.
-    cur.execute("""
-        SELECT id
-        FROM sessions
-        WHERE tutor_id=?
-    """, (tid,))
-
-    session_ids = [row["id"] for row in cur.fetchall()]
-
-    if session_ids:
-        placeholders = ",".join("?" * len(session_ids))
-
-        # Remove attendance linked to the tutor's sessions first.
-        cur.execute(f"""
-            DELETE FROM attendance
-            WHERE session_id IN ({placeholders})
-        """, session_ids)
-
-        cur.execute(f"""
-            DELETE FROM attendance_sessions
-            WHERE session_id IN ({placeholders})
-        """, session_ids)
-
-        # Remove the tutor's active sessions.
-        cur.execute(f"""
-            DELETE FROM sessions
-            WHERE id IN ({placeholders})
-        """, session_ids)
-
-    # Remove subject assignments.
-    cur.execute("""
-        DELETE FROM tutor_subjects
-        WHERE tutor_id=?
-    """, (tid,))
-
-    # Remove tutor-manager assignments.
-    cur.execute("""
-        DELETE FROM manager_tutors
-        WHERE tutor_id=?
-    """, (tid,))
-
-    # IMPORTANT:
-    # Do NOT delete materials.
-    # Do NOT delete submissions.
-    # Do NOT delete the tutor row.
-    # We only deactivate the tutor.
+    # Archive ONLY the login account. Keep sessions, attendance, subject
+    # assignments, manager assignments, materials, submissions, ratings,
+    # referrals, messages and every uploaded file/history record.
     cur.execute("""
         UPDATE tutors
         SET is_active=0,
             deleted_at=?
         WHERE id=?
-    """, (
-        now_utc_iso(),
-        tid
-    ))
+    """, (now_utc_iso(), tid))
 
     conn.commit()
     conn.close()
@@ -43072,6 +43182,8 @@ def admin_assessment_delete_locks():
     cur.execute("""
         SELECT id, full_name
         FROM tutors
+        WHERE COALESCE(is_active,1)=1
+          AND deleted_at IS NULL
         ORDER BY full_name
     """)
 
@@ -52450,6 +52562,8 @@ def admin_tutor_tracker():
     cur.execute("""
         SELECT id, full_name, phone, pin
         FROM tutor_managers
+        WHERE COALESCE(is_active,1)=1
+          AND deleted_at IS NULL
         ORDER BY full_name
     """)
     managers = cur.fetchall()
@@ -52480,7 +52594,7 @@ def admin_tutor_tracker():
 
         <form method="post"
         action="/admin/managers/delete/{m['id']}"
-        onsubmit="return confirm('Delete this manager?')">
+        onsubmit="return confirm('Delete this manager account? All tracker history, assignments, ratings, messages and uploads will be retained.')">
         <button class="btn mini danger">
         Delete
         </button>
@@ -52861,6 +52975,8 @@ def manager_login():
         cur.execute("""
         SELECT * FROM tutor_managers
         WHERE phone=? AND pin=?
+          AND COALESCE(is_active,1)=1
+          AND deleted_at IS NULL
         """,(phone,pin))
 
         manager = cur.fetchone()
@@ -53753,10 +53869,14 @@ def admin_delete_manager(manager_id):
     conn = get_db()
     cur = conn.cursor()
 
+    # Archive only the manager login. Keep tutor assignments, tracker
+    # history, rankings, ratings, messages and any linked records/uploads.
     cur.execute("""
-    DELETE FROM tutor_managers
-    WHERE id=?
-    """,(manager_id,))
+        UPDATE tutor_managers
+        SET is_active=0,
+            deleted_at=?
+        WHERE id=?
+    """, (now_utc_iso(), manager_id))
 
     conn.commit()
     conn.close()
@@ -59204,6 +59324,8 @@ def aqm_login():
             SELECT *
             FROM academic_quality_managers
             WHERE phone=? AND pin=?
+              AND COALESCE(is_active,1)=1
+              AND deleted_at IS NULL
         """, (phone, pin))
 
         aqm = cur.fetchone()
@@ -59978,6 +60100,8 @@ def admin_academic_quality_managers():
     cur.execute("""
         SELECT *
         FROM academic_quality_managers
+        WHERE COALESCE(is_active,1)=1
+          AND deleted_at IS NULL
         ORDER BY full_name
     """)
 
@@ -60007,7 +60131,7 @@ def admin_academic_quality_managers():
 
                 <form method="post"
                       action="/admin/academic-quality-managers/delete/{a['id']}"
-                      onsubmit="return confirm('Are you sure you want to delete this Academic Quality Manager?')"
+                      onsubmit="return confirm('Delete this AQM account? All reports, workspace records, certificates, messages and uploads will be retained.')"
                       style="margin-top:6px">
 
                     <button class="btn mini danger">Delete</button>
@@ -60165,10 +60289,14 @@ def admin_delete_academic_quality_manager(aqm_id):
     conn = get_db()
     cur = conn.cursor()
 
+    # Archive only the AQM login. Keep reports, workspace records,
+    # certificates, ratings, messages, files and all historical activity.
     cur.execute("""
-        DELETE FROM academic_quality_managers
+        UPDATE academic_quality_managers
+        SET is_active=0,
+            deleted_at=?
         WHERE id=?
-    """, (aqm_id,))
+    """, (now_utc_iso(), aqm_id))
 
     conn.commit()
     conn.close()
@@ -71478,6 +71606,7 @@ def admin_treasurers():
             ) AS monthly_reports_count
 
         FROM treasurers t
+        WHERE t.deleted_at IS NULL
         ORDER BY t.created_at DESC
     """)
     rows = cur.fetchall()
@@ -71499,25 +71628,16 @@ def admin_treasurers():
             + (t["monthly_reports_count"] or 0)
         )
 
-        delete_btn = ""
-
-        if linked_records == 0:
-            delete_btn = f"""
-            <form method="post"
-                  action="/admin/treasurer/{t['id']}/delete"
-                  style="display:inline"
-                  onsubmit="return confirm('Delete this treasurer permanently?');">
-                <button class="btn mini danger">
-                    Delete
-                </button>
-            </form>
-            """
-        else:
-            delete_btn = """
-            <span class="mini muted">
-                Delete locked: finance history exists
-            </span>
-            """
+        delete_btn = f"""
+        <form method="post"
+              action="/admin/treasurer/{t['id']}/delete"
+              style="display:inline"
+              onsubmit="return confirm('Delete this treasurer account? All finance history and uploaded documents will be retained.');">
+            <button class="btn mini danger">
+                Delete
+            </button>
+        </form>
+        """
 
         trs += f"""
         <tr>
@@ -71747,7 +71867,7 @@ def admin_treasurer_detail(tid):
         delete_section = f"""
         <form method="post"
               action="/admin/treasurer/{t['id']}/delete"
-              onsubmit="return confirm('Delete this treasurer permanently?');">
+              onsubmit="return confirm('Delete this treasurer account? All finance history and uploaded documents will be retained.');">
             <button class="btn danger">
                 Delete Treasurer
             </button>
@@ -71895,59 +72015,21 @@ def admin_treasurer_delete(tid):
     conn = get_db()
     cur = conn.cursor()
 
+    # Archive only the login account. Keep finance records, payment schedules,
+    # monthly reports and uploaded supporting documents intact.
+    now = now_utc_iso()
     cur.execute("""
-        SELECT COUNT(*) AS c
-        FROM finance_records
-        WHERE captured_by=?
-    """, (tid,))
-    finance_records_count = cur.fetchone()["c"] or 0
+        UPDATE treasurers
+        SET is_active=0,
+            deleted_at=?,
+            updated_at=?
+        WHERE id=?
+    """, (now, now, tid))
 
-    cur.execute("""
-        SELECT COUNT(*) AS c
-        FROM finance_payment_schedule
-        WHERE created_by=?
-    """, (tid,))
-    payment_schedule_count = cur.fetchone()["c"] or 0
-
-    cur.execute("""
-        SELECT COUNT(*) AS c
-        FROM finance_monthly_reports
-        WHERE prepared_by=?
-    """, (tid,))
-    monthly_reports_count = cur.fetchone()["c"] or 0
-
-    linked_records = finance_records_count + payment_schedule_count + monthly_reports_count
-
-    if linked_records > 0:
-        conn.close()
-        return page(
-            "Delete Blocked",
-            f"""
-            {admin_nav()}
-            <div class="card">
-                <h1>Delete Blocked</h1>
-                <p>
-                    This treasurer cannot be deleted because they already have finance activity linked to their account.
-                </p>
-                <p class="muted">
-                    Finance records: {finance_records_count}<br>
-                    Payment items: {payment_schedule_count}<br>
-                    Monthly reports: {monthly_reports_count}
-                </p>
-                <p>
-                    Please deactivate the treasurer instead to preserve finance history.
-                </p>
-                <a class="btn" href="/admin/treasurers">Back to Treasurers</a>
-            </div>
-            """
-        )
-
-    cur.execute("DELETE FROM treasurers WHERE id=?", (tid,))
     conn.commit()
     conn.close()
 
-    return redirect(url_for("admin_treasurers"))    
-    
+    return redirect(url_for("admin_treasurers"))
 
 @app.post('/admin/treasurers/add')
 @require_high_admin
@@ -72182,6 +72264,7 @@ def treasurer_login_post():
         WHERE phone IN ({qmarks})
           AND pin=?
           AND is_active=1
+          AND deleted_at IS NULL
         LIMIT 1
     """, params + [pin])
 
@@ -114179,7 +114262,13 @@ def one_on_one_link_or_create_student_account(
         raise ValueError("Please enter a valid Student WhatsApp Number.")
 
     if sid:
-        cur.execute("SELECT id, phone_whatsapp FROM students WHERE id=?", (sid,))
+        cur.execute("""
+            SELECT id, phone_whatsapp
+            FROM students
+            WHERE id=?
+              AND COALESCE(is_active,1)=1
+              AND deleted_at IS NULL
+        """, (sid,))
         existing_session_student = cur.fetchone()
 
         if not existing_session_student:
@@ -114211,7 +114300,8 @@ def one_on_one_link_or_create_student_account(
 
     placeholders = ",".join("?" * len(variants))
     cur.execute(f"""
-        SELECT id, full_name, phone_whatsapp, pin
+        SELECT id, full_name, phone_whatsapp, pin,
+               COALESCE(is_active,1) AS is_active, deleted_at
         FROM students
         WHERE phone_whatsapp IN ({placeholders})
         ORDER BY id DESC
@@ -114222,6 +114312,12 @@ def one_on_one_link_or_create_student_account(
     now = now_utc_iso()
 
     if existing_student:
+        if int(existing_student["is_active"] or 0) != 1 or existing_student["deleted_at"]:
+            raise ValueError(
+                "This learner account has been archived by EBTA. "
+                "Please contact the EBTA team to restore portal access before creating a new One-on-One request."
+            )
+
         stored_pin = existing_student["pin"] or ""
 
         if stored_pin and stored_pin != login_pin:
@@ -119546,7 +119642,9 @@ def whatsapp_enrollment_existing_student(conn, student_phone):
             province,
             school,
             phone_type,
-            guardian_phone_type
+            guardian_phone_type,
+            COALESCE(is_active,1) AS is_active,
+            deleted_at
         FROM students
         WHERE phone_whatsapp IN ({placeholders})
         ORDER BY id DESC
@@ -120159,6 +120257,12 @@ def whatsapp_enrollment_submit(conn, data):
     )
 
     if existing_student:
+        if int(existing_student["is_active"] or 0) != 1 or existing_student["deleted_at"]:
+            raise ValueError(
+                "This learner account has been archived by EBTA. "
+                "Type HUMAN to contact the EBTA team about restoring access."
+            )
+
         if str(existing_student["pin"] or "") != pin:
             raise ValueError(
                 "The existing student PIN no longer matches. "
