@@ -13025,7 +13025,7 @@ const rows=document.querySelectorAll('#'+tableId+' tbody tr');
 rows.forEach(r=>{ r.style.display = r.innerText.toLowerCase().includes(q) ? '' : 'none'; });
 }
 document.addEventListener('DOMContentLoaded', function () {
-    const cards = Array.from(document.querySelectorAll('.card'));
+    const cards = Array.from(document.querySelectorAll('.card:not(.student-materials-page-card)'));
 
     // Portal content must never depend on an animation callback to become
     // visible. This is especially important on iOS Safari.
@@ -14093,6 +14093,16 @@ EBTA_UNIFIED_UI_CSS = """
     body.ebta-unified-ui .card.soft {
         background:
             linear-gradient(145deg,rgba(255,255,255,.98),rgba(241,250,244,.90));
+    }
+
+    /* Student pages favour paint stability over glass effects.
+       This prevents Chromium/Edge from repainting large scrolling card lists
+       through a backdrop blur, which can show as blank/flickering regions. */
+    body.role-student.ebta-unified-ui .card,
+    body.role-student.ebta-unified-ui .panel {
+        backdrop-filter:none !important;
+        -webkit-backdrop-filter:none !important;
+        will-change:auto !important;
     }
 
     body.ebta-unified-ui .auth-card {
@@ -23462,162 +23472,355 @@ def student_open_material(mid):
 def student_materials():
 
     r = require_student()
-    if r: return r
+    if r:
+        return r
 
     sid = is_student()
-    month = get_active_month('student')
+    month = get_active_month("student")
     month_selector = student_month_selector(sid, month)
+    student_today_iso = portal_today_date().isoformat()
+
+    selected_subject_id = request.args.get("subject_id", "").strip()
+
+    try:
+        selected_subject_id = int(selected_subject_id) if selected_subject_id else None
+    except Exception:
+        selected_subject_id = None
+
+    try:
+        page_num = max(1, int(request.args.get("page", 1)))
+    except Exception:
+        page_num = 1
+
+    per_page = 15
 
     conn = get_db()
     cur = conn.cursor()
-    student_today_iso = portal_today_date().isoformat()
 
-    materials_html = f"""
-    <div class='empty' style='padding:16px'>
-        No learning materials are available for
-        <strong>{pretty_month_label(month)}</strong> yet.
-    </div>
+    # One access rule is used for both the compact subject list and the
+    # selected-subject detail page.
+    #
+    # GROUP/BOTH materials are available when the learner has an active
+    # enrolment for that subject/month.
+    # ONE_ON_ONE/BOTH materials are available when the learner has a valid
+    # one-on-one request for that subject and tutor.
+    access_sql = """
+        substr(m.month,1,7) = ?
+        AND (
+            (COALESCE(m.is_assignment,0)=0 AND COALESCE(m.kind,'')!='assignment')
+            OR m.open_date IS NULL
+            OR TRIM(m.open_date)=''
+            OR m.open_date <= ?
+        )
+        AND (
+            (
+                COALESCE(m.delivery_mode, 'GROUP') IN ('GROUP','BOTH')
+                AND EXISTS (
+                    SELECT 1
+                    FROM enrollments e
+                    WHERE e.student_id=?
+                      AND e.subject_id=m.subject_id
+                      AND UPPER(e.status)='ACTIVE'
+                      AND substr(e.month,1,7)=?
+                )
+            )
+            OR
+            (
+                COALESCE(m.delivery_mode, 'GROUP') IN ('ONE_ON_ONE','BOTH')
+                AND EXISTS (
+                    SELECT 1
+                    FROM one_on_one_requests r
+                    WHERE r.student_id=?
+                      AND r.subject_id=m.subject_id
+                      AND r.assigned_tutor_id=m.tutor_id
+                      AND r.request_status NOT IN ('Rejected','Cancelled')
+                )
+            )
+        )
     """
 
-    cur.execute("""
-        SELECT DISTINCT m.*, sub.name AS subject_name, sub.grade, t.full_name AS tutor_name
+    access_params = [
+        month,
+        student_today_iso,
+        sid,
+        month,
+        sid
+    ]
+
+    # Compact subject summary. This keeps the initial materials page small,
+    # even where a subject has many months/resources.
+    cur.execute(f"""
+        SELECT
+            m.subject_id,
+            sub.name AS subject_name,
+            sub.grade,
+            COUNT(DISTINCT m.id) AS resource_count,
+            SUM(
+                CASE
+                    WHEN m.youtube_url IS NOT NULL
+                     AND TRIM(m.youtube_url) != ''
+                    THEN 1 ELSE 0
+                END
+            ) AS recording_count
         FROM materials m
         JOIN subjects sub ON sub.id=m.subject_id
-        JOIN tutors t ON t.id=m.tutor_id
-        WHERE substr(m.month,1,7) = ?
-          AND (
-                (COALESCE(m.is_assignment,0)=0 AND COALESCE(m.kind,'')!='assignment')
-                OR m.open_date IS NULL
-                OR TRIM(m.open_date)=''
-                OR m.open_date <= ?
-          )
-          AND (
-                (
-                    COALESCE(m.delivery_mode, 'GROUP') IN ('GROUP','BOTH')
-                    AND EXISTS (
-                        SELECT 1 FROM enrollments e
-                        WHERE e.student_id=?
-                          AND e.subject_id=m.subject_id
-                          AND UPPER(e.status)='ACTIVE'
-                          AND substr(e.month,1,7)=?
-                    )
-                )
-                OR
-                (
-                    COALESCE(m.delivery_mode, 'GROUP') IN ('ONE_ON_ONE','BOTH')
-                    AND EXISTS (
-                        SELECT 1 FROM one_on_one_requests r
-                        WHERE r.student_id=?
-                          AND r.subject_id=m.subject_id
-                          AND r.assigned_tutor_id=m.tutor_id
-                          AND r.request_status NOT IN ('Rejected','Cancelled')
-                    )
-                )
-          )
-        ORDER BY sub.grade, sub.name, m.created_at DESC
-    """, (month, student_today_iso, sid, month, sid))
+        WHERE {access_sql}
+        GROUP BY m.subject_id, sub.name, sub.grade
+        ORDER BY
+            CAST(REPLACE(sub.grade,'G','') AS INTEGER),
+            sub.name
+    """, access_params)
 
-    mats = cur.fetchall()
+    subject_rows = cur.fetchall()
+    allowed_subject_ids = {
+        int(row["subject_id"])
+        for row in subject_rows
+    }
 
-    if mats:
+    if selected_subject_id is not None and selected_subject_id not in allowed_subject_ids:
+        selected_subject_id = None
+        page_num = 1
 
-            grouped = {}
+    subject_cards_html = ""
 
-            for m in mats:
+    for row in subject_rows:
+        subject_url = url_for(
+            "student_materials",
+            subject_id=row["subject_id"],
+            page=1
+        )
 
-                subject_key = f"{grade_label(m['grade'])} — {m['subject_name']}"
+        recording_count = int(row["recording_count"] or 0)
+        resource_count = int(row["resource_count"] or 0)
 
-                if subject_key not in grouped:
-                    grouped[subject_key] = []
+        recording_text = (
+            f" · {recording_count} recording{'s' if recording_count != 1 else ''}"
+            if recording_count
+            else ""
+        )
 
-                if m['file_path']:
-                    link = f"""
-                    <a class='btn success mini'
-                       target='_blank'
-                       href='/student/material/{m["id"]}/open'>
-                       ⬇ Download
-                    </a>
-                    """
-                else:
-                    link = f"""
-                    <a class='btn mini'
-                       target='_blank'
-                       href='/student/material/{m["id"]}/open'>
-                       ▶ Watch
-                    </a>
-                    """
-
-                grouped[subject_key].append(f"""
-                <div class='card soft' style="
-                    border-left:5px solid #25D366;
-                    padding:14px;
-                ">
-
-                    <div style="
-                        display:flex;
-                        justify-content:space-between;
-                        align-items:center;
-                        gap:10px;
-                        flex-wrap:wrap;
-                    ">
-
-                        <div>
-                            <div style="font-weight:700;font-size:15px">
-                                📘 {m['title']}
-                            </div>
-
-                            <div class="mini muted" style="margin-top:4px">
-                                👨‍🏫 {m['tutor_name']}
-                                · {'One-on-One' if (m['delivery_mode'] or 'GROUP') == 'ONE_ON_ONE' else ('Group & One-on-One' if (m['delivery_mode'] or 'GROUP') == 'BOTH' else 'Group')}
-                            </div>
-                        </div>
-
-                        <div>
-                            {link}
-                        </div>
-
-                    </div>
-
+        subject_cards_html += f"""
+        <a class="student-material-subject-card"
+           href="{subject_url}">
+            <div class="student-material-subject-copy">
+                <h3>🎓 {escape(grade_label(row['grade']))} — {escape(row['subject_name'])}</h3>
+                <div class="mini muted">
+                    Open this subject to view its learning materials.
                 </div>
-                """)
+            </div>
 
-            blocks = []
+            <div class="student-material-subject-meta">
+                <span class="chip">
+                    {resource_count} resource{'s' if resource_count != 1 else ''}
+                </span>
+                <span class="student-material-open-label">
+                    View materials{recording_text}
+                </span>
+            </div>
+        </a>
+        """
 
-            for subject, items in grouped.items():
-                blocks.append(f"""
-                <details class='material-subject-section'>
+    if not subject_rows:
+        content_html = f"""
+        <div class="empty" style="padding:16px">
+            No learning materials are available for
+            <strong>{escape(pretty_month_label(month))}</strong> yet.
+        </div>
+        """
+        heading_html = f"""
+        <h2 style="margin-top:10px">
+            📚 Learning Materials for {escape(pretty_month_label(month))}
+        </h2>
 
-                    <summary>
-                        <div class="material-subject-left">
-                            <h3>
-                                🎓 {subject}
-                            </h3>
+        <div class="mini muted" style="margin-bottom:12px">
+            Access your study resources, recordings, and notes uploaded by your tutors.
+        </div>
+        """
+    elif selected_subject_id is None:
+        content_html = subject_cards_html
+        heading_html = f"""
+        <h2 style="margin-top:10px">
+            📚 Learning Materials for {escape(pretty_month_label(month))}
+        </h2>
 
-                            <div class="mini muted">
-                                Tap to view learning materials for this subject.
-                            </div>
-                        </div>
+        <div class="mini muted" style="margin-bottom:12px">
+            Choose a subject below. Only the selected subject's resources are loaded,
+            which keeps this page fast and stable even when many materials are available.
+        </div>
+        """
+    else:
+        selected_subject = next(
+            row for row in subject_rows
+            if int(row["subject_id"]) == selected_subject_id
+        )
 
-                        <div class="material-subject-right">
-                            <span class="chip">
-                                {len(items)} resources
-                            </span>
+        count_params = list(access_params) + [selected_subject_id]
 
-                            <span class="material-toggle-text">
-                                View more
-                            </span>
-                        </div>
-                    </summary>
+        cur.execute(f"""
+            SELECT COUNT(*) AS c
+            FROM materials m
+            WHERE {access_sql}
+              AND m.subject_id=?
+        """, count_params)
 
-                    <div class='material-subject-content'>
-                        <div class='grid' style="gap:10px">
-                            {''.join(items)}
-                        </div>
+        total_resources = int(cur.fetchone()["c"] or 0)
+        total_pages = max(1, (total_resources + per_page - 1) // per_page)
+
+        if page_num > total_pages:
+            page_num = total_pages
+
+        offset = (page_num - 1) * per_page
+
+        cur.execute(f"""
+            SELECT
+                m.*,
+                sub.name AS subject_name,
+                sub.grade,
+                uploader.full_name AS tutor_name
+            FROM materials m
+            JOIN subjects sub ON sub.id=m.subject_id
+            LEFT JOIN tutors uploader ON uploader.id=m.tutor_id
+            WHERE {access_sql}
+              AND m.subject_id=?
+            ORDER BY m.created_at DESC, m.id DESC
+            LIMIT ? OFFSET ?
+        """, count_params + [per_page, offset])
+
+        mats = cur.fetchall()
+
+        material_rows_html = ""
+
+        for m in mats:
+            tutor_name = m["tutor_name"] or "Previous tutor"
+            delivery_mode = m["delivery_mode"] or "GROUP"
+
+            if delivery_mode == "ONE_ON_ONE":
+                delivery_text = "One-on-One"
+            elif delivery_mode == "BOTH":
+                delivery_text = "Group & One-on-One"
+            else:
+                delivery_text = "Group"
+
+            if m["file_path"]:
+                resource_type = "Document"
+                action = f"""
+                <a class="btn success mini"
+                   target="_blank"
+                   rel="noopener"
+                   href="/student/material/{m['id']}/open">
+                    ⬇ Download
+                </a>
+                """
+            elif m["youtube_url"]:
+                resource_type = "Recording"
+                action = f"""
+                <a class="btn mini"
+                   target="_blank"
+                   rel="noopener"
+                   href="/student/material/{m['id']}/open">
+                    ▶ Watch
+                </a>
+                """
+            else:
+                resource_type = "Resource"
+                action = f"""
+                <a class="btn mini secondary"
+                   href="/student/material/{m['id']}/open">
+                    Open
+                </a>
+                """
+
+            material_rows_html += f"""
+            <article class="student-material-row">
+                <div class="student-material-row-copy">
+                    <div class="student-material-row-title">
+                        📘 {escape(m['title'] or 'Untitled resource')}
                     </div>
 
-                </details>
-                """)
-            materials_html = "".join(blocks)
+                    <div class="mini muted student-material-row-meta">
+                        👨‍🏫 {escape(tutor_name)}
+                        · {escape(delivery_text)}
+                        · {escape(resource_type)}
+                    </div>
+                </div>
+
+                <div class="student-material-row-action">
+                    {action}
+                </div>
+            </article>
+            """
+
+        if not material_rows_html:
+            material_rows_html = """
+            <div class="empty" style="padding:16px">
+                No resources were found for this subject.
+            </div>
+            """
+
+        pager_parts = []
+
+        if page_num > 1:
+            pager_parts.append(
+                f"""
+                <a class="btn mini secondary"
+                   href="{url_for('student_materials', subject_id=selected_subject_id, page=page_num-1)}">
+                    ← Previous
+                </a>
+                """
+            )
+
+        pager_parts.append(
+            f"""
+            <span class="chip">
+                Page {page_num} of {total_pages}
+            </span>
+            """
+        )
+
+        if page_num < total_pages:
+            pager_parts.append(
+                f"""
+                <a class="btn mini secondary"
+                   href="{url_for('student_materials', subject_id=selected_subject_id, page=page_num+1)}">
+                    Next →
+                </a>
+                """
+            )
+
+        pager_html = f"""
+        <div class="student-material-pager">
+            {''.join(pager_parts)}
+        </div>
+        """
+
+        heading_html = f"""
+        <div class="student-material-detail-heading">
+            <div>
+                <h2 style="margin:0">
+                    📚 {escape(grade_label(selected_subject['grade']))}
+                    — {escape(selected_subject['subject_name'])}
+                </h2>
+
+                <div class="mini muted" style="margin-top:5px">
+                    {total_resources} resource{'s' if total_resources != 1 else ''}
+                    available for {escape(pretty_month_label(month))}.
+                </div>
+            </div>
+
+            <a class="btn mini secondary"
+               href="{url_for('student_materials')}">
+                ← All Subjects
+            </a>
+        </div>
+        """
+
+        content_html = f"""
+        <div class="student-material-list">
+            {material_rows_html}
+        </div>
+
+        {pager_html}
+        """
 
     conn.close()
 
@@ -23625,175 +23828,232 @@ def student_materials():
     {month_selector}
 
     <style>
+        /* =========================================================
+           STUDENT MATERIALS PAINT-STABILITY MODE
+           =========================================================
+           Keep this page deliberately simple:
+           - no backdrop blur
+           - no card entrance animation
+           - no nested generic .card elements
+           - only one subject's resource rows are rendered at a time
+           ========================================================= */
+
         .student-materials-page-card {{
             display:block !important;
             opacity:1 !important;
             visibility:visible !important;
             transform:none !important;
+            animation:none !important;
+            transition:none !important;
             width:100% !important;
             max-width:100% !important;
             min-width:0 !important;
-            min-height:170px;
+            min-height:0 !important;
             overflow:visible !important;
+            backdrop-filter:none !important;
+            -webkit-backdrop-filter:none !important;
+            background:#ffffff !important;
+            box-shadow:0 4px 14px rgba(15,23,42,.06) !important;
+            contain:none !important;
+            will-change:auto !important;
         }}
 
-        .student-materials-page-card *,
-        .student-materials-page-card .material-subject-section {{
-            visibility:visible !important;
+        .student-materials-page-card:hover {{
+            transform:none !important;
         }}
 
-        .material-subject-section {{
-            border:1px solid #e2e8f0;
-            border-left:6px solid #1b5e20;
-            border-radius:16px;
-            background:#ffffff;
-            box-shadow:0 2px 8px rgba(15,23,42,0.05);
-            margin-bottom:14px;
-            overflow:hidden;
-        }}
-
-        .material-subject-section summary {{
-            cursor:pointer;
-            list-style:none;
+        .student-material-subject-card {{
             display:flex;
+            align-items:center;
             justify-content:space-between;
-            align-items:center;
-            gap:12px;
+            gap:14px;
+            width:100%;
+            min-width:0;
+            margin:0 0 12px;
             padding:16px;
-            background:#f8fafc;
-        }}
-
-        .material-subject-section summary::-webkit-details-marker {{
-            display:none;
-        }}
-
-        .material-subject-left h3 {{
-            margin:0;
-            font-size:16px;
+            border:1px solid #dce7df;
+            border-left:6px solid #1b5e20;
+            border-radius:14px;
             color:#0f172a;
+            background:#ffffff;
+            text-decoration:none;
+            box-shadow:none;
+            transform:none !important;
+            transition:border-color .15s ease, background .15s ease;
         }}
 
-        .material-subject-right {{
+        .student-material-subject-card:hover {{
+            background:#f7fcf8;
+            border-color:#aac9b3;
+            transform:none !important;
+        }}
+
+        .student-material-subject-copy {{
+            min-width:0;
+            flex:1 1 auto;
+        }}
+
+        .student-material-subject-copy h3 {{
+            margin:0 0 4px;
+            font-size:16px;
+            line-height:1.3;
+        }}
+
+        .student-material-subject-meta {{
             display:flex;
             align-items:center;
-            gap:8px;
-            flex-wrap:wrap;
             justify-content:flex-end;
+            gap:8px;
+            flex:0 1 auto;
+            flex-wrap:wrap;
         }}
 
-        .material-toggle-text {{
-            font-size:12px;
-            font-weight:700;
-            color:#1b5e20;
-            background:#e8f5e9;
-            padding:5px 9px;
+        .student-material-open-label {{
+            display:inline-flex;
+            align-items:center;
+            min-height:30px;
+            padding:5px 10px;
             border-radius:999px;
+            color:#155d32;
+            background:#eaf6ed;
+            font-size:12px;
+            font-weight:800;
         }}
 
-        .material-subject-section[open] .material-toggle-text {{
-            color:#92400e;
-            background:#fef3c7;
+        .student-material-detail-heading {{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            flex-wrap:wrap;
+            margin:10px 0 14px;
         }}
 
-        .material-subject-section[open] .material-toggle-text::before {{
-            content:"Showing ";
+        .student-material-list {{
+            display:flex !important;
+            flex-direction:column !important;
+            align-items:stretch !important;
+            justify-content:flex-start !important;
+            gap:10px !important;
+            width:100% !important;
+            min-height:0 !important;
+            height:auto !important;
         }}
 
-        .material-subject-content {{
-            padding:14px;
-            border-top:1px solid #e2e8f0;
-            background:#ffffff;
+        .student-material-row {{
+            display:flex !important;
+            align-items:center !important;
+            justify-content:space-between !important;
+            gap:14px !important;
+            width:100% !important;
+            min-width:0 !important;
+            min-height:0 !important;
+            height:auto !important;
+            margin:0 !important;
+            padding:14px 16px !important;
+            border:1px solid #dce7df !important;
+            border-left:5px solid #25D366 !important;
+            border-radius:12px !important;
+            background:#ffffff !important;
+            box-shadow:none !important;
+            opacity:1 !important;
+            visibility:visible !important;
+            transform:none !important;
+            animation:none !important;
+            transition:none !important;
+            backdrop-filter:none !important;
+            -webkit-backdrop-filter:none !important;
+            contain:none !important;
+            will-change:auto !important;
+        }}
+
+        .student-material-row-copy {{
+            flex:1 1 auto;
+            min-width:0;
+        }}
+
+        .student-material-row-title {{
+            color:#0f172a;
+            font-size:15px;
+            font-weight:800;
+            line-height:1.35;
+            overflow-wrap:anywhere;
+        }}
+
+        .student-material-row-meta {{
+            margin-top:4px;
+            line-height:1.35;
+        }}
+
+        .student-material-row-action {{
+            flex:0 0 auto;
+        }}
+
+        .student-material-row-action .btn {{
+            transform:none !important;
+            animation:none !important;
+            transition:none !important;
+        }}
+
+        .student-material-pager {{
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            gap:10px;
+            flex-wrap:wrap;
+            margin-top:16px;
         }}
 
         @media(max-width:760px) {{
-            .material-subject-section summary {{
-                align-items:flex-start;
-                flex-direction:column;
+            .student-material-subject-card,
+            .student-material-row {{
+                align-items:flex-start !important;
+                flex-direction:column !important;
             }}
 
-            .material-subject-right {{
+            .student-material-subject-meta {{
                 justify-content:flex-start;
+            }}
+
+            .student-material-row-action {{
+                width:100%;
+            }}
+
+            .student-material-row-action .btn {{
+                width:100%;
+                justify-content:center;
+            }}
+        }}
+
+        @media (prefers-reduced-motion: reduce) {{
+            .student-materials-page-card *,
+            .student-materials-page-card *::before,
+            .student-materials-page-card *::after {{
+                animation:none !important;
+                transition:none !important;
+                scroll-behavior:auto !important;
             }}
         }}
     </style>
 
-    <div class='card student-materials-page-card'
-         id='studentMaterialsPageCard'
-         style="border-left:6px solid #25D366">
+    <section class="card student-materials-page-card"
+             id="studentMaterialsPageCard"
+             style="border-left:6px solid #25D366">
 
-        <a class='btn mini secondary' href='/student'>← Back</a>
+        <a class="btn mini secondary" href="/student">← Back</a>
 
-        <h2 style="margin-top:10px">
-            📚 Learning Materials for {pretty_month_label(month)}
-        </h2>
+        {heading_html}
 
-        <div class="mini muted" style="margin-bottom:12px">
-            Access your study resources, recordings, and notes uploaded by your tutors.
-        </div>
+        {content_html}
 
-        {materials_html}
-
-    </div>
+    </section>
     """
 
-    materials_visibility_js = """
-    <script>
-        (function () {
-            function forceStudentMaterialsVisible() {
-                const card = document.getElementById(
-                    "studentMaterialsPageCard"
-                );
+    # No visibility timers or repeated DOM rewriting are used here.
+    # Keeping the page static after first paint prevents the previous
+    # flicker/repaint loop on resource-heavy months.
+    return page("Materials", body)
 
-                if (!card) return;
-
-                card.style.setProperty("display", "block", "important");
-                card.style.setProperty("opacity", "1", "important");
-                card.style.setProperty("visibility", "visible", "important");
-                card.style.setProperty("transform", "none", "important");
-
-                card.querySelectorAll(
-                    ".material-subject-section, " +
-                    ".material-subject-content, h2, .mini, .empty"
-                ).forEach(function (element) {
-                    element.style.setProperty(
-                        "visibility",
-                        "visible",
-                        "important"
-                    );
-                    element.style.setProperty(
-                        "opacity",
-                        "1",
-                        "important"
-                    );
-                });
-            }
-
-            if (document.readyState === "loading") {
-                document.addEventListener(
-                    "DOMContentLoaded",
-                    forceStudentMaterialsVisible
-                );
-            } else {
-                forceStudentMaterialsVisible();
-            }
-
-            window.addEventListener(
-                "pageshow",
-                forceStudentMaterialsVisible
-            );
-
-            window.setTimeout(forceStudentMaterialsVisible, 120);
-            window.setTimeout(forceStudentMaterialsVisible, 900);
-        })();
-    </script>
-    """
-
-    return page(
-        "Materials",
-        body,
-        extra_js=materials_visibility_js
-    )
-    
     
 @app.get('/student/assignments')
 def student_assignments():
