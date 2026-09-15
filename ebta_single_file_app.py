@@ -28802,7 +28802,7 @@ def tutor_home():
                     if (!ebtaDriveTokenClient) {{
                         ebtaDriveTokenClient = google.accounts.oauth2.initTokenClient({{
                             client_id: EBTA_DRIVE_PICKER_CLIENT_ID,
-                            scope: "https://www.googleapis.com/auth/drive.readonly",
+                            scope: "https://www.googleapis.com/auth/drive.file",
                             callback: function(response) {{
                                 if (response && response.access_token) {{
                                     ebtaDriveAccessToken = response.access_token;
