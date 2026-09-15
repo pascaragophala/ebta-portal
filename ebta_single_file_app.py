@@ -6102,6 +6102,7 @@ EMAIL_NOTIFICATION_EVENTS = {
     "enrollment_approved": "Enrollment approved",
     "enrollment_lapsed": "Enrollment lapsed",
     "enrollment_pending": "Enrollment changed to pending",
+    "enrollment_reminder": "Enrollment reminder",
     "pop_updated_student": "Proof of Payment updated - learner",
     "pop_updated_admission": "Proof of Payment updated - Admissions",
     "material_uploaded": "New learning material",
@@ -35355,6 +35356,101 @@ def admin_sms_unique_phones(values):
     return phones
 
 
+def admin_email_unique_students(rows):
+    """Return one student record per valid email address."""
+    result = []
+    seen = set()
+
+    for row in rows:
+        try:
+            email = normalize_email_address(row["email"])
+        except Exception:
+            email = ""
+
+        if not email:
+            continue
+
+        key = email.lower()
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        result.append({
+            "id": int(row["id"]),
+            "full_name": str(row["full_name"] or "").strip() or "Learner",
+            "email": email,
+        })
+
+    return result
+
+
+def admin_email_default_enrollment_subject(month):
+    try:
+        month_label = pretty_month_label(month)
+    except Exception:
+        month_label = month
+
+    return f"EBTA Enrollment Reminder - {month_label}"
+
+
+def admin_email_default_enrollment_message(month):
+    try:
+        month_label = pretty_month_label(month)
+    except Exception:
+        month_label = month
+
+    return (
+        f"Enrollments for {month_label} are open at Early Bird Testimony Academy.\n\n"
+        "Our records show that you have not enrolled for this month yet. "
+        "Please complete your enrollment on the EBTA Portal if you still plan to attend classes.\n\n"
+        "For assistance, contact EBTA Admin on +27 64 865 0013."
+    )
+
+
+def admin_queue_enrollment_emails(rows, month, subject, message):
+    """
+    Queue one reminder per unique learner email address.
+    Manual High Admin reminders use the normal EBTA email queue.
+    """
+    students = admin_email_unique_students(rows)
+
+    if not students:
+        return 0, 0
+
+    conn = get_db()
+
+    queued = 0
+
+    try:
+        for student in students:
+            if queue_email_notification(
+                student["email"],
+                subject,
+                message,
+                "enrollment_reminder",
+                recipient_name=student["full_name"],
+                details=[
+                    ("Enrollment Month", pretty_month_label(month))
+                ],
+                action_path="/",
+                action_label="Open EBTA Portal",
+                recipient_type="student",
+                related_type="enrollment_reminder",
+                related_id=student["id"],
+                conn=conn
+            ):
+                queued += 1
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+    return queued, len(students)
+
+
 def admin_sms_default_enrollment_message(month):
     """
     Default SMS message for enrollment reminders.
@@ -35911,7 +36007,22 @@ def admin_enrollment_sms():
         [r["guardian_phone"] for r in all_student_rows]
     )
 
+    not_enrolled_email_students = admin_email_unique_students(not_enrolled_rows)
+    all_email_students = admin_email_unique_students(all_student_rows)
+
     default_message = admin_sms_default_enrollment_message(month)
+    default_email_subject = admin_email_default_enrollment_subject(month)
+    default_email_message = admin_email_default_enrollment_message(month)
+
+    email_master_enabled = outbound_channel_enabled("email", fresh=True)
+    smtp_ready = email_smtp_ready()
+
+    if not smtp_ready:
+        email_status_html = "<span class='chip lapsed'>Email Setup Required</span>"
+    elif not email_master_enabled:
+        email_status_html = "<span class='chip pending'>Email Paused</span>"
+    else:
+        email_status_html = "<span class='chip active'>Email Active</span>"
 
     manual_search = request.args.get("q", "").strip()
     manual_grade = request.args.get("grade", "").strip()
@@ -35962,14 +36073,21 @@ def admin_enrollment_sms():
                        name="student_ids"
                        value="{s['id']}">
             </td>
+
             <td>
                 <strong>{escape(s['full_name'] or '')}</strong>
                 <div class="mini muted">{escape(grade_label(s['grade']))}</div>
             </td>
+
             <td>{escape(s['phone_whatsapp'] or '—')}</td>
+
             <td>
                 {escape(s['guardian_name'] or '—')}
                 <div class="mini muted">{escape(s['guardian_phone'] or 'No parent phone')}</div>
+            </td>
+
+            <td>
+                {escape(s['email'] or 'No email')}
             </td>
         </tr>
         """
@@ -35977,7 +36095,7 @@ def admin_enrollment_sms():
     if not manual_rows:
         manual_rows = """
         <tr>
-            <td colspan="4" class="muted">
+            <td colspan="5" class="muted">
                 No learners found for the selected search/filter.
             </td>
         </tr>
@@ -36050,21 +36168,24 @@ def admin_enrollment_sms():
 
     body = f"""
     {admin_nav()}
-    
+
     <style>
         @media(max-width:900px){{
             #manual-selection form[method="get"]{{
+                grid-template-columns:1fr !important;
+            }}
+
+            .enrollment-reminder-grid{{
                 grid-template-columns:1fr !important;
             }}
         }}
     </style>
 
     <section class="card">
-        <h1>Enrollment SMS Reminders</h1>
+        <h1>Enrollment Reminders</h1>
 
         <p class="mini muted">
-            Use this page to send SMS enrollment reminders to parents and learners.
-            Messages are queued first, then processed by the SMS system.
+            Send enrollment reminders by SMS or email.
         </p>
 
         <form method="get"
@@ -36078,36 +36199,42 @@ def admin_enrollment_sms():
         <div class="stats-mini">
             <div>
                 <b>{len(not_enrolled_rows)}</b>
-                <span>Once-enrolled learners not enrolled now</span>
+                <span>Not enrolled this month</span>
             </div>
+
             <div>
                 <b>{len(not_enrolled_parent_phones)}</b>
-                <span>Parent phones to remind</span>
+                <span>Parent SMS numbers</span>
             </div>
+
             <div>
                 <b>{len(not_enrolled_learner_phones)}</b>
-                <span>Learner phones to remind</span>
+                <span>Learner SMS numbers</span>
             </div>
+
             <div>
-                <b>{len(all_learner_phones)}</b>
-                <span>All learner phones</span>
+                <b>{len(not_enrolled_email_students)}</b>
+                <span>Learner email addresses</span>
             </div>
         </div>
-        
+
         <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
             <a class="btn success mini" href="#manual-selection">
                 Manual Selected Learners
             </a>
 
             <a class="btn secondary mini" href="/admin/sms-dashboard">
-                View SMS Dashboard
+                SMS Dashboard
+            </a>
+
+            <a class="btn secondary mini" href="/admin/email-notifications">
+                Email Dashboard
             </a>
         </div>
-        
     </section>
 
-    <section class="card">
-        <h2>Bulk Enrollment SMS</h2>
+    <section class="card" style="border-left:5px solid #2563eb">
+        <h2>Enrollment SMS Reminders</h2>
 
         <form method="post" action="/admin/enrollment-sms/send">
 
@@ -36157,11 +36284,71 @@ def admin_enrollment_sms():
         </form>
     </section>
 
+    <section class="card" style="border-left:5px solid #7c3aed">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
+            <div>
+                <h2 style="margin-bottom:4px">Enrollment Email Reminders</h2>
+                <p class="mini muted" style="margin:0">
+                    Email reminders are sent to learner email addresses saved on the portal.
+                </p>
+            </div>
+
+            {email_status_html}
+        </div>
+
+        <div class="stats-mini" style="margin-top:14px">
+            <div>
+                <b>{len(not_enrolled_email_students)}</b>
+                <span>Not-enrolled learner emails</span>
+            </div>
+
+            <div>
+                <b>{len(all_email_students)}</b>
+                <span>All learner emails</span>
+            </div>
+        </div>
+
+        <form method="post"
+              action="/admin/enrollment-email/send"
+              style="margin-top:16px">
+
+            <input type="hidden" name="month" value="{escape(month)}">
+
+            <label>Email Subject</label>
+            <input name="subject"
+                   value="{escape(default_email_subject, quote=True)}"
+                   required>
+
+            <label style="margin-top:10px">Email Message</label>
+            <textarea name="body"
+                      rows="6"
+                      required>{escape(default_email_message)}</textarea>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">
+
+                <button class="btn mini success"
+                        name="action"
+                        value="not_enrolled"
+                        onclick="return confirm('Queue enrollment emails for learners not enrolled this month?')">
+                    Email Learners Not Enrolled
+                </button>
+
+                <button class="btn mini secondary"
+                        name="action"
+                        value="all_students"
+                        onclick="return confirm('Queue this enrollment email for all learners with a saved email address?')">
+                    Email All Learners
+                </button>
+
+            </div>
+        </form>
+    </section>
+
     <section class="card" id="manual-selection" style="border-top:4px solid #1b5e20;">
         <h2>Manual Selected Learners</h2>
 
         <p class="mini muted">
-            Manually select specific learners who were once enrolled with EBTA but are not enrolled for the selected month. You can send the reminder to the learner, parent/guardian, or both.
+            Select specific learners, then send an SMS or email reminder.
         </p>
 
         <form method="get"
@@ -36202,19 +36389,40 @@ def admin_enrollment_sms():
             </a>
         </form>
 
-        <form method="post" action="/admin/enrollment-sms/manual-send">
+        <form method="post">
 
             <input type="hidden" name="month" value="{escape(month)}">
 
-            <label>Send to</label>
-            <select name="recipient_type" required>
-                <option value="student">Learner only</option>
-                <option value="parent">Parent/guardian only</option>
-                <option value="both">Both learner and parent</option>
-            </select>
+            <div class="enrollment-reminder-grid"
+                 style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:14px 0">
 
-            <label style="margin-top:10px;">SMS Message</label>
-            <textarea name="body" rows="4" required>{escape(default_message)}</textarea>
+                <div class="card soft" style="border-left:5px solid #2563eb;margin:0">
+                    <h3>SMS Reminder</h3>
+
+                    <label>Send SMS to</label>
+                    <select name="recipient_type">
+                        <option value="student">Learner only</option>
+                        <option value="parent">Parent/guardian only</option>
+                        <option value="both">Both learner and parent</option>
+                    </select>
+
+                    <label style="margin-top:10px;">SMS Message</label>
+                    <textarea name="body" rows="5">{escape(default_message)}</textarea>
+                </div>
+
+                <div class="card soft" style="border-left:5px solid #7c3aed;margin:0">
+                    <h3>Email Reminder</h3>
+
+                    <label>Email Subject</label>
+                    <input name="email_subject"
+                           value="{escape(default_email_subject, quote=True)}">
+
+                    <label style="margin-top:10px;">Email Message</label>
+                    <textarea name="email_body"
+                              rows="5">{escape(default_email_message)}</textarea>
+                </div>
+
+            </div>
 
             {manual_pagination}
 
@@ -36230,6 +36438,7 @@ def admin_enrollment_sms():
                             <th>Learner</th>
                             <th>Learner Phone</th>
                             <th>Parent/Guardian</th>
+                            <th>Email</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -36237,19 +36446,31 @@ def admin_enrollment_sms():
                     </tbody>
                 </table>
             </div>
-            
+
             {manual_pagination}
 
-            <button class="btn success"
-                    style="margin-top:14px;"
-                    onclick="return confirm('Queue SMS reminders for the selected learners?')">
-                Send Manual Reminder
-            </button>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+
+                <button class="btn"
+                        formaction="/admin/enrollment-sms/manual-send"
+                        formmethod="post"
+                        onclick="return confirm('Queue SMS reminders for the selected learners?')">
+                    Send SMS to Selected
+                </button>
+
+                <button class="btn success"
+                        formaction="/admin/enrollment-email/manual-send"
+                        formmethod="post"
+                        onclick="return confirm('Queue email reminders for the selected learners with saved email addresses?')">
+                    Send Email to Selected
+                </button>
+
+            </div>
         </form>
     </section>
     """
 
-    return page("Enrollment SMS Reminders", body)
+    return page("Enrollment Reminders", body)
 
 
 @app.post('/admin/enrollment-sms/send')
@@ -36314,7 +36535,7 @@ def admin_enrollment_sms_send():
         ) + f"""
         <div class="card">
             <a class="btn" href="/admin/enrollment-sms?month={escape(month)}">
-                Back to Enrollment SMS
+                Back to Enrollment Reminders
             </a>
             <a class="btn secondary" href="/admin/sms-dashboard">
                 View SMS Dashboard
@@ -36399,7 +36620,7 @@ def admin_enrollment_sms_manual_send():
         card_msg(f"{len(phones)} manual SMS reminder(s) queued successfully.") + f"""
         <div class="card">
             <a class="btn" href="/admin/enrollment-sms?month={escape(month)}">
-                Back to Enrollment SMS
+                Back to Enrollment Reminders
             </a>
             <a class="btn secondary" href="/admin/sms-dashboard">
                 View SMS Dashboard
@@ -36408,6 +36629,255 @@ def admin_enrollment_sms_manual_send():
         """
     )
 
+
+
+@app.post('/admin/enrollment-email/send')
+@require_high_admin
+def admin_enrollment_email_send():
+
+    r = require_admin()
+    if r:
+        return r
+
+    month = request.form.get("month") or get_setting("current_month")
+    action = request.form.get("action", "").strip()
+    subject = request.form.get("subject", "").strip()
+    body = request.form.get("body", "").strip()
+
+    if not subject:
+        return page("Email Reminder", card_msg("Email subject is required."))
+
+    if not body:
+        return page("Email Reminder", card_msg("Email message is required."))
+
+    if not email_smtp_ready():
+        return page(
+            "Email Setup Required",
+            card_msg("Email sending is not configured yet.") +
+            """
+            <div class="card">
+                <a class="btn secondary" href="/admin/email-notifications">
+                    Open Email Notifications
+                </a>
+                <a class="btn" href="/admin/enrollment-sms">
+                    Back to Enrollment Reminders
+                </a>
+            </div>
+            """
+        )
+
+    conn = get_db()
+    event_allowed = email_event_enabled("enrollment_reminder", conn=conn)
+    conn.close()
+
+    if not event_allowed:
+        return page(
+            "Enrollment Email Reminders Disabled",
+            card_msg("Enrollment reminder emails are disabled in Email Notifications.") +
+            """
+            <div class="card">
+                <a class="btn secondary" href="/admin/email-notifications">
+                    Open Email Notifications
+                </a>
+                <a class="btn" href="/admin/enrollment-sms">
+                    Back to Enrollment Reminders
+                </a>
+            </div>
+            """
+        )
+
+    if action == "not_enrolled":
+        rows = admin_sms_fetch_not_enrolled_students(month)
+
+    elif action == "all_students":
+        rows = admin_sms_fetch_all_students()
+
+    else:
+        return page("Email Reminder", card_msg("Invalid email reminder action."))
+
+    queued, valid_count = admin_queue_enrollment_emails(
+        rows,
+        month,
+        subject,
+        body
+    )
+
+    if valid_count == 0:
+        return page(
+            "No Emails Queued",
+            card_msg("No valid learner email addresses were found for this action.") +
+            f"""
+            <div class="card">
+                <a class="btn" href="/admin/enrollment-sms?month={escape(month)}">
+                    Back to Enrollment Reminders
+                </a>
+            </div>
+            """
+        )
+
+    status_note = ""
+
+    if not outbound_channel_enabled("email", fresh=True):
+        status_note = """
+        <div class="card soft" style="border-left:5px solid #f59e0b">
+            Email is currently paused. The queued reminders will remain pending until email is resumed.
+        </div>
+        """
+
+    return page(
+        "Enrollment Emails Queued",
+        card_msg(
+            f"{queued} enrollment email reminder(s) queued for {pretty_month_label(month)}."
+        ) +
+        status_note +
+        f"""
+        <div class="card">
+            <a class="btn" href="/admin/enrollment-sms?month={escape(month)}">
+                Back to Enrollment Reminders
+            </a>
+
+            <a class="btn secondary" href="/admin/email-notifications">
+                View Email Dashboard
+            </a>
+        </div>
+        """
+    )
+
+
+@app.post('/admin/enrollment-email/manual-send')
+@require_high_admin
+def admin_enrollment_email_manual_send():
+
+    r = require_admin()
+    if r:
+        return r
+
+    month = request.form.get("month") or get_setting("current_month")
+    subject = request.form.get("email_subject", "").strip()
+    body = request.form.get("email_body", "").strip()
+    student_ids_raw = request.form.getlist("student_ids")
+
+    if not subject:
+        return page("Email Reminder", card_msg("Email subject is required."))
+
+    if not body:
+        return page("Email Reminder", card_msg("Email message is required."))
+
+    student_ids = []
+
+    for sid in student_ids_raw:
+        try:
+            student_ids.append(int(sid))
+        except Exception:
+            pass
+
+    if not student_ids:
+        return page("Email Reminder", card_msg("Please select at least one learner."))
+
+    if not email_smtp_ready():
+        return page(
+            "Email Setup Required",
+            card_msg("Email sending is not configured yet.") +
+            """
+            <div class="card">
+                <a class="btn secondary" href="/admin/email-notifications">
+                    Open Email Notifications
+                </a>
+                <a class="btn" href="/admin/enrollment-sms">
+                    Back to Enrollment Reminders
+                </a>
+            </div>
+            """
+        )
+
+    conn = get_db()
+    event_allowed = email_event_enabled("enrollment_reminder", conn=conn)
+
+    if not event_allowed:
+        conn.close()
+        return page(
+            "Enrollment Email Reminders Disabled",
+            card_msg("Enrollment reminder emails are disabled in Email Notifications.") +
+            """
+            <div class="card">
+                <a class="btn secondary" href="/admin/email-notifications">
+                    Open Email Notifications
+                </a>
+                <a class="btn" href="/admin/enrollment-sms">
+                    Back to Enrollment Reminders
+                </a>
+            </div>
+            """
+        )
+
+    placeholders = ",".join(["?"] * len(student_ids))
+
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT
+            id,
+            full_name,
+            email
+        FROM students
+        WHERE id IN ({placeholders})
+        ORDER BY full_name
+    """, student_ids)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    queued, valid_count = admin_queue_enrollment_emails(
+        rows,
+        month,
+        subject,
+        body
+    )
+
+    if valid_count == 0:
+        return page(
+            "No Emails Queued",
+            card_msg("None of the selected learners has a valid email address.") +
+            f"""
+            <div class="card">
+                <a class="btn" href="/admin/enrollment-sms?month={escape(month)}#manual-selection">
+                    Back to Selected Learners
+                </a>
+            </div>
+            """
+        )
+
+    skipped = max(0, len(set(student_ids)) - valid_count)
+
+    status_note = ""
+
+    if not outbound_channel_enabled("email", fresh=True):
+        status_note = """
+        <div class="card soft" style="border-left:5px solid #f59e0b">
+            Email is currently paused. The queued reminders will remain pending until email is resumed.
+        </div>
+        """
+
+    summary = (
+        f"{queued} email reminder(s) queued successfully."
+        + (f" {skipped} selected learner(s) had no valid email address." if skipped else "")
+    )
+
+    return page(
+        "Manual Email Reminders Queued",
+        card_msg(summary) +
+        status_note +
+        f"""
+        <div class="card">
+            <a class="btn" href="/admin/enrollment-sms?month={escape(month)}#manual-selection">
+                Back to Selected Learners
+            </a>
+
+            <a class="btn secondary" href="/admin/email-notifications">
+                View Email Dashboard
+            </a>
+        </div>
+        """
+    )
 
 
 # ===================== HUMAN RESOURCES PORTAL =====================
