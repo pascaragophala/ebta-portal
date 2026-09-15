@@ -28358,16 +28358,10 @@ def tutor_home():
             .tutor-upload-submit {{
                 display:flex;
                 align-items:center;
-                justify-content:space-between;
+                justify-content:flex-end;
                 gap:12px;
                 flex-wrap:wrap;
                 padding-top:4px;
-            }}
-
-            .tutor-upload-submit-copy {{
-                font-size:12px;
-                color:#64748b;
-                max-width:620px;
             }}
 
             @media(max-width:820px) {{
@@ -28392,8 +28386,7 @@ def tutor_home():
                 </h2>
 
                 <div class="mini muted">
-                    Start by choosing the type of content. The form will only show
-                    the fields needed for that upload.
+                    Choose the type of content you want to add.
                 </div>
             </div>
 
@@ -28409,8 +28402,7 @@ def tutor_home():
               enctype="multipart/form-data"
               id="tutorUploadForm">
 
-            <!-- The backend already expects this field to be 'on' for assignments.
-                 JavaScript changes only this value; database/storage logic is unchanged. -->
+            <!-- Assignment flag used by the existing upload form. -->
             <input type="hidden"
                    name="is_assignment"
                    id="tutorUploadAssignmentFlag"
@@ -28422,7 +28414,7 @@ def tutor_home():
                 </div>
 
                 <div class="mini muted">
-                    Choose one option. You can upload another type immediately afterwards.
+                    Select one option below.
                 </div>
 
                 <div class="tutor-upload-type-grid">
@@ -28530,8 +28522,7 @@ def tutor_home():
                     </div>
 
                     <div class="mini muted" style="margin-bottom:10px">
-                        Select one or more files. Multiple files are automatically
-                        kept together using the portal's existing upload process.
+                        Choose one or more files.
                     </div>
 
                     <input type="file"
@@ -28542,8 +28533,7 @@ def tutor_home():
                            style="width:100%">
 
                     <div class="tutor-upload-tip">
-                        Good for lesson notes, presentations, worksheets, revision
-                        packs, study guides and supporting documents.
+                        PDF, Word, PowerPoint, images and ZIP files are supported.
                     </div>
                 </div>
             </div>
@@ -28560,7 +28550,7 @@ def tutor_home():
                     </div>
 
                     <div class="mini muted" style="margin-bottom:10px">
-                        Attach the learner task, then set when it opens and when submissions close.
+                        Add the assignment file, dates and total marks.
                     </div>
 
                     <div style="margin-bottom:12px">
@@ -28609,8 +28599,7 @@ def tutor_home():
                     </div>
 
                     <div class="tutor-upload-tip">
-                        Learners will see the assignment from the open date.
-                        Submissions close after the due date.
+                        Set the dates learners can access and submit the assignment.
                     </div>
                 </div>
             </div>
@@ -28627,7 +28616,7 @@ def tutor_home():
                     </div>
 
                     <div class="mini muted" style="margin-bottom:10px">
-                        Paste the link learners should open to watch the lesson or recording.
+                        Paste the lesson or recording link.
                     </div>
 
                     <label><b>Recording or lesson link</b></label>
@@ -28639,18 +28628,12 @@ def tutor_home():
                            style="width:100%">
 
                     <div class="tutor-upload-tip">
-                        You can use a YouTube link, Google Drive sharing link,
-                        OneDrive link, or another accessible lesson-recording URL.
+                        YouTube, Google Drive, OneDrive and other accessible links are supported.
                     </div>
                 </div>
             </div>
 
             <div class="tutor-upload-submit">
-                <div class="tutor-upload-submit-copy"
-                     id="tutorUploadSubmitHelp">
-                    You are uploading a learning material document.
-                </div>
-
                 <button class="btn success"
                         id="tutorUploadSubmitButton"
                         style="padding:13px 22px;font-size:15px">
@@ -28695,8 +28678,6 @@ def tutor_home():
 
                 const submitButton =
                     document.getElementById("tutorUploadSubmitButton");
-                const submitHelp =
-                    document.getElementById("tutorUploadSubmitHelp");
                 const title =
                     document.getElementById("tutorUploadTitle");
 
@@ -28754,10 +28735,6 @@ def tutor_home():
                         if (submitButton) {{
                             submitButton.innerHTML = "📝 Upload Assignment";
                         }}
-                        if (submitHelp) {{
-                            submitHelp.textContent =
-                                "This will be saved as an assignment using the same assignment workflow already used by EBTA.";
-                        }}
                         if (title) {{
                             title.placeholder =
                                 "Example: Algebra Homework 3";
@@ -28766,10 +28743,6 @@ def tutor_home():
                         if (submitButton) {{
                             submitButton.innerHTML = "🎥 Add Recording / Lesson Link";
                         }}
-                        if (submitHelp) {{
-                            submitHelp.textContent =
-                                "This will be saved as a recording/link and appear with the existing recording resources.";
-                        }}
                         if (title) {{
                             title.placeholder =
                                 "Example: Algebra Lesson Recording";
@@ -28777,10 +28750,6 @@ def tutor_home():
                     }} else {{
                         if (submitButton) {{
                             submitButton.innerHTML = "📚 Upload Learning Material";
-                        }}
-                        if (submitHelp) {{
-                            submitHelp.textContent =
-                                "This will be saved as a normal learning material document.";
                         }}
                         if (title) {{
                             title.placeholder =
