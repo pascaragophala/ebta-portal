@@ -31,18 +31,6 @@ from flask import Flask, request, redirect, url_for, render_template_string, sen
 
 app = Flask(__name__)
 
-# Google Drive Picker used by Tutor -> Upload Learning Content.
-# Configure these in Render to enable direct Google Drive file selection.
-GOOGLE_DRIVE_PICKER_API_KEY = os.environ.get(
-    "GOOGLE_DRIVE_PICKER_API_KEY", ""
-).strip()
-GOOGLE_DRIVE_PICKER_CLIENT_ID = os.environ.get(
-    "GOOGLE_DRIVE_PICKER_CLIENT_ID", ""
-).strip()
-GOOGLE_DRIVE_PICKER_APP_ID = os.environ.get(
-    "GOOGLE_DRIVE_PICKER_APP_ID", ""
-).strip()
-
 # =============================================================
 # SECURITY CONFIGURATION
 # =============================================================
@@ -28368,54 +28356,6 @@ def tutor_home():
                 margin-top:10px;
             }}
 
-            .tutor-upload-source-row {{
-                display:flex;
-                gap:9px;
-                align-items:center;
-                flex-wrap:wrap;
-                margin-bottom:10px;
-            }}
-
-            .tutor-drive-btn {{
-                display:inline-flex;
-                align-items:center;
-                gap:8px;
-                border:1px solid #d7e2da;
-                background:#fff;
-                color:#0f172a;
-                padding:9px 12px;
-                border-radius:10px;
-                font-weight:800;
-                cursor:pointer;
-                box-shadow:none;
-            }}
-
-            .tutor-drive-btn:hover {{
-                background:#f8fbf9;
-                border-color:#a9c4b0;
-            }}
-
-            .tutor-drive-mark {{
-                display:inline-grid;
-                grid-template-columns:repeat(2,7px);
-                grid-template-rows:repeat(2,7px);
-                gap:1px;
-                width:15px;
-                height:15px;
-            }}
-
-            .tutor-drive-mark span:nth-child(1) {{ background:#4285f4; }}
-            .tutor-drive-mark span:nth-child(2) {{ background:#34a853; }}
-            .tutor-drive-mark span:nth-child(3) {{ background:#fbbc04; }}
-            .tutor-drive-mark span:nth-child(4) {{ background:#ea4335; }}
-
-            .tutor-drive-status {{
-                font-size:12px;
-                color:#64748b;
-                line-height:1.35;
-                overflow-wrap:anywhere;
-            }}
-
             .tutor-upload-submit {{
                 display:flex;
                 align-items:center;
@@ -28583,22 +28523,7 @@ def tutor_home():
                     </div>
 
                     <div class="mini muted" style="margin-bottom:10px">
-                        Choose files from your device or Google Drive.
-                    </div>
-
-                    <div class="tutor-upload-source-row">
-                        <button type="button"
-                                class="tutor-drive-btn"
-                                id="tutorDriveDocumentButton"
-                                onclick="ebtaChooseFromGoogleDrive('document')">
-                            <span class="tutor-drive-mark" aria-hidden="true">
-                                <span></span><span></span><span></span><span></span>
-                            </span>
-                            Google Drive
-                        </button>
-
-                        <span class="tutor-drive-status"
-                              id="tutorDriveDocumentStatus"></span>
+                        Choose one or more files.
                     </div>
 
                     <input type="file"
@@ -28631,23 +28556,6 @@ def tutor_home():
 
                     <div style="margin-bottom:12px">
                         <label><b>Assignment file(s)</b></label>
-
-                        <div class="tutor-upload-source-row" style="margin-top:8px">
-                            <button type="button"
-                                    class="tutor-drive-btn"
-                                    id="tutorDriveAssignmentButton"
-                                    onclick="ebtaChooseFromGoogleDrive('assignment')"
-                                    disabled>
-                                <span class="tutor-drive-mark" aria-hidden="true">
-                                    <span></span><span></span><span></span><span></span>
-                                </span>
-                                Google Drive
-                            </button>
-
-                            <span class="tutor-drive-status"
-                                  id="tutorDriveAssignmentStatus"></span>
-                        </div>
-
                         <input type="file"
                                name="file"
                                id="tutorUploadAssignmentFiles"
@@ -28736,285 +28644,6 @@ def tutor_home():
 
         </form>
 
-        <script src="https://apis.google.com/js/api.js"></script>
-        <script src="https://accounts.google.com/gsi/client"></script>
-
-        <script>
-            const EBTA_DRIVE_PICKER_API_KEY = {json.dumps(GOOGLE_DRIVE_PICKER_API_KEY)};
-            const EBTA_DRIVE_PICKER_CLIENT_ID = {json.dumps(GOOGLE_DRIVE_PICKER_CLIENT_ID)};
-            const EBTA_DRIVE_PICKER_APP_ID = {json.dumps(GOOGLE_DRIVE_PICKER_APP_ID)};
-
-            let ebtaDrivePickerLoaded = false;
-            let ebtaDriveTokenClient = null;
-            let ebtaDriveAccessToken = "";
-            let ebtaDriveTarget = "document";
-
-            function ebtaDriveStatus(target, message) {{
-                const el = document.getElementById(
-                    target === "assignment"
-                        ? "tutorDriveAssignmentStatus"
-                        : "tutorDriveDocumentStatus"
-                );
-
-                if (el) {{
-                    el.textContent = message || "";
-                }}
-            }}
-
-            function ebtaDriveConfigured() {{
-                return !!(
-                    EBTA_DRIVE_PICKER_API_KEY
-                    && EBTA_DRIVE_PICKER_CLIENT_ID
-                );
-            }}
-
-            function ebtaLoadDrivePickerApi() {{
-                return new Promise(function(resolve, reject) {{
-                    if (ebtaDrivePickerLoaded) {{
-                        resolve();
-                        return;
-                    }}
-
-                    if (!window.gapi) {{
-                        reject(new Error("Google Drive could not be opened."));
-                        return;
-                    }}
-
-                    window.gapi.load("picker", {{
-                        callback: function() {{
-                            ebtaDrivePickerLoaded = true;
-                            resolve();
-                        }},
-                        onerror: function() {{
-                            reject(new Error("Google Drive could not be opened."));
-                        }}
-                    }});
-                }});
-            }}
-
-            function ebtaGetDriveToken() {{
-                return new Promise(function(resolve, reject) {{
-                    if (!window.google || !google.accounts || !google.accounts.oauth2) {{
-                        reject(new Error("Google Drive could not be opened."));
-                        return;
-                    }}
-
-                    if (!ebtaDriveTokenClient) {{
-                        ebtaDriveTokenClient = google.accounts.oauth2.initTokenClient({{
-                            client_id: EBTA_DRIVE_PICKER_CLIENT_ID,
-                            scope: "https://www.googleapis.com/auth/drive.readonly",
-                            callback: function(response) {{
-                                if (response && response.access_token) {{
-                                    ebtaDriveAccessToken = response.access_token;
-                                    resolve(response.access_token);
-                                }} else {{
-                                    reject(new Error("Google Drive sign-in was cancelled."));
-                                }}
-                            }},
-                            error_callback: function() {{
-                                reject(new Error("Google Drive sign-in was cancelled."));
-                            }}
-                        }});
-                    }} else {{
-                        ebtaDriveTokenClient.callback = function(response) {{
-                            if (response && response.access_token) {{
-                                ebtaDriveAccessToken = response.access_token;
-                                resolve(response.access_token);
-                            }} else {{
-                                reject(new Error("Google Drive sign-in was cancelled."));
-                            }}
-                        }};
-                    }}
-
-                    ebtaDriveTokenClient.requestAccessToken({{
-                        prompt: ebtaDriveAccessToken ? "" : "consent"
-                    }});
-                }});
-            }}
-
-            async function ebtaDriveFileToBrowserFile(doc, accessToken) {{
-                const id = String(doc.id || "");
-                let name = String(doc.name || "Google Drive file");
-                const mimeType = String(doc.mimeType || "application/octet-stream");
-
-                if (!id) {{
-                    throw new Error("The selected Google Drive file could not be read.");
-                }}
-
-                let url = "";
-                let outputType = mimeType;
-
-                if (mimeType.indexOf("application/vnd.google-apps.") === 0) {{
-                    url =
-                        "https://www.googleapis.com/drive/v3/files/"
-                        + encodeURIComponent(id)
-                        + "/export?mimeType="
-                        + encodeURIComponent("application/pdf");
-
-                    if (!name.toLowerCase().endsWith(".pdf")) {{
-                        name += ".pdf";
-                    }}
-
-                    outputType = "application/pdf";
-                }} else {{
-                    url =
-                        "https://www.googleapis.com/drive/v3/files/"
-                        + encodeURIComponent(id)
-                        + "?alt=media";
-                }}
-
-                const response = await fetch(url, {{
-                    headers: {{
-                        "Authorization": "Bearer " + accessToken
-                    }}
-                }});
-
-                if (!response.ok) {{
-                    throw new Error("Could not load " + name + " from Google Drive.");
-                }}
-
-                const blob = await response.blob();
-
-                return new File(
-                    [blob],
-                    name,
-                    {{
-                        type: blob.type || outputType,
-                        lastModified: Date.now()
-                    }}
-                );
-            }}
-
-            async function ebtaApplyDriveFiles(target, docs, accessToken) {{
-                const input = document.getElementById(
-                    target === "assignment"
-                        ? "tutorUploadAssignmentFiles"
-                        : "tutorUploadDocumentFiles"
-                );
-
-                if (!input) {{
-                    throw new Error("The upload field could not be found.");
-                }}
-
-                ebtaDriveStatus(target, "Loading selected file(s)...");
-
-                const transfer = new DataTransfer();
-                let totalBytes = 0;
-
-                for (const doc of docs) {{
-                    const file = await ebtaDriveFileToBrowserFile(doc, accessToken);
-                    totalBytes += file.size;
-
-                    if (totalBytes > 24 * 1024 * 1024) {{
-                        throw new Error("The selected files are too large. Keep the total below 24 MB.");
-                    }}
-
-                    transfer.items.add(file);
-                }}
-
-                input.files = transfer.files;
-
-                const names = Array.from(input.files).map(function(file) {{
-                    return file.name;
-                }});
-
-                ebtaDriveStatus(
-                    target,
-                    names.length
-                        ? "Selected: " + names.join(", ")
-                        : ""
-                );
-
-                const title = document.getElementById("tutorUploadTitle");
-
-                if (title && !title.value.trim() && input.files.length === 1) {{
-                    const firstName = input.files[0].name || "";
-                    title.value = firstName.replace(/\\.[^.]+$/, "");
-                }}
-
-                input.dispatchEvent(new Event("change", {{ bubbles: true }}));
-            }}
-
-            function ebtaOpenDrivePicker(accessToken) {{
-                return new Promise(function(resolve, reject) {{
-                    if (!window.google || !google.picker) {{
-                        reject(new Error("Google Drive could not be opened."));
-                        return;
-                    }}
-
-                    const view = new google.picker.DocsView(google.picker.ViewId.DOCS);
-                    view.setIncludeFolders(true);
-                    view.setSelectFolderEnabled(false);
-
-                    let builder = new google.picker.PickerBuilder()
-                        .addView(view)
-                        .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
-                        .setOAuthToken(accessToken)
-                        .setDeveloperKey(EBTA_DRIVE_PICKER_API_KEY)
-                        .setCallback(async function(data) {{
-                            if (data.action === google.picker.Action.PICKED) {{
-                                try {{
-                                    const docs = data.docs || [];
-                                    await ebtaApplyDriveFiles(
-                                        ebtaDriveTarget,
-                                        docs,
-                                        accessToken
-                                    );
-                                    resolve();
-                                }} catch (error) {{
-                                    ebtaDriveStatus(
-                                        ebtaDriveTarget,
-                                        error && error.message
-                                            ? error.message
-                                            : "Could not add the selected file."
-                                    );
-                                    reject(error);
-                                }}
-                            }}
-
-                            if (data.action === google.picker.Action.CANCEL) {{
-                                ebtaDriveStatus(ebtaDriveTarget, "");
-                                resolve();
-                            }}
-                        }});
-
-                    if (EBTA_DRIVE_PICKER_APP_ID) {{
-                        builder = builder.setAppId(EBTA_DRIVE_PICKER_APP_ID);
-                    }}
-
-                    const picker = builder.build();
-                    picker.setVisible(true);
-                }});
-            }}
-
-            async function ebtaChooseFromGoogleDrive(target) {{
-                ebtaDriveTarget = target === "assignment" ? "assignment" : "document";
-
-                if (!ebtaDriveConfigured()) {{
-                    ebtaDriveStatus(
-                        ebtaDriveTarget,
-                        "Google Drive is not connected yet."
-                    );
-                    window.open("https://drive.google.com/drive/my-drive", "_blank", "noopener");
-                    return;
-                }}
-
-                try {{
-                    ebtaDriveStatus(ebtaDriveTarget, "Opening Google Drive...");
-                    await ebtaLoadDrivePickerApi();
-                    const token = await ebtaGetDriveToken();
-                    await ebtaOpenDrivePicker(token);
-                }} catch (error) {{
-                    ebtaDriveStatus(
-                        ebtaDriveTarget,
-                        error && error.message
-                            ? error.message
-                            : "Google Drive could not be opened."
-                    );
-                }}
-            }}
-        </script>
-
         <script>
             (function () {{
                 const form = document.getElementById("tutorUploadForm");
@@ -29038,8 +28667,6 @@ def tutor_home():
                     document.getElementById("tutorUploadDocumentFiles");
                 const assignmentFiles =
                     document.getElementById("tutorUploadAssignmentFiles");
-                const assignmentDriveButton =
-                    document.getElementById("tutorDriveAssignmentButton");
                 const recordingUrl =
                     document.getElementById("tutorUploadRecordingUrl");
 
@@ -29084,7 +28711,6 @@ def tutor_home():
 
                     setDisabled(documentFiles, !isDocument);
                     setDisabled(assignmentFiles, !isAssignment);
-                    setDisabled(assignmentDriveButton, !isAssignment);
                     setDisabled(openDate, !isAssignment);
                     setDisabled(dueDate, !isAssignment);
                     setDisabled(maxPoints, !isAssignment);
