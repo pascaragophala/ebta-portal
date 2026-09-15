@@ -17136,9 +17136,15 @@ def page(title, body_html, extra_head="", extra_js=""):
                     © <span id="year"></span> Early Bird Testimony Academy. All rights reserved.
                 </div>
 
-                <a class="ebta-footer-policy" href="/privacy-policy">
-                    Privacy Policy
-                </a>
+                <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+                    <a class="ebta-footer-policy" href="/privacy-policy">
+                        Privacy Policy
+                    </a>
+
+                    <a class="ebta-footer-policy" href="/terms-and-conditions">
+                        Terms & Conditions
+                    </a>
+                </div>
             </div>
 
             <div class="ebta-footer-powered">
@@ -17304,6 +17310,180 @@ def privacy_policy():
     
     
     
+
+@app.get('/terms-and-conditions')
+def terms_and_conditions():
+    body = """
+    <section class="card" style="max-width:980px;margin:auto;border-left:6px solid #1b5e20;">
+        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;">
+            <div>
+                <h1 style="margin-bottom:6px;">Terms & Conditions</h1>
+                <p class="mini muted" style="margin:0;">
+                    Early Bird Testimony Academy (EBTA)
+                </p>
+            </div>
+
+            <a class="btn mini secondary" href="/">
+                ← Back to Portal
+            </a>
+        </div>
+
+        <div class="card soft" style="margin-top:18px;border-left:5px solid #25D366;">
+            <p>
+                These Terms & Conditions apply to the use of the EBTA Portal and
+                participation in services provided by Early Bird Testimony Academy.
+                By using the portal, enrolling, uploading content, submitting work
+                or participating in EBTA activities, you agree to these terms.
+            </p>
+
+            <p class="mini muted">
+                Last updated: September 2026
+            </p>
+        </div>
+
+        <div class="grid" style="gap:14px;margin-top:16px;">
+
+            <div class="card soft">
+                <h2>1. Enrollment</h2>
+                <p>
+                    Learners and parents or guardians are responsible for providing
+                    accurate enrollment information. Enrollment is subject to the
+                    programme, grade, subject, payment and availability requirements
+                    shown on the EBTA Portal.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>2. Fees and payments</h2>
+                <p>
+                    Monthly fees must be paid according to the payment information
+                    provided by EBTA. Proof of payment may be required before an
+                    enrollment or payment can be verified.
+                </p>
+                <p>
+                    Fees are non-refundable once classes have started, except where
+                    EBTA confirms otherwise in writing or where applicable law
+                    requires a different outcome.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>3. Portal accounts and PINs</h2>
+                <p>
+                    Users are responsible for keeping their portal login details and
+                    PINs confidential. Login information should not be shared with
+                    another person. Users must notify EBTA if they believe their
+                    account has been accessed without permission.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>4. Attendance and participation</h2>
+                <p>
+                    Learners are expected to attend scheduled sessions, participate
+                    appropriately, complete assigned work and follow instructions
+                    communicated by tutors and authorised EBTA staff.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>5. Conduct</h2>
+                <p>
+                    Learners, tutors, staff and other portal users must communicate
+                    respectfully and must not use EBTA services to harass others,
+                    disrupt classes, impersonate another person, upload harmful
+                    content or misuse portal features.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>6. Learning materials and uploaded content</h2>
+                <p>
+                    Tutors may upload notes, assignments, recordings, links and other
+                    learning resources for educational use. Learners may upload
+                    submissions, reports and other documents where requested.
+                </p>
+                <p>
+                    Users must only upload content they are authorised to use and
+                    must not upload unlawful, harmful or inappropriate material.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>7. Google Drive and other third-party services</h2>
+                <p>
+                    Some portal features may allow tutors to choose files from
+                    services such as Google Drive. When using these features, the
+                    user chooses the files that are provided to EBTA for the relevant
+                    upload. Third-party services remain subject to their own terms,
+                    policies and availability.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>8. Communication</h2>
+                <p>
+                    EBTA may use the portal, WhatsApp, SMS, email or phone calls to
+                    communicate class information, enrollment reminders, academic
+                    notices, support messages, payment follow-ups and other
+                    EBTA-related information.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>9. Privacy</h2>
+                <p>
+                    Personal information is handled according to the EBTA Privacy
+                    Policy. The Privacy Policy explains the information EBTA
+                    collects, why it is used and how it is protected.
+                </p>
+
+                <p>
+                    <a class="btn mini secondary" href="/privacy-policy">
+                        View Privacy Policy
+                    </a>
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>10. Availability of the portal</h2>
+                <p>
+                    EBTA aims to keep the portal available and functioning properly,
+                    but access may occasionally be interrupted by maintenance,
+                    internet outages, hosting issues, third-party services or other
+                    technical circumstances.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>11. Changes to services and these terms</h2>
+                <p>
+                    EBTA may update portal features, academic processes or these
+                    Terms & Conditions when reasonably necessary. The latest version
+                    will be published on this page.
+                </p>
+            </div>
+
+            <div class="card soft">
+                <h2>12. Contact</h2>
+                <p>
+                    Questions about these Terms & Conditions can be sent through the
+                    official EBTA communication channels shown on the portal.
+                </p>
+            </div>
+
+        </div>
+    </section>
+    """
+
+    return page("Terms & Conditions", body)
+
+
+@app.get('/terms')
+def terms_short_link():
+    return redirect(url_for("terms_and_conditions"))
+
+
 @app.route('/uploads/<path:filename>')
 def uploads(filename): return send_from_directory(UPLOAD_DIR, filename)
 
@@ -20281,6 +20461,12 @@ function showPopup(message, type='info', timeout=4000){
 
             <p><strong>8. Agreement</strong><br>
             By proceeding, you confirm that you understand and accept these Terms & Conditions.</p>
+
+            <p style="margin-top:14px;">
+                <a href="/terms-and-conditions" target="_blank" rel="noopener">
+                    Open full Terms & Conditions
+                </a>
+            </p>
 
             </div>
 
