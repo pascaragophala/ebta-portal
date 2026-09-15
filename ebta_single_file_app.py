@@ -15969,7 +15969,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                     ("📊 Work Progress", url_for('tutor_work_progress')),
                     ("⭐ Student Reviews", url_for('tutor_student_reviews')),
                     ("👨‍🏫 One-on-One Sessions", "/tutor/one-on-one"),
-                    ("⬆️ Upload Material", url_for('tutor_home') + "#upload"),
+                    ("⬆️ Upload Learning Content", url_for('tutor_home') + "#upload"),
                     ("📚 My Library", url_for('tutor_uploads_library')),
                     ("📝 Assignments", url_for('tutor_home') + "#assignments"),
                     ("🧪 Assessments", url_for('tutor_assessments')),
@@ -28212,144 +28212,590 @@ def tutor_home():
     subjects_options="".join([f"<option value='{r['subject_id']}'>{grade_label(r['grade'])} — {r['subject_name']}</option>" for r in subs]) or "<option value=''>No assigned subjects</option>"
 
     upload_block=f"""
-    <div id="upload" class='card' style="border-left:5px solid #22c55e">
+    <div id="upload"
+         class="card tutor-upload-hub"
+         style="border-left:5px solid #22c55e">
 
-        <h2 style="margin-bottom:6px">
-            Upload Teaching Material
-        </h2>
+        <style>
+            .tutor-upload-hub {{
+                overflow:visible !important;
+            }}
 
-        <div class="mini muted" style="margin-bottom:16px">
-            Choose what you are uploading. Recordings, documents, and assignments are organised automatically.
+            .tutor-upload-intro {{
+                display:flex;
+                justify-content:space-between;
+                gap:14px;
+                align-items:flex-start;
+                flex-wrap:wrap;
+                margin-bottom:18px;
+            }}
+
+            .tutor-upload-steps {{
+                display:flex;
+                gap:7px;
+                flex-wrap:wrap;
+            }}
+
+            .tutor-upload-step {{
+                display:inline-flex;
+                align-items:center;
+                gap:6px;
+                padding:5px 9px;
+                border-radius:999px;
+                background:#f1f5f9;
+                color:#475569;
+                font-size:12px;
+                font-weight:700;
+            }}
+
+            .tutor-upload-step b {{
+                display:inline-flex;
+                align-items:center;
+                justify-content:center;
+                width:20px;
+                height:20px;
+                border-radius:50%;
+                background:#1b5e20;
+                color:white;
+                font-size:11px;
+            }}
+
+            .tutor-upload-type-grid {{
+                display:grid;
+                grid-template-columns:repeat(3,minmax(0,1fr));
+                gap:12px;
+                margin:10px 0 18px;
+            }}
+
+            .tutor-upload-type {{
+                position:relative;
+                display:block;
+                min-width:0;
+            }}
+
+            .tutor-upload-type input {{
+                position:absolute;
+                opacity:0;
+                pointer-events:none;
+            }}
+
+            .tutor-upload-type-card {{
+                display:block;
+                height:100%;
+                padding:16px;
+                border:2px solid #dbe5dd;
+                border-radius:14px;
+                background:#fff;
+                cursor:pointer;
+                transition:border-color .15s ease, background .15s ease, box-shadow .15s ease;
+            }}
+
+            .tutor-upload-type-card:hover {{
+                border-color:#9bc5a5;
+                background:#fbfffc;
+            }}
+
+            .tutor-upload-type input:checked + .tutor-upload-type-card {{
+                border-color:#1b5e20;
+                background:#eef8f0;
+                box-shadow:0 0 0 3px rgba(27,94,32,.08);
+            }}
+
+            .tutor-upload-type-icon {{
+                font-size:25px;
+                line-height:1;
+                margin-bottom:9px;
+            }}
+
+            .tutor-upload-type-title {{
+                font-weight:800;
+                color:#0f172a;
+                margin-bottom:4px;
+            }}
+
+            .tutor-upload-section {{
+                border:1px solid #e2e8f0;
+                border-radius:14px;
+                background:#fff;
+                padding:16px;
+                margin-bottom:14px;
+            }}
+
+            .tutor-upload-section-title {{
+                display:flex;
+                align-items:center;
+                gap:8px;
+                font-weight:800;
+                color:#0f172a;
+                margin-bottom:4px;
+            }}
+
+            .tutor-upload-field-grid {{
+                display:grid;
+                grid-template-columns:repeat(2,minmax(0,1fr));
+                gap:12px;
+            }}
+
+            .tutor-upload-specific {{
+                display:none;
+            }}
+
+            .tutor-upload-specific.is-active {{
+                display:block;
+            }}
+
+            .tutor-upload-tip {{
+                padding:10px 12px;
+                border-radius:10px;
+                background:#f8fafc;
+                border:1px solid #e2e8f0;
+                color:#475569;
+                font-size:12px;
+                line-height:1.45;
+                margin-top:10px;
+            }}
+
+            .tutor-upload-submit {{
+                display:flex;
+                align-items:center;
+                justify-content:space-between;
+                gap:12px;
+                flex-wrap:wrap;
+                padding-top:4px;
+            }}
+
+            .tutor-upload-submit-copy {{
+                font-size:12px;
+                color:#64748b;
+                max-width:620px;
+            }}
+
+            @media(max-width:820px) {{
+                .tutor-upload-type-grid {{
+                    grid-template-columns:1fr;
+                }}
+
+                .tutor-upload-field-grid {{
+                    grid-template-columns:1fr;
+                }}
+
+                .tutor-upload-submit .btn {{
+                    width:100%;
+                }}
+            }}
+        </style>
+
+        <div class="tutor-upload-intro">
+            <div>
+                <h2 style="margin:0 0 5px">
+                    Upload Learning Content
+                </h2>
+
+                <div class="mini muted">
+                    Start by choosing the type of content. The form will only show
+                    the fields needed for that upload.
+                </div>
+            </div>
+
+            <div class="tutor-upload-steps" aria-label="Upload steps">
+                <span class="tutor-upload-step"><b>1</b> Choose type</span>
+                <span class="tutor-upload-step"><b>2</b> Add details</span>
+                <span class="tutor-upload-step"><b>3</b> Upload</span>
+            </div>
         </div>
 
-        <form method='post'
-              action='{url_for('tutor_upload')}'
-              enctype='multipart/form-data'>
+        <form method="post"
+              action="{url_for('tutor_upload')}"
+              enctype="multipart/form-data"
+              id="tutorUploadForm">
 
-            <!-- SUBJECT -->
-            <div style="margin-bottom:14px">
-                <label><b>Subject</b></label>
-                <select name='subject_id' required style="width:100%">
-                    {subjects_options}
-                </select>
-            </div>
+            <!-- The backend already expects this field to be 'on' for assignments.
+                 JavaScript changes only this value; database/storage logic is unchanged. -->
+            <input type="hidden"
+                   name="is_assignment"
+                   id="tutorUploadAssignmentFlag"
+                   value="">
 
-
-            <!-- DELIVERY MODE -->
-            <div style="margin-bottom:14px">
-                <label><b>Who should see this resource?</b></label>
-                <select name="delivery_mode" required style="width:100%">
-                    <option value="GROUP">Group-session learners</option>
-                    <option value="ONE_ON_ONE">My One-on-One learners</option>
-                    <option value="BOTH">Both group and One-on-One learners</option>
-                </select>
-            </div>
-
-
-            <!-- TITLE -->
-            <div style="margin-bottom:18px">
-                <label><b>Title</b></label>
-                <input name='title'
-                       placeholder="Example: Photosynthesis Lesson 1"
-                       required
-                       style="width:100%">
-            </div>
-
-
-            <!-- RECORDING SECTION -->
-            <div class="card soft"
-                 style="border-left:5px solid #2563eb;margin-bottom:16px">
-
-                <div style="font-weight:600">
-                    🎥 Session Recording
+            <div class="tutor-upload-section">
+                <div class="tutor-upload-section-title">
+                    1️⃣ What are you uploading?
                 </div>
 
-                <div class="mini muted" style="margin-bottom:8px">
-                    Paste the Google drive link, YouTube recording link
+                <div class="mini muted">
+                    Choose one option. You can upload another type immediately afterwards.
                 </div>
 
-                <input name='youtube'
-                       placeholder="https://youtube.com/..."
-                       style="width:100%">
+                <div class="tutor-upload-type-grid">
+
+                    <label class="tutor-upload-type">
+                        <input type="radio"
+                               name="upload_ui_type"
+                               value="document"
+                               checked>
+
+                        <span class="tutor-upload-type-card">
+                            <div class="tutor-upload-type-icon">📚</div>
+                            <div class="tutor-upload-type-title">
+                                Learning Material
+                            </div>
+                            <div class="mini muted">
+                                Notes, slides, worksheets, study guides, PDFs, images or other resources.
+                            </div>
+                        </span>
+                    </label>
+
+                    <label class="tutor-upload-type">
+                        <input type="radio"
+                               name="upload_ui_type"
+                               value="assignment">
+
+                        <span class="tutor-upload-type-card">
+                            <div class="tutor-upload-type-icon">📝</div>
+                            <div class="tutor-upload-type-title">
+                                Assignment / Task
+                            </div>
+                            <div class="mini muted">
+                                Upload a learner task and set its open date, due date and total marks.
+                            </div>
+                        </span>
+                    </label>
+
+                    <label class="tutor-upload-type">
+                        <input type="radio"
+                               name="upload_ui_type"
+                               value="recording">
+
+                        <span class="tutor-upload-type-card">
+                            <div class="tutor-upload-type-icon">🎥</div>
+                            <div class="tutor-upload-type-title">
+                                Recording / Lesson Link
+                            </div>
+                            <div class="mini muted">
+                                Share a YouTube, Google Drive, OneDrive or other lesson recording link.
+                            </div>
+                        </span>
+                    </label>
+
+                </div>
             </div>
 
-
-            <!-- DOCUMENT SECTION -->
-            <div class="card soft"
-                 style="border-left:5px solid #16a34a;margin-bottom:16px">
-
-                <div style="font-weight:600">
-                    📄 Document / Notes
+            <div class="tutor-upload-section">
+                <div class="tutor-upload-section-title">
+                    2️⃣ Resource details
                 </div>
 
-                <div class="mini muted" style="margin-bottom:8px">
-                    Upload one or more slides, notes, worksheets, scripts, or resources. Multiple files will be saved as one ZIP file.
-                </div>
-
-                <input type='file'
-                       name='file'
-                       accept='.pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.ppt,.pptx'
-                       multiple
-                       style="width:100%">
-            </div>
-
-
-            <!-- ASSIGNMENT SECTION -->
-            <div class="card soft"
-                 style="border-left:5px solid #f59e0b;margin-bottom:16px">
-
-                <div style="font-weight:600;margin-bottom:8px">
-                    📝 Assignment (optional)
-                </div>
-
-                <label style="display:flex;gap:8px;margin-bottom:10px">
-                    <input type='checkbox' name='is_assignment'>
-                    Mark this upload as an assignment
-                </label>
-
-                <div class="grid"
-                     style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">
+                <div class="tutor-upload-field-grid" style="margin-top:12px">
 
                     <div>
-                        <label class="mini muted">Open date</label>
-                        <input name='open_date'
-                               type="date"
-                               style="width:100%">
+                        <label><b>Subject</b></label>
+                        <select name="subject_id"
+                                required
+                                style="width:100%">
+                            {subjects_options}
+                        </select>
                     </div>
 
                     <div>
-                        <label class="mini muted">Due date</label>
-                        <input name='due'
-                               type="date"
-                               style="width:100%">
-                    </div>
-
-                    <div>
-                        <label class="mini muted">Total marks</label>
-                        <input name='max_points'
-                               type='number'
-                               min='1'
-                               max='1000'
-                               placeholder='100'
-                               style="width:100%">
+                        <label><b>Who should see it?</b></label>
+                        <select name="delivery_mode"
+                                required
+                                style="width:100%">
+                            <option value="GROUP">Group-session learners</option>
+                            <option value="ONE_ON_ONE">My One-on-One learners</option>
+                            <option value="BOTH">Both group and One-on-One learners</option>
+                        </select>
                     </div>
 
                 </div>
 
-                <div class="mini muted" style="margin-top:8px">
-                    Learners will see the assignment from the open date. Submissions close after the due date.
+                <div style="margin-top:12px">
+                    <label><b>Title</b></label>
+                    <input name="title"
+                           id="tutorUploadTitle"
+                           placeholder="Example: Photosynthesis Lesson 1"
+                           required
+                           style="width:100%">
                 </div>
-
             </div>
 
+            <!-- LEARNING MATERIAL -->
+            <div class="tutor-upload-specific is-active"
+                 id="tutorUploadDocumentSection">
 
-            <!-- SUBMIT -->
-            <button class='btn success'
-                    style="width:100%;padding:14px;font-size:16px">
-                Upload Material
-            </button>
+                <div class="tutor-upload-section"
+                     style="border-left:5px solid #16a34a">
+
+                    <div class="tutor-upload-section-title">
+                        📚 Upload learning material
+                    </div>
+
+                    <div class="mini muted" style="margin-bottom:10px">
+                        Select one or more files. Multiple files are automatically
+                        kept together using the portal's existing upload process.
+                    </div>
+
+                    <input type="file"
+                           name="file"
+                           id="tutorUploadDocumentFiles"
+                           accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.ppt,.pptx"
+                           multiple
+                           style="width:100%">
+
+                    <div class="tutor-upload-tip">
+                        Good for lesson notes, presentations, worksheets, revision
+                        packs, study guides and supporting documents.
+                    </div>
+                </div>
+            </div>
+
+            <!-- ASSIGNMENT -->
+            <div class="tutor-upload-specific"
+                 id="tutorUploadAssignmentSection">
+
+                <div class="tutor-upload-section"
+                     style="border-left:5px solid #f59e0b">
+
+                    <div class="tutor-upload-section-title">
+                        📝 Upload assignment / task
+                    </div>
+
+                    <div class="mini muted" style="margin-bottom:10px">
+                        Attach the learner task, then set when it opens and when submissions close.
+                    </div>
+
+                    <div style="margin-bottom:12px">
+                        <label><b>Assignment file(s)</b></label>
+                        <input type="file"
+                               name="file"
+                               id="tutorUploadAssignmentFiles"
+                               accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.ppt,.pptx"
+                               multiple
+                               disabled
+                               style="width:100%">
+                    </div>
+
+                    <div class="tutor-upload-field-grid">
+
+                        <div>
+                            <label>Open date</label>
+                            <input name="open_date"
+                                   id="tutorUploadOpenDate"
+                                   type="date"
+                                   disabled
+                                   style="width:100%">
+                        </div>
+
+                        <div>
+                            <label>Due date</label>
+                            <input name="due"
+                                   id="tutorUploadDueDate"
+                                   type="date"
+                                   disabled
+                                   style="width:100%">
+                        </div>
+
+                        <div>
+                            <label>Total marks</label>
+                            <input name="max_points"
+                                   id="tutorUploadMaxPoints"
+                                   type="number"
+                                   min="1"
+                                   max="1000"
+                                   placeholder="100"
+                                   disabled
+                                   style="width:100%">
+                        </div>
+
+                    </div>
+
+                    <div class="tutor-upload-tip">
+                        Learners will see the assignment from the open date.
+                        Submissions close after the due date.
+                    </div>
+                </div>
+            </div>
+
+            <!-- RECORDING -->
+            <div class="tutor-upload-specific"
+                 id="tutorUploadRecordingSection">
+
+                <div class="tutor-upload-section"
+                     style="border-left:5px solid #2563eb">
+
+                    <div class="tutor-upload-section-title">
+                        🎥 Add recording / lesson link
+                    </div>
+
+                    <div class="mini muted" style="margin-bottom:10px">
+                        Paste the link learners should open to watch the lesson or recording.
+                    </div>
+
+                    <label><b>Recording or lesson link</b></label>
+                    <input name="youtube"
+                           id="tutorUploadRecordingUrl"
+                           type="url"
+                           placeholder="https://youtube.com/... or Google Drive / OneDrive link"
+                           disabled
+                           style="width:100%">
+
+                    <div class="tutor-upload-tip">
+                        You can use a YouTube link, Google Drive sharing link,
+                        OneDrive link, or another accessible lesson-recording URL.
+                    </div>
+                </div>
+            </div>
+
+            <div class="tutor-upload-submit">
+                <div class="tutor-upload-submit-copy"
+                     id="tutorUploadSubmitHelp">
+                    You are uploading a learning material document.
+                </div>
+
+                <button class="btn success"
+                        id="tutorUploadSubmitButton"
+                        style="padding:13px 22px;font-size:15px">
+                    📚 Upload Learning Material
+                </button>
+            </div>
 
         </form>
+
+        <script>
+            (function () {{
+                const form = document.getElementById("tutorUploadForm");
+                if (!form) return;
+
+                const radios = Array.from(
+                    form.querySelectorAll('input[name="upload_ui_type"]')
+                );
+
+                const assignmentFlag =
+                    document.getElementById("tutorUploadAssignmentFlag");
+
+                const documentSection =
+                    document.getElementById("tutorUploadDocumentSection");
+                const assignmentSection =
+                    document.getElementById("tutorUploadAssignmentSection");
+                const recordingSection =
+                    document.getElementById("tutorUploadRecordingSection");
+
+                const documentFiles =
+                    document.getElementById("tutorUploadDocumentFiles");
+                const assignmentFiles =
+                    document.getElementById("tutorUploadAssignmentFiles");
+                const recordingUrl =
+                    document.getElementById("tutorUploadRecordingUrl");
+
+                const openDate =
+                    document.getElementById("tutorUploadOpenDate");
+                const dueDate =
+                    document.getElementById("tutorUploadDueDate");
+                const maxPoints =
+                    document.getElementById("tutorUploadMaxPoints");
+
+                const submitButton =
+                    document.getElementById("tutorUploadSubmitButton");
+                const submitHelp =
+                    document.getElementById("tutorUploadSubmitHelp");
+                const title =
+                    document.getElementById("tutorUploadTitle");
+
+                function selectedType() {{
+                    const selected = radios.find(function (radio) {{
+                        return radio.checked;
+                    }});
+                    return selected ? selected.value : "document";
+                }}
+
+                function activate(section, active) {{
+                    if (!section) return;
+                    section.classList.toggle("is-active", !!active);
+                }}
+
+                function setDisabled(element, disabled) {{
+                    if (element) element.disabled = disabled;
+                }}
+
+                function updateUploadForm() {{
+                    const type = selectedType();
+
+                    const isDocument = type === "document";
+                    const isAssignment = type === "assignment";
+                    const isRecording = type === "recording";
+
+                    activate(documentSection, isDocument);
+                    activate(assignmentSection, isAssignment);
+                    activate(recordingSection, isRecording);
+
+                    setDisabled(documentFiles, !isDocument);
+                    setDisabled(assignmentFiles, !isAssignment);
+                    setDisabled(openDate, !isAssignment);
+                    setDisabled(dueDate, !isAssignment);
+                    setDisabled(maxPoints, !isAssignment);
+                    setDisabled(recordingUrl, !isRecording);
+
+                    if (assignmentFlag) {{
+                        assignmentFlag.value = isAssignment ? "on" : "";
+                    }}
+
+                    if (documentFiles) {{
+                        documentFiles.required = isDocument;
+                    }}
+
+                    if (assignmentFiles) {{
+                        assignmentFiles.required = isAssignment;
+                    }}
+
+                    if (recordingUrl) {{
+                        recordingUrl.required = isRecording;
+                    }}
+
+                    if (isAssignment) {{
+                        if (submitButton) {{
+                            submitButton.innerHTML = "📝 Upload Assignment";
+                        }}
+                        if (submitHelp) {{
+                            submitHelp.textContent =
+                                "This will be saved as an assignment using the same assignment workflow already used by EBTA.";
+                        }}
+                        if (title) {{
+                            title.placeholder =
+                                "Example: Algebra Homework 3";
+                        }}
+                    }} else if (isRecording) {{
+                        if (submitButton) {{
+                            submitButton.innerHTML = "🎥 Add Recording / Lesson Link";
+                        }}
+                        if (submitHelp) {{
+                            submitHelp.textContent =
+                                "This will be saved as a recording/link and appear with the existing recording resources.";
+                        }}
+                        if (title) {{
+                            title.placeholder =
+                                "Example: Algebra Lesson Recording";
+                        }}
+                    }} else {{
+                        if (submitButton) {{
+                            submitButton.innerHTML = "📚 Upload Learning Material";
+                        }}
+                        if (submitHelp) {{
+                            submitHelp.textContent =
+                                "This will be saved as a normal learning material document.";
+                        }}
+                        if (title) {{
+                            title.placeholder =
+                                "Example: Photosynthesis Lesson 1 Notes";
+                        }}
+                    }}
+                }}
+
+                radios.forEach(function (radio) {{
+                    radio.addEventListener("change", updateUploadForm);
+                }});
+
+                updateUploadForm();
+            }})();
+        </script>
 
     </div>
     """
