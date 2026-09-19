@@ -37961,7 +37961,24 @@ def staff_connect_nav(active="community"):
         ("profile", "🎯 My Career Profile", url_for("staff_connect_home", view="profile")),
     ]
 
+    role = get_logged_in_portal_role()
+    portal_home = home_path_for_logged_in_role(role)
+
     html = "<div class='admin-nav staff-connect-nav'>"
+
+    # Keep navigation simple: when inside a Connect section, Back returns to
+    # the EBTA Connect home. From the Community home, Back returns to the
+    # user's own portal dashboard.
+    if active == "community":
+        html += (
+            f"<a class='btn mini secondary' href='{escape(portal_home, quote=True)}'>"
+            "← Back to Portal</a>"
+        )
+    else:
+        html += (
+            f"<a class='btn mini secondary' href='{url_for('staff_connect_home')}'>"
+            "← Back</a>"
+        )
 
     for key, label, href in items:
         cls = "btn mini success" if active == key else "btn mini secondary"
@@ -39609,7 +39626,7 @@ def staff_connect_post_detail(post_id):
     <section class="card">
         <a class="btn mini secondary"
            href="/staff-connect">
-            ← Back to Community
+            ← Back
         </a>
     </section>
 
