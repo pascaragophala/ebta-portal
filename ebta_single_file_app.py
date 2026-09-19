@@ -39077,7 +39077,7 @@ def staff_connect_home():
         if not jobs_html:
             jobs_html = (
                 "<div class='empty'>"
-                "Live opportunities are refreshing or no listings match this filter right now."
+                "No matching opportunities right now."
                 "</div>"
             )
 
@@ -39087,7 +39087,7 @@ def staff_connect_home():
             <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
                 <div>
                     <h2 style="margin-bottom:4px">Career & Opportunity Board</h2>
-                    <p class="muted" style="margin:0">Team-shared opportunities plus a live remote-jobs feed.</p>
+                    <p class="muted" style="margin:0">Jobs, internships, bursaries and more.</p>
                 </div>
                 <a class="btn success" href="/staff-connect#share">Share an Opportunity</a>
             </div>
@@ -39109,17 +39109,14 @@ def staff_connect_home():
         <div class="staff-connect-grid">
             <section class="card">
                 <h2>Live Remote Opportunities</h2>
-                <p class="mini muted">
-                    Public listings from Remotive. EBTA refreshes this feed only a few times per day and links directly to the original listing.
-                    {'Showing cached data.' if cached else ''}
-                </p>
+                <div class="mini muted" style="margin-bottom:10px">Source: Remotive</div>
                 {jobs_html}
             </section>
 
             <aside>
                 <section class="card" style="border-left:5px solid #f59e0b">
                     <h3>Shared by the EBTA Team</h3>
-                    <p class="mini muted">Bursaries, internships, programmes, conferences, jobs and other opportunities added by colleagues.</p>
+                    <p class="mini muted">Opportunities shared by the EBTA team.</p>
                     {internal_html or '<div class="mini muted">No team-shared opportunities yet.</div>'}
                 </section>
             </aside>
