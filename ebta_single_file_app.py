@@ -1701,6 +1701,162 @@ def init_db():
         WHERE manager_id IS NOT NULL
     """)
 
+    # ================= EBTA CONNECT / STAFF COMMUNITY =================
+    # Shared professional community for tutors and EBTA management.
+    # It intentionally stores professional/community information only and does
+    # not expose banking, payroll or private contact details.
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS staff_connect_profiles(
+        role TEXT NOT NULL,
+        user_key TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        role_label TEXT,
+        career_field TEXT,
+        institution TEXT,
+        qualification TEXT,
+        career_stage TEXT,
+        skills TEXT,
+        can_help_with TEXT,
+        wants_help_with TEXT,
+        career_goals TEXT,
+        interests TEXT,
+        mentoring_status TEXT NOT NULL DEFAULT 'NONE',
+        linkedin_url TEXT,
+        portfolio_url TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(role, user_key)
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS staff_connect_posts(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        author_role TEXT NOT NULL,
+        author_key TEXT NOT NULL,
+        author_name TEXT NOT NULL,
+        author_role_label TEXT,
+        post_type TEXT NOT NULL DEFAULT 'DISCUSSION',
+        category TEXT NOT NULL DEFAULT 'General',
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        link_url TEXT,
+        is_pinned INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_staff_connect_posts_feed
+        ON staff_connect_posts(is_active, is_pinned, created_at DESC)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_staff_connect_posts_type
+        ON staff_connect_posts(post_type, category, created_at DESC)
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS staff_connect_comments(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id INTEGER NOT NULL,
+        author_role TEXT NOT NULL,
+        author_key TEXT NOT NULL,
+        author_name TEXT NOT NULL,
+        author_role_label TEXT,
+        body TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(post_id) REFERENCES staff_connect_posts(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_staff_connect_comments_post
+        ON staff_connect_comments(post_id, created_at)
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS staff_connect_reactions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id INTEGER NOT NULL,
+        author_role TEXT NOT NULL,
+        author_key TEXT NOT NULL,
+        reaction TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(post_id, author_role, author_key),
+        FOREIGN KEY(post_id) REFERENCES staff_connect_posts(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS staff_connect_bookmarks(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id INTEGER NOT NULL,
+        author_role TEXT NOT NULL,
+        author_key TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(post_id, author_role, author_key),
+        FOREIGN KEY(post_id) REFERENCES staff_connect_posts(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS staff_connect_api_cache(
+        cache_key TEXT PRIMARY KEY,
+        payload TEXT NOT NULL,
+        fetched_ts REAL NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    """)
+
+    # EBTA Connect performance indexes.
+    # These keep the feed, directory, comments and reactions responsive as the
+    # staff community grows.
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_staff_connect_profiles_field_name
+        ON staff_connect_profiles(career_field, display_name)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_staff_connect_profiles_updated
+        ON staff_connect_profiles(updated_at DESC)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_staff_connect_profiles_mentoring
+        ON staff_connect_profiles(mentoring_status, career_field)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_staff_connect_posts_active_type_category
+        ON staff_connect_posts(
+            is_active,
+            post_type,
+            category,
+            is_pinned DESC,
+            created_at DESC,
+            id DESC
+        )
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_staff_connect_comments_post_active
+        ON staff_connect_comments(post_id, is_active, created_at, id)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_staff_connect_reactions_post_reaction
+        ON staff_connect_reactions(post_id, reaction)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_staff_connect_bookmarks_actor
+        ON staff_connect_bookmarks(author_role, author_key, created_at DESC)
+    """)
+
     cur.execute("""
     CREATE TABLE IF NOT EXISTS tutor_manager_ratings(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15341,9 +15497,19 @@ def page(title, body_html, extra_head="", extra_js=""):
 
         auth = [
             f"<span class='ebta-role-badge' title='{escape(role_label)}'>{escape(role_label)}</span>",
+        ]
+
+        # EBTA Connect is a staff-only professional community. Students never
+        # receive this link, while tutors and every management role do.
+        if current_portal_role != "student":
+            auth.append(
+                "<a class='header-dashboard-link' href='/staff-connect'>EBTA Connect</a>"
+            )
+
+        auth.extend([
             f"<a class='header-dashboard-link' href='{dashboard_path}'>Portal Home</a>",
             f"<a class='header-logout-link' href='{logout_path}'>Logout</a>"
-        ]
+        ])
     else:
         auth = [
             f"<a href='{url_for('student_login')}'>Student Login</a>",
@@ -15988,6 +16154,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                     ("🧪 Assessments", url_for('tutor_assessments')),
                     ("🎮 Game Questions", url_for('tutor_learning_game_questions')),
                     ("💬 Messages", url_for('tutor_home') + "#messages"),
+                    ("🌐 EBTA Connect", url_for('staff_connect_home')),
                     ("👥 Students", url_for('tutor_home') + "#students"),
                     ("👀 Student View", url_for('tutor_switch_student_view')),
                     ("🚪 Logout", url_for('tutor_logout'))
@@ -16043,6 +16210,7 @@ def page(title, body_html, extra_head="", extra_js=""):
                     ("Inbox", url_for('admin_messages')),
                     ("Direct messages", url_for('admin_direct_messages')),
                     ("Student Reports", url_for('admin_reports')),
+                    ("EBTA Connect", url_for('staff_connect_home')),
                 ]
 
                 if is_high_admin():
@@ -35585,6 +35753,7 @@ def admin_nav():
                 [
                     ("Settings", "admin_settings", "/admin/settings"),
                     ("Portal Activity", "admin_portal_activity", "/admin/portal-activity"),
+                    ("EBTA Connect Control", "admin_ebta_connect_control", "/admin/ebta-connect-control"),
                     ("SMS & Email Control", "admin_communications_control", "/admin/communications-control"),
                     ("SMS Dashboard", "admin_sms_dashboard", "/admin/sms-dashboard"),
                     ("Email Notifications", "admin_email_notifications", "/admin/email-notifications"),
@@ -37438,6 +37607,2152 @@ def admin_enrollment_email_manual_send():
         </div>
         """
     )
+
+
+
+# =============================================================
+# EBTA CONNECT — STAFF COMMUNITY, CAREER & OPPORTUNITY HUB
+# =============================================================
+# Accessible to tutors and all EBTA management roles. It provides a shared
+# discussion space, professional directory, peer mentoring, resource sharing
+# and a live career-opportunity feed. Student accounts are excluded.
+
+STAFF_CONNECT_ALLOWED_ROLES = {
+    "tutor",
+    "high_admin",
+    "admin",
+    "manager",
+    "aqm",
+    "treasurer",
+    "secretary",
+    "social_media",
+    "duty_admin",
+    "admission",
+    "one_on_one_manager",
+    "hr",
+    "acc",
+    "coo",
+    "cao",
+    "ceo",
+    "school_manager",
+}
+
+STAFF_CONNECT_EXECUTIVE_ROLES = {
+    "high_admin", "ceo", "coo", "cao"
+}
+
+STAFF_CONNECT_POST_TYPES = {
+    "DISCUSSION": ("💬", "Discussion"),
+    "QUESTION": ("❓", "Ask the Team"),
+    "RESOURCE": ("📚", "Resource"),
+    "OPPORTUNITY": ("🚀", "Opportunity"),
+    "ANNOUNCEMENT": ("📣", "Announcement"),
+    "WIN": ("🏆", "Win / Recognition"),
+    "IDEA": ("💡", "Idea / Collaboration"),
+}
+
+# These categories reflect the broad study/career areas represented across the
+# current EBTA tutor and management team without exposing any private payroll or
+# banking data from internal staffing records.
+STAFF_CONNECT_CAREER_FIELDS = [
+    "General Career Growth",
+    "Education & Teaching",
+    "Health & Medicine",
+    "Pharmacy & Life Sciences",
+    "Technology, Data & AI",
+    "Engineering",
+    "Accounting & Finance",
+    "Business & Entrepreneurship",
+    "Law & Social Sciences",
+    "Built Environment & Planning",
+    "Leadership & Operations",
+    "Marketing & Communications",
+    "Human Resources",
+]
+
+STAFF_CONNECT_REACTIONS = {
+    "USEFUL": ("👍", "Useful"),
+    "CELEBRATE": ("🎉", "Celebrate"),
+    "SUPPORT": ("🤝", "Support"),
+    "INSIGHTFUL": ("💡", "Insightful"),
+}
+
+# Short-lived caches reduce repeated COUNT/profile matching work across
+# navigation clicks. They are intentionally small and self-invalidating.
+_STAFF_CONNECT_STATS_CACHE = {"expires_at": 0.0, "value": None}
+_STAFF_CONNECT_STATS_CACHE_LOCK = threading.Lock()
+_STAFF_CONNECT_PEER_CACHE = {}
+_STAFF_CONNECT_PEER_CACHE_LOCK = threading.Lock()
+
+STAFF_CONNECT_STATS_TTL_SECONDS = 60
+STAFF_CONNECT_PEER_TTL_SECONDS = 5 * 60
+STAFF_CONNECT_PEER_CACHE_MAX = 200
+
+
+def staff_connect_invalidate_stats_cache():
+    with _STAFF_CONNECT_STATS_CACHE_LOCK:
+        _STAFF_CONNECT_STATS_CACHE["expires_at"] = 0.0
+        _STAFF_CONNECT_STATS_CACHE["value"] = None
+
+
+def staff_connect_invalidate_peer_cache():
+    with _STAFF_CONNECT_PEER_CACHE_LOCK:
+        _STAFF_CONNECT_PEER_CACHE.clear()
+
+
+STAFF_CONNECT_JOB_TERMS = {
+    "Education & Teaching": [
+        "teacher", "teaching", "education", "tutor", "curriculum",
+        "learning", "academic", "instructional", "training"
+    ],
+    "Health & Medicine": [
+        "health", "medical", "medicine", "clinical", "nurse", "nursing",
+        "healthcare", "wellness", "patient"
+    ],
+    "Pharmacy & Life Sciences": [
+        "pharma", "pharmacy", "biotech", "biology", "life science",
+        "laboratory", "clinical research", "research"
+    ],
+    "Technology, Data & AI": [
+        "software", "developer", "engineer", "data", "analytics", "ai",
+        "machine learning", "cyber", "cloud", "it", "product"
+    ],
+    "Engineering": [
+        "engineering", "engineer", "electrical", "electronic", "systems",
+        "technical"
+    ],
+    "Accounting & Finance": [
+        "accounting", "accountant", "finance", "financial", "audit",
+        "tax", "banking", "investment"
+    ],
+    "Business & Entrepreneurship": [
+        "business", "strategy", "sales", "customer", "entrepreneur",
+        "consulting", "operations", "commercial"
+    ],
+    "Law & Social Sciences": [
+        "legal", "law", "policy", "social", "community", "research",
+        "compliance"
+    ],
+    "Built Environment & Planning": [
+        "planning", "urban", "built environment", "property", "construction",
+        "geospatial", "architecture"
+    ],
+    "Leadership & Operations": [
+        "operations", "project manager", "programme", "program manager",
+        "leadership", "manager", "coordinator", "administration"
+    ],
+    "Marketing & Communications": [
+        "marketing", "communications", "content", "social media", "brand",
+        "copywriting", "public relations"
+    ],
+    "Human Resources": [
+        "human resources", "hr", "recruiter", "recruitment", "people",
+        "talent", "learning and development"
+    ],
+}
+
+
+def staff_connect_actor():
+    identity = portal_presence_identity()
+
+    if not identity:
+        return None
+
+    role, user_key, display_name = identity
+
+    if role not in STAFF_CONNECT_ALLOWED_ROLES:
+        return None
+
+    role_label = PORTAL_PRESENCE_ROLE_LABELS.get(
+        role,
+        role.replace("_", " ").title()
+    )
+
+    return {
+        "role": str(role),
+        "user_key": str(user_key),
+        "display_name": str(display_name or role_label).strip(),
+        "role_label": role_label,
+    }
+
+
+def staff_connect_feature_enabled():
+    """
+    High Admin master switch for EBTA Connect.
+    The feature is ON by default. Turning it off never deletes posts,
+    profiles, comments, reactions or opportunity data.
+    """
+    return get_setting("ebta_connect_enabled", "1") == "1"
+
+
+def staff_connect_disabled_page():
+    manage_button = ""
+
+    if is_high_admin():
+        manage_button = f"""
+        <a class="btn success"
+           href="{url_for('admin_ebta_connect_control')}">
+            EBTA Connect Control
+        </a>
+        """
+
+    body = f"""
+    <section class="wrap small">
+        <div class="card"
+             style="
+                border-left:6px solid #64748b;
+                padding:24px;
+             ">
+            <div style="font-size:34px;margin-bottom:10px">🌐</div>
+
+            <h1 style="margin-bottom:8px">EBTA Connect</h1>
+
+            <p style="font-size:16px;margin-bottom:6px">
+                EBTA Connect is currently unavailable.
+            </p>
+
+            <p class="muted">
+                Higher Admin has deactivated this feature.
+            </p>
+
+            <div style="
+                display:flex;
+                gap:10px;
+                flex-wrap:wrap;
+                margin-top:18px;
+            ">
+                <a class="btn secondary"
+                   href="{home_path_for_logged_in_role(get_logged_in_portal_role())}">
+                    Back to Portal
+                </a>
+
+                {manage_button}
+            </div>
+        </div>
+    </section>
+    """
+
+    return page("EBTA Connect", body)
+
+
+def require_staff_connect():
+    actor = staff_connect_actor()
+
+    if actor:
+        if not staff_connect_feature_enabled():
+            return staff_connect_disabled_page()
+        return None
+
+    if is_student():
+        return page(
+            "Staff Only",
+            card_msg("EBTA Connect is available to EBTA tutors and management staff.")
+        )
+
+    return redirect("/")
+
+
+def staff_connect_is_management(actor=None):
+    actor = actor or staff_connect_actor()
+    return bool(actor and actor["role"] != "tutor")
+
+
+def staff_connect_can_moderate(actor=None):
+    actor = actor or staff_connect_actor()
+    return bool(actor and actor["role"] in STAFF_CONNECT_EXECUTIVE_ROLES)
+
+
+def staff_connect_role_chip(role, role_label=None):
+    label = role_label or PORTAL_PRESENCE_ROLE_LABELS.get(
+        role,
+        str(role or "Staff").replace("_", " ").title()
+    )
+
+    if role in STAFF_CONNECT_EXECUTIVE_ROLES:
+        cls = "active"
+    elif role == "tutor":
+        cls = ""
+    else:
+        cls = "pending"
+
+    return f"<span class='chip {cls}'>{escape(label)}</span>"
+
+
+def staff_connect_safe_url(value):
+    from urllib.parse import urlparse
+
+    link = str(value or "").strip()
+
+    if not link:
+        return ""
+
+    try:
+        parsed = urlparse(link)
+    except Exception:
+        return ""
+
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+
+    return link[:1200]
+
+
+def staff_connect_text_html(value):
+    cleaned = clean_multiline_text(str(value or "").strip())
+    return escape(cleaned).replace("\n", "<br>")
+
+
+def staff_connect_field_options(selected="", include_all=False):
+    options = []
+
+    if include_all:
+        options.append(
+            f"<option value='' {'selected' if not selected else ''}>All fields</option>"
+        )
+
+    for item in STAFF_CONNECT_CAREER_FIELDS:
+        options.append(
+            f"<option value='{escape(item, quote=True)}' "
+            f"{'selected' if selected == item else ''}>{escape(item)}</option>"
+        )
+
+    return "".join(options)
+
+
+def staff_connect_post_type_options(selected="DISCUSSION", actor=None):
+    actor = actor or staff_connect_actor()
+    options = []
+
+    for key, (icon, label) in STAFF_CONNECT_POST_TYPES.items():
+        if key == "ANNOUNCEMENT" and not staff_connect_is_management(actor):
+            continue
+
+        options.append(
+            f"<option value='{key}' {'selected' if selected == key else ''}>"
+            f"{icon} {escape(label)}</option>"
+        )
+
+    return "".join(options)
+
+
+def staff_connect_nav(active="community"):
+    items = [
+        ("community", "💬 Community", url_for("staff_connect_home")),
+        ("opportunities", "🚀 Opportunities", url_for("staff_connect_home", view="opportunities")),
+        ("people", "🤝 People & Mentoring", url_for("staff_connect_home", view="people")),
+        ("profile", "🎯 My Career Profile", url_for("staff_connect_home", view="profile")),
+    ]
+
+    html = "<div class='admin-nav staff-connect-nav'>"
+
+    for key, label, href in items:
+        cls = "btn mini success" if active == key else "btn mini secondary"
+        html += f"<a class='{cls}' href='{href}'>{label}</a>"
+
+    html += "</div>"
+    return html
+
+
+def staff_connect_ensure_profile(conn, actor):
+    """
+    Ensure the logged-in staff member has a Career Profile row.
+
+    The old version issued INSERT + UPDATE writes on every EBTA Connect page
+    load. This version writes only when the profile is first created or the
+    staff display name/role label actually changes.
+    """
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT display_name, role_label
+        FROM staff_connect_profiles
+        WHERE role=? AND user_key=?
+        LIMIT 1
+    """, (actor["role"], actor["user_key"]))
+
+    existing = cur.fetchone()
+    now = now_utc_iso()
+
+    if not existing:
+        cur.execute("""
+            INSERT INTO staff_connect_profiles(
+                role, user_key, display_name, role_label,
+                created_at, updated_at
+            )
+            VALUES(?,?,?,?,?,?)
+        """, (
+            actor["role"], actor["user_key"], actor["display_name"],
+            actor["role_label"], now, now
+        ))
+        staff_connect_invalidate_stats_cache()
+        staff_connect_invalidate_peer_cache()
+        return True
+
+    if (
+        str(existing["display_name"] or "") != actor["display_name"]
+        or str(existing["role_label"] or "") != actor["role_label"]
+    ):
+        cur.execute("""
+            UPDATE staff_connect_profiles
+            SET display_name=?, role_label=?, updated_at=?
+            WHERE role=? AND user_key=?
+        """, (
+            actor["display_name"], actor["role_label"], now,
+            actor["role"], actor["user_key"]
+        ))
+        staff_connect_invalidate_peer_cache()
+        return True
+
+    return False
+
+
+def staff_connect_profile_completeness(profile):
+    if not profile:
+        return 0
+
+    fields = [
+        "career_field", "institution", "qualification", "career_stage",
+        "skills", "can_help_with", "wants_help_with", "career_goals"
+    ]
+    completed = sum(1 for field in fields if str(profile[field] or "").strip())
+    return round((completed / len(fields)) * 100)
+
+
+def staff_connect_dashboard_stats(conn):
+    """
+    Return the hero KPI counts with a 60-second cache.
+
+    Four separate COUNT queries used to run on every EBTA Connect view.
+    The cache keeps navigation fast while still updating quickly after changes.
+    """
+    now_mono = time.monotonic()
+
+    with _STAFF_CONNECT_STATS_CACHE_LOCK:
+        cached = _STAFF_CONNECT_STATS_CACHE.get("value")
+        expires_at = float(_STAFF_CONNECT_STATS_CACHE.get("expires_at") or 0)
+
+        if cached is not None and now_mono < expires_at:
+            return dict(cached)
+
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            (SELECT COUNT(*)
+             FROM staff_connect_posts
+             WHERE is_active=1) AS total_posts,
+
+            (SELECT COUNT(*)
+             FROM staff_connect_profiles
+             WHERE COALESCE(career_field,'')!='') AS total_profiles,
+
+            (SELECT COUNT(*)
+             FROM staff_connect_posts
+             WHERE is_active=1
+               AND post_type='RESOURCE') AS total_resources,
+
+            (SELECT COUNT(*)
+             FROM staff_connect_posts
+             WHERE is_active=1
+               AND post_type='OPPORTUNITY') AS total_internal_opportunities
+    """)
+
+    row = cur.fetchone()
+    value = {
+        "total_posts": int(row["total_posts"] or 0),
+        "total_profiles": int(row["total_profiles"] or 0),
+        "total_resources": int(row["total_resources"] or 0),
+        "total_internal_opportunities": int(row["total_internal_opportunities"] or 0),
+    }
+
+    with _STAFF_CONNECT_STATS_CACHE_LOCK:
+        _STAFF_CONNECT_STATS_CACHE["value"] = dict(value)
+        _STAFF_CONNECT_STATS_CACHE["expires_at"] = (
+            time.monotonic() + STAFF_CONNECT_STATS_TTL_SECONDS
+        )
+
+    return value
+
+
+def staff_connect_enrich_posts(conn, rows):
+    """
+    Add comment_count and reaction_summary to a page of posts in two batch
+    queries instead of running correlated subqueries for every post.
+    """
+    posts = [dict(row) for row in rows]
+
+    if not posts:
+        return posts
+
+    post_ids = [int(post["id"]) for post in posts]
+    placeholders = ",".join("?" for _ in post_ids)
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT post_id, COUNT(*) AS c
+        FROM staff_connect_comments
+        WHERE is_active=1
+          AND post_id IN ({placeholders})
+        GROUP BY post_id
+    """, post_ids)
+
+    comment_counts = {
+        int(row["post_id"]): int(row["c"] or 0)
+        for row in cur.fetchall()
+    }
+
+    cur.execute(f"""
+        SELECT post_id, reaction, COUNT(*) AS c
+        FROM staff_connect_reactions
+        WHERE post_id IN ({placeholders})
+        GROUP BY post_id, reaction
+    """, post_ids)
+
+    reaction_counts = {}
+
+    for row in cur.fetchall():
+        post_id = int(row["post_id"])
+        reaction_counts.setdefault(post_id, []).append(
+            f"{row['reaction']}:{int(row['c'] or 0)}"
+        )
+
+    for post in posts:
+        post_id = int(post["id"])
+        post["comment_count"] = comment_counts.get(post_id, 0)
+        post["reaction_summary"] = "|".join(
+            reaction_counts.get(post_id, [])
+        )
+
+    return posts
+
+
+def staff_connect_peer_matches(conn, actor, profile, limit=5):
+    if not profile:
+        return []
+
+    cache_key = (
+        actor["role"],
+        actor["user_key"],
+        str(profile["updated_at"] or ""),
+        int(limit),
+    )
+    now_mono = time.monotonic()
+
+    with _STAFF_CONNECT_PEER_CACHE_LOCK:
+        cached = _STAFF_CONNECT_PEER_CACHE.get(cache_key)
+
+        if cached and now_mono < cached["expires_at"]:
+            return cached["value"]
+
+    career_field = str(profile["career_field"] or "").strip().lower()
+    skills = {
+        token.strip().lower()
+        for token in re.split(r"[,;\n]", str(profile["skills"] or ""))
+        if token.strip()
+    }
+    wants = {
+        token.strip().lower()
+        for token in re.split(r"[,;\n]", str(profile["wants_help_with"] or ""))
+        if token.strip()
+    }
+
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            role,
+            user_key,
+            display_name,
+            role_label,
+            career_field,
+            institution,
+            qualification,
+            career_stage,
+            skills,
+            can_help_with,
+            wants_help_with,
+            career_goals,
+            interests,
+            mentoring_status,
+            linkedin_url,
+            portfolio_url,
+            updated_at
+        FROM staff_connect_profiles
+        WHERE NOT (role=? AND user_key=?)
+          AND (
+              COALESCE(career_field,'')!=''
+              OR COALESCE(skills,'')!=''
+              OR COALESCE(can_help_with,'')!=''
+          )
+        ORDER BY updated_at DESC
+        LIMIT 120
+    """, (actor["role"], actor["user_key"]))
+
+    matches = []
+
+    for row in cur.fetchall():
+        score = 0
+        reasons = []
+        other_field = str(row["career_field"] or "").strip().lower()
+        other_skills = {
+            token.strip().lower()
+            for token in re.split(r"[,;\n]", str(row["skills"] or ""))
+            if token.strip()
+        }
+        other_help = str(row["can_help_with"] or "").lower()
+
+        if career_field and other_field == career_field:
+            score += 5
+            reasons.append("same career field")
+
+        shared = sorted(skills & other_skills)
+        if shared:
+            score += min(4, len(shared))
+            reasons.append("shared skills")
+
+        help_hits = [item for item in wants if item and item in other_help]
+        if help_hits:
+            score += min(4, len(help_hits) * 2)
+            reasons.append("can help with something you want to learn")
+
+        if score > 0:
+            matches.append((score, dict(row), ", ".join(reasons)))
+
+    matches.sort(
+        key=lambda item: (
+            -item[0],
+            str(item[1]["display_name"] or "")
+        )
+    )
+    result = matches[:limit]
+
+    with _STAFF_CONNECT_PEER_CACHE_LOCK:
+        if len(_STAFF_CONNECT_PEER_CACHE) >= STAFF_CONNECT_PEER_CACHE_MAX:
+            _STAFF_CONNECT_PEER_CACHE.clear()
+
+        _STAFF_CONNECT_PEER_CACHE[cache_key] = {
+            "expires_at": time.monotonic() + STAFF_CONNECT_PEER_TTL_SECONDS,
+            "value": result,
+        }
+
+    return result
+
+
+def _staff_connect_claim_job_refresh():
+    """
+    Claim a short DB-backed refresh lock so multiple Gunicorn workers do not all
+    refresh the external jobs feed at the same time.
+    """
+    lock_key = "remotive_remote_jobs_refresh_lock_v1"
+    now_ts = time.time()
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            INSERT OR IGNORE INTO staff_connect_api_cache(
+                cache_key, payload, fetched_ts, updated_at
+            )
+            VALUES(?, '{}', 0, ?)
+        """, (lock_key, now_utc_iso()))
+        conn.commit()
+
+        cur.execute("""
+            UPDATE staff_connect_api_cache
+            SET fetched_ts=?, updated_at=?
+            WHERE cache_key=?
+              AND fetched_ts < ?
+        """, (
+            now_ts,
+            now_utc_iso(),
+            lock_key,
+            now_ts - 5 * 60,
+        ))
+        claimed = int(cur.rowcount or 0) == 1
+        conn.commit()
+        return claimed
+
+    finally:
+        conn.close()
+
+
+def _staff_connect_release_job_refresh():
+    conn = get_db()
+
+    try:
+        conn.execute("""
+            UPDATE staff_connect_api_cache
+            SET fetched_ts=0, updated_at=?
+            WHERE cache_key='remotive_remote_jobs_refresh_lock_v1'
+        """, (now_utc_iso(),))
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
+def _staff_connect_refresh_remotive_jobs():
+    cache_key = "remotive_remote_jobs_v1"
+
+    try:
+        request_obj = urlreq.Request(
+            "https://remotive.com/api/remote-jobs?limit=100",
+            headers={
+                "User-Agent": "EBTA-Portal/1.0 (+https://ebtaportal.co.za)",
+                "Accept": "application/json",
+            },
+        )
+
+        with urlreq.urlopen(request_obj, timeout=7) as response:
+            payload = json.loads(
+                response.read().decode("utf-8", errors="ignore")
+            )
+
+        simplified = []
+
+        for job in (payload.get("jobs") or [])[:100]:
+            simplified.append({
+                "id": job.get("id"),
+                "url": staff_connect_safe_url(job.get("url")),
+                "title": str(job.get("title") or "").strip(),
+                "company": str(job.get("company_name") or "").strip(),
+                "category": str(job.get("category") or "").strip(),
+                "job_type": str(job.get("job_type") or "").strip(),
+                "publication_date": str(job.get("publication_date") or "").strip(),
+                "location": str(job.get("candidate_required_location") or "").strip(),
+                "salary": str(job.get("salary") or "").strip(),
+            })
+
+        conn = get_db()
+
+        try:
+            conn.execute("""
+                INSERT INTO staff_connect_api_cache(
+                    cache_key, payload, fetched_ts, updated_at
+                )
+                VALUES(?,?,?,?)
+                ON CONFLICT(cache_key)
+                DO UPDATE SET
+                    payload=excluded.payload,
+                    fetched_ts=excluded.fetched_ts,
+                    updated_at=excluded.updated_at
+            """, (
+                cache_key,
+                json.dumps(simplified, ensure_ascii=False),
+                time.time(),
+                now_utc_iso(),
+            ))
+            conn.commit()
+
+        finally:
+            conn.close()
+
+    except Exception as exc:
+        print(
+            "[EBTA CONNECT] Remotive refresh failed:",
+            str(exc)[:240],
+            flush=True,
+        )
+
+    finally:
+        try:
+            _staff_connect_release_job_refresh()
+        except Exception:
+            pass
+
+
+def _staff_connect_start_job_refresh():
+    if not _staff_connect_claim_job_refresh():
+        return False
+
+    threading.Thread(
+        target=_staff_connect_refresh_remotive_jobs,
+        name="ebta-connect-jobs-refresh",
+        daemon=True,
+    ).start()
+
+    return True
+
+
+def staff_connect_fetch_remotive_jobs():
+    """
+    Return cached jobs immediately.
+
+    If the 8-hour cache is stale, refresh it in a background thread and serve
+    the existing cache without making the user's page wait for the network.
+    """
+    cache_key = "remotive_remote_jobs_v1"
+    max_age_seconds = 8 * 60 * 60
+    cached_jobs = []
+    fetched_ts = 0.0
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            SELECT payload, fetched_ts
+            FROM staff_connect_api_cache
+            WHERE cache_key=?
+            LIMIT 1
+        """, (cache_key,))
+        row = cur.fetchone()
+
+        if row:
+            try:
+                cached_jobs = json.loads(row["payload"] or "[]")
+            except Exception:
+                cached_jobs = []
+
+            try:
+                fetched_ts = float(row["fetched_ts"] or 0)
+            except Exception:
+                fetched_ts = 0.0
+
+    finally:
+        conn.close()
+
+    is_fresh = (
+        bool(fetched_ts)
+        and time.time() - fetched_ts < max_age_seconds
+    )
+
+    if is_fresh:
+        return cached_jobs, True
+
+    # Refresh outside the web request. A DB-backed lock prevents duplicate
+    # refreshes across Gunicorn workers.
+    try:
+        _staff_connect_start_job_refresh()
+    except Exception:
+        pass
+
+    return cached_jobs, True
+
+
+def staff_connect_filter_jobs(jobs, career_field="", search=""):
+    career_field = str(career_field or "").strip()
+    search = str(search or "").strip().lower()
+    terms = STAFF_CONNECT_JOB_TERMS.get(career_field, [])
+    filtered = []
+
+    for job in jobs:
+        haystack = " ".join([
+            str(job.get("title") or ""),
+            str(job.get("company") or ""),
+            str(job.get("category") or ""),
+            str(job.get("location") or ""),
+        ]).lower()
+
+        if terms and not any(term in haystack for term in terms):
+            continue
+
+        if search and search not in haystack:
+            continue
+
+        filtered.append(job)
+
+    return filtered
+
+
+def staff_connect_render_profile_card(profile, compact=False):
+    if not profile:
+        return ""
+
+    links = []
+
+    linkedin_url = staff_connect_safe_url(profile["linkedin_url"])
+    portfolio_url = staff_connect_safe_url(profile["portfolio_url"])
+
+    if linkedin_url:
+        links.append(
+            f"<a class='btn mini secondary' target='_blank' rel='noopener' "
+            f"href='{escape(linkedin_url, quote=True)}'>LinkedIn</a>"
+        )
+
+    if portfolio_url:
+        links.append(
+            f"<a class='btn mini secondary' target='_blank' rel='noopener' "
+            f"href='{escape(portfolio_url, quote=True)}'>Portfolio</a>"
+        )
+
+    skill_html = ""
+    for skill in [
+        item.strip() for item in re.split(r"[,;\n]", str(profile["skills"] or ""))
+        if item.strip()
+    ][:8]:
+        skill_html += f"<span class='chip'>{escape(skill)}</span>"
+
+    mentoring_map = {
+        "OFFERING": "Available to mentor",
+        "SEEKING": "Looking for a mentor",
+        "BOTH": "Mentor & learn",
+        "NONE": "",
+    }
+    mentoring = mentoring_map.get(str(profile["mentoring_status"] or "NONE"), "")
+
+    detail = ""
+    if not compact:
+        if profile["qualification"]:
+            detail += f"<div><b>Qualification:</b> {escape(profile['qualification'])}</div>"
+        if profile["career_stage"]:
+            detail += f"<div><b>Stage:</b> {escape(profile['career_stage'])}</div>"
+        if profile["can_help_with"]:
+            detail += f"<div><b>Can help with:</b> {staff_connect_text_html(profile['can_help_with'])}</div>"
+        if profile["wants_help_with"]:
+            detail += f"<div><b>Would like help with:</b> {staff_connect_text_html(profile['wants_help_with'])}</div>"
+        if profile["career_goals"]:
+            detail += f"<div><b>Career goals:</b> {staff_connect_text_html(profile['career_goals'])}</div>"
+
+    return f"""
+    <article class="staff-person-card">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
+            <div>
+                <h3 style="margin:0 0 4px">{escape(profile['display_name'] or 'EBTA Team Member')}</h3>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+                    {staff_connect_role_chip(profile['role'], profile['role_label'])}
+                    {f"<span class='chip active'>{escape(profile['career_field'])}</span>" if profile['career_field'] else ''}
+                    {f"<span class='chip pending'>{escape(mentoring)}</span>" if mentoring else ''}
+                </div>
+                <div class="mini muted">
+                    {escape(profile['institution'] or '')}
+                </div>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">{''.join(links)}</div>
+        </div>
+        {f"<div style='display:flex;gap:5px;flex-wrap:wrap;margin-top:10px'>{skill_html}</div>" if skill_html else ''}
+        {f"<div class='mini' style='margin-top:10px;line-height:1.5'>{detail}</div>" if detail else ''}
+    </article>
+    """
+
+
+def staff_connect_render_post_card(post, actor, compact=False):
+    post_type = str(post["post_type"] or "DISCUSSION")
+    icon, label = STAFF_CONNECT_POST_TYPES.get(post_type, ("💬", post_type.title()))
+
+    try:
+        body = str(post["body"] or "")
+        if compact and len(body) > 420:
+            body = body[:420].rstrip() + "…"
+    except Exception:
+        body = ""
+
+    link_html = ""
+    safe_link = staff_connect_safe_url(post["link_url"])
+
+    if safe_link:
+        link_html = f"""
+        <div style="margin-top:10px">
+            <a class="btn mini secondary" target="_blank" rel="noopener"
+               href="{escape(safe_link, quote=True)}">Open shared link ↗</a>
+        </div>
+        """
+
+    pinned = "<span class='chip active'>📌 Pinned</span>" if int(post["is_pinned"] or 0) == 1 else ""
+    created = format_chat_datetime(post["created_at"])
+
+    reactions = {}
+    raw_reactions = post["reaction_summary"] if "reaction_summary" in post.keys() else ""
+
+    if raw_reactions:
+        for part in str(raw_reactions).split("|"):
+            if ":" in part:
+                key, count = part.split(":", 1)
+                try:
+                    reactions[key] = int(count)
+                except Exception:
+                    pass
+
+    reaction_buttons = ""
+    for key, (reaction_icon, reaction_label) in STAFF_CONNECT_REACTIONS.items():
+        count = reactions.get(key, 0)
+        reaction_buttons += f"""
+        <form method="post" action="{url_for('staff_connect_react', post_id=post['id'])}" style="display:inline">
+            <input type="hidden" name="reaction" value="{key}">
+            <input type="hidden" name="return_to" value="{escape(request.full_path or '/staff-connect', quote=True)}">
+            <button class="staff-reaction-btn" title="{escape(reaction_label)}">
+                {reaction_icon} {count if count else ''}
+            </button>
+        </form>
+        """
+
+    can_archive = (
+        staff_connect_can_moderate(actor)
+        or (
+            str(post["author_role"]) == actor["role"]
+            and str(post["author_key"]) == actor["user_key"]
+        )
+    )
+
+    moderation = ""
+    if staff_connect_can_moderate(actor):
+        moderation += f"""
+        <form method="post" action="{url_for('staff_connect_moderate_post', post_id=post['id'])}" style="display:inline">
+            <input type="hidden" name="action" value="{'unpin' if int(post['is_pinned'] or 0) == 1 else 'pin'}">
+            <button class="btn mini secondary">{'Unpin' if int(post['is_pinned'] or 0) == 1 else 'Pin'}</button>
+        </form>
+        """
+
+    if can_archive:
+        moderation += f"""
+        <form method="post" action="{url_for('staff_connect_moderate_post', post_id=post['id'])}" style="display:inline"
+              onsubmit="return confirm('Archive this post?')">
+            <input type="hidden" name="action" value="archive">
+            <button class="btn mini danger">Archive</button>
+        </form>
+        """
+
+    comment_count = int(post["comment_count"] or 0) if "comment_count" in post.keys() else 0
+
+    return f"""
+    <article class="staff-post-card {'pinned' if int(post['is_pinned'] or 0) == 1 else ''}">
+        <div class="staff-post-head">
+            <div>
+                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                    <span class="chip">{icon} {escape(label)}</span>
+                    <span class="chip pending">{escape(post['category'] or 'General')}</span>
+                    {pinned}
+                </div>
+                <h3 style="margin:8px 0 3px">{escape(post['title'] or 'Untitled')}</h3>
+                <div class="mini muted">
+                    {escape(post['author_name'] or 'EBTA Team Member')} · {escape(post['author_role_label'] or '')} · {escape(created)}
+                </div>
+            </div>
+        </div>
+
+        <div class="staff-post-body">{staff_connect_text_html(body)}</div>
+        {link_html}
+
+        <div class="staff-post-actions">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+                {reaction_buttons}
+                <a class="btn mini secondary" href="{url_for('staff_connect_post_detail', post_id=post['id'])}">
+                    💬 {comment_count} comment{'s' if comment_count != 1 else ''}
+                </a>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">{moderation}</div>
+        </div>
+    </article>
+    """
+
+
+def staff_connect_styles():
+    return """
+    <style>
+        .staff-connect-hero{
+            background:linear-gradient(135deg,#0f3d1e,#1b5e20 55%,#2e7d32);
+            color:white;border:none;overflow:hidden;position:relative;
+        }
+        .staff-connect-hero:after{
+            content:"";position:absolute;width:280px;height:280px;border-radius:50%;
+            right:-100px;top:-120px;background:rgba(255,255,255,.08);
+        }
+        .staff-connect-hero h1,.staff-connect-hero h2{color:white}
+        .staff-connect-nav{margin:0 0 14px;gap:8px;flex-wrap:wrap}
+        .staff-connect-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,.75fr);gap:15px;align-items:start}
+        .staff-post-card,.staff-person-card{
+            background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:16px;
+            margin-bottom:12px;box-shadow:0 4px 14px rgba(15,23,42,.05)
+        }
+        .staff-post-card.pinned{border-left:6px solid #25D366;background:#fbfffc}
+        .staff-post-head,.staff-post-actions{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
+        .staff-post-body{margin-top:12px;line-height:1.6;color:#263238;overflow-wrap:anywhere}
+        .staff-post-actions{margin-top:14px;padding-top:11px;border-top:1px solid #edf2f7;align-items:center}
+        .staff-reaction-btn{border:1px solid #dbe4df;background:#fff;border-radius:999px;padding:6px 9px;cursor:pointer;font-weight:700}
+        .staff-reaction-btn:hover{background:#eef8f0;border-color:#9fc3a8}
+        .staff-connect-kpis{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;margin-top:14px}
+        .staff-connect-kpi{padding:13px;border-radius:14px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18)}
+        .staff-connect-kpi b{font-size:22px;display:block}.staff-connect-kpi span{font-size:12px;opacity:.9}
+        .staff-compose-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+        .staff-opportunity-card{border:1px solid #dbe4df;border-left:5px solid #2563eb;border-radius:14px;padding:14px;background:white;margin-bottom:10px}
+        .staff-profile-progress{height:10px;background:#e5e7eb;border-radius:999px;overflow:hidden}.staff-profile-progress>div{height:100%;background:#1b5e20}
+        @media(max-width:900px){
+            .staff-connect-grid{grid-template-columns:1fr}
+            .staff-connect-kpis{grid-template-columns:repeat(2,minmax(120px,1fr))}
+            .staff-compose-grid{grid-template-columns:1fr}
+        }
+        @media(max-width:520px){.staff-connect-kpis{grid-template-columns:1fr 1fr}}
+    </style>
+    """
+
+
+@app.get('/staff-connect')
+def staff_connect_home():
+    r = require_staff_connect()
+    if r:
+        return r
+
+    actor = staff_connect_actor()
+    view = request.args.get("view", "community").strip().lower()
+
+    if view not in {"community", "opportunities", "people", "profile"}:
+        view = "community"
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    if staff_connect_ensure_profile(conn, actor):
+        conn.commit()
+
+    cur.execute("""
+        SELECT * FROM staff_connect_profiles
+        WHERE role=? AND user_key=?
+        LIMIT 1
+    """, (actor["role"], actor["user_key"]))
+    my_profile = cur.fetchone()
+
+    connect_stats = staff_connect_dashboard_stats(conn)
+    total_posts = connect_stats["total_posts"]
+    total_profiles = connect_stats["total_profiles"]
+    total_resources = connect_stats["total_resources"]
+    total_internal_opportunities = connect_stats["total_internal_opportunities"]
+
+    profile_completion = staff_connect_profile_completeness(my_profile)
+
+    hero = f"""
+    {staff_connect_styles()}
+    {staff_connect_nav(view)}
+
+    <section class="card staff-connect-hero">
+        <div style="position:relative;z-index:1">
+            <div class="mini" style="opacity:.9;font-weight:800;letter-spacing:.08em;text-transform:uppercase">
+                EBTA Team Community
+            </div>
+            <h1 style="margin:5px 0">EBTA Connect</h1>
+            <p style="max-width:780px;margin:0;line-height:1.6">
+                Communicate, share resources, ask for help, celebrate wins, find opportunities
+                and connect with people across the EBTA team.
+            </p>
+
+            <div class="staff-connect-kpis">
+                <div class="staff-connect-kpi"><b>{total_posts}</b><span>Community posts</span></div>
+                <div class="staff-connect-kpi"><b>{total_profiles}</b><span>Career profiles</span></div>
+                <div class="staff-connect-kpi"><b>{total_resources}</b><span>Shared resources</span></div>
+                <div class="staff-connect-kpi"><b>{total_internal_opportunities}</b><span>Team opportunities</span></div>
+            </div>
+        </div>
+    </section>
+    """
+
+    if view == "profile":
+        mentoring_status = str(my_profile["mentoring_status"] or "NONE") if my_profile else "NONE"
+
+        def pv(field):
+            return escape(str(my_profile[field] or "") if my_profile else "", quote=True)
+
+        body = f"""
+        {hero}
+        <section class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+                <div>
+                    <h2 style="margin-bottom:4px">My Career Profile</h2>
+                    <p class="muted" style="margin:0">
+                        Share the professional information you are comfortable showing to the EBTA team.
+                    </p>
+                </div>
+                <div style="min-width:220px">
+                    <div class="mini muted">Profile completeness: {profile_completion}%</div>
+                    <div class="staff-profile-progress" style="margin-top:6px"><div style="width:{profile_completion}%"></div></div>
+                </div>
+            </div>
+
+            <form method="post" action="{url_for('staff_connect_save_profile')}" style="margin-top:16px">
+                <div class="staff-compose-grid">
+                    <div>
+                        <label>Career / Study Field</label>
+                        <select name="career_field">{staff_connect_field_options(str(my_profile['career_field'] or '') if my_profile else '')}</select>
+                    </div>
+                    <div>
+                        <label>Institution / Organisation</label>
+                        <input name="institution" value="{pv('institution')}" placeholder="Example: UCT, UJ, UP, EBTA">
+                    </div>
+                    <div>
+                        <label>Qualification / Programme</label>
+                        <input name="qualification" value="{pv('qualification')}" placeholder="Example: BEd, MBChB, BCom Accounting, BSc Computer Science">
+                    </div>
+                    <div>
+                        <label>Career / Study Stage</label>
+                        <input name="career_stage" value="{pv('career_stage')}" placeholder="Example: 3rd year, Graduate, Honours, Early career">
+                    </div>
+                </div>
+
+                <label style="margin-top:12px">Skills & Strengths</label>
+                <textarea name="skills" rows="3" placeholder="Separate skills with commas">{escape(str(my_profile['skills'] or '') if my_profile else '')}</textarea>
+
+                <div class="staff-compose-grid" style="margin-top:12px">
+                    <div>
+                        <label>I can help other EBTA members with</label>
+                        <textarea name="can_help_with" rows="4" placeholder="Example: CV reviews, Python, lesson planning, interview preparation">{escape(str(my_profile['can_help_with'] or '') if my_profile else '')}</textarea>
+                    </div>
+                    <div>
+                        <label>I would like help with</label>
+                        <textarea name="wants_help_with" rows="4" placeholder="Example: internships, research applications, public speaking">{escape(str(my_profile['wants_help_with'] or '') if my_profile else '')}</textarea>
+                    </div>
+                </div>
+
+                <label style="margin-top:12px">Career Goals</label>
+                <textarea name="career_goals" rows="4" placeholder="What are you working toward?">{escape(str(my_profile['career_goals'] or '') if my_profile else '')}</textarea>
+
+                <label style="margin-top:12px">Professional Interests</label>
+                <textarea name="interests" rows="3" placeholder="Research, entrepreneurship, education technology, finance, health, leadership...">{escape(str(my_profile['interests'] or '') if my_profile else '')}</textarea>
+
+                <div class="staff-compose-grid" style="margin-top:12px">
+                    <div>
+                        <label>Mentoring</label>
+                        <select name="mentoring_status">
+                            <option value="NONE" {'selected' if mentoring_status == 'NONE' else ''}>Not selected</option>
+                            <option value="OFFERING" {'selected' if mentoring_status == 'OFFERING' else ''}>I can mentor / support others</option>
+                            <option value="SEEKING" {'selected' if mentoring_status == 'SEEKING' else ''}>I am looking for a mentor / support</option>
+                            <option value="BOTH" {'selected' if mentoring_status == 'BOTH' else ''}>I can help others and I also want support</option>
+                        </select>
+                    </div>
+                    <div></div>
+                    <div>
+                        <label>LinkedIn URL</label>
+                        <input type="url" name="linkedin_url" value="{pv('linkedin_url')}" placeholder="https://www.linkedin.com/in/...">
+                    </div>
+                    <div>
+                        <label>Portfolio / Professional Website</label>
+                        <input type="url" name="portfolio_url" value="{pv('portfolio_url')}" placeholder="https://...">
+                    </div>
+                </div>
+
+                <button class="btn success" style="margin-top:14px">Save Career Profile</button>
+            </form>
+        </section>
+        """
+        conn.close()
+        return page("EBTA Connect - Career Profile", body)
+
+    if view == "people":
+        q = request.args.get("q", "").strip()
+        field = request.args.get("field", "").strip()
+
+        try:
+            people_page = max(1, int(request.args.get("people_page", 1)))
+        except Exception:
+            people_page = 1
+
+        people_per_page = 24
+        where = ["1=1"]
+        params = []
+
+        if field:
+            where.append("career_field=?")
+            params.append(field)
+
+        if q:
+            pattern = f"%{q}%"
+            where.append("""
+                (
+                    display_name LIKE ?
+                    OR career_field LIKE ?
+                    OR institution LIKE ?
+                    OR qualification LIKE ?
+                    OR skills LIKE ?
+                    OR can_help_with LIKE ?
+                )
+            """)
+            params.extend([pattern] * 6)
+
+        people_where_sql = " AND ".join(where)
+
+        cur.execute(f"""
+            SELECT COUNT(*) AS c
+            FROM staff_connect_profiles
+            WHERE {people_where_sql}
+        """, params)
+
+        people_total = int(cur.fetchone()["c"] or 0)
+        people_total_pages = max(
+            1,
+            (people_total + people_per_page - 1) // people_per_page
+        )
+
+        if people_page > people_total_pages:
+            people_page = people_total_pages
+
+        people_offset = (people_page - 1) * people_per_page
+
+        cur.execute(f"""
+            SELECT *
+            FROM staff_connect_profiles
+            WHERE {people_where_sql}
+            ORDER BY
+                CASE WHEN COALESCE(career_field,'')='' THEN 1 ELSE 0 END,
+                display_name
+            LIMIT ? OFFSET ?
+        """, params + [people_per_page, people_offset])
+
+        people = cur.fetchall()
+
+        cards = "".join(
+            staff_connect_render_profile_card(row)
+            for row in people
+        )
+
+        if not cards:
+            cards = "<div class='empty'>No matching career profiles yet.</div>"
+
+        matches = staff_connect_peer_matches(
+            conn,
+            actor,
+            my_profile,
+            limit=5
+        )
+
+        match_html = ""
+
+        for score, row, reason in matches:
+            match_html += f"""
+            <div class="card soft" style="margin-bottom:8px;border-left:4px solid #25D366">
+                <b>{escape(row['display_name'])}</b>
+                <div class="mini muted">{escape(row['career_field'] or row['role_label'] or '')}</div>
+                <div class="mini" style="margin-top:4px">Match: {escape(reason)}</div>
+            </div>
+            """
+
+        people_base = {
+            "view": "people",
+            "q": q,
+            "field": field,
+        }
+
+        people_prev = ""
+        people_next = ""
+
+        if people_page > 1:
+            people_prev = (
+                "<a class='btn mini secondary' href='/staff-connect?"
+                + urlencode({
+                    **people_base,
+                    "people_page": people_page - 1,
+                })
+                + "'>← Previous</a>"
+            )
+
+        if people_page < people_total_pages:
+            people_next = (
+                "<a class='btn mini secondary' href='/staff-connect?"
+                + urlencode({
+                    **people_base,
+                    "people_page": people_page + 1,
+                })
+                + "'>Next →</a>"
+            )
+
+        people_showing_from = (
+            people_offset + 1
+            if people_total
+            else 0
+        )
+        people_showing_to = min(
+            people_offset + len(people),
+            people_total
+        )
+
+        body = f"""
+        {hero}
+        <div class="staff-connect-grid">
+            <section class="card">
+                <h2>People & Mentoring Directory</h2>
+                <p class="muted">Find EBTA colleagues by field, qualification, skills or what they can help with.</p>
+
+                <form method="get" action="/staff-connect" class="toolbar" style="align-items:end">
+                    <input type="hidden" name="view" value="people">
+
+                    <div style="flex:1;min-width:220px">
+                        <label>Search</label>
+                        <input name="q"
+                               value="{escape(q, quote=True)}"
+                               placeholder="Name, skill, qualification, institution...">
+                    </div>
+
+                    <div style="min-width:220px">
+                        <label>Field</label>
+                        <select name="field">
+                            {staff_connect_field_options(field, include_all=True)}
+                        </select>
+                    </div>
+
+                    <button class="btn">Search</button>
+                </form>
+
+                <div class="mini muted" style="margin-top:12px">
+                    Showing {people_showing_from}-{people_showing_to}
+                    of {people_total} profile{'s' if people_total != 1 else ''}
+                </div>
+
+                <div style="margin-top:14px">{cards}</div>
+
+                <div style="
+                    display:flex;
+                    justify-content:center;
+                    gap:8px;
+                    align-items:center;
+                    flex-wrap:wrap;
+                    margin-top:14px;
+                ">
+                    {people_prev}
+                    <span class="chip">
+                        Page {people_page} of {people_total_pages}
+                    </span>
+                    {people_next}
+                </div>
+            </section>
+
+            <aside>
+                <section class="card" style="border-left:5px solid #25D366">
+                    <h3>People you may connect with</h3>
+                    <p class="mini muted">
+                        Suggestions use the career profile information you choose to share.
+                    </p>
+                    {match_html or '<div class="mini muted">Complete your Career Profile to get peer-match suggestions.</div>'}
+                </section>
+
+                <section class="card">
+                    <h3>Build the network</h3>
+                    <p class="mini muted">
+                        Add your own skills and goals so colleagues know when they can reach out to you.
+                    </p>
+                    <a class="btn success" href="/staff-connect?view=profile">
+                        Update My Career Profile
+                    </a>
+                </section>
+            </aside>
+        </div>
+        """
+
+        conn.close()
+        return page("EBTA Connect - People", body)
+
+    if view == "opportunities":
+        career_field = request.args.get("field", "").strip()
+        search = request.args.get("q", "").strip()
+
+        if not career_field and my_profile and my_profile["career_field"]:
+            career_field = str(my_profile["career_field"] or "")
+
+        cur.execute("""
+            SELECT p.*
+            FROM staff_connect_posts p
+            WHERE p.is_active=1
+              AND p.post_type='OPPORTUNITY'
+            ORDER BY p.is_pinned DESC, p.created_at DESC, p.id DESC
+            LIMIT 12
+        """)
+        internal_posts = staff_connect_enrich_posts(
+            conn,
+            cur.fetchall()
+        )
+        internal_html = "".join(staff_connect_render_post_card(row, actor, compact=True) for row in internal_posts)
+
+        conn.close()
+
+        live_jobs, cached = staff_connect_fetch_remotive_jobs()
+        live_jobs = staff_connect_filter_jobs(live_jobs, career_field, search)[:18]
+
+        jobs_html = ""
+        for job in live_jobs:
+            url = staff_connect_safe_url(job.get("url"))
+            if not url:
+                continue
+            published = str(job.get("publication_date") or "")[:10]
+            meta_parts = [
+                job.get("company"), job.get("category"), job.get("location"),
+                job.get("job_type"), job.get("salary")
+            ]
+            meta = " · ".join(str(item) for item in meta_parts if item)
+            jobs_html += f"""
+            <article class="staff-opportunity-card">
+                <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
+                    <div style="min-width:0;flex:1">
+                        <h3 style="margin:0 0 4px">{escape(job.get('title') or 'Remote opportunity')}</h3>
+                        <div class="mini muted">{escape(meta)}</div>
+                        <div class="mini muted" style="margin-top:4px">Posted {escape(published)} · Source: Remotive</div>
+                    </div>
+                    <a class="btn mini success" target="_blank" rel="noopener" href="{escape(url, quote=True)}">View Opportunity ↗</a>
+                </div>
+            </article>
+            """
+
+        if not jobs_html:
+            jobs_html = (
+                "<div class='empty'>"
+                "Live opportunities are refreshing or no listings match this filter right now."
+                "</div>"
+            )
+
+        body = f"""
+        {hero}
+        <section class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+                <div>
+                    <h2 style="margin-bottom:4px">Career & Opportunity Board</h2>
+                    <p class="muted" style="margin:0">Team-shared opportunities plus a live remote-jobs feed.</p>
+                </div>
+                <a class="btn success" href="/staff-connect#share">Share an Opportunity</a>
+            </div>
+
+            <form method="get" action="/staff-connect" class="toolbar" style="align-items:end;margin-top:14px">
+                <input type="hidden" name="view" value="opportunities">
+                <div style="min-width:250px;flex:1">
+                    <label>Career field</label>
+                    <select name="field">{staff_connect_field_options(career_field, include_all=True)}</select>
+                </div>
+                <div style="min-width:220px;flex:1">
+                    <label>Search live jobs</label>
+                    <input name="q" value="{escape(search, quote=True)}" placeholder="Example: data, teaching, finance">
+                </div>
+                <button class="btn">Apply</button>
+            </form>
+        </section>
+
+        <div class="staff-connect-grid">
+            <section class="card">
+                <h2>Live Remote Opportunities</h2>
+                <p class="mini muted">
+                    Public listings from Remotive. EBTA refreshes this feed only a few times per day and links directly to the original listing.
+                    {'Showing cached data.' if cached else ''}
+                </p>
+                {jobs_html}
+            </section>
+
+            <aside>
+                <section class="card" style="border-left:5px solid #f59e0b">
+                    <h3>Shared by the EBTA Team</h3>
+                    <p class="mini muted">Bursaries, internships, programmes, conferences, jobs and other opportunities added by colleagues.</p>
+                    {internal_html or '<div class="mini muted">No team-shared opportunities yet.</div>'}
+                </section>
+            </aside>
+        </div>
+        """
+        return page("EBTA Connect - Opportunities", body)
+
+    # ================= COMMUNITY VIEW =================
+    post_type = request.args.get("type", "").strip().upper()
+    field = request.args.get("field", "").strip()
+    q = request.args.get("q", "").strip()
+
+    try:
+        page_num = max(1, int(request.args.get("page", 1)))
+    except Exception:
+        page_num = 1
+
+    per_page = 12
+    where = ["p.is_active=1"]
+    params = []
+
+    if post_type in STAFF_CONNECT_POST_TYPES:
+        where.append("p.post_type=?")
+        params.append(post_type)
+
+    if field:
+        where.append("p.category=?")
+        params.append(field)
+
+    if q:
+        pattern = f"%{q}%"
+        where.append("(p.title LIKE ? OR p.body LIKE ? OR p.author_name LIKE ? OR p.category LIKE ?)")
+        params.extend([pattern] * 4)
+
+    where_sql = " AND ".join(where)
+    cur.execute(f"SELECT COUNT(*) AS c FROM staff_connect_posts p WHERE {where_sql}", params)
+    total = int(cur.fetchone()["c"] or 0)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+
+    offset = (page_num - 1) * per_page
+    data_params = list(params) + [per_page, offset]
+
+    cur.execute(f"""
+        SELECT p.*
+        FROM staff_connect_posts p
+        WHERE {where_sql}
+        ORDER BY p.is_pinned DESC, p.created_at DESC, p.id DESC
+        LIMIT ? OFFSET ?
+    """, data_params)
+    posts = staff_connect_enrich_posts(
+        conn,
+        cur.fetchall()
+    )
+
+    feed_html = "".join(staff_connect_render_post_card(row, actor, compact=True) for row in posts)
+    if not feed_html:
+        feed_html = "<div class='empty'>No community posts match this filter yet.</div>"
+
+    matches = staff_connect_peer_matches(conn, actor, my_profile, limit=4)
+    match_html = ""
+    for score, row, reason in matches:
+        match_html += f"""
+        <div class="card soft" style="margin-bottom:8px">
+            <b>{escape(row['display_name'])}</b>
+            <div class="mini muted">{escape(row['career_field'] or row['role_label'] or '')}</div>
+            <div class="mini" style="margin-top:4px">{escape(reason)}</div>
+        </div>
+        """
+
+    type_filter_options = "<option value=''>All post types</option>"
+    for key, (icon, label) in STAFF_CONNECT_POST_TYPES.items():
+        type_filter_options += (
+            f"<option value='{key}' {'selected' if post_type == key else ''}>{icon} {escape(label)}</option>"
+        )
+
+    prev_link = ""
+    next_link = ""
+    base_params = {"type": post_type, "field": field, "q": q}
+
+    if page_num > 1:
+        prev_qs = urlencode({**base_params, "page": page_num - 1})
+        prev_link = f"<a class='btn mini secondary' href='/staff-connect?{prev_qs}'>← Previous</a>"
+
+    if page_num < total_pages:
+        next_qs = urlencode({**base_params, "page": page_num + 1})
+        next_link = f"<a class='btn mini secondary' href='/staff-connect?{next_qs}'>Next →</a>"
+
+    body = f"""
+    {hero}
+
+    <div class="staff-connect-grid">
+        <div>
+            <section class="card" id="share" style="border-left:5px solid #25D366">
+                <h2>Share with the Team</h2>
+                <p class="mini muted">Start a discussion, ask a question, share a useful resource, post an opportunity, celebrate a win or propose an idea.</p>
+
+                <form method="post" action="{url_for('staff_connect_create_post')}">
+                    <div class="staff-compose-grid">
+                        <div>
+                            <label>Post Type</label>
+                            <select name="post_type">{staff_connect_post_type_options(actor=actor)}</select>
+                        </div>
+                        <div>
+                            <label>Career / Interest Area</label>
+                            <select name="category">{staff_connect_field_options('General Career Growth')}</select>
+                        </div>
+                    </div>
+                    <label style="margin-top:10px">Title</label>
+                    <input name="title" maxlength="160" required placeholder="What would you like the EBTA team to know?">
+                    <label style="margin-top:10px">Message</label>
+                    <textarea name="body" rows="5" maxlength="6000" required placeholder="Share the details, ask for advice or explain how others can benefit."></textarea>
+                    <label style="margin-top:10px">Useful Link (optional)</label>
+                    <input type="url" name="link_url" placeholder="https://...">
+                    {"<label style='display:flex;gap:8px;align-items:center;margin-top:10px'><input type='checkbox' name='pin'> Pin this post</label>" if staff_connect_can_moderate(actor) else ""}
+                    <button class="btn success" style="margin-top:12px">Post to EBTA Connect</button>
+                </form>
+            </section>
+
+            <section class="card">
+                <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
+                    <div>
+                        <h2 style="margin-bottom:4px">Community Feed</h2>
+                        <div class="mini muted">{total} matching post{'s' if total != 1 else ''}</div>
+                    </div>
+                </div>
+
+                <form method="get" action="/staff-connect" class="toolbar" style="align-items:end;margin:12px 0">
+                    <div style="flex:1;min-width:200px"><label>Search</label><input name="q" value="{escape(q, quote=True)}" placeholder="Search discussions, people or topics"></div>
+                    <div style="min-width:190px"><label>Type</label><select name="type">{type_filter_options}</select></div>
+                    <div style="min-width:230px"><label>Field</label><select name="field">{staff_connect_field_options(field, include_all=True)}</select></div>
+                    <button class="btn">Filter</button>
+                </form>
+
+                {feed_html}
+
+                <div style="display:flex;justify-content:center;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px">
+                    {prev_link}
+                    <span class="chip">Page {page_num} of {total_pages}</span>
+                    {next_link}
+                </div>
+            </section>
+        </div>
+
+        <aside>
+            <section class="card" style="border-left:5px solid #25D366">
+                <h3>My Career Profile</h3>
+                <div class="mini muted">{profile_completion}% complete</div>
+                <div class="staff-profile-progress" style="margin:7px 0 12px"><div style="width:{profile_completion}%"></div></div>
+                <a class="btn success" href="/staff-connect?view=profile">{'Continue My Profile' if profile_completion < 100 else 'View / Update Profile'}</a>
+            </section>
+
+            <section class="card">
+                <h3>Peer Matches</h3>
+                <p class="mini muted">People whose fields, skills or support areas overlap with yours.</p>
+                {match_html or '<div class="mini muted">Complete your profile to unlock peer suggestions.</div>'}
+                <a class="btn mini secondary" style="margin-top:8px" href="/staff-connect?view=people">Browse Everyone</a>
+            </section>
+
+            <section class="card" style="border-left:5px solid #2563eb">
+                <h3>Career Opportunities</h3>
+                <p class="mini muted">Browse team-shared opportunities and the live remote-jobs feed.</p>
+                <a class="btn mini" href="/staff-connect?view=opportunities">Open Opportunity Board</a>
+            </section>
+
+            <section class="card">
+                <h3>Ways to use EBTA Connect</h3>
+                <div class="mini" style="line-height:1.65">
+                    • Ask colleagues for advice<br>
+                    • Share bursaries, internships and jobs<br>
+                    • Exchange teaching and study resources<br>
+                    • Find someone with a skill you want to learn<br>
+                    • Offer mentoring or request support<br>
+                    • Celebrate academic and career wins<br>
+                    • Find collaborators for projects and initiatives
+                </div>
+            </section>
+        </aside>
+    </div>
+    """
+
+    conn.close()
+    return page("EBTA Connect", body)
+
+
+@app.post('/staff-connect/profile/save')
+def staff_connect_save_profile():
+    r = require_staff_connect()
+    if r:
+        return r
+
+    actor = staff_connect_actor()
+
+    def clean(name, max_len):
+        return clean_multiline_text(request.form.get(name, "").strip())[:max_len]
+
+    career_field = request.form.get("career_field", "").strip()
+    if career_field not in STAFF_CONNECT_CAREER_FIELDS:
+        career_field = ""
+
+    mentoring_status = request.form.get("mentoring_status", "NONE").strip().upper()
+    if mentoring_status not in {"NONE", "OFFERING", "SEEKING", "BOTH"}:
+        mentoring_status = "NONE"
+
+    linkedin_url = staff_connect_safe_url(request.form.get("linkedin_url", ""))
+    portfolio_url = staff_connect_safe_url(request.form.get("portfolio_url", ""))
+    now = now_utc_iso()
+
+    conn = get_db()
+    cur = conn.cursor()
+    staff_connect_ensure_profile(conn, actor)
+
+    cur.execute("""
+        UPDATE staff_connect_profiles
+        SET career_field=?, institution=?, qualification=?, career_stage=?,
+            skills=?, can_help_with=?, wants_help_with=?, career_goals=?,
+            interests=?, mentoring_status=?, linkedin_url=?, portfolio_url=?,
+            display_name=?, role_label=?, updated_at=?
+        WHERE role=? AND user_key=?
+    """, (
+        career_field,
+        clean("institution", 180),
+        clean("qualification", 240),
+        clean("career_stage", 120),
+        clean("skills", 1200),
+        clean("can_help_with", 1800),
+        clean("wants_help_with", 1800),
+        clean("career_goals", 1800),
+        clean("interests", 1200),
+        mentoring_status,
+        linkedin_url or None,
+        portfolio_url or None,
+        actor["display_name"],
+        actor["role_label"],
+        now,
+        actor["role"],
+        actor["user_key"],
+    ))
+
+    conn.commit()
+    conn.close()
+
+    staff_connect_invalidate_stats_cache()
+    staff_connect_invalidate_peer_cache()
+
+    return redirect(url_for("staff_connect_home", view="profile"))
+
+
+@app.post('/staff-connect/post')
+def staff_connect_create_post():
+    r = require_staff_connect()
+    if r:
+        return r
+
+    actor = staff_connect_actor()
+    post_type = request.form.get("post_type", "DISCUSSION").strip().upper()
+    category = request.form.get("category", "General Career Growth").strip()
+    title = clean_multiline_text(request.form.get("title", "").strip())[:160]
+    body = clean_multiline_text(request.form.get("body", "").strip())[:6000]
+    link_url = staff_connect_safe_url(request.form.get("link_url", ""))
+
+    if post_type not in STAFF_CONNECT_POST_TYPES:
+        post_type = "DISCUSSION"
+
+    if post_type == "ANNOUNCEMENT" and not staff_connect_is_management(actor):
+        post_type = "DISCUSSION"
+
+    if category not in STAFF_CONNECT_CAREER_FIELDS:
+        category = "General Career Growth"
+
+    if not title or not body:
+        return page(
+            "EBTA Connect",
+            card_msg("A title and message are required.") +
+            "<div class='card'><a class='btn' href='/staff-connect'>Back to EBTA Connect</a></div>"
+        )
+
+    is_pinned = 1 if (request.form.get("pin") and staff_connect_can_moderate(actor)) else 0
+    now = now_utc_iso()
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO staff_connect_posts(
+            author_role, author_key, author_name, author_role_label,
+            post_type, category, title, body, link_url,
+            is_pinned, is_active, created_at, updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)
+    """, (
+        actor["role"], actor["user_key"], actor["display_name"], actor["role_label"],
+        post_type, category, title, body, link_url or None,
+        is_pinned, now, now
+    ))
+    post_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    staff_connect_invalidate_stats_cache()
+
+    return redirect(url_for("staff_connect_post_detail", post_id=post_id))
+
+
+@app.get('/staff-connect/post/<int:post_id>')
+def staff_connect_post_detail(post_id):
+    r = require_staff_connect()
+    if r:
+        return r
+
+    actor = staff_connect_actor()
+
+    try:
+        comment_page = max(
+            1,
+            int(request.args.get("comment_page", 1))
+        )
+    except Exception:
+        comment_page = 1
+
+    comments_per_page = 50
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT p.*
+        FROM staff_connect_posts p
+        WHERE p.id=?
+          AND p.is_active=1
+        LIMIT 1
+    """, (post_id,))
+
+    post_row = cur.fetchone()
+
+    if not post_row:
+        conn.close()
+        return page(
+            "Post Not Found",
+            card_msg(
+                "This EBTA Connect post is no longer available."
+            )
+        )
+
+    post = staff_connect_enrich_posts(
+        conn,
+        [post_row]
+    )[0]
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM staff_connect_comments
+        WHERE post_id=?
+          AND is_active=1
+    """, (post_id,))
+
+    total_comments = int(cur.fetchone()["c"] or 0)
+    total_comment_pages = max(
+        1,
+        (total_comments + comments_per_page - 1)
+        // comments_per_page
+    )
+
+    if comment_page > total_comment_pages:
+        comment_page = total_comment_pages
+
+    comment_offset = (
+        (comment_page - 1)
+        * comments_per_page
+    )
+
+    cur.execute("""
+        SELECT *
+        FROM staff_connect_comments
+        WHERE post_id=?
+          AND is_active=1
+        ORDER BY created_at ASC, id ASC
+        LIMIT ? OFFSET ?
+    """, (
+        post_id,
+        comments_per_page,
+        comment_offset
+    ))
+
+    comments = cur.fetchall()
+    conn.close()
+
+    comments_html = ""
+
+    for comment in comments:
+        comments_html += f"""
+        <div class="card soft"
+             style="margin-bottom:9px;border-left:4px solid #d1fae5">
+            <div style="
+                display:flex;
+                gap:7px;
+                align-items:center;
+                flex-wrap:wrap;
+            ">
+                <b>{escape(comment['author_name'])}</b>
+                {staff_connect_role_chip(comment['author_role'], comment['author_role_label'])}
+                <span class="mini muted">
+                    {escape(format_chat_datetime(comment['created_at']))}
+                </span>
+            </div>
+
+            <div style="margin-top:7px;line-height:1.55">
+                {staff_connect_text_html(comment['body'])}
+            </div>
+        </div>
+        """
+
+    comment_prev = ""
+    comment_next = ""
+
+    if comment_page > 1:
+        comment_prev = (
+            f"<a class='btn mini secondary' "
+            f"href='{url_for('staff_connect_post_detail', post_id=post_id, comment_page=comment_page-1)}'>"
+            "← Previous comments</a>"
+        )
+
+    if comment_page < total_comment_pages:
+        comment_next = (
+            f"<a class='btn mini secondary' "
+            f"href='{url_for('staff_connect_post_detail', post_id=post_id, comment_page=comment_page+1)}'>"
+            "Next comments →</a>"
+        )
+
+    comment_pager = ""
+
+    if total_comments > comments_per_page:
+        comment_pager = f"""
+        <div style="
+            display:flex;
+            justify-content:center;
+            gap:8px;
+            align-items:center;
+            flex-wrap:wrap;
+            margin:12px 0;
+        ">
+            {comment_prev}
+            <span class="chip">
+                Comments page {comment_page} of {total_comment_pages}
+            </span>
+            {comment_next}
+        </div>
+        """
+
+    body = f"""
+    {staff_connect_styles()}
+    {staff_connect_nav('community')}
+
+    <section class="card">
+        <a class="btn mini secondary"
+           href="/staff-connect">
+            ← Back to Community
+        </a>
+    </section>
+
+    {staff_connect_render_post_card(post, actor, compact=False)}
+
+    <section class="card">
+        <h2>Discussion</h2>
+
+        <div class="mini muted" style="margin-bottom:10px">
+            {total_comments} comment{'s' if total_comments != 1 else ''}
+        </div>
+
+        {comment_pager}
+
+        {comments_html or '<div class="empty">No comments yet. Start the conversation below.</div>'}
+
+        {comment_pager}
+
+        <form method="post"
+              action="{url_for('staff_connect_add_comment', post_id=post_id)}"
+              style="margin-top:14px">
+            <label>Add your thoughts</label>
+            <textarea name="body"
+                      rows="4"
+                      maxlength="3000"
+                      required
+                      placeholder="Reply, add advice, ask a follow-up question or share your experience."></textarea>
+
+            <button class="btn success" style="margin-top:10px">
+                Add Comment
+            </button>
+        </form>
+    </section>
+    """
+
+    return page("EBTA Connect Discussion", body)
+
+
+@app.post('/staff-connect/post/<int:post_id>/comment')
+def staff_connect_add_comment(post_id):
+    r = require_staff_connect()
+    if r:
+        return r
+
+    actor = staff_connect_actor()
+    body = clean_multiline_text(request.form.get("body", "").strip())[:3000]
+
+    if not body:
+        return redirect(url_for("staff_connect_post_detail", post_id=post_id))
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM staff_connect_posts WHERE id=? AND is_active=1", (post_id,))
+
+    if not cur.fetchone():
+        conn.close()
+        return page("Post Not Found", card_msg("This EBTA Connect post is no longer available."))
+
+    cur.execute("""
+        INSERT INTO staff_connect_comments(
+            post_id, author_role, author_key, author_name,
+            author_role_label, body, is_active, created_at
+        )
+        VALUES(?,?,?,?,?,?,1,?)
+    """, (
+        post_id, actor["role"], actor["user_key"], actor["display_name"],
+        actor["role_label"], body, now_utc_iso()
+    ))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("staff_connect_post_detail", post_id=post_id))
+
+
+@app.post('/staff-connect/post/<int:post_id>/react')
+def staff_connect_react(post_id):
+    r = require_staff_connect()
+    if r:
+        return r
+
+    actor = staff_connect_actor()
+    reaction = request.form.get("reaction", "").strip().upper()
+    return_to = request.form.get("return_to", "").strip()
+
+    if reaction not in STAFF_CONNECT_REACTIONS:
+        reaction = "USEFUL"
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT reaction
+        FROM staff_connect_reactions
+        WHERE post_id=? AND author_role=? AND author_key=?
+        LIMIT 1
+    """, (post_id, actor["role"], actor["user_key"]))
+    existing = cur.fetchone()
+
+    if existing and existing["reaction"] == reaction:
+        cur.execute("""
+            DELETE FROM staff_connect_reactions
+            WHERE post_id=? AND author_role=? AND author_key=?
+        """, (post_id, actor["role"], actor["user_key"]))
+    else:
+        cur.execute("""
+            INSERT INTO staff_connect_reactions(
+                post_id, author_role, author_key, reaction, created_at
+            )
+            VALUES(?,?,?,?,?)
+            ON CONFLICT(post_id, author_role, author_key)
+            DO UPDATE SET reaction=excluded.reaction, created_at=excluded.created_at
+        """, (
+            post_id, actor["role"], actor["user_key"], reaction, now_utc_iso()
+        ))
+
+    conn.commit()
+    conn.close()
+
+    # Only allow local return paths.
+    if return_to.startswith("/") and not return_to.startswith("//"):
+        return redirect(return_to)
+
+    return redirect(url_for("staff_connect_post_detail", post_id=post_id))
+
+
+@app.post('/staff-connect/post/<int:post_id>/moderate')
+def staff_connect_moderate_post(post_id):
+    r = require_staff_connect()
+    if r:
+        return r
+
+    actor = staff_connect_actor()
+    action = request.form.get("action", "").strip().lower()
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT * FROM staff_connect_posts WHERE id=? LIMIT 1
+    """, (post_id,))
+    post = cur.fetchone()
+
+    if not post:
+        conn.close()
+        return redirect(url_for("staff_connect_home"))
+
+    owns_post = (
+        str(post["author_role"]) == actor["role"]
+        and str(post["author_key"]) == actor["user_key"]
+    )
+
+    if action in {"pin", "unpin"}:
+        if not staff_connect_can_moderate(actor):
+            conn.close()
+            return page("Access Denied", card_msg("Only EBTA executive moderators can pin posts."))
+
+        cur.execute(
+            "UPDATE staff_connect_posts SET is_pinned=?, updated_at=? WHERE id=?",
+            (1 if action == "pin" else 0, now_utc_iso(), post_id)
+        )
+
+    elif action == "archive":
+        if not (owns_post or staff_connect_can_moderate(actor)):
+            conn.close()
+            return page("Access Denied", card_msg("You cannot archive this post."))
+
+        cur.execute(
+            "UPDATE staff_connect_posts SET is_active=0, updated_at=? WHERE id=?",
+            (now_utc_iso(), post_id)
+        )
+
+    conn.commit()
+    conn.close()
+
+    if action == "archive":
+        staff_connect_invalidate_stats_cache()
+
+    return redirect(url_for("staff_connect_home"))
 
 
 # ===================== HUMAN RESOURCES PORTAL =====================
@@ -51580,6 +53895,165 @@ def admin_cost_export():
     )
 
 
+
+# ===================== HIGH ADMIN: EBTA CONNECT CONTROL =====================
+
+@app.get('/admin/ebta-connect-control')
+@require_high_admin
+def admin_ebta_connect_control():
+    r = require_admin()
+    if r:
+        return r
+
+    enabled = staff_connect_feature_enabled()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            SELECT
+                (SELECT COUNT(*)
+                 FROM staff_connect_profiles) AS profile_count,
+
+                (SELECT COUNT(*)
+                 FROM staff_connect_posts
+                 WHERE is_active=1) AS post_count,
+
+                (SELECT COUNT(*)
+                 FROM staff_connect_comments
+                 WHERE is_active=1) AS comment_count
+        """)
+
+        stats_row = cur.fetchone()
+        profile_count = int(stats_row["profile_count"] or 0)
+        post_count = int(stats_row["post_count"] or 0)
+        comment_count = int(stats_row["comment_count"] or 0)
+
+    finally:
+        conn.close()
+
+    if enabled:
+        status_chip = "<span class='chip active'>Active</span>"
+        status_text = "Tutors and management can currently use EBTA Connect."
+        button_label = "Deactivate EBTA Connect"
+        button_class = "btn warn"
+        next_value = "0"
+        confirm_text = (
+            "Deactivate EBTA Connect? The button will remain visible to staff, "
+            "but opening it will show that Higher Admin has deactivated the feature. "
+            "Existing posts and profiles will not be deleted."
+        )
+    else:
+        status_chip = "<span class='chip lapsed'>Deactivated</span>"
+        status_text = (
+            "The EBTA Connect button is still visible, but staff cannot enter "
+            "the community until Higher Admin activates it again."
+        )
+        button_label = "Activate EBTA Connect"
+        button_class = "btn success"
+        next_value = "1"
+        confirm_text = "Activate EBTA Connect for tutors and management?"
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card"
+             style="border-left:6px solid {'#16a34a' if enabled else '#64748b'}">
+
+        <div style="
+            display:flex;
+            justify-content:space-between;
+            gap:12px;
+            align-items:flex-start;
+            flex-wrap:wrap;
+        ">
+            <div>
+                <h1 style="margin-bottom:6px">EBTA Connect Control</h1>
+                <p class="muted" style="margin:0">
+                    Activate or deactivate EBTA Connect across the staff portal.
+                </p>
+            </div>
+
+            {status_chip}
+        </div>
+
+        <div class="card soft" style="margin-top:16px">
+            <strong>Current status</strong>
+            <div style="margin-top:6px">{escape(status_text)}</div>
+        </div>
+
+        <div class="stats-mini" style="margin-top:14px">
+            <div>
+                <b>{profile_count}</b>
+                <span>Career Profiles</span>
+            </div>
+
+            <div>
+                <b>{post_count}</b>
+                <span>Active Posts</span>
+            </div>
+
+            <div>
+                <b>{comment_count}</b>
+                <span>Comments</span>
+            </div>
+        </div>
+
+        <div class="card soft"
+             style="margin-top:14px;border-left:5px solid #2563eb">
+            <strong>What happens when it is deactivated?</strong>
+
+            <div class="mini muted" style="margin-top:7px;line-height:1.6">
+                EBTA Connect remains visible in the portal navigation.
+                Staff who open it will see a short message saying that Higher Admin
+                has deactivated the feature. Existing profiles, posts, comments,
+                reactions and shared opportunities remain saved and return exactly
+                as they were when the feature is activated again.
+            </div>
+        </div>
+
+        <form method="post"
+              action="{url_for('admin_ebta_connect_control_save')}"
+              style="margin-top:16px">
+
+            <input type="hidden"
+                   name="enabled"
+                   value="{next_value}">
+
+            <button class="{button_class}"
+                    style="padding:13px 20px;font-size:15px"
+                    onclick="return confirm({json.dumps(confirm_text)})">
+                {button_label}
+            </button>
+
+            <a class="btn secondary"
+               href="{url_for('staff_connect_home')}"
+               style="margin-left:8px">
+                Open EBTA Connect
+            </a>
+        </form>
+    </section>
+    """
+
+    return page("EBTA Connect Control", body)
+
+
+@app.post('/admin/ebta-connect-control')
+@require_high_admin
+def admin_ebta_connect_control_save():
+    r = require_admin()
+    if r:
+        return r
+
+    enabled = "1" if request.form.get("enabled", "0") == "1" else "0"
+    set_setting("ebta_connect_enabled", enabled)
+
+    staff_connect_invalidate_stats_cache()
+
+    return redirect(url_for("admin_ebta_connect_control"))
+
+
 # --- Admin: Settings ---
 
 @app.get('/admin/settings')
@@ -51622,6 +54096,13 @@ def admin_settings():
     )
     celebration_banner_position = get_setting('celebration_banner_position', 'bottom')
     celebration_banner_speed = get_setting('celebration_banner_speed', '10')
+
+    ebta_connect_enabled = staff_connect_feature_enabled()
+    ebta_connect_status_chip = (
+        "<span class='chip active'>Active</span>"
+        if ebta_connect_enabled
+        else "<span class='chip lapsed'>Deactivated</span>"
+    )
 
 
     body = f"""
@@ -51753,6 +54234,33 @@ def admin_settings():
                 Save Student Live Access
             </button>
         </form>
+    </section>
+
+    <section class='card soft'
+             style="border-left:5px solid #2563eb">
+        <div style="
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:10px;
+            flex-wrap:wrap;
+        ">
+            <div>
+                <h2 style="margin-bottom:5px">EBTA Connect</h2>
+                <div class="mini muted">
+                    Master control for the staff community and career hub.
+                </div>
+            </div>
+
+            {ebta_connect_status_chip}
+        </div>
+
+        <div style="margin-top:12px">
+            <a class="btn success"
+               href="{url_for('admin_ebta_connect_control')}">
+                Manage EBTA Connect
+            </a>
+        </div>
     </section>
 
     <section class='card soft'>
