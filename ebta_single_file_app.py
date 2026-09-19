@@ -15475,6 +15475,8 @@ def page(title, body_html, extra_head="", extra_js=""):
         "duty_admin": "Duty Administrator",
         "admission": "Admission Coordinator",
         "one_on_one_manager": "One-on-One Support Manager",
+        "hr": "Human Resources",
+        "acc": "Academic Content Coordinator",
         "coo": "Chief Operating Officer",
         "cao": "Chief Academic Officer",
         "ceo": "Chief Executive Officer",
@@ -37613,9 +37615,10 @@ def admin_enrollment_email_manual_send():
 # =============================================================
 # EBTA CONNECT — STAFF COMMUNITY, CAREER & OPPORTUNITY HUB
 # =============================================================
-# Accessible to tutors and all EBTA management roles. It provides a shared
-# discussion space, professional directory, peer mentoring, resource sharing
-# and a live career-opportunity feed. Student accounts are excluded.
+# Accessible to every authenticated EBTA staff role: tutors, Tutor Managers,
+# Admin/High Admin and every management portal role. Everyone uses the same
+# shared community and can maintain their own Career Profile. Student accounts
+# are the only portal role excluded.
 
 STAFF_CONNECT_ALLOWED_ROLES = {
     "tutor",
@@ -39761,6 +39764,7 @@ def hr_nav():
         <a class="btn secondary" href="{url_for('admin_applications')}">Tutor Applications</a>
         <a class="btn secondary" href="{url_for('admin_management_applications')}">Management Applications</a>
         <a class="btn secondary" href="{url_for('admin_management_roles')}">Management Application Roles</a>
+        <a class="btn secondary" href="/staff-connect">🌐 EBTA Connect</a>
         <a class="btn danger" href="{url_for('hr_logout')}">Logout</a>
     </nav>
     """
@@ -40079,6 +40083,7 @@ def acc_nav():
         <a class="btn mini" href="{url_for('acc_google_drive_links')}">Google Drive Links</a>
         <a class="btn mini" href="{url_for('acc_messages')}">Messages</a>
         <a class="btn mini" href="{url_for('acc_tasks')}">Tasks from CAO</a>
+        <a class="btn mini" href="/staff-connect">🌐 EBTA Connect</a>
         <a class="btn mini danger" href="{url_for('acc_logout')}">Logout</a>
     </div>
     """
@@ -59326,6 +59331,10 @@ def manager_nav():
             WhatsApp Groups
         </a>
 
+        <a class="btn mini" href="/staff-connect">
+            🌐 EBTA Connect
+        </a>
+
         <a class="btn mini danger" href="/manager/logout">
             Logout
         </a>
@@ -63921,6 +63930,7 @@ def aqm_nav():
     sections = [
         ("Overview", [
             ("Dashboard", "/aqm/dashboard", "🏠"),
+            ("EBTA Connect", "/staff-connect", "🌐"),
             ("Workspace", "/aqm/workspace", "🗂️"),
             ("Tasks from CEO", "/aqm/tasks", "✅"),
         ]),
@@ -77609,6 +77619,7 @@ def treasurer_nav():
         <a class="btn secondary" href="/treasurer/payments">Payment Schedule</a>
         <a class="btn secondary" href="/treasurer/monthly-report">Monthly Report</a>
         <a class="btn secondary" href="/treasurer/tasks">Tasks from CEO</a>
+        <a class="btn secondary" href="/staff-connect">🌐 EBTA Connect</a>
         <a class="btn danger" href="/treasurer/logout">Logout</a>
     </nav>
     """    
@@ -79385,6 +79396,7 @@ def secretary_nav():
         <a class="btn secondary" href="/secretary/minutes">Meeting Minutes</a>
         <a class="btn secondary" href="/secretary/action-items">Action Items</a>
         <a class="btn secondary" href="/secretary/tasks">Tasks from CEO</a>
+        <a class="btn secondary" href="/staff-connect">🌐 EBTA Connect</a>
         <a class="btn danger" href="/secretary/logout">Logout</a>
     </nav>
     """
@@ -81710,6 +81722,7 @@ def social_media_nav():
         <a class="btn secondary" href="/social-media/crisis-logs">Crisis Logs</a>
         <a class="btn secondary" href="/social-media/crisis-logs/new">Log Crisis</a>
         <a class="btn secondary" href="/social-media/tasks">Tasks from CEO</a>
+        <a class="btn secondary" href="/staff-connect">🌐 EBTA Connect</a>
         <a class="btn danger" href="/social-media/logout">Logout</a>
     </nav>
     """
@@ -83307,6 +83320,7 @@ def duty_admin_nav():
         <!-- <a class="btn secondary" href="{url_for('duty_admin_reports')}">Student Reports</a> -->
         <a class="btn secondary" href="{url_for('duty_admin_followups')}">Follow-Ups</a>
         <a class="btn secondary" href="/duty-admin/tasks">Tasks from CEO</a>
+        <a class="btn secondary" href="/staff-connect">🌐 EBTA Connect</a>
         <a class="btn danger" href="{url_for('duty_admin_logout')}">Logout</a>
     </nav>
     """
@@ -86513,6 +86527,7 @@ def admission_nav():
         <a class="btn secondary" href="{url_for('admission_referrals')}">Referrals</a>
         <a class="btn secondary" href="/admission/one-on-one">One-on-One Sessions</a>
         <a class="btn secondary" href="/admission/tasks">Tasks from CEO</a>
+        <a class="btn secondary" href="/staff-connect">🌐 EBTA Connect</a>
         <a class="btn danger" href="{url_for('admission_logout')}">Logout</a>
     </nav>
     """
@@ -86917,6 +86932,7 @@ def one_on_one_manager_nav():
         nav_link("Assigned Requests", "/one-on-one-manager?status=Assigned", "✓", current_status == "Assigned"),
         nav_link("Confirmed Sessions", "/one-on-one-manager?status=Confirmed", "▣", current_status == "Confirmed"),
         nav_link("Tutors & Availability", "/one-on-one-manager/tutors", "♟", current_path == "/one-on-one-manager/tutors"),
+        nav_link("EBTA Connect", "/staff-connect", "🌐", current_path.startswith("/staff-connect")),
     ])
 
     manager_name = escape(session.get("one_on_one_manager_name", "One-on-One Support Manager"))
@@ -94659,6 +94675,7 @@ def coo_nav():
             "Core",
             [
                 coo_link("Dashboard", "coo_dashboard", icon="🏠"),
+                coo_link("EBTA Connect", "staff_connect_home", icon="🌐"),
                 coo_link("Reports to CEO", "coo_ceo_reports", icon="📤"),
                 coo_link("Operational Team", "coo_team_profiles", "coo_employee_profiles_enabled", icon="👥"),
                 coo_link("Tasks from CEO", "coo_operations_tasks", fallback="/coo/tasks", icon="✅"),
@@ -100393,6 +100410,7 @@ def cao_nav():
             "Academy Office",
             [
                 cao_link("Dashboard", "cao_dashboard", "cao_academic_dashboard_enabled", icon="🏠"),
+                cao_link("EBTA Connect", "staff_connect_home", icon="🌐"),
                 cao_link("Reports to CEO", "cao_ceo_reports", icon="📤"),
                 cao_link("Tasks from CEO", "cao_operations_tasks", fallback="/cao/tasks", icon="✅"),
                 cao_link("Academic Team", "cao_academic_team", "cao_tutors_enabled", icon="👥"),
@@ -105949,6 +105967,7 @@ def ceo_nav():
             "Executive",
             [
                 ceo_link("Dashboard", "ceo_dashboard", "/ceo", "🏠"),
+                ceo_link("EBTA Connect", "staff_connect_home", "/staff-connect", "🌐"),
                 ceo_link("Monthly Reports", "ceo_monthly_reports", "/ceo/monthly-reports", "📤"),
                 ceo_link("Risks & Mitigations", "ceo_risks", "/ceo/risks", "⚠️"),
                 ceo_link("Goals", "ceo_goals", "/ceo/goals", "🎯"),
@@ -123884,6 +123903,7 @@ def school_nav():
         <a class="btn secondary" href="{url_for('school_dashboard')}">Dashboard</a>
         <a class="btn secondary" href="{url_for('school_students')}">Students</a>
         <a class="btn secondary" href="{url_for('school_notes')}">Follow-Up Notes</a>
+        <a class="btn secondary" href="/staff-connect">🌐 EBTA Connect</a>
         <span class="chip">{escape(school_name)}</span>
         <a class="btn danger" href="{url_for('school_logout')}">Logout</a>
     </nav>
