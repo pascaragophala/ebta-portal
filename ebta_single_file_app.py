@@ -37771,10 +37771,16 @@ def staff_connect_actor():
         role.replace("_", " ").title()
     )
 
+    connect_display_name = str(display_name or role_label).strip()
+
+    # Keep the technical High Admin login name private inside EBTA Connect.
+    if role == "high_admin" and connect_display_name.lower() == "superadmin":
+        connect_display_name = "Higher Admin"
+
     return {
         "role": str(role),
         "user_key": str(user_key),
-        "display_name": str(display_name or role_label).strip(),
+        "display_name": connect_display_name,
         "role_label": role_label,
     }
 
@@ -37863,6 +37869,15 @@ def staff_connect_is_management(actor=None):
 def staff_connect_can_moderate(actor=None):
     actor = actor or staff_connect_actor()
     return bool(actor and actor["role"] in STAFF_CONNECT_EXECUTIVE_ROLES)
+
+
+def staff_connect_public_name(name, role=""):
+    value = str(name or "").strip()
+
+    if str(role or "") == "high_admin" and value.lower() == "superadmin":
+        return "Higher Admin"
+
+    return value or "EBTA Team Member"
 
 
 def staff_connect_role_chip(role, role_label=None):
@@ -38046,7 +38061,12 @@ def staff_connect_dashboard_stats(conn):
 
             (SELECT COUNT(*)
              FROM staff_connect_profiles
-             WHERE COALESCE(career_field,'')!='') AS total_profiles,
+             WHERE COALESCE(career_field,'')!=''
+               AND NOT (
+                   role='high_admin'
+                   AND LOWER(TRIM(COALESCE(display_name,''))) IN ('superadmin', 'higher admin')
+               )
+            ) AS total_profiles,
 
             (SELECT COUNT(*)
              FROM staff_connect_posts
@@ -38180,6 +38200,10 @@ def staff_connect_peer_matches(conn, actor, profile, limit=5):
             updated_at
         FROM staff_connect_profiles
         WHERE NOT (role=? AND user_key=?)
+          AND NOT (
+              role='high_admin'
+              AND LOWER(TRIM(COALESCE(display_name,''))) IN ('superadmin', 'higher admin')
+          )
           AND (
               COALESCE(career_field,'')!=''
               OR COALESCE(skills,'')!=''
@@ -38616,7 +38640,7 @@ def staff_connect_render_post_card(post, actor, compact=False):
                 </div>
                 <h3 style="margin:8px 0 3px">{escape(post['title'] or 'Untitled')}</h3>
                 <div class="mini muted">
-                    {escape(post['author_name'] or 'EBTA Team Member')} · {escape(post['author_role_label'] or '')} · {escape(created)}
+                    {escape(staff_connect_public_name(post['author_name'], post['author_role']))} · {escape(post['author_role_label'] or '')} · {escape(created)}
                 </div>
             </div>
         </div>
@@ -38855,6 +38879,14 @@ def staff_connect_home():
                 )
             """)
             params.extend([pattern] * 6)
+
+        # The technical High Admin account is not shown in the staff directory.
+        where.append("""
+            NOT (
+                role='high_admin'
+                AND LOWER(TRIM(COALESCE(display_name,''))) IN ('superadmin', 'higher admin')
+            )
+        """)
 
         people_where_sql = " AND ".join(where)
 
@@ -39520,7 +39552,7 @@ def staff_connect_post_detail(post_id):
                 align-items:center;
                 flex-wrap:wrap;
             ">
-                <b>{escape(comment['author_name'])}</b>
+                <b>{escape(staff_connect_public_name(comment['author_name'], comment['author_role']))}</b>
                 {staff_connect_role_chip(comment['author_role'], comment['author_role_label'])}
                 <span class="mini muted">
                     {escape(format_chat_datetime(comment['created_at']))}
