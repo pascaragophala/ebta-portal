@@ -3021,6 +3021,27 @@ def init_db():
     """)
 
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS enrollment_code_uses(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        enrollment_period_ref TEXT NOT NULL,
+        student_id INTEGER NOT NULL,
+        coupon_id INTEGER,
+        code TEXT NOT NULL,
+        code_type TEXT NOT NULL,
+        subject_id INTEGER,
+        discount_percent INTEGER NOT NULL DEFAULT 0,
+        discount_amount INTEGER NOT NULL DEFAULT 0,
+        discount_scope_months INTEGER NOT NULL DEFAULT 0,
+        discount_total INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        UNIQUE(enrollment_period_ref, code),
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+        FOREIGN KEY(coupon_id) REFERENCES discount_coupons(id) ON DELETE SET NULL,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL
+    );
+    """)
+
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS referral_uses(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
 
@@ -3285,6 +3306,9 @@ def init_db():
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_students_referral_code ON students(referral_code)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_discount_coupons_code ON discount_coupons(code)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_discount_coupons_target ON discount_coupons(target_student_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollment_code_uses_period ON enrollment_code_uses(enrollment_period_ref)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollment_code_uses_student ON enrollment_code_uses(student_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_enrollment_code_uses_coupon ON enrollment_code_uses(coupon_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_referral_uses_referrer ON referral_uses(referrer_student_id)")
     
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tutors_referral_code ON tutors(referral_code)")
@@ -7580,21 +7604,345 @@ def get_subject_fee_map(conn, subject_ids):
     return fee_map
 
 
-def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", student_id=None, month_count=1):
+def parse_enrollment_codes(raw_codes):
+    """Return unique enrollment codes in the order the learner entered them."""
+    if isinstance(raw_codes, (list, tuple, set)):
+        pieces = []
+        for value in raw_codes:
+            pieces.extend(re.split(r"[,;\n]+", str(value or "")))
+    else:
+        pieces = re.split(r"[,;\n]+", str(raw_codes or ""))
+
+    codes = []
+    seen = set()
+
+    for piece in pieces:
+        code = str(piece or "").strip().upper()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        codes.append(code)
+
+    return codes
+
+
+def evaluate_enrollment_codes(conn, raw_codes, subject_ids, student_id=None, month_count=1):
     """
-    Calculates enrolment fees using selected subjects and the selected number of months.
+    Validate and assign all entered codes.
 
     Rules:
-    - Each selected subject uses its own grade fee.
-    - Bulk discount still applies when 3+ subjects are selected.
-    - A valid discount coupon applies to ONE selected subject.
-    - Award discount coupons can be limited to ONE month even during a multi-month enrollment.
-    - Existing referral reward coupons keep their existing scope.
-    - Referral-only codes do not reduce the total.
+    - Codes may be separated by commas, semicolons or new lines.
+    - A subject can receive only one discount coupon in an enrollment.
+    - Subject-specific coupons keep their subject.
+    - General coupons are assigned to remaining selected subjects, with the
+      highest percentage matched to the highest remaining subject fee.
+    - Only one student/tutor referral code may be supplied.
     """
-
     month_count = normalize_enrollment_month_count(month_count)
-    subject_ids = [str(x) for x in subject_ids if str(x).strip()]
+    subject_ids = list(dict.fromkeys(str(x) for x in subject_ids if str(x).strip()))
+    codes = parse_enrollment_codes(raw_codes)
+
+    empty = {
+        "valid": True,
+        "message": "",
+        "codes": codes,
+        "results": [],
+        "discount_results": [],
+        "referral_result": None,
+    }
+
+    if not codes:
+        return empty
+
+    if len(codes) > 10:
+        return {
+            **empty,
+            "valid": False,
+            "message": "Please use no more than 10 codes in one enrollment."
+        }
+
+    if not subject_ids:
+        return {
+            **empty,
+            "valid": False,
+            "message": "Select at least one subject before using a code."
+        }
+
+    cur = conn.cursor()
+    placeholders = ",".join("?" for _ in subject_ids)
+    cur.execute(f"""
+        SELECT id, name, grade
+        FROM subjects
+        WHERE id IN ({placeholders})
+    """, subject_ids)
+    subject_rows = cur.fetchall()
+
+    subject_map = {
+        str(row["id"]): {
+            "name": str(row["name"] or "Subject"),
+            "fee": int(fee_for_grade(row["grade"])),
+        }
+        for row in subject_rows
+    }
+
+    if len(subject_map) != len(subject_ids):
+        return {
+            **empty,
+            "valid": False,
+            "message": "One or more selected subjects are invalid."
+        }
+
+    candidates = []
+    referral_results = []
+
+    for input_index, code in enumerate(codes):
+        cur.execute("""
+            SELECT *
+            FROM discount_coupons
+            WHERE UPPER(code)=?
+              AND status='ACTIVE'
+              AND used_count < max_uses
+            LIMIT 1
+        """, (code,))
+        coupon = cur.fetchone()
+
+        if coupon:
+            target_student_id = coupon["target_student_id"]
+            if (
+                student_id is not None
+                and target_student_id
+                and int(target_student_id) != int(student_id)
+            ):
+                return {
+                    **empty,
+                    "valid": False,
+                    "message": f"{code} belongs to another learner."
+                }
+
+            discount_percent = int(coupon["discount_percent"] or 0)
+            if discount_percent not in SUPPORTED_DISCOUNT_PERCENTAGES:
+                return {
+                    **empty,
+                    "valid": False,
+                    "message": f"{code} has an unsupported discount percentage."
+                }
+
+            applies_to = str(coupon["applies_to"] or "ALL").upper()
+            fixed_subject_id = None
+
+            if applies_to == "SUBJECT":
+                fixed_subject_id = str(coupon["subject_id"] or "")
+                if fixed_subject_id not in subject_map:
+                    return {
+                        **empty,
+                        "valid": False,
+                        "message": f"{code} applies to a subject that was not selected."
+                    }
+
+            candidates.append({
+                "input_index": input_index,
+                "code": code,
+                "coupon_id": int(coupon["id"]),
+                "code_type": str(coupon["source"] or "MANUAL"),
+                "discount_percent": discount_percent,
+                "discount_scope_months": int(coupon["discount_scope_months"] or 0),
+                "fixed_subject_id": fixed_subject_id,
+                "assigned_subject_id": None,
+                "referral_owner_id": None,
+                "tutor_referrer_id": None,
+            })
+            continue
+
+        # Student referral code.
+        cur.execute("""
+            SELECT id, full_name
+            FROM students
+            WHERE UPPER(referral_code)=?
+            LIMIT 1
+        """, (code,))
+        referrer = cur.fetchone()
+
+        if referrer:
+            if student_id is not None and int(referrer["id"]) == int(student_id):
+                return {
+                    **empty,
+                    "valid": False,
+                    "message": f"{code} is your own referral code and cannot be used."
+                }
+
+            referral_results.append({
+                "input_index": input_index,
+                "code": code,
+                "coupon_id": None,
+                "code_type": "REFERRAL_ONLY",
+                "discount_percent": 0,
+                "discount_amount": 0,
+                "discount_scope_months": 0,
+                "discount_months_applied": 0,
+                "discount_total": 0,
+                "assigned_subject_id": None,
+                "assigned_subject_name": None,
+                "referral_owner_id": int(referrer["id"]),
+                "tutor_referrer_id": None,
+                "message": f"{code}: referral code accepted."
+            })
+            continue
+
+        # Tutor referral code.
+        cur.execute("""
+            SELECT id, full_name
+            FROM tutors
+            WHERE UPPER(referral_code)=?
+            LIMIT 1
+        """, (code,))
+        tutor_referrer = cur.fetchone()
+
+        if tutor_referrer:
+            referral_results.append({
+                "input_index": input_index,
+                "code": code,
+                "coupon_id": None,
+                "code_type": "TUTOR_REFERRAL",
+                "discount_percent": 0,
+                "discount_amount": 0,
+                "discount_scope_months": 0,
+                "discount_months_applied": 0,
+                "discount_total": 0,
+                "assigned_subject_id": None,
+                "assigned_subject_name": None,
+                "referral_owner_id": None,
+                "tutor_referrer_id": int(tutor_referrer["id"]),
+                "message": f"{code}: referral code accepted."
+            })
+            continue
+
+        return {
+            **empty,
+            "valid": False,
+            "message": f"{code} is invalid or already used."
+        }
+
+    if len(referral_results) > 1:
+        return {
+            **empty,
+            "valid": False,
+            "message": "Use only one referral code in an enrollment."
+        }
+
+    assigned_subjects = set()
+
+    # Subject-specific coupons are assigned first.
+    for candidate in sorted(candidates, key=lambda item: item["input_index"]):
+        subject_id = candidate["fixed_subject_id"]
+        if not subject_id:
+            continue
+
+        if subject_id in assigned_subjects:
+            subject_name = subject_map[subject_id]["name"]
+            return {
+                **empty,
+                "valid": False,
+                "message": (
+                    f"{candidate['code']} cannot be combined with another discount "
+                    f"on {subject_name}."
+                )
+            }
+
+        candidate["assigned_subject_id"] = subject_id
+        assigned_subjects.add(subject_id)
+
+    # General coupons use separate remaining subjects. Matching the largest
+    # percentage with the highest remaining fee gives the learner the best use
+    # of the valid codes without stacking two coupons on one subject.
+    flexible = [c for c in candidates if not c["fixed_subject_id"]]
+    flexible.sort(key=lambda item: (-item["discount_percent"], item["input_index"]))
+
+    remaining_subjects = [sid for sid in subject_ids if sid not in assigned_subjects]
+    remaining_subjects.sort(
+        key=lambda sid: (-subject_map[sid]["fee"], subject_map[sid]["name"].lower(), sid)
+    )
+
+    for candidate in flexible:
+        if not remaining_subjects:
+            return {
+                **empty,
+                "valid": False,
+                "message": (
+                    f"{candidate['code']} has no remaining selected subject to discount. "
+                    "Each subject can use only one discount code."
+                )
+            }
+
+        subject_id = remaining_subjects.pop(0)
+        candidate["assigned_subject_id"] = subject_id
+        assigned_subjects.add(subject_id)
+
+    discount_results = []
+
+    for candidate in candidates:
+        subject_id = candidate["assigned_subject_id"]
+        subject = subject_map[subject_id]
+        monthly_discount = int(round(
+            subject["fee"] * (candidate["discount_percent"] / 100)
+        ))
+
+        configured_scope = int(candidate["discount_scope_months"] or 0)
+        months_applied = (
+            min(month_count, configured_scope)
+            if configured_scope > 0
+            else month_count
+        )
+        total_discount = monthly_discount * months_applied
+
+        scope_note = ""
+        if months_applied > 1:
+            scope_note = f" over {months_applied} months"
+        elif month_count > 1 and months_applied == 1:
+            scope_note = " for 1 month"
+
+        discount_results.append({
+            **candidate,
+            "discount_amount": monthly_discount,
+            "discount_months_applied": months_applied,
+            "discount_total": total_discount,
+            "assigned_subject_name": subject["name"],
+            "message": (
+                f"{candidate['code']}: {candidate['discount_percent']}% "
+                f"{subject['name']} (-R{total_discount}{scope_note})."
+            )
+        })
+
+    all_results = sorted(
+        discount_results + referral_results,
+        key=lambda item: item["input_index"]
+    )
+
+    message = " ".join(item["message"] for item in all_results)
+
+    return {
+        "valid": True,
+        "message": message,
+        "codes": codes,
+        "results": all_results,
+        "discount_results": discount_results,
+        "referral_result": referral_results[0] if referral_results else None,
+    }
+
+
+def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", student_id=None, month_count=1):
+    """Calculate enrollment fees, including multiple comma-separated codes."""
+    month_count = normalize_enrollment_month_count(month_count)
+    subject_ids = list(dict.fromkeys(str(x) for x in subject_ids if str(x).strip()))
+
+    default_coupon_result = {
+        "valid": True,
+        "message": "",
+        "code_type": "NONE",
+        "discount_amount": 0,
+        "coupon_id": None,
+        "referral_owner_id": None,
+        "tutor_referrer_id": None
+    }
 
     result = {
         "valid": True,
@@ -7613,15 +7961,11 @@ def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", studen
         "discounted_subject_fee": 0,
         "discount_percent": 0,
         "coupon_discount_months": 0,
-        "coupon_result": {
-            "valid": True,
-            "message": "",
-            "code_type": "NONE",
-            "discount_amount": 0,
-            "coupon_id": None,
-            "referral_owner_id": None,
-            "tutor_referrer_id": None
-        }
+        "has_limited_coupon_scope": False,
+        "coupon_result": default_coupon_result,
+        "code_results": [],
+        "coupon_results": [],
+        "referral_result": None,
     }
 
     if not subject_ids:
@@ -7630,146 +7974,141 @@ def calculate_enrollment_fee_breakdown(conn, subject_ids, coupon_code="", studen
         return result
 
     cur = conn.cursor()
-    placeholders = ",".join("?" * len(subject_ids))
-
+    placeholders = ",".join("?" for _ in subject_ids)
     cur.execute(f"""
         SELECT id, grade, name
         FROM subjects
         WHERE id IN ({placeholders})
     """, subject_ids)
-
     subjects = cur.fetchall()
 
-    if not subjects:
+    if len(subjects) != len(subject_ids):
         result["valid"] = False
         result["message"] = "Invalid subject selection."
         return result
 
-    fee_map = {}
-
-    for row in subjects:
-        fee_map[str(row["id"])] = fee_for_grade(row["grade"])
-
+    fee_map = {
+        str(row["id"]): int(fee_for_grade(row["grade"]))
+        for row in subjects
+    }
     monthly_subtotal = sum(fee_map.values())
-    count = len(subject_ids)
-
     result["monthly_subtotal"] = monthly_subtotal
 
     monthly_bulk_discount = 0
-
-    # Existing EBTA bulk discount rule, calculated per month.
-    if count >= 3:
+    if len(subject_ids) >= 3:
         grades = [row["grade"] for row in subjects]
-
-        if all(g == "G13" for g in grades):
-            monthly_bulk_discount = int(round(monthly_subtotal * 0.10))
-        else:
-            monthly_bulk_discount = int(round(monthly_subtotal * 0.05))
-
+        monthly_bulk_discount = int(round(
+            monthly_subtotal * (0.10 if all(g == "G13" for g in grades) else 0.05)
+        ))
     result["monthly_bulk_discount"] = monthly_bulk_discount
 
-    coupon_code = (coupon_code or "").strip().upper()
+    code_eval = evaluate_enrollment_codes(
+        conn,
+        coupon_code,
+        subject_ids,
+        student_id=student_id,
+        month_count=month_count,
+    )
 
-    if coupon_code:
-        if student_id:
-            coupon_result = validate_discount_or_referral_code(
-                conn,
-                coupon_code,
-                student_id,
-                subject_ids,
-                monthly_subtotal
-            )
-        else:
-            coupon_result = preview_discount_code_for_subjects(
-                conn,
-                coupon_code,
-                subject_ids,
-                monthly_subtotal
-            )
+    if not code_eval.get("valid"):
+        result["valid"] = False
+        result["message"] = code_eval.get("message", "Invalid discount code.")
+        result["coupon_result"] = {
+            **default_coupon_result,
+            "valid": False,
+            "message": result["message"],
+            "code_type": "INVALID",
+        }
+        return result
 
-        result["coupon_result"] = coupon_result
+    code_results = code_eval.get("results", [])
+    coupon_results = code_eval.get("discount_results", [])
+    referral_result = code_eval.get("referral_result")
 
-        if not coupon_result.get("valid"):
-            result["valid"] = False
-            result["message"] = coupon_result.get("message", "Invalid discount code.")
-            return result
+    result["code_results"] = code_results
+    result["coupon_results"] = coupon_results
+    result["referral_result"] = referral_result
+    result["message"] = code_eval.get("message", "")
 
-        result["monthly_coupon_discount"] = int(coupon_result.get("discount_amount", 0) or 0)
+    monthly_coupon_discount = sum(
+        int(item.get("discount_amount", 0) or 0)
+        for item in coupon_results
+    )
+    coupon_discount = sum(
+        int(item.get("discount_total", 0) or 0)
+        for item in coupon_results
+    )
 
-        coupon_scope_months = int(
-            coupon_result.get("discount_scope_months", 0)
-            or 0
-        )
+    result["monthly_coupon_discount"] = monthly_coupon_discount
+    result["coupon_discount"] = coupon_discount
+    result["discount_percent"] = max(
+        [int(item.get("discount_percent", 0) or 0) for item in coupon_results] or [0]
+    )
 
-        if result["monthly_coupon_discount"] > 0:
-            if coupon_scope_months > 0:
-                result["coupon_discount_months"] = min(
-                    month_count,
-                    coupon_scope_months
-                )
-            else:
-                # Legacy/referral reward discount behavior remains unchanged.
-                result["coupon_discount_months"] = month_count
+    discount_month_counts = {
+        int(item.get("discount_months_applied", 0) or 0)
+        for item in coupon_results
+        if int(item.get("discount_amount", 0) or 0) > 0
+    }
+    if len(discount_month_counts) == 1:
+        result["coupon_discount_months"] = next(iter(discount_month_counts))
 
-        # Work out visible discount percent for the front page.
-        cur.execute("""
-            SELECT discount_percent
-            FROM discount_coupons
-            WHERE UPPER(code)=?
-            LIMIT 1
-        """, (coupon_code,))
+    result["has_limited_coupon_scope"] = any(
+        0 < int(item.get("discount_months_applied", 0) or 0) < month_count
+        for item in coupon_results
+    )
 
-        c = cur.fetchone()
+    if len(code_results) == 1:
+        result["coupon_result"] = dict(code_results[0])
+        result["coupon_result"]["valid"] = True
+    elif len(code_results) > 1:
+        result["coupon_result"] = {
+            "valid": True,
+            "message": result["message"],
+            "code_type": "MULTIPLE",
+            "discount_amount": monthly_coupon_discount,
+            "coupon_id": None,
+            "referral_owner_id": (
+                referral_result.get("referral_owner_id") if referral_result else None
+            ),
+            "tutor_referrer_id": (
+                referral_result.get("tutor_referrer_id") if referral_result else None
+            ),
+        }
 
-        if c:
-            result["discount_percent"] = int(c["discount_percent"] or 0)
-
-    monthly_total_discount = result["monthly_bulk_discount"] + result["monthly_coupon_discount"]
-
-    if monthly_total_discount > monthly_subtotal:
-        monthly_total_discount = monthly_subtotal
-
-    monthly_total_due = monthly_subtotal - monthly_total_discount
-
+    monthly_total_discount = monthly_bulk_discount + monthly_coupon_discount
+    monthly_total_discount = min(monthly_total_discount, monthly_subtotal)
     result["monthly_total_discount"] = monthly_total_discount
-    result["monthly_total_due"] = monthly_total_due
+    result["monthly_total_due"] = monthly_subtotal - monthly_total_discount
 
     result["subtotal"] = monthly_subtotal * month_count
-    result["bulk_discount"] = result["monthly_bulk_discount"] * month_count
-
-    result["coupon_discount"] = (
-        result["monthly_coupon_discount"]
-        * result["coupon_discount_months"]
+    result["bulk_discount"] = monthly_bulk_discount * month_count
+    result["total_discount"] = min(
+        result["subtotal"],
+        result["bulk_discount"] + coupon_discount,
     )
-
-    result["total_discount"] = (
-        result["bulk_discount"]
-        + result["coupon_discount"]
-    )
-
-    if result["total_discount"] > result["subtotal"]:
-        result["total_discount"] = result["subtotal"]
-
-    result["total_due"] = (
-        result["subtotal"]
-        - result["total_discount"]
-    )
+    result["total_due"] = result["subtotal"] - result["total_discount"]
 
     return result
-    
-    
+
+
 def preview_discount_code_for_subjects(conn, code, subject_ids, subtotal):
-    """
-    Used only by the front page to preview discount totals before the student record exists.
-
-    It does not award points and does not mark coupons as used.
-    Backend validation still happens again during final registration.
-    """
-
-    code = (code or "").strip().upper()
-    subject_ids_str = [str(x) for x in subject_ids]
-
-    if not code:
+    """Backward-compatible single-code preview helper."""
+    evaluated = evaluate_enrollment_codes(
+        conn, code, subject_ids, student_id=None, month_count=1
+    )
+    if not evaluated.get("valid"):
+        return {
+            "valid": False,
+            "message": evaluated.get("message", "Invalid discount code."),
+            "code_type": "INVALID",
+            "discount_amount": 0,
+            "coupon_id": None,
+            "referral_owner_id": None,
+            "tutor_referrer_id": None,
+        }
+    results = evaluated.get("results", [])
+    if not results:
         return {
             "valid": True,
             "message": "",
@@ -7777,122 +8116,30 @@ def preview_discount_code_for_subjects(conn, code, subject_ids, subtotal):
             "discount_amount": 0,
             "coupon_id": None,
             "referral_owner_id": None,
-            "tutor_referrer_id": None
+            "tutor_referrer_id": None,
         }
-
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT *
-        FROM discount_coupons
-        WHERE UPPER(code)=?
-          AND status='ACTIVE'
-          AND used_count < max_uses
-        LIMIT 1
-    """, (code,))
-
-    coupon = cur.fetchone()
-
-    if not coupon:
-        return {
-            "valid": False,
-            "message": "Invalid or already used discount code.",
-            "code_type": "INVALID",
-            "discount_amount": 0,
-            "coupon_id": None,
-            "referral_owner_id": None,
-            "tutor_referrer_id": None
-        }
-
-    discount_percent = int(coupon["discount_percent"] or 0)
-
-    if discount_percent not in SUPPORTED_DISCOUNT_PERCENTAGES:
-        return {
-            "valid": False,
-            "message": "This discount percentage is not supported.",
-            "code_type": "INVALID",
-            "discount_amount": 0,
-            "coupon_id": None,
-            "referral_owner_id": None,
-            "tutor_referrer_id": None
-        }
-
-    fee_map = get_subject_fee_map(conn, subject_ids_str)
-
-    if not fee_map:
-        return {
-            "valid": False,
-            "message": "No valid subject selected for this discount code.",
-            "code_type": "INVALID",
-            "discount_amount": 0,
-            "coupon_id": None,
-            "referral_owner_id": None,
-            "tutor_referrer_id": None
-        }
-
-    discount_base = 0
-
-    if coupon["applies_to"] == "SUBJECT":
-        subject_id = str(coupon["subject_id"] or "")
-
-        if subject_id not in subject_ids_str:
-            return {
-                "valid": False,
-                "message": "This code applies to a subject that was not selected.",
-                "code_type": "INVALID",
-                "discount_amount": 0,
-                "coupon_id": None,
-                "referral_owner_id": None,
-                "tutor_referrer_id": None
-            }
-
-        discount_base = fee_map.get(subject_id, 0)
-
-    else:
-        # ALL or ANY_SUBJECT discount codes must only discount ONE selected subject.
-        # We use the highest selected subject fee.
-        discount_base = max(fee_map.values())
-
-    discount_amount = int(round(discount_base * (discount_percent / 100)))
-
-    scope_months = int(coupon["discount_scope_months"] or 0)
-
-    scope_text = (
-        " for 1 month"
-        if scope_months == 1
-        else ""
-    )
-
-    return {
-        "valid": True,
-        "message": f"{discount_percent}% discount applied to one selected subject{scope_text}.",
-        "code_type": coupon["source"] or "MANUAL",
-        "discount_amount": discount_amount,
-        "discount_scope_months": scope_months,
-        "coupon_id": coupon["id"],
-        "referral_owner_id": None,
-        "tutor_referrer_id": None
-    }
+    result = dict(results[0])
+    result["valid"] = True
+    return result
 
 
 def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subtotal):
-    """
-    Validates coupon/referral code during registration.
-
-    Returns:
-    {
-        valid: True/False,
-        message: "...",
-        code_type: MANUAL | REFERRAL_REWARD | REFERRAL_ONLY | NONE | INVALID,
-        discount_amount: number,
-        coupon_id: id or None,
-        referral_owner_id: student_id or None
-    }
-    """
-
-    code = (code or "").strip().upper()
-
-    if not code:
+    """Backward-compatible single-code validation helper."""
+    evaluated = evaluate_enrollment_codes(
+        conn, code, subject_ids, student_id=student_id, month_count=1
+    )
+    if not evaluated.get("valid"):
+        return {
+            "valid": False,
+            "message": evaluated.get("message", "Invalid coupon or referral code."),
+            "code_type": "INVALID",
+            "discount_amount": 0,
+            "coupon_id": None,
+            "referral_owner_id": None,
+            "tutor_referrer_id": None,
+        }
+    results = evaluated.get("results", [])
+    if not results:
         return {
             "valid": True,
             "message": "",
@@ -7900,170 +8147,11 @@ def validate_discount_or_referral_code(conn, code, student_id, subject_ids, subt
             "discount_amount": 0,
             "coupon_id": None,
             "referral_owner_id": None,
-            "tutor_referrer_id": None
+            "tutor_referrer_id": None,
         }
-
-    cur = conn.cursor()
-
-    # 1. Check discount coupon first
-    cur.execute("""
-        SELECT *
-        FROM discount_coupons
-        WHERE UPPER(code)=?
-          AND status='ACTIVE'
-          AND used_count < max_uses
-        LIMIT 1
-    """, (code,))
-
-    coupon = cur.fetchone()
-
-    if coupon:
-        target_student_id = coupon["target_student_id"]
-
-        if target_student_id and int(target_student_id) != int(student_id):
-            return {
-                "valid": False,
-                "message": "This discount code belongs to another learner.",
-                "code_type": "INVALID",
-                "discount_amount": 0,
-                "coupon_id": None,
-                "referral_owner_id": None,
-                "tutor_referrer_id": None
-            }
-
-        discount_percent = int(coupon["discount_percent"] or 0)
-
-        if discount_percent not in SUPPORTED_DISCOUNT_PERCENTAGES:
-            return {
-                "valid": False,
-                "message": "Invalid discount percentage on this code.",
-                "code_type": "INVALID",
-                "discount_amount": 0,
-                "coupon_id": None,
-                "referral_owner_id": None,
-                "tutor_referrer_id": None
-            }
-
-        subject_ids_str = [str(x) for x in subject_ids]
-        fee_map = get_subject_fee_map(conn, subject_ids_str)
-
-        if not fee_map:
-            return {
-                "valid": False,
-                "message": "No valid subject was selected for this discount code.",
-                "code_type": "INVALID",
-                "discount_amount": 0,
-                "coupon_id": None,
-                "referral_owner_id": None,
-                "tutor_referrer_id": None
-            }
-
-        discount_base = 0
-
-        if coupon["applies_to"] == "SUBJECT":
-            subject_id = str(coupon["subject_id"] or "")
-
-            if subject_id not in subject_ids_str:
-                return {
-                    "valid": False,
-                    "message": "This discount code applies to a subject that was not selected.",
-                    "code_type": "INVALID",
-                    "discount_amount": 0,
-                    "coupon_id": None,
-                    "referral_owner_id": None,
-                    "tutor_referrer_id": None
-                }
-
-            discount_base = fee_map.get(subject_id, 0)
-
-        else:
-            # ALL or ANY_SUBJECT must discount ONE selected subject only.
-            # This matches the front-page preview logic.
-            discount_base = max(fee_map.values())
-
-        discount_amount = int(round(discount_base * (discount_percent / 100)))
-
-        scope_months = int(coupon["discount_scope_months"] or 0)
-
-        scope_text = (
-            " to one selected subject for 1 month"
-            if scope_months == 1
-            else " to one selected subject"
-        )
-
-        return {
-            "valid": True,
-            "message": f"{discount_percent}% discount applied{scope_text}.",
-            "code_type": coupon["source"] or "MANUAL",
-            "discount_amount": discount_amount,
-            "discount_scope_months": scope_months,
-            "coupon_id": coupon["id"],
-            "referral_owner_id": None,
-            "tutor_referrer_id": None
-        }
-
-    # 2. Check student referral code
-    cur.execute("""
-        SELECT id, full_name
-        FROM students
-        WHERE UPPER(referral_code)=?
-        LIMIT 1
-    """, (code,))
-
-    referrer = cur.fetchone()
-
-    if referrer:
-        if int(referrer["id"]) == int(student_id):
-            return {
-                "valid": False,
-                "message": "You cannot use your own referral code.",
-                "code_type": "INVALID",
-                "discount_amount": 0,
-                "coupon_id": None,
-                "referral_owner_id": None,
-                "tutor_referrer_id": None
-            }
-
-        return {
-            "valid": True,
-            "message": "Student referral code accepted. It does not discount this enrollment.",
-            "code_type": "REFERRAL_ONLY",
-            "discount_amount": 0,
-            "coupon_id": None,
-            "referral_owner_id": referrer["id"],
-            "tutor_referrer_id": None
-        }
-
-    # 3. Check tutor referral code
-    cur.execute("""
-        SELECT id, full_name
-        FROM tutors
-        WHERE UPPER(referral_code)=?
-        LIMIT 1
-    """, (code,))
-
-    tutor_referrer = cur.fetchone()
-
-    if tutor_referrer:
-        return {
-            "valid": True,
-            "message": "Tutor referral code accepted. It does not discount this enrollment.",
-            "code_type": "TUTOR_REFERRAL",
-            "discount_amount": 0,
-            "coupon_id": None,
-            "referral_owner_id": None,
-            "tutor_referrer_id": tutor_referrer["id"]
-        }
-
-    return {
-        "valid": False,
-        "message": "Invalid coupon or referral code.",
-        "code_type": "INVALID",
-        "discount_amount": 0,
-        "coupon_id": None,
-        "referral_owner_id": None,
-        "tutor_referrer_id": None
-    }
+    result = dict(results[0])
+    result["valid"] = True
+    return result
 
 def award_referral_point_and_rewards(conn, referrer_student_id, referred_student_id, referral_code, month):
     """
@@ -8226,15 +8314,54 @@ def award_referral_point_and_rewards(conn, referrer_student_id, referred_student
         """, (referrer_student_id,))
 
 
-def mark_coupon_used(conn, coupon_id):
-    """
-    Marks a discount coupon as used after successful enrollment.
-    """
-    if not coupon_id:
+def save_enrollment_code_uses(conn, period_ref, student_id, code_results):
+    """Save one audit row for every discount/referral code used in a period."""
+    if not period_ref or not student_id:
         return
 
     cur = conn.cursor()
 
+    for item in code_results or []:
+        code = str(item.get("code", "") or "").strip().upper()
+        if not code:
+            continue
+
+        cur.execute("""
+            INSERT OR IGNORE INTO enrollment_code_uses(
+                enrollment_period_ref,
+                student_id,
+                coupon_id,
+                code,
+                code_type,
+                subject_id,
+                discount_percent,
+                discount_amount,
+                discount_scope_months,
+                discount_total,
+                created_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            period_ref,
+            int(student_id),
+            item.get("coupon_id"),
+            code,
+            str(item.get("code_type", "") or "UNKNOWN"),
+            item.get("assigned_subject_id"),
+            int(item.get("discount_percent", 0) or 0),
+            int(item.get("discount_amount", 0) or 0),
+            int(item.get("discount_months_applied", 0) or 0),
+            int(item.get("discount_total", 0) or 0),
+            now_utc_iso(),
+        ))
+
+
+def mark_coupon_used(conn, coupon_id):
+    """Consume one available use of a discount coupon."""
+    if not coupon_id:
+        return True
+
+    cur = conn.cursor()
     cur.execute("""
         UPDATE discount_coupons
         SET used_count = used_count + 1,
@@ -8244,7 +8371,11 @@ def mark_coupon_used(conn, coupon_id):
             END,
             used_at = ?
         WHERE id=?
+          AND status='ACTIVE'
+          AND used_count < max_uses
     """, (now_utc_iso(), coupon_id))
+
+    return int(cur.rowcount or 0) == 1
 
 
 def pagination_controls(base_path, page_num, total_pages, query_params=None):
@@ -18771,12 +18902,12 @@ def home():
 
             <label>Payment details</label>
             <div>
-                <label>Coupon / Referral Code Optional</label>
+                <label>Discount / Referral Code(s) Optional</label>
                 <input name="coupon_code"
                        id="coupon_code"
-                       placeholder="Enter discount code if you have one">
+                       placeholder="Example: CODE1, CODE2">
                 <div class="mini muted">
-                    Leave this blank if you do not have a code.
+                    Separate multiple codes with commas.
                 </div>
             </div>
             <div class="mini">
@@ -20055,6 +20186,7 @@ function showPopup(message, type='info', timeout=4000){
             const bulkDiscount = Number(data.bulk_discount || 0);
             const couponDiscount = Number(data.coupon_discount || 0);
             const couponDiscountMonths = Number(data.coupon_discount_months || 0);
+            const hasLimitedCouponScope = Boolean(data.has_limited_coupon_scope);
             const totalDiscount = Number(data.total_discount || 0);
             const totalDue = Number(data.total_due || 0);
             const monthlyDue = Number(data.monthly_total_due || (monthCount ? Math.round(totalDue / monthCount) : totalDue) || 0);
@@ -20091,16 +20223,9 @@ function showPopup(message, type='info', timeout=4000){
             let couponLine = "";
 
             if (couponDiscount > 0) {
-                const couponScopeText = (
-                    couponDiscountMonths === 1 && monthCount > 1
-                    ? "Discount code applied for 1 month only"
-                    : "Discount code applied for selected period"
-                );
-
                 couponLine = `
                     <div style="color:#1b5e20; margin-top:4px;">
-                        ${couponScopeText}:
-                        <strong>-R${couponDiscount}</strong>
+                        Discount code(s): <strong>-R${couponDiscount}</strong>
                     </div>
                 `;
             }
@@ -20118,7 +20243,7 @@ function showPopup(message, type='info', timeout=4000){
             if (loading) {
                 messageLine = `
                     <div class="mini muted" style="margin-top:6px;">
-                        Checking discount code...
+                        Checking code(s)...
                     </div>
                 `;
             }
@@ -20138,7 +20263,7 @@ function showPopup(message, type='info', timeout=4000){
                     Months selected: <strong>${monthCount}</strong><br>
                     Monthly subtotal: <strong>R${monthlySubtotal}</strong><br>
                     ${
-                        couponDiscountMonths === 1 && monthCount > 1
+                        hasLimitedCouponScope
                         ? "First month amount after discounts"
                         : "Monthly amount after discounts"
                     }:
@@ -20272,7 +20397,7 @@ function showPopup(message, type='info', timeout=4000){
                     coupon_discount: 0,
                     total_discount: 0,
                     total_due: subtotal * monthCount,
-                    message: "Could not check discount code. Please try again."
+                    message: "Could not check discount codes. Please try again."
                 }, count, per);
             }
         }
@@ -20954,7 +21079,19 @@ def register_discount_preview():
         "total_discount": breakdown["total_discount"],
         "total_due": breakdown["total_due"],
         "discount_percent": breakdown["discount_percent"],
-        "coupon_discount_months": breakdown.get("coupon_discount_months", 0)
+        "coupon_discount_months": breakdown.get("coupon_discount_months", 0),
+        "has_limited_coupon_scope": breakdown.get("has_limited_coupon_scope", False),
+        "code_results": [
+            {
+                "code": item.get("code"),
+                "code_type": item.get("code_type"),
+                "discount_percent": item.get("discount_percent", 0),
+                "discount_total": item.get("discount_total", 0),
+                "subject": item.get("assigned_subject_name"),
+                "message": item.get("message", ""),
+            }
+            for item in breakdown.get("code_results", [])
+        ]
     }
 
 
@@ -21198,6 +21335,14 @@ def register():
     total_discount = fee_breakdown["total_discount"]
     total_due = fee_breakdown["total_due"]
     coupon_result = fee_breakdown["coupon_result"]
+    code_results = fee_breakdown.get("code_results", [])
+    referral_result = fee_breakdown.get("referral_result")
+    normalized_codes = [
+        str(item.get("code", "") or "").strip().upper()
+        for item in code_results
+        if str(item.get("code", "") or "").strip()
+    ]
+    coupon_code_summary = ", ".join(normalized_codes)
 
     # The entered amount must match the final calculated total.
     # If a valid discount code is used, total_due is already reduced.
@@ -21340,6 +21485,18 @@ def register():
         
 
     is_new_referral_student = is_first_time_student(conn, sid)
+
+    if (
+        referral_result
+        and referral_result.get("code_type") == "REFERRAL_ONLY"
+        and not is_new_referral_student
+    ):
+        conn.rollback()
+        conn.close()
+        return page(
+            "Referral Code Not Allowed",
+            card_msg("Referral codes can only be used by new EBTA learners.")
+        )
     
     created = []
     
@@ -21381,13 +21538,17 @@ def register():
 
             # Save coupon details on only ONE enrollment row.
             # This prevents the admin side from showing the same discount multiple times.
-            if coupon_code and not coupon_saved_on_enrollment:
-                coupon_code_for_row = coupon_code
+            if coupon_code_summary and not coupon_saved_on_enrollment:
+                coupon_code_for_row = coupon_code_summary
                 coupon_discount_for_row = coupon_discount
-                coupon_type_for_row = coupon_result["code_type"]
+                coupon_type_for_row = (
+                    "MULTIPLE"
+                    if len(code_results) > 1
+                    else (code_results[0].get("code_type") if code_results else None)
+                )
 
-                if coupon_result["code_type"] in ["REFERRAL_ONLY", "TUTOR_REFERRAL"]:
-                    referral_code_for_row = coupon_code
+                if referral_result:
+                    referral_code_for_row = referral_result.get("code")
 
             cur.execute("""
             INSERT INTO enrollments(
@@ -21436,7 +21597,7 @@ def register():
                 now_utc_iso()
             ))
 
-            if coupon_code and not coupon_saved_on_enrollment:
+            if coupon_code_summary and not coupon_saved_on_enrollment:
                 coupon_saved_on_enrollment = True
 
             # 2️⃣ Now eid is valid
@@ -21480,32 +21641,45 @@ def register():
             created.append((eid, token))
         
     if created:
-        mark_coupon_used(conn, coupon_result.get("coupon_id"))
-
-        if coupon_result.get("code_type") == "REFERRAL_ONLY":
-            if not is_new_referral_student:
+        for item in fee_breakdown.get("coupon_results", []):
+            if not mark_coupon_used(conn, item.get("coupon_id")):
                 conn.rollback()
                 conn.close()
                 return page(
-                    "Referral Code Not Allowed",
-                    card_msg("Referral codes can only be used by new EBTA learners.")
+                    "Discount Code Error",
+                    card_msg(
+                        f"{item.get('code', 'A discount code')} is no longer available. "
+                        "Please refresh the enrollment page and try again."
+                    )
                 )
 
+        save_enrollment_code_uses(
+            conn,
+            period_ref,
+            sid,
+            code_results
+        )
+
+        if referral_result and referral_result.get("code_type") == "REFERRAL_ONLY":
             award_referral_point_and_rewards(
                 conn,
-                coupon_result.get("referral_owner_id"),
+                referral_result.get("referral_owner_id"),
                 sid,
-                coupon_code,
+                referral_result.get("code", ""),
                 month
             )
-        # Tutor referral reward
-        # This only counts if the learner is new to EBTA.
-        if is_new_student_for_referral and coupon_result.get("tutor_referrer_id"):
+
+        # Tutor referral reward only counts for a completely new learner.
+        if (
+            referral_result
+            and is_new_student_for_referral
+            and referral_result.get("tutor_referrer_id")
+        ):
             award_tutor_referral_reward(
                 conn,
-                coupon_result.get("tutor_referrer_id"),
+                referral_result.get("tutor_referrer_id"),
                 sid,
-                coupon_code.strip().upper() if coupon_code else "",
+                referral_result.get("code", ""),
                 month
             )
 
@@ -125544,7 +125718,7 @@ def whatsapp_enrollment_prepare_fee(conn, data):
                     "coupon_result",
                     {}
                 ).get("message")
-                or "The discount code could not be applied."
+                or "The discount code(s) could not be applied."
             )
         }
 
@@ -126218,6 +126392,14 @@ def whatsapp_enrollment_submit(conn, data):
     period_end_month = months_to_enroll[-1]
     coupon_result = breakdown["coupon_result"]
     coupon_discount = breakdown["coupon_discount"]
+    code_results = breakdown.get("code_results", [])
+    referral_result = breakdown.get("referral_result")
+    normalized_codes = [
+        str(item.get("code", "") or "").strip().upper()
+        for item in code_results
+        if str(item.get("code", "") or "").strip()
+    ]
+    coupon_code_summary = ", ".join(normalized_codes)
 
     is_new_referral_student = is_first_time_student(
         conn,
@@ -126240,8 +126422,8 @@ def whatsapp_enrollment_submit(conn, data):
     )
 
     if (
-        coupon_result.get("code_type")
-        == "REFERRAL_ONLY"
+        referral_result
+        and referral_result.get("code_type") == "REFERRAL_ONLY"
         and not is_new_referral_student
     ):
         raise ValueError(
@@ -126260,18 +126442,17 @@ def whatsapp_enrollment_submit(conn, data):
             coupon_type_for_row = None
             referral_code_for_row = None
 
-            if coupon_code and not coupon_saved_on_enrollment:
-                coupon_code_for_row = coupon_code
+            if coupon_code_summary and not coupon_saved_on_enrollment:
+                coupon_code_for_row = coupon_code_summary
                 coupon_discount_for_row = coupon_discount
-                coupon_type_for_row = coupon_result.get(
-                    "code_type"
+                coupon_type_for_row = (
+                    "MULTIPLE"
+                    if len(code_results) > 1
+                    else (code_results[0].get("code_type") if code_results else None)
                 )
 
-                if coupon_result.get("code_type") in {
-                    "REFERRAL_ONLY",
-                    "TUTOR_REFERRAL"
-                }:
-                    referral_code_for_row = coupon_code
+                if referral_result:
+                    referral_code_for_row = referral_result.get("code")
 
             cur.execute("""
                 INSERT INTO enrollments(
@@ -126320,7 +126501,7 @@ def whatsapp_enrollment_submit(conn, data):
                 now_utc_iso()
             ))
 
-            if coupon_code and not coupon_saved_on_enrollment:
+            if coupon_code_summary and not coupon_saved_on_enrollment:
                 coupon_saved_on_enrollment = True
 
             enrollment_id = int(cur.lastrowid)
@@ -126374,29 +126555,39 @@ def whatsapp_enrollment_submit(conn, data):
             )
 
     if created:
-        mark_coupon_used(
+        for item in breakdown.get("coupon_results", []):
+            if not mark_coupon_used(conn, item.get("coupon_id")):
+                raise ValueError(
+                    f"{item.get('code', 'A discount code')} is no longer available. "
+                    "Please type CANCEL and start again."
+                )
+
+        save_enrollment_code_uses(
             conn,
-            coupon_result.get("coupon_id")
+            period_ref,
+            sid,
+            code_results
         )
 
-        if coupon_result.get("code_type") == "REFERRAL_ONLY":
+        if referral_result and referral_result.get("code_type") == "REFERRAL_ONLY":
             award_referral_point_and_rewards(
                 conn,
-                coupon_result.get("referral_owner_id"),
+                referral_result.get("referral_owner_id"),
                 sid,
-                coupon_code,
+                referral_result.get("code", ""),
                 start_month
             )
 
         if (
-            is_new_student_for_referral
-            and coupon_result.get("tutor_referrer_id")
+            referral_result
+            and is_new_student_for_referral
+            and referral_result.get("tutor_referrer_id")
         ):
             award_tutor_referral_reward(
                 conn,
-                coupon_result.get("tutor_referrer_id"),
+                referral_result.get("tutor_referrer_id"),
                 sid,
-                coupon_code,
+                referral_result.get("code", ""),
                 start_month
             )
 
@@ -126874,8 +127065,8 @@ def whatsapp_enrollment_handle(
         )
 
         return (
-            "Do you have an EBTA coupon or referral code?\n\n"
-            "Send the code, or reply NONE."
+            "Do you have an EBTA discount or referral code?\n\n"
+            "You can send more than one code separated by commas, or reply NONE."
         )
 
     if stage == "coupon":
@@ -126887,7 +127078,7 @@ def whatsapp_enrollment_handle(
                 "skip",
                 "n/a"
             }
-            else clean.upper()
+            else ", ".join(parse_enrollment_codes(clean))
         )
 
         data["coupon_code"] = coupon_code
@@ -126905,7 +127096,7 @@ def whatsapp_enrollment_handle(
                         "The enrollment fee could not be calculated."
                     )
                 )
-                + "\n\nPlease send a different code or reply NONE."
+                + "\n\nPlease send different code(s) or reply NONE."
             )
 
         for key in {
