@@ -37928,6 +37928,583 @@ STAFF_CONNECT_JOB_TERMS = {
     ],
 }
 
+# Curated links are kept in code instead of creating one database row per
+# external opportunity. Dated items disappear automatically after their
+# validity window. Ongoing source hubs remain available.
+STAFF_CONNECT_EXTERNAL_OPPORTUNITY_TYPES = {
+    "BURSARY": ("🎓", "Bursary"),
+    "SCHOLARSHIP": ("🏅", "Scholarship / Fellowship"),
+    "INTERNSHIP": ("🧑‍💻", "Internship"),
+    "VACATION_WORK": ("🌴", "Vacation Work"),
+    "GRADUATE": ("🚀", "Graduate Programme"),
+    "EVENT": ("📅", "Event / Workshop"),
+    "CAREER_HUB": ("🏢", "Career Hub"),
+    "REMOTE_JOB": ("🌍", "Remote Job"),
+}
+
+
+STAFF_CONNECT_EXTERNAL_OPPORTUNITIES = [
+    # ---------------- BURSARIES / SCHOLARSHIPS ----------------
+    {
+        "type": "BURSARY",
+        "title": "Open 2027 Bursaries & Scholarships",
+        "organisation": "StudyTrust",
+        "fields": [],
+        "location": "South Africa",
+        "deadline": "30 Sep 2026",
+        "expires_on": "2026-09-30",
+        "summary": "Amazon, Standard Bank, Santam, Toyota, Cisco, Investec, AWS, HP, Sage, TFG and more.",
+        "url": "https://studytrust.org.za/bursaries/",
+        "priority": 100,
+    },
+    {
+        "type": "BURSARY",
+        "title": "Amazon Recruitment Bursary",
+        "organisation": "Amazon / StudyTrust",
+        "fields": ["Technology, Data & AI", "Engineering"],
+        "location": "South Africa",
+        "deadline": "30 Sep 2026",
+        "expires_on": "2026-09-30",
+        "summary": "For eligible Computer Science, Computer Engineering and Software Engineering students.",
+        "url": "https://studytrust.org.za/amazon-recruitment-bursaries/",
+        "priority": 95,
+    },
+    {
+        "type": "BURSARY",
+        "title": "Standard Bank Group Bursary",
+        "organisation": "Standard Bank / StudyTrust",
+        "fields": ["Accounting & Finance", "Technology, Data & AI", "Engineering", "Business & Entrepreneurship", "Law & Social Sciences"],
+        "location": "South Africa",
+        "deadline": "30 Sep 2026",
+        "expires_on": "2026-09-30",
+        "summary": "Undergraduate and postgraduate funding across several commerce, STEM and related fields.",
+        "url": "https://studytrust.org.za/standardbank/",
+        "priority": 94,
+    },
+    {
+        "type": "BURSARY",
+        "title": "Santam Bursary Programme",
+        "organisation": "Santam / StudyTrust",
+        "fields": ["Accounting & Finance", "Technology, Data & AI", "Engineering", "Built Environment & Planning"],
+        "location": "South Africa",
+        "deadline": "30 Sep 2026",
+        "expires_on": "2026-09-30",
+        "summary": "Includes data, statistics, finance, agriculture, engineering, construction and risk fields.",
+        "url": "https://studytrust.org.za/santam/",
+        "priority": 93,
+    },
+    {
+        "type": "BURSARY",
+        "title": "Toyota SA Motors Bursary",
+        "organisation": "Toyota / StudyTrust",
+        "fields": ["Accounting & Finance", "Technology, Data & AI", "Engineering", "Business & Entrepreneurship", "Law & Social Sciences", "Human Resources", "Marketing & Communications"],
+        "location": "South Africa",
+        "deadline": "Open for 2027",
+        "expires_on": "2026-09-30",
+        "summary": "Commerce, engineering, computer science, IT and other funded study areas.",
+        "url": "https://studytrust.org.za/toyota/",
+        "priority": 92,
+    },
+    {
+        "type": "SCHOLARSHIP",
+        "title": "Cisco Charitable Foundation Trust SA Bursary",
+        "organisation": "Cisco / StudyTrust",
+        "fields": ["Technology, Data & AI", "Engineering"],
+        "location": "South Africa",
+        "deadline": "Open for 2027",
+        "expires_on": "2026-09-30",
+        "summary": "Study funding opportunity administered by StudyTrust.",
+        "url": "https://studytrust.org.za/cisco/",
+        "priority": 91,
+    },
+    {
+        "type": "SCHOLARSHIP",
+        "title": "Imfundo Trust Scholarship",
+        "organisation": "Old Mutual Investment Group / StudyTrust",
+        "fields": ["Accounting & Finance", "Technology, Data & AI", "Business & Entrepreneurship"],
+        "location": "South Africa",
+        "deadline": "Open for 2027",
+        "expires_on": "2026-09-30",
+        "summary": "Scholarship opportunity administered by StudyTrust.",
+        "url": "https://studytrust.org.za/old-mutual/",
+        "priority": 90,
+    },
+    {
+        "type": "BURSARY",
+        "title": "Investec Tertiary Bursary",
+        "organisation": "Investec",
+        "fields": ["Accounting & Finance", "Technology, Data & AI", "Business & Entrepreneurship"],
+        "location": "South Africa",
+        "deadline": "30 Sep 2026",
+        "expires_on": "2026-09-30",
+        "summary": "Tertiary funding with a focus on financially related study fields.",
+        "url": "https://www.investec.com/en_za/welcome-to-investec/sustainability/our-community/bursaries/tertiary-bursary-programme.html",
+        "priority": 89,
+    },
+    {
+        "type": "BURSARY",
+        "title": "Investec High School Bursary",
+        "organisation": "Investec",
+        "fields": ["Education & Teaching", "General Career Growth"],
+        "location": "South Africa",
+        "deadline": "30 Sep 2026",
+        "expires_on": "2026-09-30",
+        "summary": "For eligible learners entering Grades 10, 11 or 12 in 2027.",
+        "url": "https://www.investec.com/en_za/welcome-to-investec/sustainability/our-community/bursaries/high-school-bursary-programme.html",
+        "priority": 88,
+    },
+    {
+        "type": "BURSARY",
+        "title": "FirstRand Empowerment Foundation Undergraduate Bursary",
+        "organisation": "FirstRand Empowerment Foundation / StudyTrust",
+        "fields": [],
+        "location": "South Africa",
+        "deadline": "30 Sep 2026",
+        "expires_on": "2026-09-30",
+        "summary": "For qualifying students starting a first degree in 2027.",
+        "url": "https://studytrust.org.za/fref-bursary/",
+        "priority": 87,
+    },
+    {
+        "type": "BURSARY",
+        "title": "AWS Skills Development Bursary",
+        "organisation": "AWS / StudyTrust",
+        "fields": ["Technology, Data & AI", "Engineering"],
+        "location": "South Africa",
+        "deadline": "Open for 2027",
+        "expires_on": "2026-09-30",
+        "summary": "Skills-development bursary for qualifying students.",
+        "url": "https://studytrust.org.za/amazon-web/",
+        "priority": 86,
+    },
+    {
+        "type": "BURSARY",
+        "title": "HP Inc Bursary",
+        "organisation": "HP / StudyTrust",
+        "fields": ["Technology, Data & AI", "Engineering", "Business & Entrepreneurship"],
+        "location": "South Africa",
+        "deadline": "Open for 2027",
+        "expires_on": "2026-09-30",
+        "summary": "Open bursary opportunity administered by StudyTrust.",
+        "url": "https://studytrust.org.za/hp-inc-bursaries/",
+        "priority": 85,
+    },
+    {
+        "type": "BURSARY",
+        "title": "Sage External Bursary",
+        "organisation": "Sage / StudyTrust",
+        "fields": ["Technology, Data & AI", "Accounting & Finance", "Business & Entrepreneurship"],
+        "location": "South Africa",
+        "deadline": "Open for 2027",
+        "expires_on": "2026-09-30",
+        "summary": "Open external bursary opportunity administered by StudyTrust.",
+        "url": "https://studytrust.org.za/sage/",
+        "priority": 84,
+    },
+    {
+        "type": "SCHOLARSHIP",
+        "title": "TFG Data Science & Leadership Fellowship",
+        "organisation": "TFG / StudyTrust",
+        "fields": ["Technology, Data & AI", "Leadership & Operations"],
+        "location": "South Africa",
+        "deadline": "Open for 2027",
+        "expires_on": "2026-09-30",
+        "summary": "For students building careers in data science and leadership.",
+        "url": "https://studytrust.org.za/tfg-data-science/",
+        "priority": 83,
+    },
+    {
+        "type": "BURSARY",
+        "title": "Amandla Omoya Trust Bursary",
+        "organisation": "Amandla Omoya Trust / StudyTrust",
+        "fields": ["Engineering", "Built Environment & Planning", "General Career Growth"],
+        "location": "South Africa",
+        "deadline": "Open for 2027",
+        "expires_on": "2026-09-30",
+        "summary": "Renewable-energy community bursary programme.",
+        "url": "https://studytrust.org.za/amandla-omoya-trust-bursary-programme/",
+        "priority": 82,
+    },
+    {
+        "type": "BURSARY",
+        "title": "Kathu Solar Park Bursary",
+        "organisation": "Kathu Solar Park / StudyTrust",
+        "fields": ["Engineering", "Built Environment & Planning", "General Career Growth"],
+        "location": "South Africa",
+        "deadline": "Open for 2027",
+        "expires_on": "2026-09-30",
+        "summary": "Community bursary programme linked to the renewable-energy sector.",
+        "url": "https://studytrust.org.za/kathu-solar-park/",
+        "priority": 81,
+    },
+    {
+        "type": "BURSARY",
+        "title": "Solar Capital Orange Bursary",
+        "organisation": "Solar Capital Orange / StudyTrust",
+        "fields": ["Engineering", "Built Environment & Planning", "General Career Growth"],
+        "location": "South Africa",
+        "deadline": "Open for 2027",
+        "expires_on": "2026-09-30",
+        "summary": "Renewable-energy bursary programme.",
+        "url": "https://studytrust.org.za/solar-capital-orange/",
+        "priority": 80,
+    },
+    {
+        "type": "BURSARY",
+        "title": "Kangnas Wind Farm Bursary",
+        "organisation": "Kangnas Wind Farm / StudyTrust",
+        "fields": ["Engineering", "Built Environment & Planning", "General Career Growth"],
+        "location": "South Africa",
+        "deadline": "Open for 2027",
+        "expires_on": "2026-09-30",
+        "summary": "Renewable-energy community bursary programme.",
+        "url": "https://studytrust.org.za/kangnas-wind-farm/",
+        "priority": 79,
+    },
+    {
+        "type": "BURSARY",
+        "title": "EY 2027 Bursary Programme",
+        "organisation": "EY South Africa",
+        "fields": ["Accounting & Finance"],
+        "location": "South Africa",
+        "deadline": "30 Sep 2026",
+        "expires_on": "2026-09-30",
+        "summary": "For students pursuing the CA stream.",
+        "url": "https://www.ey.com/en_za/careers/apply-for-our-bursary-program",
+        "priority": 78,
+    },
+    {
+        "type": "BURSARY",
+        "title": "Deloitte Financial Contribution",
+        "organisation": "Deloitte South Africa",
+        "fields": ["Accounting & Finance"],
+        "location": "South Africa",
+        "deadline": "30 Sep 2026",
+        "expires_on": "2026-09-30",
+        "summary": "Funding support for qualifying CA-stream students.",
+        "url": "https://www.deloitte.com/za/en/careers/explore-your-fit/students/financial-contribution.html",
+        "priority": 77,
+    },
+    {
+        "type": "SCHOLARSHIP",
+        "title": "African Laser Centre Scholarship Proposals 2027",
+        "organisation": "CSIR / African Laser Centre",
+        "fields": ["Engineering", "Technology, Data & AI", "Pharmacy & Life Sciences"],
+        "location": "Africa / South Africa",
+        "deadline": "16 Oct 2026",
+        "expires_on": "2026-10-16",
+        "summary": "Postgraduate laser and laser-application research funding call.",
+        "url": "https://www.csir.co.za/work-with-us/funding-and-programmes/eois",
+        "priority": 76,
+    },
+
+    # ---------------- INTERNSHIPS / VAC WORK / GRADUATE ----------------
+    {
+        "type": "VACATION_WORK",
+        "title": "Vacation Interactive Business Experience (VIBE)",
+        "organisation": "Deloitte South Africa",
+        "fields": ["Accounting & Finance", "Technology, Data & AI", "Engineering", "Business & Entrepreneurship", "Law & Social Sciences", "Human Resources"],
+        "location": "South Africa",
+        "deadline": "Applications open",
+        "expires_on": "2026-10-31",
+        "summary": "Student programme with a pathway to Deloitte vacation work.",
+        "url": "https://www.deloitte.com/za/en/services/audit/services/vacation-interactive-business-experience-vibe.html",
+        "priority": 74,
+    },
+    {
+        "type": "VACATION_WORK",
+        "title": "Audit Vacation Work",
+        "organisation": "EY South Africa",
+        "fields": ["Accounting & Finance"],
+        "location": "South Africa",
+        "deadline": "Applications Sep–Oct",
+        "expires_on": "2026-10-31",
+        "summary": "For eligible university students studying toward a CA(SA) qualification.",
+        "url": "https://www.ey.com/en_za/careers/graduate-programmes-south-africa",
+        "priority": 73,
+    },
+    {
+        "type": "INTERNSHIP",
+        "title": "BBBEE Business Program Manager Internship",
+        "organisation": "Microsoft",
+        "fields": ["Business & Entrepreneurship", "Education & Teaching", "Human Resources", "Marketing & Communications", "Technology, Data & AI"],
+        "location": "Johannesburg",
+        "deadline": "Open until filled",
+        "expires_on": "2026-10-21",
+        "summary": "South Africa internship in learning, skilling and business programme management.",
+        "url": "https://careers.microsoft.com/v2/global/en/locations/johannesburg.html",
+        "priority": 72,
+    },
+    {
+        "type": "INTERNSHIP",
+        "title": "2027 Account Manager Intern",
+        "organisation": "Amazon South Africa",
+        "fields": ["Business & Entrepreneurship", "Marketing & Communications", "Leadership & Operations"],
+        "location": "South Africa",
+        "deadline": "Open",
+        "expires_on": "2026-10-21",
+        "summary": "Full-time 12-month internship across Amazon business areas.",
+        "url": "https://www.amazon.jobs/en/jobs/10499683/2027-account-manager-intern",
+        "priority": 71,
+    },
+    {
+        "type": "INTERNSHIP",
+        "title": "2027 Program / Product Manager Intern",
+        "organisation": "Amazon South Africa",
+        "fields": ["Business & Entrepreneurship", "Technology, Data & AI", "Leadership & Operations"],
+        "location": "South Africa",
+        "deadline": "Open",
+        "expires_on": "2026-10-21",
+        "summary": "12-month internship for eligible students and recent graduates.",
+        "url": "https://www.amazon.jobs/en/jobs/10499684/2027-program-product-manager-intern",
+        "priority": 70,
+    },
+    {
+        "type": "GRADUATE",
+        "title": "SAP Next Gen Academy – Customer Success",
+        "organisation": "SAP",
+        "fields": ["Business & Entrepreneurship", "Technology, Data & AI", "Marketing & Communications"],
+        "location": "Woodmead, South Africa",
+        "deadline": "Open",
+        "expires_on": "2026-10-21",
+        "summary": "Graduate-level customer success opportunity at SAP South Africa.",
+        "url": "https://jobs.sap.com/job/Woodmead-Customer-Success-Manager-SAP-Next-Gen-Academy-for-Customer-Success-SOUTH-AFRICA-2148/1423554933/",
+        "priority": 69,
+    },
+
+    # ---------------- EVENTS / WORKSHOPS ----------------
+    {
+        "type": "EVENT",
+        "title": "AI-Powered Developer Productivity with GitHub Copilot & VS Code",
+        "organisation": "Microsoft Reactor",
+        "fields": ["Technology, Data & AI"],
+        "location": "Online",
+        "deadline": "25 Sep 2026",
+        "expires_on": "2026-09-25",
+        "summary": "Developer productivity session covering AI-assisted coding, debugging and testing.",
+        "url": "https://developer.microsoft.com/en-us/reactor/series/s-1687/",
+        "priority": 68,
+    },
+    {
+        "type": "EVENT",
+        "title": "Model Mondays: Mistral OCR-4 & AI Agents",
+        "organisation": "Microsoft Reactor",
+        "fields": ["Technology, Data & AI"],
+        "location": "Online",
+        "deadline": "28 Sep 2026",
+        "expires_on": "2026-09-28",
+        "summary": "Livestream on Mistral models and practical agent workflows in Microsoft Foundry.",
+        "url": "https://developer.microsoft.com/en-us/reactor/events/27546/",
+        "priority": 67,
+    },
+    {
+        "type": "EVENT",
+        "title": "Copilot Dev Camp Summit – Fall Edition 2026",
+        "organisation": "Microsoft Reactor",
+        "fields": ["Technology, Data & AI"],
+        "location": "Online",
+        "deadline": "30 Sep 2026",
+        "expires_on": "2026-09-30",
+        "summary": "Microsoft 365 Copilot, agents, extensibility, demos and developer sessions.",
+        "url": "https://developer.microsoft.com/en-us/reactor/events/27402/",
+        "priority": 66,
+    },
+    {
+        "type": "EVENT",
+        "title": "Secure Parallel Agent Swarms",
+        "organisation": "Microsoft Reactor",
+        "fields": ["Technology, Data & AI"],
+        "location": "Online",
+        "deadline": "30 Sep 2026",
+        "expires_on": "2026-09-30",
+        "summary": "Technical livestream on secure compute and orchestration for AI agent workloads.",
+        "url": "https://developer.microsoft.com/en-us/reactor/events/27394/",
+        "priority": 65,
+    },
+    {
+        "type": "EVENT",
+        "title": "Model Mondays: Fine-Tuned Models",
+        "organisation": "Microsoft Reactor",
+        "fields": ["Technology, Data & AI"],
+        "location": "Online",
+        "deadline": "5 Oct 2026",
+        "expires_on": "2026-10-05",
+        "summary": "Session on fine-tuning models for specialised AI agent experiences.",
+        "url": "https://developer.microsoft.com/en-us/reactor/events/27545/",
+        "priority": 64,
+    },
+    {
+        "type": "EVENT",
+        "title": "Building AI Apps Faster with Agentic Coding & Azure Cosmos DB",
+        "organisation": "Microsoft Reactor",
+        "fields": ["Technology, Data & AI"],
+        "location": "Online",
+        "deadline": "15 Oct 2026",
+        "expires_on": "2026-10-15",
+        "summary": "Live session on AI apps, coding agents, vector search and Azure Cosmos DB.",
+        "url": "https://developer.microsoft.com/en-us/reactor/events/27613/",
+        "priority": 63,
+    },
+    {
+        "type": "EVENT",
+        "title": "Google DevFest 2026",
+        "organisation": "Google for Developers",
+        "fields": ["Technology, Data & AI", "Business & Entrepreneurship"],
+        "location": "Global / Local chapters",
+        "deadline": "1 Oct – 31 Dec 2026",
+        "expires_on": "2026-12-31",
+        "summary": "Developer and AI community events, workshops and networking across many cities.",
+        "url": "https://developers.google.com/community/devfest",
+        "priority": 62,
+    },
+    {
+        "type": "EVENT",
+        "title": "AWS Events & Webinars",
+        "organisation": "Amazon Web Services",
+        "fields": ["Technology, Data & AI", "Business & Entrepreneurship"],
+        "location": "Online & global",
+        "deadline": "Upcoming events",
+        "expires_on": "",
+        "summary": "Cloud, AI, certification, workshops, summits and technical learning events.",
+        "url": "https://aws.amazon.com/events/",
+        "priority": 61,
+    },
+
+    # ---------------- CAREER HUBS ----------------
+    {
+        "type": "CAREER_HUB",
+        "title": "Amazon University Talent – South Africa",
+        "organisation": "Amazon",
+        "fields": ["Technology, Data & AI", "Engineering", "Business & Entrepreneurship", "Leadership & Operations"],
+        "location": "South Africa",
+        "deadline": "Open roles",
+        "expires_on": "",
+        "summary": "Student internships and graduate opportunities.",
+        "url": "https://www.amazon.jobs/content/en/career-programs/university?country%5B%5D=ZA",
+        "priority": 40,
+    },
+    {
+        "type": "CAREER_HUB",
+        "title": "Microsoft Johannesburg Careers",
+        "organisation": "Microsoft",
+        "fields": ["Technology, Data & AI", "Business & Entrepreneurship", "Marketing & Communications", "Human Resources"],
+        "location": "Johannesburg",
+        "deadline": "Open roles",
+        "expires_on": "",
+        "summary": "Current Microsoft opportunities in Johannesburg.",
+        "url": "https://careers.microsoft.com/v2/global/en/locations/johannesburg.html",
+        "priority": 39,
+    },
+    {
+        "type": "CAREER_HUB",
+        "title": "Deloitte Student & Graduate Opportunities",
+        "organisation": "Deloitte South Africa",
+        "fields": [],
+        "location": "South Africa",
+        "deadline": "Open programmes",
+        "expires_on": "",
+        "summary": "Graduate programmes, vacation work and student opportunities across several fields.",
+        "url": "https://www.deloitte.com/za/en/careers.html",
+        "priority": 38,
+    },
+    {
+        "type": "CAREER_HUB",
+        "title": "EY South Africa Job Search",
+        "organisation": "EY South Africa",
+        "fields": [],
+        "location": "South Africa",
+        "deadline": "Open roles",
+        "expires_on": "",
+        "summary": "Student, entry-level and experienced career opportunities.",
+        "url": "https://www.ey.com/en_za/careers/job-search",
+        "priority": 37,
+    },
+]
+
+
+def staff_connect_external_opportunities():
+    today = portal_today_date()
+    visible = []
+
+    for item in STAFF_CONNECT_EXTERNAL_OPPORTUNITIES:
+        expires_on = str(item.get("expires_on") or "").strip()
+
+        if expires_on:
+            try:
+                if datetime.date.fromisoformat(expires_on) < today:
+                    continue
+            except Exception:
+                pass
+
+        visible.append(dict(item))
+
+    return visible
+
+
+def staff_connect_external_matches(item, career_field="", opportunity_type="", search=""):
+    career_field = str(career_field or "").strip()
+    opportunity_type = str(opportunity_type or "").strip().upper()
+    search = str(search or "").strip().lower()
+
+    if opportunity_type and str(item.get("type") or "").upper() != opportunity_type:
+        return False
+
+    fields = list(item.get("fields") or [])
+    if career_field and fields and career_field not in fields and "General Career Growth" not in fields:
+        return False
+
+    if search:
+        haystack = " ".join([
+            str(item.get("title") or ""),
+            str(item.get("organisation") or ""),
+            str(item.get("location") or ""),
+            str(item.get("summary") or ""),
+            " ".join(str(x) for x in fields),
+        ]).lower()
+
+        if search not in haystack:
+            return False
+
+    return True
+
+
+def staff_connect_render_external_opportunity(item):
+    kind = str(item.get("type") or "CAREER_HUB").upper()
+    icon, label = STAFF_CONNECT_EXTERNAL_OPPORTUNITY_TYPES.get(kind, ("🔗", "Opportunity"))
+    url = staff_connect_safe_url(item.get("url"))
+
+    if not url:
+        return ""
+
+    field_chips = "".join(
+        f"<span class='chip'>{escape(field)}</span>"
+        for field in list(item.get("fields") or [])[:3]
+    )
+
+    deadline = str(item.get("deadline") or "").strip()
+    location = str(item.get("location") or "").strip()
+    meta = " · ".join(part for part in [location, deadline] if part)
+
+    return f"""
+    <article class="staff-opportunity-card">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+            <div style="min-width:0;flex:1">
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px">
+                    <span class="chip active">{icon} {escape(label)}</span>
+                    {field_chips}
+                </div>
+                <h3 style="margin:0 0 4px">{escape(item.get('title') or 'Opportunity')}</h3>
+                <div class="mini"><b>{escape(item.get('organisation') or '')}</b></div>
+                {f'<div class="mini muted" style="margin-top:3px">{escape(meta)}</div>' if meta else ''}
+                {f'<div class="mini" style="margin-top:8px;line-height:1.5">{escape(item.get("summary") or "")}</div>' if item.get('summary') else ''}
+            </div>
+            <a class="btn mini success" target="_blank" rel="noopener"
+               href="{escape(url, quote=True)}">View ↗</a>
+        </div>
+    </article>
+    """
+
+
 
 def staff_connect_actor():
     identity = portal_presence_identity()
@@ -39252,10 +39829,91 @@ def staff_connect_home():
 
     if view == "opportunities":
         career_field = request.args.get("field", "").strip()
+        opportunity_type = request.args.get("opp_type", "").strip().upper()
         search = request.args.get("q", "").strip()
 
-        if not career_field and my_profile and my_profile["career_field"]:
-            career_field = str(my_profile["career_field"] or "")
+        try:
+            opportunity_page = max(1, int(request.args.get("opp_page", 1)))
+        except Exception:
+            opportunity_page = 1
+
+        per_page = 12
+
+        if opportunity_type and opportunity_type not in STAFF_CONNECT_EXTERNAL_OPPORTUNITY_TYPES:
+            opportunity_type = ""
+
+        # Keep the board broad by default. Staff can filter by their field when wanted.
+        external_items = [
+            item for item in staff_connect_external_opportunities()
+            if staff_connect_external_matches(
+                item,
+                career_field=career_field,
+                opportunity_type=opportunity_type,
+                search=search,
+            )
+        ]
+
+        # Live remote jobs stay outside the normal opportunity tables. The existing
+        # Remotive response is kept as one short-lived cache record only.
+        live_jobs = []
+        if not opportunity_type or opportunity_type == "REMOTE_JOB":
+            remotive_jobs, _ = staff_connect_fetch_remotive_jobs()
+            filtered_remote = staff_connect_filter_jobs(
+                remotive_jobs,
+                career_field,
+                search,
+            )
+
+            for job in filtered_remote[:80]:
+                url = staff_connect_safe_url(job.get("url"))
+                if not url:
+                    continue
+
+                meta_parts = [
+                    job.get("category"),
+                    job.get("job_type"),
+                    job.get("salary"),
+                ]
+                summary = " · ".join(str(x) for x in meta_parts if x)
+
+                live_jobs.append({
+                    "type": "REMOTE_JOB",
+                    "title": str(job.get("title") or "Remote opportunity"),
+                    "organisation": str(job.get("company") or "Remote employer"),
+                    "fields": [career_field] if career_field else [],
+                    "location": str(job.get("location") or "Remote"),
+                    "deadline": (
+                        "Posted " + str(job.get("publication_date") or "")[:10]
+                        if job.get("publication_date")
+                        else ""
+                    ),
+                    "summary": summary,
+                    "url": url,
+                    "priority": 20,
+                })
+
+        combined = external_items + live_jobs
+        combined.sort(
+            key=lambda item: (
+                -int(item.get("priority") or 0),
+                str(item.get("title") or "").lower(),
+            )
+        )
+
+        total_opportunities = len(combined)
+        total_pages = max(1, (total_opportunities + per_page - 1) // per_page)
+        if opportunity_page > total_pages:
+            opportunity_page = total_pages
+
+        start_at = (opportunity_page - 1) * per_page
+        page_items = combined[start_at:start_at + per_page]
+        opportunity_html = "".join(
+            staff_connect_render_external_opportunity(item)
+            for item in page_items
+        )
+
+        if not opportunity_html:
+            opportunity_html = "<div class='empty'>No matching opportunities right now.</div>"
 
         cur.execute("""
             SELECT p.*
@@ -39263,87 +39921,125 @@ def staff_connect_home():
             WHERE p.is_active=1
               AND p.post_type='OPPORTUNITY'
             ORDER BY p.is_pinned DESC, p.created_at DESC, p.id DESC
-            LIMIT 12
+            LIMIT 8
         """)
-        internal_posts = staff_connect_enrich_posts(
-            conn,
-            cur.fetchall()
+        internal_posts = staff_connect_enrich_posts(conn, cur.fetchall())
+        internal_html = "".join(
+            staff_connect_render_post_card(row, actor, compact=True)
+            for row in internal_posts
         )
-        internal_html = "".join(staff_connect_render_post_card(row, actor, compact=True) for row in internal_posts)
-
         conn.close()
 
-        live_jobs, cached = staff_connect_fetch_remotive_jobs()
-        live_jobs = staff_connect_filter_jobs(live_jobs, career_field, search)[:18]
-
-        jobs_html = ""
-        for job in live_jobs:
-            url = staff_connect_safe_url(job.get("url"))
-            if not url:
-                continue
-            published = str(job.get("publication_date") or "")[:10]
-            meta_parts = [
-                job.get("company"), job.get("category"), job.get("location"),
-                job.get("job_type"), job.get("salary")
-            ]
-            meta = " · ".join(str(item) for item in meta_parts if item)
-            jobs_html += f"""
-            <article class="staff-opportunity-card">
-                <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
-                    <div style="min-width:0;flex:1">
-                        <h3 style="margin:0 0 4px">{escape(job.get('title') or 'Remote opportunity')}</h3>
-                        <div class="mini muted">{escape(meta)}</div>
-                        <div class="mini muted" style="margin-top:4px">Posted {escape(published)} · Source: Remotive</div>
-                    </div>
-                    <a class="btn mini success" target="_blank" rel="noopener" href="{escape(url, quote=True)}">View Opportunity ↗</a>
-                </div>
-            </article>
-            """
-
-        if not jobs_html:
-            jobs_html = (
-                "<div class='empty'>"
-                "No matching opportunities right now."
-                "</div>"
+        type_options = "<option value=''>All opportunity types</option>"
+        for key, (icon, label) in STAFF_CONNECT_EXTERNAL_OPPORTUNITY_TYPES.items():
+            selected = "selected" if opportunity_type == key else ""
+            type_options += (
+                f"<option value='{key}' {selected}>{icon} {escape(label)}</option>"
             )
+
+        base_params = {
+            "view": "opportunities",
+            "field": career_field,
+            "opp_type": opportunity_type,
+            "q": search,
+        }
+        prev_link = ""
+        next_link = ""
+
+        if opportunity_page > 1:
+            prev_link = (
+                "<a class='btn mini secondary' href='/staff-connect?"
+                + urlencode({**base_params, "opp_page": opportunity_page - 1})
+                + "'>← Previous</a>"
+            )
+
+        if opportunity_page < total_pages:
+            next_link = (
+                "<a class='btn mini secondary' href='/staff-connect?"
+                + urlencode({**base_params, "opp_page": opportunity_page + 1})
+                + "'>Next →</a>"
+            )
+
+        showing_from = start_at + 1 if total_opportunities else 0
+        showing_to = min(start_at + len(page_items), total_opportunities)
+
+        quick_links = "".join([
+            "<a class='btn mini secondary' target='_blank' rel='noopener' href='https://studytrust.org.za/bursaries/'>🎓 Open Bursaries</a>",
+            "<a class='btn mini secondary' target='_blank' rel='noopener' href='https://www.amazon.jobs/content/en/career-programs/university?country%5B%5D=ZA'>🧑‍💻 Amazon Students</a>",
+            "<a class='btn mini secondary' target='_blank' rel='noopener' href='https://careers.microsoft.com/v2/global/en/locations/johannesburg.html'>🏢 Microsoft SA</a>",
+            "<a class='btn mini secondary' target='_blank' rel='noopener' href='https://www.deloitte.com/za/en/careers.html'>🚀 Deloitte Careers</a>",
+            "<a class='btn mini secondary' target='_blank' rel='noopener' href='https://developer.microsoft.com/en-us/reactor/'>📅 Microsoft Reactor</a>",
+            "<a class='btn mini secondary' target='_blank' rel='noopener' href='https://developers.google.com/community/devfest'>📅 Google DevFest</a>",
+            "<a class='btn mini secondary' target='_blank' rel='noopener' href='https://aws.amazon.com/events/'>📅 AWS Events</a>",
+        ])
 
         body = f"""
         {hero}
+
         <section class="card">
             <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
                 <div>
                     <h2 style="margin-bottom:4px">Career & Opportunity Board</h2>
-                    <p class="muted" style="margin:0">Jobs, internships, bursaries and more.</p>
+                    <p class="muted" style="margin:0">Bursaries, jobs, internships, vacation work, events and graduate opportunities.</p>
                 </div>
                 <a class="btn success" href="/staff-connect#share">Share an Opportunity</a>
             </div>
 
             <form method="get" action="/staff-connect" class="toolbar" style="align-items:end;margin-top:14px">
                 <input type="hidden" name="view" value="opportunities">
-                <div style="min-width:250px;flex:1">
+
+                <div style="min-width:210px;flex:1">
+                    <label>Type</label>
+                    <select name="opp_type">{type_options}</select>
+                </div>
+
+                <div style="min-width:230px;flex:1">
                     <label>Career field</label>
                     <select name="field">{staff_connect_field_options(career_field, include_all=True)}</select>
                 </div>
+
                 <div style="min-width:220px;flex:1">
-                    <label>Search live jobs</label>
-                    <input name="q" value="{escape(search, quote=True)}" placeholder="Example: data, teaching, finance">
+                    <label>Search</label>
+                    <input name="q" value="{escape(search, quote=True)}" placeholder="Company, field or opportunity">
                 </div>
-                <button class="btn">Apply</button>
+
+                <button class="btn">Filter</button>
+                <a class="btn secondary" href="/staff-connect?view=opportunities">Clear</a>
             </form>
+
+            <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:12px">
+                {quick_links}
+            </div>
         </section>
 
         <div class="staff-connect-grid">
             <section class="card">
-                <h2>Live Remote Opportunities</h2>
-                <div class="mini muted" style="margin-bottom:10px">Source: Remotive</div>
-                {jobs_html}
+                <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;margin-bottom:12px">
+                    <div>
+                        <h2 style="margin-bottom:3px">Opportunities</h2>
+                        <div class="mini muted">Showing {showing_from}-{showing_to} of {total_opportunities}</div>
+                    </div>
+                </div>
+
+                {opportunity_html}
+
+                <div style="display:flex;justify-content:center;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px">
+                    {prev_link}
+                    <span class="chip">Page {opportunity_page} of {total_pages}</span>
+                    {next_link}
+                </div>
             </section>
 
             <aside>
                 <section class="card" style="border-left:5px solid #f59e0b">
                     <h3>Shared by the EBTA Team</h3>
-                    <p class="mini muted">Opportunities shared by the EBTA team.</p>
                     {internal_html or '<div class="mini muted">No team-shared opportunities yet.</div>'}
+                </section>
+
+                <section class="card" style="border-left:5px solid #2563eb">
+                    <h3>Remote Jobs</h3>
+                    <div class="mini muted" style="margin-bottom:10px">Source: Remotive</div>
+                    <a class="btn mini" href="/staff-connect?view=opportunities&opp_type=REMOTE_JOB">Browse Remote Jobs</a>
                 </section>
             </aside>
         </div>
@@ -39506,7 +40202,7 @@ def staff_connect_home():
 
             <section class="card" style="border-left:5px solid #2563eb">
                 <h3>Career Opportunities</h3>
-                <p class="mini muted">Browse team-shared opportunities and the live remote-jobs feed.</p>
+                <p class="mini muted">Bursaries, internships, jobs, vacation work, events and more.</p>
                 <a class="btn mini" href="/staff-connect?view=opportunities">Open Opportunity Board</a>
             </section>
 
