@@ -3083,6 +3083,7 @@ def init_db():
 
     
     ensure_column(conn, "students", "guardian_name", "TEXT")
+    ensure_column(conn, "students", "guardian_email", "TEXT")
     ensure_column(conn, "materials", "is_assignment", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "materials", "due_date", "TEXT")
     ensure_column(conn, "materials", "open_date", "TEXT")
@@ -6313,6 +6314,7 @@ EMAIL_NOTIFICATION_EVENTS = {
     "one_on_one_request_received": "One-on-One request submitted",
     "tutor_subject_assigned": "Tutor subject assignment",
     "tutor_manager_assigned": "Tutor Manager assignment",
+    "group_links_bulk": "Learner and parent group emails",
 }
 
 
@@ -6342,6 +6344,45 @@ def normalize_email_address(value):
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value):
         return ""
     return value
+
+
+EBTA_DEFAULT_LEARNER_GROUP_NAME = "EBTA Learners Notifications"
+EBTA_DEFAULT_LEARNER_GROUP_LINK = "https://chat.whatsapp.com/HfmZyzcU9bMDB3N1DAuFrJ"
+EBTA_DEFAULT_PARENT_GROUP_NAME = "EBTA Parents Notifications"
+EBTA_DEFAULT_PARENT_GROUP_LINK = "https://chat.whatsapp.com/DZYMvnEl9jpEyvzxqbgwV6"
+
+
+def ebta_general_group_settings(conn=None):
+    own = conn is None
+    if own:
+        conn = get_db()
+
+    try:
+        return {
+            "learner_name": _email_setting(
+                conn,
+                "learner_notifications_group_name",
+                EBTA_DEFAULT_LEARNER_GROUP_NAME
+            ) or EBTA_DEFAULT_LEARNER_GROUP_NAME,
+            "learner_link": _email_setting(
+                conn,
+                "learner_notifications_group_link",
+                EBTA_DEFAULT_LEARNER_GROUP_LINK
+            ) or EBTA_DEFAULT_LEARNER_GROUP_LINK,
+            "parent_name": _email_setting(
+                conn,
+                "parent_notifications_group_name",
+                EBTA_DEFAULT_PARENT_GROUP_NAME
+            ) or EBTA_DEFAULT_PARENT_GROUP_NAME,
+            "parent_link": _email_setting(
+                conn,
+                "parent_notifications_group_link",
+                EBTA_DEFAULT_PARENT_GROUP_LINK
+            ) or EBTA_DEFAULT_PARENT_GROUP_LINK,
+        }
+    finally:
+        if own:
+            conn.close()
 
 
 def portal_email_base_url():
@@ -6447,6 +6488,445 @@ def queue_email_notification(recipient_email, subject, message, event_key,
     finally:
         if own:
             conn.close()
+
+
+
+GROUP_EMAIL_TEMPLATES = {
+    "welcome": {
+        "label": "Welcome & Group Links",
+        "subject": "Welcome to EBTA - Join Your WhatsApp Groups",
+        "message": (
+            "Welcome to Early Bird Testimony Academy. "
+            "Please use the links below to join the WhatsApp groups relevant to you."
+        ),
+    },
+    "learner_groups": {
+        "label": "Learner Class Groups",
+        "subject": "EBTA Class Group Links",
+        "message": (
+            "Please join the EBTA learner group and the class groups for the subjects "
+            "you are currently enrolled in."
+        ),
+    },
+    "parent_group": {
+        "label": "Parents Group Invitation",
+        "subject": "Join the EBTA Parents WhatsApp Group",
+        "message": (
+            "Please join the EBTA Parents Notifications WhatsApp group using the link below. "
+            "Important parent notices and academy updates are shared there."
+        ),
+    },
+    "reminder": {
+        "label": "Group Reminder",
+        "subject": "Reminder: Join Your EBTA WhatsApp Groups",
+        "message": (
+            "Please make sure you have joined the EBTA WhatsApp groups listed below "
+            "so you do not miss important class and academy updates."
+        ),
+    },
+    "custom": {
+        "label": "Custom Message",
+        "subject": "",
+        "message": "",
+    },
+}
+
+
+GROUP_EMAIL_ROLE_ACCESS_SETTINGS = {
+    "duty_admin": "group_emails_duty_admin_enabled",
+    "admission": "group_emails_admission_enabled",
+    "coo": "group_emails_coo_enabled",
+}
+
+
+def group_email_role_enabled(role):
+    if role == "admin":
+        return True
+
+    if get_setting("group_emails_staff_enabled", "1") != "1":
+        return False
+
+    setting_key = GROUP_EMAIL_ROLE_ACCESS_SETTINGS.get(str(role or ""))
+
+    if not setting_key:
+        return False
+
+    return get_setting(setting_key, "1") == "1"
+
+
+def group_email_disabled_response(ctx):
+    return page(
+        "Group Emails",
+        ctx["nav"]
+        + """
+        <section class='card'>
+            <h1>Group Emails</h1>
+            <p>Higher Admin has deactivated this feature.</p>
+        </section>
+        """
+    )
+
+
+def group_email_access_context():
+    role = get_logged_in_portal_role()
+
+    if role == "admin" and is_high_admin():
+        return {
+            "role": "admin",
+            "name": session.get("admin_username", "Higher Admin"),
+            "nav": admin_nav(),
+            "base_path": "/admin/group-emails",
+            "can_edit_links": True,
+            "can_edit_contacts": True,
+            "enabled": True,
+        }
+
+    if role == "duty_admin" and is_duty_admin():
+        return {
+            "role": "duty_admin",
+            "name": session.get("duty_admin_name", "Duty Admin"),
+            "nav": duty_admin_nav(),
+            "base_path": "/duty-admin/group-emails",
+            "can_edit_links": False,
+            "can_edit_contacts": True,
+            "enabled": group_email_role_enabled("duty_admin"),
+        }
+
+    if role == "admission" and is_admission_coordinator():
+        return {
+            "role": "admission",
+            "name": session.get("admission_coordinator_name", "Admission Coordinator"),
+            "nav": admission_nav(),
+            "base_path": "/admission/group-emails",
+            "can_edit_links": True,
+            "can_edit_contacts": True,
+            "enabled": group_email_role_enabled("admission"),
+        }
+
+    if role == "coo" and is_coo():
+        return {
+            "role": "coo",
+            "name": session.get("coo_name", "COO"),
+            "nav": coo_nav(),
+            "base_path": "/coo/group-emails",
+            "can_edit_links": True,
+            "can_edit_contacts": False,
+            "enabled": group_email_role_enabled("coo"),
+        }
+
+    return None
+
+
+def group_email_valid_whatsapp_link(value):
+    value = str(value or "").strip()
+    return value.startswith("https://chat.whatsapp.com/") and len(value) > 30
+
+
+def group_email_student_filters(month, grade="", q="", student_ids=None):
+    where = [
+        "e.month=?",
+        "UPPER(COALESCE(e.status,''))='ACTIVE'",
+        "COALESCE(s.is_active,1)=1",
+        "s.deleted_at IS NULL",
+    ]
+    params = [month]
+
+    if grade:
+        where.append("s.grade=?")
+        params.append(grade)
+
+    if q:
+        search = f"%{q}%"
+        where.append("""
+            (
+                s.full_name LIKE ?
+                OR s.phone_whatsapp LIKE ?
+                OR COALESCE(s.email,'') LIKE ?
+                OR COALESCE(s.guardian_name,'') LIKE ?
+                OR COALESCE(s.guardian_phone,'') LIKE ?
+                OR COALESCE(s.guardian_email,'') LIKE ?
+                OR COALESCE(s.school,'') LIKE ?
+                OR COALESCE(s.province,'') LIKE ?
+                OR sub.name LIKE ?
+            )
+        """)
+        params.extend([search] * 9)
+
+    if student_ids is not None:
+        clean_ids = sorted({
+            int(value)
+            for value in student_ids
+            if str(value).strip().isdigit()
+        })
+
+        if not clean_ids:
+            where.append("1=0")
+        else:
+            placeholders = ",".join("?" for _ in clean_ids)
+            where.append(f"s.id IN ({placeholders})")
+            params.extend(clean_ids)
+
+    return " AND ".join(where), params
+
+
+def group_email_fetch_students(conn, month, grade="", q="", student_ids=None,
+                               limit=None, offset=0):
+    where_sql, params = group_email_student_filters(
+        month,
+        grade=grade,
+        q=q,
+        student_ids=student_ids
+    )
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT COUNT(DISTINCT s.id) AS c
+        FROM enrollments e
+        JOIN students s ON s.id=e.student_id
+        JOIN subjects sub ON sub.id=e.subject_id
+        WHERE {where_sql}
+    """, params)
+    total = int(cur.fetchone()["c"] or 0)
+
+    query = f"""
+        SELECT
+            s.id,
+            s.full_name,
+            s.grade,
+            s.phone_whatsapp,
+            s.email,
+            s.guardian_name,
+            s.guardian_phone,
+            s.guardian_email,
+            s.school,
+            GROUP_CONCAT(DISTINCT sub.name) AS subjects
+        FROM enrollments e
+        JOIN students s ON s.id=e.student_id
+        JOIN subjects sub ON sub.id=e.subject_id
+        WHERE {where_sql}
+        GROUP BY s.id
+        ORDER BY
+            CAST(REPLACE(s.grade,'G','') AS INTEGER),
+            s.full_name
+    """
+
+    query_params = list(params)
+
+    if limit is not None:
+        query += " LIMIT ? OFFSET ?"
+        query_params.extend([int(limit), int(offset)])
+
+    cur.execute(query, query_params)
+    return cur.fetchall(), total
+
+
+def group_email_class_links(conn, student_ids, month):
+    student_ids = sorted({
+        int(value)
+        for value in student_ids
+        if str(value).strip().isdigit()
+    })
+
+    if not student_ids:
+        return {}
+
+    placeholders = ",".join("?" for _ in student_ids)
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT
+            e.student_id,
+            sub.id AS subject_id,
+            sub.name AS subject_name,
+            sub.grade,
+            g.invite_link,
+            g.month AS group_month
+        FROM enrollments e
+        JOIN subjects sub ON sub.id=e.subject_id
+        JOIN groups g
+          ON g.subject_id=e.subject_id
+         AND COALESCE(g.is_visible,1)=1
+         AND (
+              UPPER(TRIM(g.month))='ALL'
+              OR substr(TRIM(g.month),1,7)=?
+         )
+        WHERE e.month=?
+          AND UPPER(COALESCE(e.status,''))='ACTIVE'
+          AND e.student_id IN ({placeholders})
+        ORDER BY
+            e.student_id,
+            CAST(REPLACE(sub.grade,'G','') AS INTEGER),
+            sub.name,
+            CASE
+                WHEN substr(TRIM(g.month),1,7)=? THEN 0
+                ELSE 1
+            END,
+            g.id DESC
+    """, [month, month] + student_ids + [month])
+
+    result = {}
+    seen = set()
+
+    for row in cur.fetchall():
+        key = (int(row["student_id"]), int(row["subject_id"]))
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        result.setdefault(int(row["student_id"]), []).append({
+            "label": f"{grade_label(row['grade'])} - {row['subject_name']}",
+            "url": str(row["invite_link"] or "").strip(),
+        })
+
+    return result
+
+
+def build_group_links_email_bodies(subject, recipient_name, message, links,
+                                   learner_names=""):
+    recipient_name = str(recipient_name or "").strip()
+    greeting = f"Good day {recipient_name}," if recipient_name else "Good day,"
+    message = str(message or "").strip()
+    learner_names = str(learner_names or "").strip()
+
+    clean_links = []
+    seen_urls = set()
+
+    for item in links or []:
+        label = str(item.get("label") or "WhatsApp Group").strip()
+        url = str(item.get("url") or "").strip()
+
+        if not url or url in seen_urls:
+            continue
+
+        seen_urls.add(url)
+        clean_links.append((label, url))
+
+    text_lines = [greeting, "", message]
+
+    if learner_names:
+        text_lines += ["", f"Learner(s): {learner_names}"]
+
+    if clean_links:
+        text_lines += ["", "WhatsApp Groups:"]
+        for label, url in clean_links:
+            text_lines.append(f"- {label}: {url}")
+
+    text_lines += ["", "Kind regards,", "Early Bird Testimony Academy"]
+    text_body = "\n".join(text_lines)
+
+    message_html = escape(message).replace("\n", "<br>")
+    learner_html = (
+        f"<p style='color:#4b5563'><strong>Learner(s):</strong> "
+        f"{escape(learner_names)}</p>"
+        if learner_names
+        else ""
+    )
+
+    links_html = ""
+
+    for label, url in clean_links:
+        links_html += f"""
+        <div style='margin:10px 0'>
+            <a href='{escape(url, quote=True)}'
+               style='display:inline-block;padding:11px 15px;border-radius:9px;
+                      background:#1b5e20;color:#ffffff;text-decoration:none;
+                      font-weight:700'>
+                {escape(label)}
+            </a>
+        </div>
+        """
+
+    html_body = f"""<!doctype html>
+    <html>
+    <body style='margin:0;background:#f4f7f5;font-family:Arial,Helvetica,sans-serif;color:#1f2937'>
+        <div style='max-width:680px;margin:0 auto;padding:24px 14px'>
+            <div style='background:#ffffff;border:1px solid #e1e8e3;border-radius:14px;overflow:hidden'>
+                <div style='background:#123d1f;color:#ffffff;padding:20px 24px'>
+                    <div style='font-size:12px;letter-spacing:.6px;opacity:.86'>
+                        EARLY BIRD TESTIMONY ACADEMY
+                    </div>
+                    <h1 style='margin:7px 0 0;font-size:22px'>
+                        {escape(str(subject or 'EBTA Group Links'))}
+                    </h1>
+                </div>
+
+                <div style='padding:24px;line-height:1.6'>
+                    <p>{escape(greeting)}</p>
+                    <p>{message_html}</p>
+                    {learner_html}
+                    {links_html}
+                    <p style='margin-top:24px;color:#4b5563'>
+                        Kind regards,<br>
+                        <strong>Early Bird Testimony Academy</strong>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>"""
+
+    return text_body, html_body
+
+
+def queue_group_links_email(conn, recipient_email, recipient_name, subject,
+                            message, links, learner_names, batch_id,
+                            recipient_type):
+    recipient_email = normalize_email_address(recipient_email)
+
+    if not recipient_email:
+        return False
+
+    if not email_event_enabled("group_links_bulk", conn=conn):
+        return False
+
+    text_body, html_body = build_group_links_email_bodies(
+        subject,
+        recipient_name,
+        message,
+        links,
+        learner_names=learner_names
+    )
+
+    dedupe_key = (
+        f"group-links:{batch_id}:"
+        f"{recipient_email.lower()}"
+    )
+
+    try:
+        conn.execute("""
+            INSERT INTO email_queue(
+                recipient_email,
+                recipient_name,
+                subject,
+                text_body,
+                html_body,
+                event_key,
+                recipient_type,
+                related_type,
+                related_id,
+                dedupe_key,
+                status,
+                retry_count,
+                created_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,'PENDING',0,?)
+        """, (
+            recipient_email,
+            str(recipient_name or "").strip() or None,
+            str(subject or "EBTA Group Links").strip(),
+            text_body,
+            html_body,
+            "group_links_bulk",
+            recipient_type,
+            "group_email_batch",
+            batch_id,
+            dedupe_key,
+            now_utc_iso(),
+        ))
+        return True
+    except sqlite3.IntegrityError:
+        return False
 
 
 def tutor_contact_email(conn, tutor_id):
@@ -18821,8 +19301,13 @@ def home():
             </div>
  
             <div>
+            <label>Parent/Guardian Email (optional)</label>
+            <input name='guardian_email' id="guardian_email_input" type="email"/>
+            </div>
+
+            <div>
             <label>Student Email (optional)</label>
-            <input name='email' id="email_input"/>
+            <input name='email' id="email_input" type="email"/>
             </div>
             <div>
               <label>Province</label>
@@ -19266,6 +19751,7 @@ document.addEventListener("DOMContentLoaded", function(){
     const guardianNameInput = document.getElementById("guardian_name_input");
     const guardianInput = document.getElementById("guardian_input");
     const guardianPhoneTypeInput = document.getElementById("guardian_phone_type");
+    const guardianEmailInput = document.getElementById("guardian_email_input");
     const emailInput = document.getElementById("email_input");
     const provinceInput = document.getElementById("province_input");
     const schoolInput = document.getElementById("school_input");
@@ -19396,6 +19882,7 @@ document.addEventListener("DOMContentLoaded", function(){
             }
             
             if(guardianPhoneTypeInput) guardianPhoneTypeInput.value = s.guardian_phone_type || "SA";
+            if(guardianEmailInput) guardianEmailInput.value = s.guardian_email || "";
             if(emailInput) emailInput.value = s.email || "";
             if(provinceInput) provinceInput.value = s.province || "";
             if(schoolInput) schoolInput.value = s.school || "";
@@ -20831,6 +21318,7 @@ def returning_student_lookup():
             guardian_name,
             guardian_phone,
             guardian_phone_type,
+            guardian_email,
             email,
             province,
             school,
@@ -20861,6 +21349,7 @@ def returning_student_lookup():
             "guardian_name": student["guardian_name"] or "",
             "guardian_phone": student["guardian_phone"] or "",
             "guardian_phone_type": student["guardian_phone_type"] or "SA",
+            "guardian_email": student["guardian_email"] or "",
             "email": student["email"] or "",
             "province": student["province"] or "",
             "school": student["school"] or "",
@@ -21120,7 +21609,16 @@ def register():
         return page("Error", card_msg(str(e)))
     
     guardian_name = request.form.get('guardian_name','').strip()
-    email = request.form.get('email','').strip() or None
+
+    guardian_email_raw = request.form.get('guardian_email','').strip()
+    guardian_email = normalize_email_address(guardian_email_raw) or None
+    if guardian_email_raw and not guardian_email:
+        return page("Error", card_msg("Please enter a valid parent or guardian email address."))
+
+    email_raw = request.form.get('email','').strip()
+    email = normalize_email_address(email_raw) or None
+    if email_raw and not email:
+        return page("Error", card_msg("Please enter a valid student email address."))
     subject_ids = request.form.getlist('subject_ids')
     pin = request.form.get('pin','').strip()
     pops = request.files.getlist('pop')
@@ -21215,6 +21713,7 @@ def register():
             SET full_name=?,
                 guardian_phone=?,
                 guardian_name=?,
+                guardian_email=?,
                 email=?,
                 grade=?,
                 province=?,
@@ -21226,6 +21725,7 @@ def register():
             full_name,
             guardian,
             guardian_name,
+            guardian_email,
             email,
             derived_grade,
             province,
@@ -21242,6 +21742,7 @@ def register():
                 phone_whatsapp,
                 guardian_phone,
                 guardian_name,
+                guardian_email,
                 email,
                 grade,
                 pin,
@@ -21251,12 +21752,13 @@ def register():
                 phone_type,
                 guardian_phone_type
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             full_name,
             phone,
             guardian,
             guardian_name,
+            guardian_email,
             email,
             derived_grade,
             pin,
@@ -23758,6 +24260,12 @@ def student_home():
         </div>
         """
     
+    general_groups = ebta_general_group_settings()
+    learner_notifications_group_name = general_groups["learner_name"]
+    learner_notifications_group_link = general_groups["learner_link"]
+    parent_notifications_group_name = general_groups["parent_name"]
+    parent_notifications_group_link = general_groups["parent_link"]
+
     body=fr"""
     <section class='grid'>
     <div class='card'>
@@ -23787,19 +24295,19 @@ def student_home():
 
             <a class="btn success"
                target="_blank"
-               href="https://chat.whatsapp.com/HfmZyzcU9bMDB3N1DAuFrJ"
+               href="{escape(learner_notifications_group_link, quote=True)}"
                style="display:block;text-align:center">
 
-                EBTA Learners Notifications
+                {escape(learner_notifications_group_name)}
 
             </a>
 
             <a class="btn secondary"
                target="_blank"
-               href="https://chat.whatsapp.com/DZYMvnEl9jpEyvzxqbgwV6"
+               href="{escape(parent_notifications_group_link, quote=True)}"
                style="display:block;text-align:center">
 
-                EBTA Parents Notifications
+                {escape(parent_notifications_group_name)}
 
             </a>
 
@@ -35933,6 +36441,8 @@ def admin_nav():
                     ("SMS & Email Control", "admin_communications_control", "/admin/communications-control"),
                     ("SMS Dashboard", "admin_sms_dashboard", "/admin/sms-dashboard"),
                     ("Email Notifications", "admin_email_notifications", "/admin/email-notifications"),
+                    ("Group Emails", "__group_email_admin__", "/admin/group-emails"),
+                    ("Group Email Access", "admin_group_email_access", "/admin/group-email-access"),
                     ("WhatsApp Enrollment Bot", "admin_whatsapp_bot", "/admin/whatsapp-bot"),
                     ("Enrollment Reminders", "admin_enrollment_sms", "/admin/enrollment-sms"),
                     ("Processed SMS", "admin_process_sms", "/admin/process-sms"),
@@ -36233,6 +36743,1238 @@ def admin_email_notifications_retry():
     conn.commit(); conn.close()
     return redirect(url_for('admin_email_notifications'))
 
+
+
+
+# =============================================================
+# GROUP EMAIL ACCESS CONTROL
+# =============================================================
+
+@app.get('/admin/group-email-access')
+@require_high_admin
+def admin_group_email_access():
+    r = require_admin()
+    if r:
+        return r
+
+    master_enabled = (
+        get_setting("group_emails_staff_enabled", "1") == "1"
+    )
+
+    role_rows = [
+        (
+            "Duty Admin",
+            "duty_admin",
+            get_setting(
+                "group_emails_duty_admin_enabled",
+                "1"
+            ) == "1",
+        ),
+        (
+            "Admission Coordinator",
+            "admission",
+            get_setting(
+                "group_emails_admission_enabled",
+                "1"
+            ) == "1",
+        ),
+        (
+            "COO",
+            "coo",
+            get_setting(
+                "group_emails_coo_enabled",
+                "1"
+            ) == "1",
+        ),
+    ]
+
+    cards = ""
+
+    for label, role_key, role_enabled in role_rows:
+        active = master_enabled and role_enabled
+        status = "Enabled" if active else "Disabled"
+        chip_class = "ok" if active else "danger"
+
+        next_value = "0" if role_enabled else "1"
+        action_label = "Disable" if role_enabled else "Enable"
+        button_class = "btn danger" if role_enabled else "btn success"
+
+        cards += f"""
+        <section class='card'>
+            <div style='display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap'>
+                <div>
+                    <h2 style='margin:0'>{escape(label)}</h2>
+                    <span class='chip {chip_class}'>{status}</span>
+                </div>
+
+                <form method='post'
+                      action='{url_for("admin_group_email_access_save")}'
+                      style='margin:0'>
+                    <input type='hidden'
+                           name='role'
+                           value='{escape(role_key, quote=True)}'>
+
+                    <input type='hidden'
+                           name='enabled'
+                           value='{next_value}'>
+
+                    <button class='{button_class}'>
+                        {action_label}
+                    </button>
+                </form>
+            </div>
+        </section>
+        """
+
+    master_next = "0" if master_enabled else "1"
+    master_action = (
+        "Disable for Staff"
+        if master_enabled
+        else "Enable for Staff"
+    )
+    master_class = (
+        "btn danger"
+        if master_enabled
+        else "btn success"
+    )
+
+    body = f"""
+    {admin_nav()}
+
+    <section class='card'>
+        <div style='display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap'>
+            <div>
+                <h1>Group Email Access</h1>
+                <p class='muted'>Choose who can use Group Emails.</p>
+            </div>
+
+            <a class='btn secondary'
+               href='/admin/group-emails'>
+                Group Emails
+            </a>
+        </div>
+    </section>
+
+    <section class='card'>
+        <div style='display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap'>
+            <div>
+                <h2 style='margin:0'>Staff Access</h2>
+                <span class='chip {"ok" if master_enabled else "danger"}'>
+                    {"Enabled" if master_enabled else "Disabled"}
+                </span>
+            </div>
+
+            <form method='post'
+                  action='{url_for("admin_group_email_access_save")}'
+                  style='margin:0'>
+                <input type='hidden'
+                       name='role'
+                       value='all'>
+
+                <input type='hidden'
+                       name='enabled'
+                       value='{master_next}'>
+
+                <button class='{master_class}'>
+                    {master_action}
+                </button>
+            </form>
+        </div>
+    </section>
+
+    <div class='grid'
+         style='grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px'>
+        {cards}
+    </div>
+    """
+
+    return page("Group Email Access", body)
+
+
+@app.post('/admin/group-email-access')
+@require_high_admin
+def admin_group_email_access_save():
+    r = require_admin()
+    if r:
+        return r
+
+    role = request.form.get(
+        "role",
+        ""
+    ).strip().lower()
+
+    enabled = (
+        "1"
+        if request.form.get("enabled", "0") == "1"
+        else "0"
+    )
+
+    if role == "all":
+        set_setting(
+            "group_emails_staff_enabled",
+            enabled
+        )
+
+    elif role in GROUP_EMAIL_ROLE_ACCESS_SETTINGS:
+        set_setting(
+            GROUP_EMAIL_ROLE_ACCESS_SETTINGS[role],
+            enabled
+        )
+
+    return redirect(
+        url_for("admin_group_email_access")
+    )
+
+
+# =============================================================
+# LEARNER / PARENT GROUP EMAILS
+# =============================================================
+
+@app.get('/admin/group-emails')
+@app.get('/duty-admin/group-emails')
+@app.get('/admission/group-emails')
+@app.get('/coo/group-emails')
+def group_email_center():
+    ctx = group_email_access_context()
+
+    if not ctx:
+        return page("Access Denied", card_msg("You do not have access to Group Emails."))
+
+    if not ctx.get("enabled", False):
+        return group_email_disabled_response(ctx)
+
+    month = request.args.get(
+        "month",
+        ""
+    ).strip() or get_setting(
+        "current_month",
+        datetime.date.today().strftime("%Y-%m")
+    )
+
+    grade = request.args.get("grade", "").strip().upper()
+    q = request.args.get("q", "").strip()
+
+    if grade not in {"", "G8", "G9", "G10", "G11", "G12", "G13"}:
+        grade = ""
+
+    try:
+        page_num = max(1, int(request.args.get("page", 1)))
+    except Exception:
+        page_num = 1
+
+    per_page = 20
+    offset = (page_num - 1) * per_page
+
+    conn = get_db()
+    rows, total = group_email_fetch_students(
+        conn,
+        month,
+        grade=grade,
+        q=q,
+        limit=per_page,
+        offset=offset
+    )
+
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    if page_num > total_pages:
+        page_num = total_pages
+        offset = (page_num - 1) * per_page
+        rows, total = group_email_fetch_students(
+            conn,
+            month,
+            grade=grade,
+            q=q,
+            limit=per_page,
+            offset=offset
+        )
+
+    where_sql, count_params = group_email_student_filters(
+        month,
+        grade=grade,
+        q=q
+    )
+
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT
+            COUNT(DISTINCT CASE
+                WHEN TRIM(COALESCE(s.email,''))<>'' THEN s.id
+            END) AS learner_emails,
+            COUNT(DISTINCT CASE
+                WHEN TRIM(COALESCE(s.guardian_email,''))<>'' THEN s.id
+            END) AS parent_emails
+        FROM enrollments e
+        JOIN students s ON s.id=e.student_id
+        JOIN subjects sub ON sub.id=e.subject_id
+        WHERE {where_sql}
+    """, count_params)
+
+    email_counts = cur.fetchone()
+    learner_email_count = int(email_counts["learner_emails"] or 0)
+    parent_email_count = int(email_counts["parent_emails"] or 0)
+
+    page_student_ids = [int(row["id"]) for row in rows]
+    page_class_links = group_email_class_links(
+        conn,
+        page_student_ids,
+        month
+    )
+
+    general_groups = ebta_general_group_settings(conn)
+
+    cur.execute("""
+        SELECT
+            recipient_email,
+            recipient_name,
+            subject,
+            status,
+            created_at,
+            sent_at
+        FROM email_queue
+        WHERE event_key='group_links_bulk'
+        ORDER BY id DESC
+        LIMIT 12
+    """)
+    recent_rows = cur.fetchall()
+
+    conn.close()
+
+    result_notice = ""
+    sent = request.args.get("sent", "").strip()
+    missing_learner = request.args.get("missing_learner", "").strip()
+    missing_parent = request.args.get("missing_parent", "").strip()
+
+    if sent:
+        details = []
+
+        if missing_learner and missing_learner != "0":
+            details.append(f"{escape(missing_learner)} learner email(s) missing")
+
+        if missing_parent and missing_parent != "0":
+            details.append(f"{escape(missing_parent)} parent email(s) missing")
+
+        details_html = (
+            "<div class='mini' style='margin-top:4px'>"
+            + " • ".join(details)
+            + "</div>"
+            if details
+            else ""
+        )
+
+        result_notice = f"""
+        <div class='card soft' style='border-left:5px solid #22c55e'>
+            <strong>{escape(sent)} email(s) are being sent.</strong>
+            {details_html}
+        </div>
+        """
+
+    if request.args.get("saved") == "1":
+        result_notice += """
+        <div class='card soft' style='border-left:5px solid #22c55e'>
+            <strong>Group links updated.</strong>
+        </div>
+        """
+
+    if request.args.get("contact_saved") == "1":
+        result_notice += """
+        <div class='card soft' style='border-left:5px solid #22c55e'>
+            <strong>Email details updated.</strong>
+        </div>
+        """
+
+    learner_link = general_groups["learner_link"]
+    parent_link = general_groups["parent_link"]
+
+    if ctx["can_edit_links"]:
+        group_settings_html = f"""
+        <section class='card'>
+            <h2>General WhatsApp Groups</h2>
+
+            <form method='post'
+                  action='{ctx["base_path"]}/settings'
+                  class='grid'
+                  style='grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px'>
+
+                <div>
+                    <label>Learners Group Name</label>
+                    <input name='learner_name'
+                           value='{escape(general_groups["learner_name"], quote=True)}'
+                           required>
+                </div>
+
+                <div>
+                    <label>Learners Group Link</label>
+                    <input name='learner_link'
+                           value='{escape(learner_link, quote=True)}'
+                           required>
+                </div>
+
+                <div>
+                    <label>Parents Group Name</label>
+                    <input name='parent_name'
+                           value='{escape(general_groups["parent_name"], quote=True)}'
+                           required>
+                </div>
+
+                <div>
+                    <label>Parents Group Link</label>
+                    <input name='parent_link'
+                           value='{escape(parent_link, quote=True)}'
+                           required>
+                </div>
+
+                <div style='grid-column:1/-1'>
+                    <button class='btn success'>Save Group Links</button>
+                </div>
+            </form>
+        </section>
+        """
+    else:
+        group_settings_html = f"""
+        <section class='card'>
+            <h2>General WhatsApp Groups</h2>
+            <div class='grid'
+                 style='grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px'>
+                <div class='card soft'>
+                    <strong>{escape(general_groups["learner_name"])}</strong>
+                    <div class='mini' style='margin-top:6px;word-break:break-all'>
+                        <a target='_blank'
+                           href='{escape(learner_link, quote=True)}'>
+                            Open Group
+                        </a>
+                    </div>
+                </div>
+
+                <div class='card soft'>
+                    <strong>{escape(general_groups["parent_name"])}</strong>
+                    <div class='mini' style='margin-top:6px;word-break:break-all'>
+                        <a target='_blank'
+                           href='{escape(parent_link, quote=True)}'>
+                            Open Group
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </section>
+        """
+
+    grade_options = "".join(
+        f"<option value='{g}' {'selected' if grade == g else ''}>"
+        f"{grade_label(g)}</option>"
+        for g in ["G8", "G9", "G10", "G11", "G12", "G13"]
+    )
+
+    row_html = ""
+
+    for student in rows:
+        student_id = int(student["id"])
+        learner_email = str(student["email"] or "").strip()
+        guardian_email = str(student["guardian_email"] or "").strip()
+        class_links = page_class_links.get(student_id, [])
+        class_link_count = len(class_links)
+
+        if ctx["can_edit_contacts"]:
+            contact_html = f"""
+            <form method='post'
+                  action='{ctx["base_path"]}/contact-emails'
+                  style='display:grid;gap:6px;min-width:230px'>
+                <input type='hidden' name='student_id' value='{student_id}'>
+                <input type='hidden' name='month' value='{escape(month, quote=True)}'>
+                <input type='hidden' name='grade' value='{escape(grade, quote=True)}'>
+                <input type='hidden' name='q' value='{escape(q, quote=True)}'>
+                <input type='hidden' name='page' value='{page_num}'>
+
+                <input type='email'
+                       name='learner_email'
+                       value='{escape(learner_email, quote=True)}'
+                       placeholder='Learner email'>
+
+                <input type='email'
+                       name='guardian_email'
+                       value='{escape(guardian_email, quote=True)}'
+                       placeholder='Parent email'>
+
+                <button class='btn mini secondary'>Save Emails</button>
+            </form>
+            """
+        else:
+            contact_html = f"""
+            <div>
+                <strong>Learner:</strong> {escape(learner_email or '—')}<br>
+                <strong>Parent:</strong> {escape(guardian_email or '—')}
+            </div>
+            """
+
+        row_html += f"""
+        <tr>
+            <td style='text-align:center'>
+                <input type='checkbox'
+                       name='student_ids'
+                       value='{student_id}'
+                       form='group-email-send-form'
+                       class='group-email-student-check'
+                       style='width:auto'>
+            </td>
+
+            <td>
+                <strong>{escape(student["full_name"] or "")}</strong>
+                <div class='mini muted'>{grade_label(student["grade"])}</div>
+                <div class='mini muted'>{escape(student["school"] or "—")}</div>
+            </td>
+
+            <td>
+                {escape(student["guardian_name"] or "Parent/Guardian")}
+                <div class='mini muted'>
+                    {escape(student["guardian_phone"] or "—")}
+                </div>
+            </td>
+
+            <td>{contact_html}</td>
+
+            <td>
+                {escape(student["subjects"] or "—")}
+                <div class='mini muted' style='margin-top:4px'>
+                    {class_link_count} class group link{'s' if class_link_count != 1 else ''}
+                </div>
+            </td>
+        </tr>
+        """
+
+    if not row_html:
+        row_html = "<tr><td colspan='5'>No active learners found for these filters.</td></tr>"
+
+    template_options = "".join(
+        f"<option value='{escape(key, quote=True)}'>{escape(value['label'])}</option>"
+        for key, value in GROUP_EMAIL_TEMPLATES.items()
+    )
+
+    template_payload = {
+        key: {
+            "subject": value["subject"],
+            "message": value["message"],
+        }
+        for key, value in GROUP_EMAIL_TEMPLATES.items()
+    }
+
+    template_json = json.dumps(
+        template_payload,
+        ensure_ascii=False
+    ).replace("</", "<\\/")
+
+    default_template = GROUP_EMAIL_TEMPLATES["welcome"]
+
+    recent_html = ""
+
+    for row in recent_rows:
+        status = str(row["status"] or "")
+        cls = (
+            "active"
+            if status == "SENT"
+            else "lapsed"
+            if status == "FAILED"
+            else "pending"
+        )
+
+        recent_html += f"""
+        <tr>
+            <td>
+                <strong>{escape(row["recipient_name"] or "Recipient")}</strong>
+                <div class='mini muted'>{escape(row["recipient_email"] or "")}</div>
+            </td>
+            <td>{escape(row["subject"] or "")}</td>
+            <td><span class='chip {cls}'>{escape(status)}</span></td>
+            <td class='mini'>
+                {escape((row["sent_at"] or row["created_at"] or "")[:16].replace("T"," "))}
+            </td>
+        </tr>
+        """
+
+    if not recent_html:
+        recent_html = "<tr><td colspan='4'>No group emails sent yet.</td></tr>"
+
+    pagination = pagination_controls(
+        ctx["base_path"],
+        page_num,
+        total_pages,
+        {
+            "month": month,
+            "grade": grade,
+            "q": q,
+        }
+    )
+
+    email_ready = (
+        email_smtp_ready()
+        and outbound_channel_enabled("email")
+        and email_event_enabled("group_links_bulk")
+    )
+
+    readiness = (
+        "<span class='chip active'>Email Ready</span>"
+        if email_ready
+        else "<span class='chip lapsed'>Email Unavailable</span>"
+    )
+
+    body = f"""
+    {ctx["nav"]}
+
+    <style>
+        .group-email-stats {{
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+            gap:10px;
+            margin-top:12px;
+        }}
+
+        .group-email-stat {{
+            border:1px solid #dbe4ef;
+            border-radius:14px;
+            background:#f8fafc;
+            padding:14px;
+        }}
+
+        .group-email-stat strong {{
+            display:block;
+            font-size:24px;
+            color:#1b5e20;
+        }}
+
+        .group-email-compose {{
+            border-left:5px solid #1b5e20;
+        }}
+
+        .group-email-scope {{
+            display:flex;
+            gap:14px;
+            flex-wrap:wrap;
+            align-items:center;
+        }}
+
+        .group-email-scope label {{
+            display:flex;
+            gap:7px;
+            align-items:center;
+            margin:0;
+        }}
+
+        @media(max-width:760px) {{
+            .group-email-send-grid {{
+                grid-template-columns:1fr !important;
+            }}
+        }}
+    </style>
+
+    <section class='card'>
+        <div style='display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap'>
+            <div>
+                <h1>Group Emails</h1>
+                <p class='muted'>
+                    Send WhatsApp group links to learners and parents.
+                </p>
+            </div>
+            {readiness}
+        </div>
+
+        <div class='group-email-stats'>
+            <div class='group-email-stat'>
+                <strong>{total}</strong>
+                <span>Active Learners</span>
+            </div>
+
+            <div class='group-email-stat'>
+                <strong>{learner_email_count}</strong>
+                <span>Learner Emails</span>
+            </div>
+
+            <div class='group-email-stat'>
+                <strong>{parent_email_count}</strong>
+                <span>Parent Emails</span>
+            </div>
+        </div>
+    </section>
+
+    {result_notice}
+
+    {group_settings_html}
+
+    <section class='card group-email-compose'>
+        <h2>Prepare Email</h2>
+
+        <form id='group-email-send-form'
+              method='post'
+              action='{ctx["base_path"]}/send'
+              onsubmit="return confirm('Send these group emails?');">
+
+            <input type='hidden' name='month' value='{escape(month, quote=True)}'>
+            <input type='hidden' name='grade' value='{escape(grade, quote=True)}'>
+            <input type='hidden' name='q' value='{escape(q, quote=True)}'>
+
+            <div class='grid group-email-send-grid'
+                 style='grid-template-columns:repeat(2,minmax(260px,1fr));gap:12px'>
+
+                <div>
+                    <label>Template</label>
+                    <select id='group-email-template' name='template_key'>
+                        {template_options}
+                    </select>
+                </div>
+
+                <div>
+                    <label>Send To</label>
+                    <select name='target' required>
+                        <option value='both'>Learners & Parents</option>
+                        <option value='learners'>Learners</option>
+                        <option value='parents'>Parents</option>
+                    </select>
+                </div>
+
+                <div style='grid-column:1/-1'>
+                    <label>Email Subject</label>
+                    <input id='group-email-subject'
+                           name='subject'
+                           value='{escape(default_template["subject"], quote=True)}'
+                           maxlength='180'
+                           required>
+                </div>
+
+                <div style='grid-column:1/-1'>
+                    <label>Message</label>
+                    <textarea id='group-email-message'
+                              name='message'
+                              rows='6'
+                              maxlength='5000'
+                              required>{escape(default_template["message"])}</textarea>
+                </div>
+
+                <div style='grid-column:1/-1'>
+                    <label>Recipients</label>
+                    <div class='group-email-scope'>
+                        <label>
+                            <input type='radio'
+                                   name='scope'
+                                   value='all'
+                                   checked
+                                   style='width:auto'>
+                            All matching learners
+                        </label>
+
+                        <label>
+                            <input type='radio'
+                                   name='scope'
+                                   value='selected'
+                                   style='width:auto'>
+                            Selected learners below
+                        </label>
+                    </div>
+                </div>
+
+                <div style='grid-column:1/-1'>
+                    <button class='btn success'
+                            {'disabled' if not email_ready else ''}>
+                        Send Group Emails
+                    </button>
+                </div>
+            </div>
+        </form>
+    </section>
+
+    <section class='card'>
+        <h2>Learners</h2>
+
+        <form method='get' class='toolbar'>
+            <input type='month'
+                   name='month'
+                   value='{escape(month, quote=True)}'>
+
+            <select name='grade'>
+                <option value=''>All Grades</option>
+                {grade_options}
+            </select>
+
+            <input name='q'
+                   value='{escape(q, quote=True)}'
+                   placeholder='Search learner, parent, email, school or subject'>
+
+            <button class='btn mini'>Search</button>
+
+            <a class='btn mini secondary'
+               href='{ctx["base_path"]}'>
+                Clear
+            </a>
+        </form>
+
+        <div style='display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0'>
+            <div class='mini muted'>
+                Showing {len(rows)} of {total} active learner(s) for {pretty_month_label(month)}.
+            </div>
+
+            <label class='mini' style='display:flex;align-items:center;gap:6px;margin:0'>
+                <input type='checkbox'
+                       id='group-email-select-page'
+                       style='width:auto'>
+                Select this page
+            </label>
+        </div>
+
+        {pagination}
+
+        <div class='scroll-x'>
+            <table style='min-width:1050px'>
+                <thead>
+                    <tr>
+                        <th>Select</th>
+                        <th>Learner</th>
+                        <th>Parent / Guardian</th>
+                        <th>Email Details</th>
+                        <th>Current Classes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {row_html}
+                </tbody>
+            </table>
+        </div>
+
+        {pagination}
+    </section>
+
+    <section class='card'>
+        <h2>Recent Group Emails</h2>
+
+        <div class='scroll-x'>
+            <table style='min-width:760px'>
+                <thead>
+                    <tr>
+                        <th>Recipient</th>
+                        <th>Subject</th>
+                        <th>Status</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody>{recent_html}</tbody>
+            </table>
+        </div>
+    </section>
+
+    <script>
+    (function(){{
+        const templates = {template_json};
+        const selector = document.getElementById("group-email-template");
+        const subjectInput = document.getElementById("group-email-subject");
+        const messageInput = document.getElementById("group-email-message");
+        const selectPage = document.getElementById("group-email-select-page");
+
+        if(selector){{
+            selector.addEventListener("change", function(){{
+                const item = templates[this.value] || {{}};
+
+                if(this.value !== "custom"){{
+                    subjectInput.value = item.subject || "";
+                    messageInput.value = item.message || "";
+                }}
+            }});
+        }}
+
+        if(selectPage){{
+            selectPage.addEventListener("change", function(){{
+                document.querySelectorAll(".group-email-student-check").forEach(function(box){{
+                    box.checked = selectPage.checked;
+                }});
+            }});
+        }}
+    }})();
+    </script>
+    """
+
+    return page("Group Emails", body)
+
+
+@app.post('/admin/group-emails/settings')
+@app.post('/duty-admin/group-emails/settings')
+@app.post('/admission/group-emails/settings')
+@app.post('/coo/group-emails/settings')
+def group_email_settings_save():
+    ctx = group_email_access_context()
+
+    if not ctx:
+        return page("Access Denied", card_msg("You do not have access to Group Emails."))
+
+    if not ctx.get("enabled", False):
+        return group_email_disabled_response(ctx)
+
+    if not ctx["can_edit_links"]:
+        return page("Access Denied", card_msg("You cannot change the group links."))
+
+    learner_name = request.form.get(
+        "learner_name",
+        EBTA_DEFAULT_LEARNER_GROUP_NAME
+    ).strip() or EBTA_DEFAULT_LEARNER_GROUP_NAME
+
+    learner_link = request.form.get("learner_link", "").strip()
+
+    parent_name = request.form.get(
+        "parent_name",
+        EBTA_DEFAULT_PARENT_GROUP_NAME
+    ).strip() or EBTA_DEFAULT_PARENT_GROUP_NAME
+
+    parent_link = request.form.get("parent_link", "").strip()
+
+    if not group_email_valid_whatsapp_link(learner_link):
+        return page(
+            "Invalid Group Link",
+            ctx["nav"] + card_msg("Please enter a valid learners WhatsApp group link.")
+        )
+
+    if not group_email_valid_whatsapp_link(parent_link):
+        return page(
+            "Invalid Group Link",
+            ctx["nav"] + card_msg("Please enter a valid parents WhatsApp group link.")
+        )
+
+    conn = get_db()
+
+    values = {
+        "learner_notifications_group_name": learner_name,
+        "learner_notifications_group_link": learner_link,
+        "parent_notifications_group_name": parent_name,
+        "parent_notifications_group_link": parent_link,
+    }
+
+    for key, value in values.items():
+        conn.execute("""
+            INSERT INTO settings(key,value)
+            VALUES(?,?)
+            ON CONFLICT(key)
+            DO UPDATE SET value=excluded.value
+        """, (key, value))
+
+    conn.commit()
+    conn.close()
+
+    return redirect(ctx["base_path"] + "?saved=1")
+
+
+@app.post('/admin/group-emails/contact-emails')
+@app.post('/duty-admin/group-emails/contact-emails')
+@app.post('/admission/group-emails/contact-emails')
+@app.post('/coo/group-emails/contact-emails')
+def group_email_contact_emails_save():
+    ctx = group_email_access_context()
+
+    if not ctx:
+        return page("Access Denied", card_msg("You do not have access to Group Emails."))
+
+    if not ctx.get("enabled", False):
+        return group_email_disabled_response(ctx)
+
+    if not ctx["can_edit_contacts"]:
+        return page("Access Denied", card_msg("You cannot edit learner email details."))
+
+    try:
+        student_id = int(request.form.get("student_id", "0"))
+    except Exception:
+        student_id = 0
+
+    learner_raw = request.form.get("learner_email", "").strip()
+    parent_raw = request.form.get("guardian_email", "").strip()
+
+    learner_email = normalize_email_address(learner_raw) if learner_raw else ""
+    parent_email = normalize_email_address(parent_raw) if parent_raw else ""
+
+    if learner_raw and not learner_email:
+        return page(
+            "Invalid Email",
+            ctx["nav"] + card_msg("Please enter a valid learner email address.")
+        )
+
+    if parent_raw and not parent_email:
+        return page(
+            "Invalid Email",
+            ctx["nav"] + card_msg("Please enter a valid parent email address.")
+        )
+
+    conn = get_db()
+    conn.execute("""
+        UPDATE students
+        SET email=?,
+            guardian_email=?
+        WHERE id=?
+    """, (
+        learner_email or None,
+        parent_email or None,
+        student_id
+    ))
+    conn.commit()
+    conn.close()
+
+    params = {
+        "month": request.form.get("month", "").strip(),
+        "grade": request.form.get("grade", "").strip(),
+        "q": request.form.get("q", "").strip(),
+        "page": request.form.get("page", "1").strip(),
+        "contact_saved": "1",
+    }
+
+    return redirect(
+        ctx["base_path"]
+        + "?"
+        + urlencode(params)
+    )
+
+
+@app.post('/admin/group-emails/send')
+@app.post('/duty-admin/group-emails/send')
+@app.post('/admission/group-emails/send')
+@app.post('/coo/group-emails/send')
+def group_email_send():
+    ctx = group_email_access_context()
+
+    if not ctx:
+        return page("Access Denied", card_msg("You do not have access to Group Emails."))
+
+    if not ctx.get("enabled", False):
+        return group_email_disabled_response(ctx)
+
+    if not email_smtp_ready() or not outbound_channel_enabled("email", fresh=True):
+        return page(
+            "Email Unavailable",
+            ctx["nav"] + card_msg("Email sending is currently unavailable.")
+        )
+
+    if not email_event_enabled("group_links_bulk"):
+        return page(
+            "Email Unavailable",
+            ctx["nav"] + card_msg("Group emails are currently unavailable.")
+        )
+
+    month = request.form.get(
+        "month",
+        ""
+    ).strip() or get_setting(
+        "current_month",
+        datetime.date.today().strftime("%Y-%m")
+    )
+
+    grade = request.form.get("grade", "").strip().upper()
+    q = request.form.get("q", "").strip()
+
+    target = request.form.get("target", "both").strip().lower()
+    scope = request.form.get("scope", "all").strip().lower()
+    subject = request.form.get("subject", "").strip()
+    message = request.form.get("message", "").strip()
+
+    if target not in {"learners", "parents", "both"}:
+        return page("Invalid Recipients", ctx["nav"] + card_msg("Please choose who should receive the email."))
+
+    if scope not in {"all", "selected"}:
+        scope = "all"
+
+    if not subject:
+        return page("Missing Subject", ctx["nav"] + card_msg("Please enter an email subject."))
+
+    if not message:
+        return page("Missing Message", ctx["nav"] + card_msg("Please enter the email message."))
+
+    selected_ids = request.form.getlist("student_ids")
+
+    if scope == "selected" and not selected_ids:
+        return page(
+            "No Learners Selected",
+            ctx["nav"] + card_msg("Select at least one learner or choose All matching learners.")
+        )
+
+    conn = get_db()
+
+    students, _ = group_email_fetch_students(
+        conn,
+        month,
+        grade=grade,
+        q=q,
+        student_ids=selected_ids if scope == "selected" else None
+    )
+
+    if not students:
+        conn.close()
+        return page(
+            "No Recipients",
+            ctx["nav"] + card_msg("No active learners matched the selected filters.")
+        )
+
+    general_groups = ebta_general_group_settings(conn)
+    class_links = group_email_class_links(
+        conn,
+        [int(row["id"]) for row in students],
+        month
+    )
+
+    recipients = {}
+    missing_learner = 0
+    missing_parent = 0
+
+    def add_recipient(email, name, role_name, student_name, links):
+        email = normalize_email_address(email)
+
+        if not email:
+            return False
+
+        key = email.lower()
+
+        if key not in recipients:
+            recipients[key] = {
+                "email": email,
+                "name": str(name or "").strip() or "EBTA Family",
+                "roles": set(),
+                "learners": set(),
+                "links": [],
+                "seen_links": set(),
+            }
+
+        entry = recipients[key]
+        entry["roles"].add(role_name)
+
+        if student_name:
+            entry["learners"].add(str(student_name).strip())
+
+        for link in links:
+            url = str(link.get("url") or "").strip()
+
+            if not url or url in entry["seen_links"]:
+                continue
+
+            entry["seen_links"].add(url)
+            entry["links"].append(link)
+
+        return True
+
+    for student in students:
+        sid = int(student["id"])
+        learner_name = str(student["full_name"] or "").strip() or "Learner"
+
+        if target in {"learners", "both"}:
+            learner_links = []
+
+            if group_email_valid_whatsapp_link(general_groups["learner_link"]):
+                learner_links.append({
+                    "label": general_groups["learner_name"],
+                    "url": general_groups["learner_link"],
+                })
+
+            learner_links.extend(class_links.get(sid, []))
+
+            learner_added = add_recipient(
+                student["email"],
+                learner_name,
+                "learner",
+                learner_name,
+                learner_links
+            )
+
+            if not learner_added:
+                missing_learner += 1
+
+                # If both audiences were selected and the learner has no email,
+                # give the learner's class links to the parent instead.
+                if (
+                    target == "both"
+                    and normalize_email_address(student["guardian_email"])
+                ):
+                    add_recipient(
+                        student["guardian_email"],
+                        student["guardian_name"] or "Parent/Guardian",
+                        "parent",
+                        learner_name,
+                        learner_links
+                    )
+
+        if target in {"parents", "both"}:
+            parent_links = []
+
+            if group_email_valid_whatsapp_link(general_groups["parent_link"]):
+                parent_links.append({
+                    "label": general_groups["parent_name"],
+                    "url": general_groups["parent_link"],
+                })
+
+            parent_added = add_recipient(
+                student["guardian_email"],
+                student["guardian_name"] or "Parent/Guardian",
+                "parent",
+                learner_name,
+                parent_links
+            )
+
+            if not parent_added:
+                missing_parent += 1
+
+                # If both audiences were selected and the parent has no email,
+                # include the parent-group link in the learner email.
+                if (
+                    target == "both"
+                    and normalize_email_address(student["email"])
+                ):
+                    add_recipient(
+                        student["email"],
+                        learner_name,
+                        "learner",
+                        learner_name,
+                        parent_links
+                    )
+
+    batch_id = (
+        datetime.datetime.now(
+            ZoneInfo("Africa/Johannesburg")
+        ).strftime("%Y%m%d%H%M%S")
+        + "-"
+        + secrets.token_hex(4)
+    )
+
+    prepared = 0
+
+    for entry in recipients.values():
+        recipient_type = (
+            "learner_parent"
+            if entry["roles"] == {"learner", "parent"}
+            else next(iter(entry["roles"]))
+        )
+
+        learner_names = ", ".join(
+            sorted(entry["learners"])
+        )
+
+        if queue_group_links_email(
+            conn,
+            entry["email"],
+            entry["name"],
+            subject,
+            message,
+            entry["links"],
+            learner_names,
+            batch_id,
+            recipient_type
+        ):
+            prepared += 1
+
+    conn.commit()
+    conn.close()
+
+    try:
+        EMAIL_QUEUE_WAKE_EVENT.set()
+    except Exception:
+        pass
+
+    return redirect(
+        ctx["base_path"]
+        + "?"
+        + urlencode({
+            "month": month,
+            "grade": grade,
+            "q": q,
+            "sent": prepared,
+            "missing_learner": missing_learner,
+            "missing_parent": missing_parent,
+        })
+    )
 
 
 # =============================================================
@@ -84192,6 +85934,7 @@ def duty_admin_nav():
         <a class="btn secondary" href="{url_for('duty_admin_parents_notifications')}">Parents Info</a>
         <a class="btn secondary" href="{url_for('duty_admin_non_enrolled_parent_whatsapp')}">Parent WhatsApp Follow-Up</a>
         <a class="btn secondary" href="{url_for('duty_admin_groups')}">Groups</a>
+        <a class="btn secondary" href="/duty-admin/group-emails">Group Emails</a>
         <a class="btn secondary" href="{url_for('duty_admin_sessions')}">Sessions</a>
         <!-- <a class="btn secondary" href="{url_for('duty_admin_inbox')}">Inbox</a> -->
 
@@ -87399,6 +89142,7 @@ def admission_nav():
         <a class="btn secondary" href="{url_for('admission_parents_notifications')}">Parents Info</a>
         <a class="btn secondary" href="{url_for('admission_followups')}">Follow-Ups</a>
         <a class="btn secondary" href="{url_for('admission_groups')}">Group Links</a>
+        <a class="btn secondary" href="/admission/group-emails">Group Emails</a>
         <a class="btn secondary" href="{url_for('admission_sessions')}">Sessions</a>
         <a class="btn secondary" href="{url_for('admission_inbox')}">Inbox</a>
         <a class="btn secondary" href="{url_for('admission_discounts')}">Discount Codes</a>
@@ -94440,8 +96184,9 @@ def admin_parents_notifications():
     limit = 15
     offset = (page_num - 1) * limit
 
-    parent_group_name = "EBTA Parents Notifications"
-    parent_group_link = "https://chat.whatsapp.com/DZYMvnEl9jpEyvzxqbgwV6"
+    group_settings = ebta_general_group_settings()
+    parent_group_name = group_settings["parent_name"]
+    parent_group_link = group_settings["parent_link"]
 
     conn = get_db()
     cur = conn.cursor()
@@ -94808,8 +96553,9 @@ def admin_parents_notifications_export():
     if parent_status not in ["", "new", "returning"]:
         parent_status = ""
 
-    parent_group_name = "EBTA Parents Notifications"
-    parent_group_link = "https://chat.whatsapp.com/DZYMvnEl9jpEyvzxqbgwV6"
+    group_settings = ebta_general_group_settings()
+    parent_group_name = group_settings["parent_name"]
+    parent_group_link = group_settings["parent_link"]
 
     conn = get_db()
     cur = conn.cursor()
@@ -95150,8 +96896,9 @@ def parent_information_page(portal_title, nav_html, base_path, clear_endpoint, r
     limit = 15
     offset = (page_num - 1) * limit
 
-    parent_group_name = "EBTA Parents Notifications"
-    parent_group_link = "https://chat.whatsapp.com/DZYMvnEl9jpEyvzxqbgwV6"
+    group_settings = ebta_general_group_settings()
+    parent_group_name = group_settings["parent_name"]
+    parent_group_link = group_settings["parent_link"]
 
     conn = get_db()
     cur = conn.cursor()
@@ -95869,6 +97616,7 @@ def coo_nav():
                 coo_link("Admission Overview", "coo_admission_overview", "coo_admission_enabled", icon="✅"),
                 coo_link("Duty Admin Overview", "coo_duty_admin_overview", "coo_duty_admin_enabled", icon="🧾"),
                 coo_link("Parents Information", "coo_parents_information", "coo_admission_enabled", icon="👨‍👩‍👧"),
+                coo_link("Group Emails", "__group_email_coo__", fallback="/coo/group-emails", icon="✉️"),
                 coo_link("Discounts", "coo_discounts", "coo_discounts_enabled", icon="🏷️"),
             ]
         ),
@@ -99808,8 +101556,10 @@ def coo_parents_information():
     rows = cur.fetchall()
     conn.close()
 
-    group_link = "https://chat.whatsapp.com/DZYMvnEl9jpEyvzxqbgwV6"
-    msg = "Good day, please join the EBTA Parents Notifications WhatsApp group: " + group_link
+    group_settings = ebta_general_group_settings()
+    group_link = group_settings["parent_link"]
+    group_name = group_settings["parent_name"]
+    msg = "Good day, please join the " + group_name + " WhatsApp group: " + group_link
 
     trs = ""
 
@@ -121232,6 +122982,7 @@ def one_on_one_link_or_create_student_account(
             phone_whatsapp,
             guardian_phone,
             guardian_name,
+            guardian_email,
             email,
             grade,
             province,
@@ -126497,6 +128248,7 @@ def whatsapp_enrollment_existing_student(conn, student_phone):
             phone_whatsapp,
             guardian_phone,
             guardian_name,
+            guardian_email,
             email,
             grade,
             pin,
@@ -127022,6 +128774,10 @@ def whatsapp_enrollment_submit(conn, data):
         or ""
     ).strip()
 
+    guardian_email = normalize_email_address(
+        data.get("guardian_email", "")
+    ) or None
+
     email = normalize_email_address(
         data.get("email", "")
     ) or None
@@ -127167,6 +128923,7 @@ def whatsapp_enrollment_submit(conn, data):
             SET full_name=?,
                 guardian_phone=?,
                 guardian_name=?,
+                guardian_email=?,
                 email=?,
                 grade=?,
                 province=?,
@@ -127178,6 +128935,7 @@ def whatsapp_enrollment_submit(conn, data):
             full_name,
             guardian_phone,
             guardian_name,
+            guardian_email,
             email,
             grade,
             province,
@@ -127194,6 +128952,7 @@ def whatsapp_enrollment_submit(conn, data):
                 phone_whatsapp,
                 guardian_phone,
                 guardian_name,
+                guardian_email,
                 email,
                 grade,
                 pin,
@@ -127203,12 +128962,13 @@ def whatsapp_enrollment_submit(conn, data):
                 phone_type,
                 guardian_phone_type
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             full_name,
             student_phone,
             guardian_phone,
             guardian_name,
+            guardian_email,
             email,
             grade,
             pin,
@@ -127824,13 +129584,45 @@ def whatsapp_enrollment_handle(
             conn,
             phone,
             profile_name,
+            "guardian_email",
+            data
+        )
+
+        return (
+            "What is the parent or guardian's email address?\n\n"
+            "Reply NONE if there is no parent email address."
+        )
+
+    if stage == "guardian_email":
+        if lower in {
+            "none",
+            "no",
+            "skip",
+            "n/a"
+        }:
+            guardian_email = ""
+        else:
+            guardian_email = normalize_email_address(clean)
+
+            if not guardian_email:
+                return (
+                    "Please enter a valid parent or guardian email address, "
+                    "or reply NONE."
+                )
+
+        data["guardian_email"] = guardian_email
+
+        whatsapp_enrollment_save_draft(
+            conn,
+            phone,
+            profile_name,
             "email",
             data
         )
 
         return (
-            "What email address should EBTA use for enrollment updates?\n\n"
-            "Reply NONE if there is no email address."
+            "What is the learner's email address?\n\n"
+            "Reply NONE if there is no learner email address."
         )
 
     if stage == "email":
