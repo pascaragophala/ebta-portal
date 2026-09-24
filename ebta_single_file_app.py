@@ -90090,6 +90090,32 @@ def admission_groups():
     total_to_check = sum(1 for _, group, checked in all_items if group and not checked)
     total_missing = sum(1 for _, group, _ in all_items if not group)
 
+    imported_count = request.args.get("imported", "").strip()
+    replaced_count = request.args.get("replaced", "").strip()
+    duplicate_count = request.args.get("duplicates", "").strip()
+    imported_file = request.args.get("file", "").strip()
+
+    import_notice = ""
+
+    if imported_count:
+        duplicate_note = (
+            f" {escape(duplicate_count)} duplicate row(s) were combined."
+            if duplicate_count and duplicate_count != "0"
+            else ""
+        )
+
+        import_notice = f"""
+        <div class='card soft admission-group-import-success'>
+            <strong>Group links updated</strong>
+            <div class='mini' style='margin-top:4px'>
+                {escape(imported_count)} link(s) imported from
+                {escape(imported_file or 'the Excel file')}.
+                {escape(replaced_count or '0')} previous link(s) were replaced.
+                {duplicate_note}
+            </div>
+        </div>
+        """
+
     filtered = []
     q_lower = q.lower()
     for subject, group, checked in all_items:
@@ -90225,6 +90251,11 @@ def admission_groups():
         .admission-group-stat span{{font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted)}}
         .admission-group-add-grid{{display:grid;grid-template-columns:minmax(220px,1fr) minmax(280px,2fr) auto;gap:10px;align-items:end}}
         .admission-group-add-grid select,.admission-group-add-grid input{{width:100%;margin:0}}
+        .admission-group-import-grid{{display:grid;grid-template-columns:minmax(240px,1fr) auto;gap:10px;align-items:end}}
+        .admission-group-import-grid input{{width:100%;margin:0}}
+        .admission-group-import-card{{border-left:5px solid #e3ad24}}
+        .admission-group-import-success{{border-left:5px solid #22c55e;background:#f0fdf4;color:#14532d;margin-bottom:14px}}
+        .admission-group-import-note{{margin-top:9px;padding:9px 11px;border:1px solid #efd995;border-radius:12px;background:#fff9e8;color:#6d4c08}}
         .admission-group-checked td{{background:#ecfdf3 !important}}
         .admission-group-unchecked td{{background:#fff8e6 !important}}
         .admission-group-missing td{{background:#f8fafc !important}}
@@ -90232,7 +90263,10 @@ def admission_groups():
         .admission-group-unchecked td:first-child{{box-shadow:inset 4px 0 0 #f59e0b}}
         .admission-group-missing td:first-child{{box-shadow:inset 4px 0 0 #94a3b8}}
         .admission-group-table{{min-width:820px}}
-        @media(max-width:760px){{.admission-group-add-grid{{grid-template-columns:1fr}}.admission-group-add-grid .btn{{width:100%}}}}
+        @media(max-width:760px){{
+            .admission-group-add-grid,.admission-group-import-grid{{grid-template-columns:1fr}}
+            .admission-group-add-grid .btn,.admission-group-import-grid .btn{{width:100%}}
+        }}
     </style>
 
     <section class='card'>
@@ -90244,6 +90278,42 @@ def admission_groups():
             <div class='admission-group-stat'><strong>{total_checked}</strong><span>Checked</span></div>
             <div class='admission-group-stat'><strong>{total_to_check}</strong><span>To Check</span></div>
             <div class='admission-group-stat'><strong>{total_missing}</strong><span>Missing</span></div>
+        </div>
+
+        {import_notice}
+
+        <div class='card soft admission-group-import-card' style='margin-bottom:16px'>
+            <h2>Upload Group Links</h2>
+
+            <p class='mini muted'>
+                Excel columns:
+                <strong>Grade / Programme</strong>,
+                <strong>Subject</strong> and
+                <strong>WhatsApp Group Link</strong>.
+            </p>
+
+            <form method='post'
+                  action='{url_for("admission_groups_import")}'
+                  enctype='multipart/form-data'
+                  onsubmit="return confirm('Replace the current group links with the links in this Excel file?');">
+                <div class='admission-group-import-grid'>
+                    <div>
+                        <label>Excel file</label>
+                        <input type='file'
+                               name='group_file'
+                               accept='.xlsx,.xlsm'
+                               required>
+                    </div>
+
+                    <button class='btn success'>
+                        Upload & Update Links
+                    </button>
+                </div>
+            </form>
+
+            <div class='admission-group-import-note mini'>
+                Current group links will be replaced. Existing Show/Hide settings stay the same for matching subjects.
+            </div>
         </div>
 
         <form method='post' action='{url_for('admission_groups_save')}' style='margin-bottom:16px'>
@@ -90309,6 +90379,250 @@ def admission_group_safe_return_to(value):
 def admission_group_link_is_valid(value):
     value = str(value or "").strip().lower()
     return value.startswith("https://chat.whatsapp.com/") or value.startswith("http://chat.whatsapp.com/")
+
+
+@app.post('/admission/groups/import')
+def admission_groups_import():
+    r = require_admission_coordinator()
+    if r:
+        return r
+
+    upload = request.files.get("group_file")
+
+    def admission_group_import_page(title, message):
+        return page(
+            title,
+            f"""
+            {admission_nav()}
+            <section class='card'>
+                <h1>{escape(title)}</h1>
+                <p>{message}</p>
+                <a class='btn secondary'
+                   href='{url_for("admission_groups")}'>
+                    Back to Group Links
+                </a>
+            </section>
+            """
+        )
+
+    if not upload or not upload.filename:
+        return admission_group_import_page(
+            "No Excel File",
+            "Please choose an Excel file."
+        )
+
+    extension = Path(upload.filename).suffix.lower()
+
+    if extension not in {".xlsx", ".xlsm"}:
+        return admission_group_import_page(
+            "Invalid Excel File",
+            "Please upload an XLSX or XLSM file."
+        )
+
+    file_bytes = upload.read()
+
+    if not file_bytes:
+        return admission_group_import_page(
+            "Empty Excel File",
+            "The selected Excel file is empty."
+        )
+
+    if len(file_bytes) > 10 * 1024 * 1024:
+        return admission_group_import_page(
+            "Excel File Too Large",
+            "Please use an Excel file smaller than 10 MB."
+        )
+
+    try:
+        parsed_rows, parse_issues, duplicate_count = (
+            admin_group_excel_parse(file_bytes)
+        )
+    except Exception as exc:
+        return admission_group_import_page(
+            "Excel Import Failed",
+            "The Excel file could not be opened: "
+            + escape(str(exc))
+        )
+
+    if not parsed_rows and not parse_issues:
+        parse_issues.append(
+            "No WhatsApp group links were found in the Excel file."
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, name, grade
+        FROM subjects
+    """)
+    subjects = cur.fetchall()
+
+    subject_index = {}
+
+    for subject in subjects:
+        subject_index[
+            (
+                str(subject["grade"] or "").upper(),
+                admin_group_excel_normalize_subject(
+                    subject["name"]
+                )
+            )
+        ] = subject
+
+    validated_rows = []
+
+    for parsed_row in parsed_rows:
+        subject = subject_index.get(
+            (
+                parsed_row["grade"],
+                parsed_row["subject_key"]
+            )
+        )
+
+        if not subject:
+            parse_issues.append(
+                f"{parsed_row['sheet_name']}, "
+                f"row {parsed_row['row_number']}: "
+                f"{parsed_row['subject_entered']} is not available for "
+                f"{grade_label(parsed_row['grade'])} on the portal."
+            )
+            continue
+
+        validated_rows.append(
+            {
+                "subject_id": int(subject["id"]),
+                "invite_link": parsed_row["invite_link"]
+            }
+        )
+
+    if parse_issues:
+        conn.close()
+
+        issue_rows = "".join(
+            f"<li>{escape(issue)}</li>"
+            for issue in parse_issues[:30]
+        )
+
+        extra_issues = max(0, len(parse_issues) - 30)
+        extra_note = (
+            f"<p class='mini muted'>{extra_issues} more issue(s) were found.</p>"
+            if extra_issues
+            else ""
+        )
+
+        return page(
+            "Check Excel File",
+            f"""
+            {admission_nav()}
+
+            <section class='card'
+                     style='border-left:5px solid #dc2626'>
+                <h1>Check the Excel File</h1>
+
+                <p>
+                    No group links were changed. Fix the items below
+                    and upload the file again.
+                </p>
+
+                <ul style='line-height:1.7'>
+                    {issue_rows}
+                </ul>
+
+                {extra_note}
+
+                <a class='btn secondary'
+                   href='{url_for("admission_groups")}'>
+                    Back to Group Links
+                </a>
+            </section>
+            """
+        )
+
+    if not validated_rows:
+        conn.close()
+        return admission_group_import_page(
+            "No Group Links Found",
+            "No valid WhatsApp group links were found in the file."
+        )
+
+    # Keep the current Show/Hide setting for subjects that already have links.
+    cur.execute("""
+        SELECT subject_id, is_visible
+        FROM groups
+        WHERE UPPER(month)='ALL'
+    """)
+    visibility_map = {
+        int(row["subject_id"]): int(row["is_visible"] or 0)
+        for row in cur.fetchall()
+    }
+
+    cur.execute("""
+        SELECT COUNT(*) AS link_count
+        FROM groups
+        WHERE UPPER(month)='ALL'
+    """)
+    replaced_count = int(
+        cur.fetchone()["link_count"] or 0
+    )
+
+    try:
+        cur.execute("BEGIN")
+
+        # Match the Higher Admin import behaviour: the spreadsheet becomes the
+        # current persistent group-link list.
+        cur.execute("""
+            DELETE FROM groups
+            WHERE UPPER(month)='ALL'
+        """)
+
+        imported_at = now_utc_iso()
+
+        for row in validated_rows:
+            is_visible = visibility_map.get(
+                row["subject_id"],
+                1
+            )
+
+            cur.execute("""
+                INSERT INTO groups(
+                    subject_id,
+                    month,
+                    invite_link,
+                    created_at,
+                    is_visible
+                )
+                VALUES(?, 'ALL', ?, ?, ?)
+            """, (
+                row["subject_id"],
+                row["invite_link"],
+                imported_at,
+                is_visible
+            ))
+
+        conn.commit()
+
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+
+        return admission_group_import_page(
+            "Group Import Failed",
+            "The group links were not changed: "
+            + escape(str(exc))
+        )
+
+    conn.close()
+
+    return redirect(
+        url_for(
+            "admission_groups",
+            imported=len(validated_rows),
+            replaced=replaced_count,
+            duplicates=duplicate_count,
+            file=Path(upload.filename).name
+        )
+    )
 
 
 @app.post('/admission/groups/save')
