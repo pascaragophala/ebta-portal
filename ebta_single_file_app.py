@@ -6347,7 +6347,7 @@ def normalize_email_address(value):
 
 
 EBTA_DEFAULT_LEARNER_GROUP_NAME = "EBTA Learners Notifications"
-EBTA_DEFAULT_LEARNER_GROUP_LINK = "https://chat.whatsapp.com/HfmZyzcU9bMDB3N1DAuFrJ"
+EBTA_DEFAULT_LEARNER_GROUP_LINK = "https://chat.whatsapp.com/Bm4Efj6zeLI9mmMkYdszmf"
 EBTA_DEFAULT_PARENT_GROUP_NAME = "EBTA Parents Notifications"
 EBTA_DEFAULT_PARENT_GROUP_LINK = "https://chat.whatsapp.com/DZYMvnEl9jpEyvzxqbgwV6"
 
