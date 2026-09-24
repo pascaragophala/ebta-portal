@@ -6524,6 +6524,18 @@ GROUP_EMAIL_TEMPLATES = {
             "so you do not miss important class and academy updates."
         ),
     },
+    "enrollment_reminder": {
+        "label": "Enrollment Reminder",
+        "subject": "Reminder: Enroll Your Child with EBTA",
+        "message": (
+            "Dear Parent/Guardian, this is a friendly reminder to complete your "
+            "son or daughter's EBTA enrollment so they can continue receiving "
+            "academic support and access their classes.\n\n"
+            "Please complete the enrollment here: https://ebtaportal.co.za\n\n"
+            "If you have already completed the enrollment, please disregard this "
+            "reminder. Thank you for choosing Early Bird Testimony Academy."
+        ),
+    },
     "custom": {
         "label": "Custom Message",
         "subject": "",
@@ -19301,12 +19313,12 @@ def home():
             </div>
  
             <div>
-            <label>Parent/Guardian Email (optional)</label>
+            <label>Parent/Guardian Email</label>
             <input name='guardian_email' id="guardian_email_input" type="email"/>
             </div>
 
             <div>
-            <label>Student Email (optional)</label>
+            <label>Student Email</label>
             <input name='email' id="email_input" type="email"/>
             </div>
             <div>
@@ -20484,7 +20496,7 @@ function showPopup(message, type='info', timeout=4000){
         if(emailInput && emailInput.value.trim() !== ''){
             if(!emailInput.value.trim().toLowerCase().endsWith('@gmail.com')){
                 e.preventDefault();
-                showPopup('Student Email (optional) must end with @gmail.com', 'error');
+                showPopup('Student Email must end with @gmail.com', 'error');
                 emailInput.focus();
                 return;
             }
@@ -37370,7 +37382,7 @@ def group_email_center():
             <div>
                 <h1>Group Emails</h1>
                 <p class='muted'>
-                    Send WhatsApp group links to learners and parents.
+                    Send group links and enrollment reminders to learners and parents.
                 </p>
             </div>
             {readiness}
@@ -37422,7 +37434,7 @@ def group_email_center():
 
                 <div>
                     <label>Send To</label>
-                    <select name='target' required>
+                    <select id='group-email-target' name='target' required>
                         <option value='both'>Learners & Parents</option>
                         <option value='learners'>Learners</option>
                         <option value='parents'>Parents</option>
@@ -37472,7 +37484,7 @@ def group_email_center():
                 <div style='grid-column:1/-1'>
                     <button class='btn success'
                             {'disabled' if not email_ready else ''}>
-                        Send Group Emails
+                        Send Emails
                     </button>
                 </div>
             </div>
@@ -37563,6 +37575,7 @@ def group_email_center():
         const selector = document.getElementById("group-email-template");
         const subjectInput = document.getElementById("group-email-subject");
         const messageInput = document.getElementById("group-email-message");
+        const targetInput = document.getElementById("group-email-target");
         const selectPage = document.getElementById("group-email-select-page");
 
         if(selector){{
@@ -37572,6 +37585,10 @@ def group_email_center():
                 if(this.value !== "custom"){{
                     subjectInput.value = item.subject || "";
                     messageInput.value = item.message || "";
+                }}
+
+                if(this.value === "enrollment_reminder" && targetInput){{
+                    targetInput.value = "parents";
                 }}
             }});
         }}
@@ -37761,6 +37778,7 @@ def group_email_send():
 
     target = request.form.get("target", "both").strip().lower()
     scope = request.form.get("scope", "all").strip().lower()
+    template_key = request.form.get("template_key", "").strip().lower()
     subject = request.form.get("subject", "").strip()
     message = request.form.get("message", "").strip()
 
@@ -37854,13 +37872,14 @@ def group_email_send():
         if target in {"learners", "both"}:
             learner_links = []
 
-            if group_email_valid_whatsapp_link(general_groups["learner_link"]):
-                learner_links.append({
-                    "label": general_groups["learner_name"],
-                    "url": general_groups["learner_link"],
-                })
+            if template_key != "enrollment_reminder":
+                if group_email_valid_whatsapp_link(general_groups["learner_link"]):
+                    learner_links.append({
+                        "label": general_groups["learner_name"],
+                        "url": general_groups["learner_link"],
+                    })
 
-            learner_links.extend(class_links.get(sid, []))
+                learner_links.extend(class_links.get(sid, []))
 
             learner_added = add_recipient(
                 student["email"],
@@ -37890,7 +37909,10 @@ def group_email_send():
         if target in {"parents", "both"}:
             parent_links = []
 
-            if group_email_valid_whatsapp_link(general_groups["parent_link"]):
+            if (
+                template_key != "enrollment_reminder"
+                and group_email_valid_whatsapp_link(general_groups["parent_link"])
+            ):
                 parent_links.append({
                     "label": general_groups["parent_name"],
                     "url": general_groups["parent_link"],
