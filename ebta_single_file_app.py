@@ -6634,14 +6634,65 @@ def group_email_valid_whatsapp_link(value):
     return value.startswith("https://chat.whatsapp.com/") and len(value) > 30
 
 
-def group_email_student_filters(month, grade="", q="", student_ids=None):
+def group_email_student_filters(
+    month,
+    grade="",
+    q="",
+    student_ids=None,
+    audience="all"
+):
+    audience = str(audience or "all").strip().lower()
+
+    if audience not in {"all", "active", "pending", "not_enrolled"}:
+        audience = "all"
+
     where = [
-        "e.month=?",
-        "UPPER(COALESCE(e.status,''))='ACTIVE'",
         "COALESCE(s.is_active,1)=1",
         "s.deleted_at IS NULL",
     ]
-    params = [month]
+    params = []
+
+    if audience == "active":
+        where.append("""
+            EXISTS (
+                SELECT 1 FROM enrollments ge_active
+                WHERE ge_active.student_id=s.id
+                  AND ge_active.month=?
+                  AND UPPER(COALESCE(ge_active.status,''))='ACTIVE'
+            )
+        """)
+        params.append(month)
+
+    elif audience == "pending":
+        where.append("""
+            NOT EXISTS (
+                SELECT 1 FROM enrollments ge_active
+                WHERE ge_active.student_id=s.id
+                  AND ge_active.month=?
+                  AND UPPER(COALESCE(ge_active.status,''))='ACTIVE'
+            )
+        """)
+        params.append(month)
+        where.append("""
+            EXISTS (
+                SELECT 1 FROM enrollments ge_pending
+                WHERE ge_pending.student_id=s.id
+                  AND ge_pending.month=?
+                  AND UPPER(COALESCE(ge_pending.status,''))='PENDING'
+            )
+        """)
+        params.append(month)
+
+    elif audience == "not_enrolled":
+        where.append("""
+            NOT EXISTS (
+                SELECT 1 FROM enrollments ge_current
+                WHERE ge_current.student_id=s.id
+                  AND ge_current.month=?
+                  AND UPPER(COALESCE(ge_current.status,'')) IN ('ACTIVE','PENDING')
+            )
+        """)
+        params.append(month)
 
     if grade:
         where.append("s.grade=?")
@@ -6659,18 +6710,22 @@ def group_email_student_filters(month, grade="", q="", student_ids=None):
                 OR COALESCE(s.guardian_email,'') LIKE ?
                 OR COALESCE(s.school,'') LIKE ?
                 OR COALESCE(s.province,'') LIKE ?
-                OR sub.name LIKE ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM enrollments ge_search
+                    JOIN subjects ge_sub ON ge_sub.id=ge_search.subject_id
+                    WHERE ge_search.student_id=s.id
+                      AND ge_sub.name LIKE ?
+                )
             )
         """)
         params.extend([search] * 9)
 
     if student_ids is not None:
         clean_ids = sorted({
-            int(value)
-            for value in student_ids
+            int(value) for value in student_ids
             if str(value).strip().isdigit()
         })
-
         if not clean_ids:
             where.append("1=0")
         else:
@@ -6681,21 +6736,24 @@ def group_email_student_filters(month, grade="", q="", student_ids=None):
     return " AND ".join(where), params
 
 
-def group_email_fetch_students(conn, month, grade="", q="", student_ids=None,
-                               limit=None, offset=0):
+def group_email_fetch_students(
+    conn,
+    month,
+    grade="",
+    q="",
+    student_ids=None,
+    audience="all",
+    limit=None,
+    offset=0
+):
     where_sql, params = group_email_student_filters(
-        month,
-        grade=grade,
-        q=q,
-        student_ids=student_ids
+        month, grade=grade, q=q, student_ids=student_ids, audience=audience
     )
     cur = conn.cursor()
 
     cur.execute(f"""
-        SELECT COUNT(DISTINCT s.id) AS c
-        FROM enrollments e
-        JOIN students s ON s.id=e.student_id
-        JOIN subjects sub ON sub.id=e.subject_id
+        SELECT COUNT(*) AS c
+        FROM students s
         WHERE {where_sql}
     """, params)
     total = int(cur.fetchone()["c"] or 0)
@@ -6711,23 +6769,37 @@ def group_email_fetch_students(conn, month, grade="", q="", student_ids=None,
             s.guardian_phone,
             s.guardian_email,
             s.school,
-            GROUP_CONCAT(DISTINCT sub.name) AS subjects
-        FROM enrollments e
-        JOIN students s ON s.id=e.student_id
-        JOIN subjects sub ON sub.id=e.subject_id
+            (
+                SELECT GROUP_CONCAT(DISTINCT ge_sub.name)
+                FROM enrollments ge_enroll
+                JOIN subjects ge_sub ON ge_sub.id=ge_enroll.subject_id
+                WHERE ge_enroll.student_id=s.id
+                  AND ge_enroll.month=?
+                  AND UPPER(COALESCE(ge_enroll.status,'')) IN ('ACTIVE','PENDING')
+            ) AS subjects,
+            CASE
+                WHEN EXISTS (
+                    SELECT 1 FROM enrollments ge_status_active
+                    WHERE ge_status_active.student_id=s.id
+                      AND ge_status_active.month=?
+                      AND UPPER(COALESCE(ge_status_active.status,''))='ACTIVE'
+                ) THEN 'ACTIVE'
+                WHEN EXISTS (
+                    SELECT 1 FROM enrollments ge_status_pending
+                    WHERE ge_status_pending.student_id=s.id
+                      AND ge_status_pending.month=?
+                      AND UPPER(COALESCE(ge_status_pending.status,''))='PENDING'
+                ) THEN 'PENDING'
+                ELSE 'NOT ENROLLED'
+            END AS enrollment_status
+        FROM students s
         WHERE {where_sql}
-        GROUP BY s.id
-        ORDER BY
-            CAST(REPLACE(s.grade,'G','') AS INTEGER),
-            s.full_name
+        ORDER BY CAST(REPLACE(s.grade,'G','') AS INTEGER), s.full_name
     """
-
-    query_params = list(params)
-
+    query_params = [month, month, month] + list(params)
     if limit is not None:
         query += " LIMIT ? OFFSET ?"
         query_params.extend([int(limit), int(offset)])
-
     cur.execute(query, query_params)
     return cur.fetchall(), total
 
@@ -36965,6 +37037,10 @@ def group_email_center():
 
     grade = request.args.get("grade", "").strip().upper()
     q = request.args.get("q", "").strip()
+    audience = request.args.get("audience", "all").strip().lower()
+
+    if audience not in {"all", "active", "pending", "not_enrolled"}:
+        audience = "all"
 
     if grade not in {"", "G8", "G9", "G10", "G11", "G12", "G13"}:
         grade = ""
@@ -36983,6 +37059,7 @@ def group_email_center():
         month,
         grade=grade,
         q=q,
+        audience=audience,
         limit=per_page,
         offset=offset
     )
@@ -36997,34 +37074,59 @@ def group_email_center():
             month,
             grade=grade,
             q=q,
+            audience=audience,
             limit=per_page,
             offset=offset
         )
 
     where_sql, count_params = group_email_student_filters(
-        month,
-        grade=grade,
-        q=q
+        month, grade=grade, q=q, audience=audience
     )
 
     cur = conn.cursor()
     cur.execute(f"""
         SELECT
-            COUNT(DISTINCT CASE
-                WHEN TRIM(COALESCE(s.email,''))<>'' THEN s.id
-            END) AS learner_emails,
-            COUNT(DISTINCT CASE
-                WHEN TRIM(COALESCE(s.guardian_email,''))<>'' THEN s.id
-            END) AS parent_emails
-        FROM enrollments e
-        JOIN students s ON s.id=e.student_id
-        JOIN subjects sub ON sub.id=e.subject_id
+            COUNT(CASE WHEN TRIM(COALESCE(s.email,''))<>'' THEN 1 END) AS learner_emails,
+            COUNT(CASE WHEN TRIM(COALESCE(s.guardian_email,''))<>'' THEN 1 END) AS parent_emails
+        FROM students s
         WHERE {where_sql}
     """, count_params)
 
     email_counts = cur.fetchone()
     learner_email_count = int(email_counts["learner_emails"] or 0)
     parent_email_count = int(email_counts["parent_emails"] or 0)
+
+    cur.execute("""
+        SELECT
+            COUNT(*) AS all_contacts,
+            COUNT(CASE WHEN EXISTS (
+                SELECT 1 FROM enrollments ge_a
+                WHERE ge_a.student_id=s.id AND ge_a.month=?
+                  AND UPPER(COALESCE(ge_a.status,''))='ACTIVE'
+            ) THEN 1 END) AS active_contacts,
+            COUNT(CASE WHEN NOT EXISTS (
+                SELECT 1 FROM enrollments ge_a2
+                WHERE ge_a2.student_id=s.id AND ge_a2.month=?
+                  AND UPPER(COALESCE(ge_a2.status,''))='ACTIVE'
+            ) AND EXISTS (
+                SELECT 1 FROM enrollments ge_p
+                WHERE ge_p.student_id=s.id AND ge_p.month=?
+                  AND UPPER(COALESCE(ge_p.status,''))='PENDING'
+            ) THEN 1 END) AS pending_contacts,
+            COUNT(CASE WHEN NOT EXISTS (
+                SELECT 1 FROM enrollments ge_c
+                WHERE ge_c.student_id=s.id AND ge_c.month=?
+                  AND UPPER(COALESCE(ge_c.status,'')) IN ('ACTIVE','PENDING')
+            ) THEN 1 END) AS not_enrolled_contacts
+        FROM students s
+        WHERE COALESCE(s.is_active,1)=1
+          AND s.deleted_at IS NULL
+    """, (month, month, month, month))
+    audience_counts = cur.fetchone()
+    all_contact_count = int(audience_counts["all_contacts"] or 0)
+    active_contact_count = int(audience_counts["active_contacts"] or 0)
+    pending_contact_count = int(audience_counts["pending_contacts"] or 0)
+    not_enrolled_contact_count = int(audience_counts["not_enrolled_contacts"] or 0)
 
     page_student_ids = [int(row["id"]) for row in rows]
     page_class_links = group_email_class_links(
@@ -37185,6 +37287,13 @@ def group_email_center():
         guardian_email = str(student["guardian_email"] or "").strip()
         class_links = page_class_links.get(student_id, [])
         class_link_count = len(class_links)
+        enrollment_status = str(student["enrollment_status"] or "NOT ENROLLED").strip().upper()
+        if enrollment_status == "ACTIVE":
+            enrollment_chip = "<span class='chip active'>Active</span>"
+        elif enrollment_status == "PENDING":
+            enrollment_chip = "<span class='chip pending'>Pending</span>"
+        else:
+            enrollment_chip = "<span class='chip lapsed'>Not Enrolled</span>"
 
         if ctx["can_edit_contacts"]:
             contact_html = f"""
@@ -37195,6 +37304,7 @@ def group_email_center():
                 <input type='hidden' name='month' value='{escape(month, quote=True)}'>
                 <input type='hidden' name='grade' value='{escape(grade, quote=True)}'>
                 <input type='hidden' name='q' value='{escape(q, quote=True)}'>
+                <input type='hidden' name='audience' value='{escape(audience, quote=True)}'>
                 <input type='hidden' name='page' value='{page_num}'>
 
                 <input type='email'
@@ -37233,6 +37343,7 @@ def group_email_center():
                 <strong>{escape(student["full_name"] or "")}</strong>
                 <div class='mini muted'>{grade_label(student["grade"])}</div>
                 <div class='mini muted'>{escape(student["school"] or "—")}</div>
+                <div style='margin-top:5px'>{enrollment_chip}</div>
             </td>
 
             <td>
@@ -37254,7 +37365,7 @@ def group_email_center():
         """
 
     if not row_html:
-        row_html = "<tr><td colspan='5'>No active learners found for these filters.</td></tr>"
+        row_html = "<tr><td colspan='5'>No contacts found for these filters.</td></tr>"
 
     template_options = "".join(
         f"<option value='{escape(key, quote=True)}'>{escape(value['label'])}</option>"
@@ -37313,6 +37424,7 @@ def group_email_center():
             "month": month,
             "grade": grade,
             "q": q,
+            "audience": audience,
         }
     )
 
@@ -37389,20 +37501,12 @@ def group_email_center():
         </div>
 
         <div class='group-email-stats'>
-            <div class='group-email-stat'>
-                <strong>{total}</strong>
-                <span>Active Learners</span>
-            </div>
-
-            <div class='group-email-stat'>
-                <strong>{learner_email_count}</strong>
-                <span>Learner Emails</span>
-            </div>
-
-            <div class='group-email-stat'>
-                <strong>{parent_email_count}</strong>
-                <span>Parent Emails</span>
-            </div>
+            <div class='group-email-stat'><strong>{all_contact_count}</strong><span>All Contacts</span></div>
+            <div class='group-email-stat'><strong>{active_contact_count}</strong><span>Active</span></div>
+            <div class='group-email-stat'><strong>{pending_contact_count}</strong><span>Pending</span></div>
+            <div class='group-email-stat'><strong>{not_enrolled_contact_count}</strong><span>Not Enrolled</span></div>
+            <div class='group-email-stat'><strong>{learner_email_count}</strong><span>Matching Learner Emails</span></div>
+            <div class='group-email-stat'><strong>{parent_email_count}</strong><span>Matching Parent Emails</span></div>
         </div>
     </section>
 
@@ -37441,6 +37545,16 @@ def group_email_center():
                     </select>
                 </div>
 
+                <div>
+                    <label>Enrollment Status</label>
+                    <select id='group-email-audience' name='audience' required>
+                        <option value='all' {'selected' if audience == 'all' else ''}>All Contacts</option>
+                        <option value='active' {'selected' if audience == 'active' else ''}>Active</option>
+                        <option value='pending' {'selected' if audience == 'pending' else ''}>Pending</option>
+                        <option value='not_enrolled' {'selected' if audience == 'not_enrolled' else ''}>Not Enrolled / Not Active</option>
+                    </select>
+                </div>
+
                 <div style='grid-column:1/-1'>
                     <label>Email Subject</label>
                     <input id='group-email-subject'
@@ -37468,7 +37582,7 @@ def group_email_center():
                                    value='all'
                                    checked
                                    style='width:auto'>
-                            All matching learners
+                            All matching contacts
                         </label>
 
                         <label>
@@ -37476,7 +37590,7 @@ def group_email_center():
                                    name='scope'
                                    value='selected'
                                    style='width:auto'>
-                            Selected learners below
+                            Selected contacts below
                         </label>
                     </div>
                 </div>
@@ -37492,7 +37606,7 @@ def group_email_center():
     </section>
 
     <section class='card'>
-        <h2>Learners</h2>
+        <h2>Contacts</h2>
 
         <form method='get' class='toolbar'>
             <input type='month'
@@ -37502,6 +37616,13 @@ def group_email_center():
             <select name='grade'>
                 <option value=''>All Grades</option>
                 {grade_options}
+            </select>
+
+            <select name='audience'>
+                <option value='all' {'selected' if audience == 'all' else ''}>All Contacts</option>
+                <option value='active' {'selected' if audience == 'active' else ''}>Active</option>
+                <option value='pending' {'selected' if audience == 'pending' else ''}>Pending</option>
+                <option value='not_enrolled' {'selected' if audience == 'not_enrolled' else ''}>Not Enrolled / Not Active</option>
             </select>
 
             <input name='q'
@@ -37518,7 +37639,7 @@ def group_email_center():
 
         <div style='display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0'>
             <div class='mini muted'>
-                Showing {len(rows)} of {total} active learner(s) for {pretty_month_label(month)}.
+                Showing {len(rows)} of {total} matching contact(s) for {pretty_month_label(month)}.
             </div>
 
             <label class='mini' style='display:flex;align-items:center;gap:6px;margin:0'>
@@ -37576,6 +37697,7 @@ def group_email_center():
         const subjectInput = document.getElementById("group-email-subject");
         const messageInput = document.getElementById("group-email-message");
         const targetInput = document.getElementById("group-email-target");
+        const audienceInput = document.getElementById("group-email-audience");
         const selectPage = document.getElementById("group-email-select-page");
 
         if(selector){{
@@ -37587,8 +37709,13 @@ def group_email_center():
                     messageInput.value = item.message || "";
                 }}
 
-                if(this.value === "enrollment_reminder" && targetInput){{
-                    targetInput.value = "parents";
+                if(this.value === "enrollment_reminder"){{
+                    if(targetInput){{ targetInput.value = "parents"; }}
+                    if(audienceInput){{ audienceInput.value = "all"; }}
+                }}
+
+                if(this.value === "learner_groups" && audienceInput){{
+                    audienceInput.value = "active";
                 }}
             }});
         }}
@@ -37729,6 +37856,7 @@ def group_email_contact_emails_save():
         "month": request.form.get("month", "").strip(),
         "grade": request.form.get("grade", "").strip(),
         "q": request.form.get("q", "").strip(),
+        "audience": request.form.get("audience", "all").strip(),
         "page": request.form.get("page", "1").strip(),
         "contact_saved": "1",
     }
@@ -37778,6 +37906,7 @@ def group_email_send():
 
     target = request.form.get("target", "both").strip().lower()
     scope = request.form.get("scope", "all").strip().lower()
+    audience = request.form.get("audience", "all").strip().lower()
     template_key = request.form.get("template_key", "").strip().lower()
     subject = request.form.get("subject", "").strip()
     message = request.form.get("message", "").strip()
@@ -37787,6 +37916,9 @@ def group_email_send():
 
     if scope not in {"all", "selected"}:
         scope = "all"
+
+    if audience not in {"all", "active", "pending", "not_enrolled"}:
+        audience = "all"
 
     if not subject:
         return page("Missing Subject", ctx["nav"] + card_msg("Please enter an email subject."))
@@ -37798,8 +37930,8 @@ def group_email_send():
 
     if scope == "selected" and not selected_ids:
         return page(
-            "No Learners Selected",
-            ctx["nav"] + card_msg("Select at least one learner or choose All matching learners.")
+            "No Contacts Selected",
+            ctx["nav"] + card_msg("Select at least one contact or choose All matching contacts.")
         )
 
     conn = get_db()
@@ -37809,14 +37941,15 @@ def group_email_send():
         month,
         grade=grade,
         q=q,
-        student_ids=selected_ids if scope == "selected" else None
+        student_ids=selected_ids if scope == "selected" else None,
+        audience=audience
     )
 
     if not students:
         conn.close()
         return page(
             "No Recipients",
-            ctx["nav"] + card_msg("No active learners matched the selected filters.")
+            ctx["nav"] + card_msg("No contacts matched the selected filters.")
         )
 
     general_groups = ebta_general_group_settings(conn)
@@ -37992,6 +38125,7 @@ def group_email_send():
             "month": month,
             "grade": grade,
             "q": q,
+            "audience": audience,
             "sent": prepared,
             "missing_learner": missing_learner,
             "missing_parent": missing_parent,
