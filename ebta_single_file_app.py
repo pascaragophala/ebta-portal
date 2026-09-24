@@ -36161,8 +36161,8 @@ def admin_email_notifications():
     <div><label>Sender Email</label><input type='email' name='sender_address' value='{escape(sender_address or "",quote=True)}' placeholder='notifications@yourdomain.co.za'></div>
     <div style='grid-column:1/-1'><h3>Activities</h3><div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px'>{event_rows}</div></div>
     <div style='grid-column:1/-1'><button class='btn success'>Save Email Settings</button></div></form></section>
-    <section class='card'><h2>SMTP Setup</h2><p class='mini muted'>Render environment variables: <strong>EBTA_SMTP_HOST</strong>, <strong>EBTA_SMTP_PORT</strong>, <strong>EBTA_SMTP_USERNAME</strong>, <strong>EBTA_SMTP_PASSWORD</strong>, <strong>EBTA_EMAIL_FROM</strong>. Optional: <strong>EBTA_EMAIL_FROM_NAME</strong>, <strong>EBTA_EMAIL_REPLY_TO</strong>, <strong>EBTA_SMTP_SECURITY</strong>.</p>
-    <div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(220px,1fr))'><div class='card soft'><strong>SMTP Host</strong><div class='mini muted'>{escape(os.environ.get('EBTA_SMTP_HOST','smtp-relay.brevo.com'))}</div></div><div class='card soft'><strong>SMTP Username</strong><div class='mini muted'>{'Configured' if os.environ.get('EBTA_SMTP_USERNAME') else 'Not configured'}</div></div><div class='card soft'><strong>SMTP Password</strong><div class='mini muted'>{'Configured' if os.environ.get('EBTA_SMTP_PASSWORD') else 'Not configured'}</div></div></div>
+    <section class='card'><h2>Email Connection</h2>
+    <p class='mini muted'>Send a test email to confirm everything is working.</p>
     <form method='post' action='{url_for('admin_email_notifications_test')}' class='toolbar' style='margin-top:14px'><input type='email' name='test_email' placeholder='Email address for test' required><button class='btn'>Send Test Email</button></form>
     <form method='post' action='{url_for('admin_email_notifications_retry')}' style='margin-top:10px'><button class='btn secondary'>Retry Failed Emails</button></form></section>
     <section class='card'>
@@ -37625,7 +37625,7 @@ def admin_enrollment_email_send():
     if not outbound_channel_enabled("email", fresh=True):
         status_note = """
         <div class="card soft" style="border-left:5px solid #f59e0b">
-            Email is currently paused. The queued reminders will remain pending until email is resumed.
+            Email is paused. Reminders will send when email is resumed.
         </div>
         """
 
@@ -37758,7 +37758,7 @@ def admin_enrollment_email_manual_send():
     if not outbound_channel_enabled("email", fresh=True):
         status_note = """
         <div class="card soft" style="border-left:5px solid #f59e0b">
-            Email is currently paused. The queued reminders will remain pending until email is resumed.
+            Email is paused. Reminders will send when email is resumed.
         </div>
         """
 
@@ -44409,7 +44409,7 @@ def admin_awards_student_export():
         <h1>Awards Student Export</h1>
 
         <p class="muted">
-            Paste the awards learner list or upload a TXT/CSV file. The system will match the names against portal students and export their full portal details to Excel.
+            Paste or upload the learner list to export matched student details to Excel.
         </p>
 
         <div class="card soft" style="border-left:5px solid #1b5e20;margin-top:14px">
@@ -51226,10 +51226,7 @@ def admin_groups():
         <form method="post"
               action="{url_for('admin_groups_import')}"
               enctype="multipart/form-data"
-              onsubmit="return confirm(
-                  'This will replace all current persistent group links ' +
-                  'with the links in this Excel file. Continue?'
-              );">
+              onsubmit="return confirm('Import the group links from this Excel file?');">
 
             <div class="group-import-grid">
                 <div>
@@ -51241,15 +51238,11 @@ def admin_groups():
                 </div>
 
                 <button class="btn success">
-                    Replace Group Links
+                    Upload & Update Links
                 </button>
             </div>
         </form>
 
-        <div class="group-import-warning mini">
-            All current persistent group links will be replaced.
-            Existing Show/Hide settings will be kept for matching subjects.
-        </div>
     </section>
 
     <section class='card'>
@@ -54856,21 +54849,14 @@ def admin_ebta_connect_control():
 
     if enabled:
         status_chip = "<span class='chip active'>Active</span>"
-        status_text = "Tutors and management can currently use EBTA Connect."
+        status_text = "EBTA Connect is active."
         button_label = "Deactivate EBTA Connect"
         button_class = "btn warn"
         next_value = "0"
-        confirm_text = (
-            "Deactivate EBTA Connect? The button will remain visible to staff, "
-            "but opening it will show that Higher Admin has deactivated the feature. "
-            "Existing posts and profiles will not be deleted."
-        )
+        confirm_text = "Deactivate EBTA Connect for staff?"
     else:
         status_chip = "<span class='chip lapsed'>Deactivated</span>"
-        status_text = (
-            "The EBTA Connect button is still visible, but staff cannot enter "
-            "the community until Higher Admin activates it again."
-        )
+        status_text = "EBTA Connect is currently deactivated."
         button_label = "Activate EBTA Connect"
         button_class = "btn success"
         next_value = "1"
@@ -56953,15 +56939,13 @@ def admin_communications_control():
         <h1>SMS & Email Control</h1>
 
         <p class="muted">
-            High Admin master controls for all outbound SMS and email across the
-            entire EBTA portal.
+            Manage SMS and email sending across EBTA.
         </p>
 
         <div class="card soft" style="border-left:5px solid #dc2626;margin-bottom:14px">
             <strong>Important:</strong>
-            Pausing a channel stops new provider sends across the portal.
-            Messages already waiting in the queue stay saved and will continue
-            when the channel is resumed. WhatsApp is not affected.
+            Paused messages will continue when the channel is resumed.
+            WhatsApp is separate.
         </div>
 
         <div class="toolbar" style="gap:10px;flex-wrap:wrap;margin-bottom:16px">
@@ -56984,11 +56968,6 @@ def admin_communications_control():
             <div class="card soft" style="border-left:5px solid {'#16a34a' if sms_enabled else '#dc2626'}">
                 <h2>SMS Master Switch</h2>
                 <p>{sms_state}</p>
-
-                <p class="muted">
-                    Controls Twilio/direct SMS and the EBTA SMS queue throughout
-                    the whole application.
-                </p>
 
                 <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0">
                     <div class="card" style="padding:10px"><b>{sms_pending}</b><div class="mini muted">Pending</div></div>
@@ -57014,11 +56993,6 @@ def admin_communications_control():
                 <h2>Email Master Switch</h2>
                 <p>{email_state}</p>
 
-                <p class="muted">
-                    Controls SMTP/direct email and the EBTA email queue throughout
-                    the whole application.
-                </p>
-
                 <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0">
                     <div class="card" style="padding:10px"><b>{email_pending}</b><div class="mini muted">Pending</div></div>
                     <div class="card" style="padding:10px"><b>{email_failed}</b><div class="mini muted">Failed</div></div>
@@ -57040,21 +57014,6 @@ def admin_communications_control():
             </div>
         </div>
 
-        <div class="card soft" style="margin-top:14px">
-            <h2>How Pause / Resume Works</h2>
-            <p class="mini muted" style="margin-bottom:6px">
-                • Pause SMS: no new Twilio SMS send is allowed anywhere in EBTA.
-            </p>
-            <p class="mini muted" style="margin-bottom:6px">
-                • Pause Email: no new SMTP email send is allowed anywhere in EBTA.
-            </p>
-            <p class="mini muted" style="margin-bottom:6px">
-                • Queued notifications remain stored instead of being deleted.
-            </p>
-            <p class="mini muted" style="margin-bottom:0">
-                • Resume wakes the relevant queue worker so pending notifications can continue.
-            </p>
-        </div>
     </section>
     """
 
@@ -77978,7 +77937,7 @@ def admin_treasurers():
             </form>
 
             <p class="mini muted">
-                The system will generate a 5-digit PIN for the treasurer.
+                A 5-digit PIN will be created for the treasurer.
             </p>
         </div>
 
@@ -80459,7 +80418,7 @@ def admin_secretaries():
             </form>
 
             <p class="mini muted">
-                The system will generate a 5-digit PIN.
+                A 5-digit PIN will be created.
             </p>
         </div>
 
@@ -82783,7 +82742,7 @@ def admin_social_media_managers():
             </form>
 
             <p class="mini muted">
-                The system will generate a 5-digit PIN.
+                A 5-digit PIN will be created.
             </p>
         </div>
 
@@ -84426,7 +84385,7 @@ def admin_duty_admins():
             </form>
 
             <p class="mini muted">
-                The system will generate a 5-digit PIN.
+                A 5-digit PIN will be created.
             </p>
         </div>
 
@@ -87234,7 +87193,7 @@ def duty_admin_followup_add():
             <div>
                 <h1>Log New Follow-Up</h1>
                 <p class="muted" style="margin-top:4px">
-                    Add a learner follow-up. This will also appear on the normal admin follow-up page.
+                    Add a learner follow-up.
                 </p>
             </div>
 
@@ -87635,7 +87594,7 @@ def admin_admission_coordinators():
             </form>
 
             <p class="mini muted">
-                The system will generate a 5-digit PIN.
+                A 5-digit PIN will be created.
             </p>
         </div>
 
@@ -90098,20 +90057,12 @@ def admission_groups():
     import_notice = ""
 
     if imported_count:
-        duplicate_note = (
-            f" {escape(duplicate_count)} duplicate row(s) were combined."
-            if duplicate_count and duplicate_count != "0"
-            else ""
-        )
-
         import_notice = f"""
         <div class='card soft admission-group-import-success'>
             <strong>Group links updated</strong>
             <div class='mini' style='margin-top:4px'>
                 {escape(imported_count)} link(s) imported from
                 {escape(imported_file or 'the Excel file')}.
-                {escape(replaced_count or '0')} previous link(s) were replaced.
-                {duplicate_note}
             </div>
         </div>
         """
@@ -90311,9 +90262,6 @@ def admission_groups():
                 </div>
             </form>
 
-            <div class='admission-group-import-note mini'>
-                Current group links will be replaced. Existing Show/Hide settings stay the same for matching subjects.
-            </div>
         </div>
 
         <form method='post' action='{url_for('admission_groups_save')}' style='margin-bottom:16px'>
@@ -92000,7 +91948,7 @@ def admission_followup_add():
             <div>
                 <h1>Log New Follow-Up</h1>
                 <p class="muted" style="margin-top:4px">
-                    Add a learner follow-up. This will also appear on the main admin follow-up page.
+                    Add a learner follow-up.
                 </p>
             </div>
 
@@ -94062,10 +94010,6 @@ def admission_discount_email_all():
                 <p><b>Already queued / already sent:</b> {already_queued_count}</p>
                 <p><b>Skipped because no valid student email is saved:</b> {missing_email_count}</p>
                 <p><b>Could not queue:</b> {failed_count}</p>
-                <p class="muted">
-                    Emails are processed by the EBTA background email worker so the portal stays responsive.
-                    Failed email deliveries are retried automatically.
-                </p>
             </div>
             <a class="btn" href="{url_for('admission_discounts')}">Back to Discount Codes</a>
         </section>
@@ -128541,7 +128485,7 @@ def whatsapp_bot_rule_reply(
         )
 
     return (
-        "I can help with EBTA enrollment without using an AI API.\n\n"
+        "I can help with EBTA enrollment.\n\n"
         "Reply MENU to see the available options, or ENROLL to start "
         "an enrollment."
     )
@@ -129181,7 +129125,7 @@ def admin_whatsapp_bot():
         queue_diagnostics_html = f"""
         <section class='card'>
             <h2>Queue Issues</h2>
-            <p class='mini muted'>Failed/interrupted WhatsApp jobs and the actual bot/Meta API error.</p>
+            <p class='mini muted'>Recent failed WhatsApp messages.</p>
             <div class='scroll-x'>
                 <table style='min-width:850px'>
                     <thead><tr><th>Queue ID</th><th>Number</th><th>Status</th><th>Retries</th><th>Last error</th><th>Last attempt</th></tr></thead>
@@ -129303,16 +129247,6 @@ def admin_whatsapp_bot():
             {setup_cards}
         </div>
 
-        <div class='mini muted' style='margin-top:12px'>
-            Required Render variables:
-            WHATSAPP_ACCESS_TOKEN,
-            WHATSAPP_PHONE_NUMBER_ID,
-            WHATSAPP_VERIFY_TOKEN,
-            WHATSAPP_APP_SECRET,
-            WHATSAPP_GRAPH_VERSION,
-            EBTA_WHATSAPP_BOT_NUMBER,
-            EBTA_PORTAL_BASE_URL.
-        </div>
     </section>
 
     {queue_diagnostics_html}
