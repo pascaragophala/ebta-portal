@@ -1412,6 +1412,63 @@ def init_db():
         ON subject_session_templates(subject_id)
     """)
 
+    # ================= IMPORTED TIMETABLES =================
+    # Exact-date timetable slots imported from High Admin PDF/Excel files.
+    # These are kept separate from recurring session links so exam-preparation
+    # timetables do not accidentally repeat every week.
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS timetable_imports(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        source_filename TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_hash TEXT,
+        portal_month TEXT NOT NULL,
+        is_visible INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS timetable_events(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        import_id INTEGER NOT NULL,
+        grade TEXT NOT NULL,
+        event_date TEXT NOT NULL,
+        start_time TEXT NOT NULL,
+        end_time TEXT NOT NULL,
+        subject_label TEXT NOT NULL,
+        subject_keys_json TEXT NOT NULL DEFAULT '[]',
+        session_label TEXT,
+        focus TEXT,
+        source_page INTEGER,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(import_id)
+            REFERENCES timetable_imports(id)
+            ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_timetable_events_date
+        ON timetable_events(event_date, start_time)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_timetable_events_grade
+        ON timetable_events(grade, event_date)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_timetable_events_import
+        ON timetable_events(import_id)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_timetable_imports_month
+        ON timetable_imports(portal_month, is_visible)
+    """)
+
     # ================= GOOGLE DRIVE LINKS =================
     cur.execute("""
     CREATE TABLE IF NOT EXISTS google_drive_links(
@@ -23051,6 +23108,11 @@ def student_home():
     enrolls = cur.fetchall()   # FETCH IMMEDIATELY
 
     active_sub_ids=[str(x['subject_id']) for x in enrolls if x['status'].upper()=='ACTIVE']
+    active_subject_names=[
+        str(x['subject_name'] or '').strip()
+        for x in enrolls
+        if x['status'].upper()=='ACTIVE'
+    ]
     has_active_enrollment = any(x['status'].upper() == 'ACTIVE' for x in enrolls)
 
     student_live_access_mode = get_setting(
@@ -23406,6 +23468,16 @@ def student_home():
                 {''.join(cards)}
             </div>
             """
+
+    official_timetable_html = ""
+
+    if student_live_access_allowed:
+        official_timetable_html = timetable_student_html(
+            conn,
+            month,
+            student_profile["grade"] if student_profile else "",
+            active_subject_names
+        )
 
 
 
@@ -24413,12 +24485,15 @@ def student_home():
 
         sessions_section = f"""
         <div class='card'>
-            <h2>Sessions</h2>
+            <h2>Sessions & Timetable</h2>
 
             <div class="mini muted" style="margin-bottom:12px">
-                Session details for your active subjects in {pretty_month_label(month)}.
+                Your class dates, times and session links for {pretty_month_label(month)}.
             </div>
 
+            {official_timetable_html}
+
+            <h3 style="margin-top:12px">Session Links</h3>
             {sessions_html}
         </div>
         """
@@ -29294,6 +29369,12 @@ def tutor_home():
                 WHERE ts.tutor_id=? ORDER BY s.grade,s.name""",(tid,))
     subs=cur.fetchall()
     assigned_list=", ".join([f"{grade_label(r['grade'])} — {r['subject_name']}" for r in subs]) or "<span class='muted'>No subjects assigned yet.</span>"
+
+    tutor_official_timetable_html = timetable_tutor_html(
+        conn,
+        month,
+        subs
+    )
     
     # ================= TUTOR REFERRAL SECTION =================
 
@@ -31826,6 +31907,8 @@ def tutor_home():
         <p class="mini muted">Drive links available for your assigned subjects.</p>
         {tutor_google_drive_html}
     </div>
+
+    {tutor_official_timetable_html}
 
     <div class='card'><h2>Your sessions</h2>
         {sessions_html}
@@ -57725,6 +57808,2252 @@ def admin_set_system_month():
     set_setting('current_month', month)
     return redirect(url_for('admin_home'))
 
+
+# =============================================================
+# HIGH ADMIN TIMETABLE PDF / EXCEL IMPORT
+# =============================================================
+
+_TIMETABLE_MONTH_LOOKUP = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
+
+
+def timetable_clean_text(value):
+    return " ".join(
+        str(value or "")
+        .replace("\r", " ")
+        .replace("\n", " ")
+        .replace("–", "-")
+        .replace("—", "-")
+        .split()
+    ).strip()
+
+
+def timetable_month_number(value):
+    raw = timetable_clean_text(value).lower().rstrip(".")
+    return _TIMETABLE_MONTH_LOOKUP.get(raw)
+
+
+def timetable_normalize_grade(value):
+    raw = timetable_clean_text(value).upper()
+
+    match = re.search(
+        r"\b(?:GRADE\s*)?(8|9|10|11|12|13)\b",
+        raw
+    )
+
+    if match:
+        return "G" + match.group(1)
+
+    if "UPGRADING" in raw:
+        return "G13"
+
+    if "MATRIC" in raw:
+        return "G12"
+
+    return ""
+
+
+def timetable_canonical_subject(value):
+    raw = timetable_clean_text(value)
+    key = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        raw.lower()
+    ).strip()
+
+    aliases = {
+        "math": "Mathematics",
+        "maths": "Mathematics",
+        "mathematics": "Mathematics",
+
+        "math lit": "Mathematical Literacy",
+        "maths lit": "Mathematical Literacy",
+        "math literacy": "Mathematical Literacy",
+        "maths literacy": "Mathematical Literacy",
+        "mathematical literacy": "Mathematical Literacy",
+
+        "english fal": "English FAL",
+        "engl fal": "English FAL",
+        "english hl": "English HL",
+        "engl hl": "English HL",
+
+        "afrikaans fal": "Afrikaans FAL",
+
+        "ems": "EMS",
+        "economics and management sciences": "EMS",
+
+        "natural sciences": "Natural Sciences",
+        "ns": "Natural Sciences",
+
+        "physical sciences": "Physical Sciences",
+        "physics": "Physical Sciences",
+
+        "life sciences": "Life Sciences",
+        "life science": "Life Sciences",
+
+        "accounting": "Accounting",
+        "geography": "Geography",
+        "business studies": "Business Studies",
+        "economics": "Economics",
+    }
+
+    return aliases.get(key, raw)
+
+
+def timetable_subject_key(value):
+    canonical = timetable_canonical_subject(value)
+
+    return re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        canonical.lower()
+    ).strip()
+
+
+def timetable_expand_subject_keys(value):
+    raw = timetable_clean_text(value)
+
+    if not raw:
+        return []
+
+    working = raw
+
+    working = re.sub(
+        r"Economics\s+and\s+Management\s+Sciences",
+        "EMS",
+        working,
+        flags=re.I
+    )
+
+    working = re.sub(
+        r"English\s*FAL\s*/\s*HL",
+        "English FAL|English HL",
+        working,
+        flags=re.I
+    )
+
+    working = re.sub(
+        r"Maths?\s*/\s*Maths?(?:ematical)?\s*Lit(?:eracy)?",
+        "Mathematics|Mathematical Literacy",
+        working,
+        flags=re.I
+    )
+
+    working = re.sub(
+        r"Maths?\s*/\s*Maths?\s*Literacy",
+        "Mathematics|Mathematical Literacy",
+        working,
+        flags=re.I
+    )
+
+    parts = re.split(
+        r"\s*\|\s*|\s*/\s*",
+        working
+    )
+
+    keys = []
+
+    for part in parts:
+        canonical = timetable_canonical_subject(part)
+        key = timetable_subject_key(canonical)
+
+        if key and key not in keys:
+            keys.append(key)
+
+    return keys
+
+
+def timetable_subject_label_for_display(value):
+    return timetable_clean_text(value)
+
+
+def timetable_parse_time_range(value):
+    raw = timetable_clean_text(value)
+
+    match = re.search(
+        r"\b(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\b",
+        raw
+    )
+
+    if not match:
+        return None
+
+    start_time = match.group(1)
+    end_time = match.group(2)
+
+    try:
+        datetime.datetime.strptime(start_time, "%H:%M")
+        datetime.datetime.strptime(end_time, "%H:%M")
+    except Exception:
+        return None
+
+    if start_time >= end_time:
+        return None
+
+    return start_time, end_time
+
+
+def timetable_parse_date_value(value, default_year=None):
+    if isinstance(value, datetime.datetime):
+        return value.date()
+
+    if isinstance(value, datetime.date):
+        return value
+
+    raw = timetable_clean_text(value)
+
+    if not raw:
+        return None
+
+    iso_match = re.search(
+        r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b",
+        raw
+    )
+
+    if iso_match:
+        try:
+            return datetime.date(
+                int(iso_match.group(1)),
+                int(iso_match.group(2)),
+                int(iso_match.group(3))
+            )
+        except Exception:
+            return None
+
+    day_month_year = re.search(
+        r"\b(\d{1,2})\s+([A-Za-z]{3,9})\s+(20\d{2})\b",
+        raw
+    )
+
+    if day_month_year:
+        month_num = timetable_month_number(
+            day_month_year.group(2)
+        )
+
+        if month_num:
+            try:
+                return datetime.date(
+                    int(day_month_year.group(3)),
+                    month_num,
+                    int(day_month_year.group(1))
+                )
+            except Exception:
+                return None
+
+    day_month = re.search(
+        r"\b(\d{1,2})\s+([A-Za-z]{3,9})\b",
+        raw
+    )
+
+    if day_month and default_year:
+        month_num = timetable_month_number(
+            day_month.group(2)
+        )
+
+        if month_num:
+            try:
+                return datetime.date(
+                    int(default_year),
+                    month_num,
+                    int(day_month.group(1))
+                )
+            except Exception:
+                return None
+
+    for fmt in (
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%d %B %Y",
+        "%d %b %Y",
+    ):
+        try:
+            return datetime.datetime.strptime(
+                raw,
+                fmt
+            ).date()
+        except Exception:
+            pass
+
+    return None
+
+
+def timetable_infer_year(text_value, filename=""):
+    combined = (
+        timetable_clean_text(filename)
+        + " "
+        + timetable_clean_text(text_value)
+    )
+
+    match = re.search(
+        r"\b(20\d{2})\b",
+        combined
+    )
+
+    if match:
+        return int(match.group(1))
+
+    return datetime.date.today().year
+
+
+def timetable_infer_grade(page_text):
+    upper = str(page_text or "").upper()
+
+    if "UPGRADING" in upper:
+        return "G13"
+
+    match = re.search(
+        r"\bGRADE\s*[-:]?\s*(8|9|10|11|12|13)\b",
+        upper
+    )
+
+    if match:
+        return "G" + match.group(1)
+
+    if "MATRIC" in upper:
+        return "G12"
+
+    return ""
+
+
+def timetable_infer_portal_month(
+    text_value,
+    filename,
+    events
+):
+    combined = (
+        str(filename or "").replace("_", " ")
+        + "\n"
+        + str(text_value or "")
+    )
+
+    month_words = (
+        "January|February|March|April|May|June|July|August|"
+        "September|October|November|December|"
+        "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec"
+    )
+
+    match = re.search(
+        rf"\b({month_words})\b[^0-9]{{0,35}}\b(20\d{{2}})\b",
+        combined,
+        flags=re.I
+    )
+
+    if match:
+        month_num = timetable_month_number(
+            match.group(1)
+        )
+
+        if month_num:
+            return (
+                f"{int(match.group(2)):04d}-"
+                f"{month_num:02d}"
+            )
+
+    dated_events = []
+
+    for event in events:
+        try:
+            dated_events.append(
+                datetime.date.fromisoformat(
+                    event["event_date"]
+                )
+            )
+        except Exception:
+            pass
+
+    if dated_events:
+        first_date = min(dated_events)
+        return first_date.strftime("%Y-%m")
+
+    return get_setting(
+        "current_month",
+        datetime.date.today().strftime("%Y-%m")
+    )
+
+
+def timetable_infer_title(text_value, filename):
+    lines = [
+        timetable_clean_text(line)
+        for line in str(text_value or "").splitlines()
+        if timetable_clean_text(line)
+    ]
+
+    for line in lines[:20]:
+        if (
+            "TIMETABLE" in line.upper()
+            and len(line) <= 140
+        ):
+            return line.title()
+
+    stem = Path(
+        str(filename or "EBTA Timetable")
+    ).stem
+
+    stem = re.sub(
+        r"\(\d+\)$",
+        "",
+        stem
+    )
+
+    stem = re.sub(
+        r"[_-]+",
+        " ",
+        stem
+    )
+
+    return timetable_clean_text(stem) or "EBTA Timetable"
+
+
+def timetable_date_ranges_from_text(
+    page_text,
+    year
+):
+    ranges = []
+
+    pattern = re.compile(
+        r"\b(\d{1,2})(?:ST|ND|RD|TH)\s*-\s*"
+        r"(\d{1,2})(?:ST|ND|RD|TH)\s+"
+        r"([A-Za-z]{3,9})\b",
+        flags=re.I
+    )
+
+    for match in pattern.finditer(
+        str(page_text or "")
+    ):
+        month_num = timetable_month_number(
+            match.group(3)
+        )
+
+        if not month_num:
+            continue
+
+        ranges.append({
+            "start_day": int(match.group(1)),
+            "end_day": int(match.group(2)),
+            "month": month_num,
+            "year": int(year),
+        })
+
+    return ranges
+
+
+def timetable_extract_pdf_pages(file_bytes):
+    errors = []
+
+    try:
+        import pdfplumber
+
+        pages = []
+
+        with pdfplumber.open(
+            io.BytesIO(file_bytes)
+        ) as pdf:
+            for page in pdf.pages:
+                pages.append({
+                    "text": page.extract_text() or "",
+                    "tables": page.extract_tables() or [],
+                })
+
+        if pages:
+            return pages
+
+    except Exception as exc:
+        errors.append(str(exc))
+
+    try:
+        import fitz
+
+        document = fitz.open(
+            stream=file_bytes,
+            filetype="pdf"
+        )
+
+        pages = []
+
+        for page in document:
+            page_tables = []
+
+            try:
+                found = page.find_tables()
+
+                for table in found.tables:
+                    page_tables.append(
+                        table.extract()
+                    )
+            except Exception:
+                page_tables = []
+
+            pages.append({
+                "text": page.get_text("text") or "",
+                "tables": page_tables,
+            })
+
+        document.close()
+
+        if pages:
+            return pages
+
+    except Exception as exc:
+        errors.append(str(exc))
+
+    raise RuntimeError(
+        "This PDF could not be read. "
+        "You can upload the Excel timetable instead."
+    )
+
+
+def timetable_parse_pdf(
+    file_bytes,
+    filename
+):
+    pages = timetable_extract_pdf_pages(
+        file_bytes
+    )
+
+    all_text = "\n".join(
+        str(page.get("text") or "")
+        for page in pages
+    )
+
+    year = timetable_infer_year(
+        all_text,
+        filename
+    )
+
+    events = []
+
+    for page_number, page in enumerate(
+        pages,
+        start=1
+    ):
+        page_text = str(
+            page.get("text") or ""
+        )
+
+        page_grade = timetable_infer_grade(
+            page_text
+        )
+
+        page_tables = page.get(
+            "tables"
+        ) or []
+
+        # --------------------------------------------------
+        # Exact-date preparation timetable:
+        # Date | Time | Subject | Session | Paper focus
+        # --------------------------------------------------
+        for table in page_tables:
+            if not table or len(table) < 2:
+                continue
+
+            headers = [
+                timetable_clean_text(cell).lower()
+                for cell in (table[0] or [])
+            ]
+
+            if (
+                len(headers) >= 4
+                and headers[0] == "date"
+                and headers[1] == "time"
+                and headers[2] == "subject"
+            ):
+                for row in table[1:]:
+                    row = list(row or [])
+
+                    if len(row) < 3:
+                        continue
+
+                    date_value = timetable_parse_date_value(
+                        row[0],
+                        default_year=year
+                    )
+
+                    time_value = timetable_parse_time_range(
+                        row[1]
+                    )
+
+                    subject_label = timetable_subject_label_for_display(
+                        row[2]
+                    )
+
+                    if (
+                        not date_value
+                        or not time_value
+                        or not page_grade
+                        or not subject_label
+                    ):
+                        continue
+
+                    session_label = (
+                        timetable_clean_text(row[3])
+                        if len(row) > 3
+                        else ""
+                    )
+
+                    focus = (
+                        timetable_clean_text(row[4])
+                        if len(row) > 4
+                        else ""
+                    )
+
+                    events.append({
+                        "grade": page_grade,
+                        "event_date": date_value.isoformat(),
+                        "start_time": time_value[0],
+                        "end_time": time_value[1],
+                        "subject_label": subject_label,
+                        "subject_keys": timetable_expand_subject_keys(
+                            subject_label
+                        ),
+                        "session_label": session_label,
+                        "focus": focus,
+                        "source_page": page_number,
+                    })
+
+        # --------------------------------------------------
+        # EBTA weekly grid:
+        # Time | Friday | Saturday | Sunday
+        # --------------------------------------------------
+        date_ranges = timetable_date_ranges_from_text(
+            page_text,
+            year
+        )
+
+        grid_tables = []
+
+        for table in page_tables:
+            if not table or len(table) < 2:
+                continue
+
+            first_cell = timetable_clean_text(
+                (table[0] or [""])[0]
+                if table[0]
+                else ""
+            ).lower()
+
+            if first_cell.startswith("time"):
+                grid_tables.append(table)
+
+        if (
+            page_grade
+            and date_ranges
+            and grid_tables
+        ):
+            for date_range, table in zip(
+                date_ranges,
+                grid_tables
+            ):
+                date_by_weekday = {}
+
+                for day_number in range(
+                    date_range["start_day"],
+                    date_range["end_day"] + 1
+                ):
+                    try:
+                        date_obj = datetime.date(
+                            date_range["year"],
+                            date_range["month"],
+                            day_number
+                        )
+                    except Exception:
+                        continue
+
+                    date_by_weekday[
+                        date_obj.strftime(
+                            "%A"
+                        ).lower()
+                    ] = date_obj
+
+                headers = [
+                    timetable_clean_text(cell)
+                    for cell in (table[0] or [])
+                ]
+
+                for row in table[1:]:
+                    row = list(row or [])
+
+                    if not row:
+                        continue
+
+                    time_value = timetable_parse_time_range(
+                        row[0]
+                    )
+
+                    if not time_value:
+                        continue
+
+                    for column_index in range(
+                        1,
+                        min(len(row), len(headers))
+                    ):
+                        weekday_name = timetable_clean_text(
+                            headers[column_index]
+                        ).lower()
+
+                        date_obj = date_by_weekday.get(
+                            weekday_name
+                        )
+
+                        subject_label = timetable_subject_label_for_display(
+                            row[column_index]
+                        )
+
+                        if (
+                            not date_obj
+                            or not subject_label
+                        ):
+                            continue
+
+                        events.append({
+                            "grade": page_grade,
+                            "event_date": date_obj.isoformat(),
+                            "start_time": time_value[0],
+                            "end_time": time_value[1],
+                            "subject_label": subject_label,
+                            "subject_keys": timetable_expand_subject_keys(
+                                subject_label
+                            ),
+                            "session_label": "",
+                            "focus": "",
+                            "source_page": page_number,
+                        })
+
+    unique_events = {}
+
+    for event in events:
+        key = (
+            event["grade"],
+            event["event_date"],
+            event["start_time"],
+            event["end_time"],
+            event["subject_label"].lower(),
+            event["session_label"].lower(),
+            event["focus"].lower(),
+        )
+
+        unique_events[key] = event
+
+    events = sorted(
+        unique_events.values(),
+        key=lambda item: (
+            item["event_date"],
+            item["start_time"],
+            item["grade"],
+            item["subject_label"].lower(),
+        )
+    )
+
+    portal_month = timetable_infer_portal_month(
+        all_text,
+        filename,
+        events
+    )
+
+    title = timetable_infer_title(
+        all_text,
+        filename
+    )
+
+    return {
+        "title": title,
+        "portal_month": portal_month,
+        "events": events,
+    }
+
+
+def timetable_excel_header_key(value):
+    raw = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        timetable_clean_text(value).lower()
+    ).strip()
+
+    aliases = {
+        "grade programme": "grade",
+        "grade program": "grade",
+        "programme": "grade",
+        "program": "grade",
+        "grade": "grade",
+
+        "date": "date",
+        "session date": "date",
+        "class date": "date",
+
+        "time": "time",
+        "session time": "time",
+
+        "start": "start_time",
+        "start time": "start_time",
+
+        "end": "end_time",
+        "end time": "end_time",
+
+        "subject": "subject",
+        "class": "subject",
+
+        "session": "session",
+        "session label": "session",
+
+        "focus": "focus",
+        "paper focus": "focus",
+        "topic": "focus",
+
+        "portal month": "portal_month",
+        "month": "portal_month",
+    }
+
+    return aliases.get(raw, raw)
+
+
+def timetable_excel_time_value(value):
+    if isinstance(value, datetime.datetime):
+        return value.strftime("%H:%M")
+
+    if isinstance(value, datetime.time):
+        return value.strftime("%H:%M")
+
+    raw = timetable_clean_text(value)
+
+    match = re.search(
+        r"\b(\d{1,2}:\d{2})\b",
+        raw
+    )
+
+    if not match:
+        return ""
+
+    candidate = match.group(1)
+
+    try:
+        datetime.datetime.strptime(
+            candidate,
+            "%H:%M"
+        )
+        return candidate
+    except Exception:
+        return ""
+
+
+def timetable_parse_excel(
+    file_bytes,
+    filename
+):
+    try:
+        from openpyxl import load_workbook
+    except Exception as exc:
+        raise RuntimeError(
+            "The Excel timetable could not be opened."
+        ) from exc
+
+    workbook = load_workbook(
+        io.BytesIO(file_bytes),
+        data_only=True,
+        read_only=True
+    )
+
+    events = []
+    workbook_portal_month = ""
+
+    for worksheet in workbook.worksheets:
+        header_row_number = None
+        header_map = {}
+
+        max_header_scan = min(
+            int(worksheet.max_row or 0),
+            20
+        )
+
+        for row_number in range(
+            1,
+            max_header_scan + 1
+        ):
+            values = [
+                worksheet.cell(
+                    row=row_number,
+                    column=column_number
+                ).value
+                for column_number in range(
+                    1,
+                    int(worksheet.max_column or 0) + 1
+                )
+            ]
+
+            candidate_map = {}
+
+            for column_number, value in enumerate(
+                values,
+                start=1
+            ):
+                key = timetable_excel_header_key(
+                    value
+                )
+
+                if key:
+                    candidate_map[
+                        key
+                    ] = column_number
+
+            has_grade = "grade" in candidate_map
+            has_date = "date" in candidate_map
+            has_subject = "subject" in candidate_map
+            has_time = (
+                "time" in candidate_map
+                or (
+                    "start_time" in candidate_map
+                    and "end_time" in candidate_map
+                )
+            )
+
+            if (
+                has_date
+                and has_subject
+                and has_time
+                and (
+                    has_grade
+                    or timetable_normalize_grade(
+                        worksheet.title
+                    )
+                )
+            ):
+                header_row_number = row_number
+                header_map = candidate_map
+                break
+
+        if not header_row_number:
+            continue
+
+        sheet_grade = timetable_normalize_grade(
+            worksheet.title
+        )
+
+        for row_number in range(
+            header_row_number + 1,
+            int(worksheet.max_row or 0) + 1
+        ):
+            def cell_for(header_key):
+                column_number = header_map.get(
+                    header_key
+                )
+
+                if not column_number:
+                    return None
+
+                return worksheet.cell(
+                    row=row_number,
+                    column=column_number
+                ).value
+
+            grade = timetable_normalize_grade(
+                cell_for("grade")
+            ) or sheet_grade
+
+            date_value = timetable_parse_date_value(
+                cell_for("date")
+            )
+
+            subject_label = timetable_subject_label_for_display(
+                cell_for("subject")
+            )
+
+            if "time" in header_map:
+                time_value = timetable_parse_time_range(
+                    cell_for("time")
+                )
+            else:
+                start_time = timetable_excel_time_value(
+                    cell_for("start_time")
+                )
+                end_time = timetable_excel_time_value(
+                    cell_for("end_time")
+                )
+
+                time_value = (
+                    (start_time, end_time)
+                    if start_time
+                    and end_time
+                    and start_time < end_time
+                    else None
+                )
+
+            if (
+                not grade
+                or not date_value
+                or not subject_label
+                or not time_value
+            ):
+                continue
+
+            portal_month_value = timetable_clean_text(
+                cell_for("portal_month")
+            )
+
+            if (
+                not workbook_portal_month
+                and re.fullmatch(
+                    r"20\d{2}-\d{2}",
+                    portal_month_value
+                )
+            ):
+                workbook_portal_month = portal_month_value
+
+            events.append({
+                "grade": grade,
+                "event_date": date_value.isoformat(),
+                "start_time": time_value[0],
+                "end_time": time_value[1],
+                "subject_label": subject_label,
+                "subject_keys": timetable_expand_subject_keys(
+                    subject_label
+                ),
+                "session_label": timetable_clean_text(
+                    cell_for("session")
+                ),
+                "focus": timetable_clean_text(
+                    cell_for("focus")
+                ),
+                "source_page": None,
+            })
+
+    workbook.close()
+
+    unique_events = {}
+
+    for event in events:
+        key = (
+            event["grade"],
+            event["event_date"],
+            event["start_time"],
+            event["end_time"],
+            event["subject_label"].lower(),
+            event["session_label"].lower(),
+            event["focus"].lower(),
+        )
+
+        unique_events[key] = event
+
+    events = sorted(
+        unique_events.values(),
+        key=lambda item: (
+            item["event_date"],
+            item["start_time"],
+            item["grade"],
+            item["subject_label"].lower(),
+        )
+    )
+
+    portal_month = workbook_portal_month
+
+    if not portal_month:
+        portal_month = timetable_infer_portal_month(
+            "",
+            filename,
+            events
+        )
+
+    return {
+        "title": timetable_infer_title(
+            "",
+            filename
+        ),
+        "portal_month": portal_month,
+        "events": events,
+    }
+
+
+def timetable_event_subject_keys(event_row):
+    try:
+        values = json.loads(
+            event_row["subject_keys_json"] or "[]"
+        )
+    except Exception:
+        values = []
+
+    if not isinstance(values, list):
+        return set()
+
+    return {
+        timetable_subject_key(value)
+        for value in values
+        if timetable_subject_key(value)
+    }
+
+
+def timetable_fetch_visible_events(
+    conn,
+    month,
+    grade=None
+):
+    where = [
+        "ti.is_visible=1",
+        "(ti.portal_month=? OR substr(te.event_date,1,7)=?)"
+    ]
+    params = [
+        month,
+        month
+    ]
+
+    if grade:
+        where.append(
+            "te.grade=?"
+        )
+        params.append(
+            grade
+        )
+
+    cur = conn.cursor()
+
+    cur.execute(
+        f"""
+        SELECT
+            te.*,
+            ti.title AS timetable_title,
+            ti.portal_month
+        FROM timetable_events te
+        JOIN timetable_imports ti
+          ON ti.id=te.import_id
+        WHERE {" AND ".join(where)}
+        ORDER BY
+            te.event_date,
+            te.start_time,
+            te.grade,
+            te.subject_label,
+            te.id
+        """,
+        params
+    )
+
+    return cur.fetchall()
+
+
+def timetable_format_date(value):
+    try:
+        date_obj = datetime.date.fromisoformat(
+            str(value)
+        )
+
+        return date_obj.strftime(
+            "%a %d %b %Y"
+        )
+    except Exception:
+        return str(value or "")
+
+
+def timetable_student_html(
+    conn,
+    month,
+    grade,
+    active_subject_names
+):
+    if not grade:
+        return ""
+
+    events = timetable_fetch_visible_events(
+        conn,
+        month,
+        grade=grade
+    )
+
+    if not events:
+        return ""
+
+    active_keys = {
+        timetable_subject_key(name)
+        for name in active_subject_names
+        if timetable_subject_key(name)
+    }
+
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT name
+        FROM subjects
+        WHERE grade=?
+        """,
+        (grade,)
+    )
+
+    known_grade_keys = {
+        timetable_subject_key(row["name"])
+        for row in cur.fetchall()
+        if timetable_subject_key(row["name"])
+    }
+
+    visible_events = []
+    seen = set()
+
+    for event in events:
+        event_keys = timetable_event_subject_keys(
+            event
+        )
+
+        include = False
+
+        if not event_keys:
+            include = True
+
+        elif active_keys.intersection(
+            event_keys
+        ):
+            include = True
+
+        elif not known_grade_keys.intersection(
+            event_keys
+        ):
+            # A timetable subject that does not exist as an enrolment subject
+            # for this grade is treated as a grade-wide timetable item.
+            include = True
+
+        if not include:
+            continue
+
+        duplicate_key = (
+            event["event_date"],
+            event["start_time"],
+            event["end_time"],
+            event["subject_label"],
+            event["session_label"] or "",
+            event["focus"] or "",
+        )
+
+        if duplicate_key in seen:
+            continue
+
+        seen.add(
+            duplicate_key
+        )
+
+        visible_events.append(
+            event
+        )
+
+    if not visible_events:
+        return ""
+
+    cards = []
+
+    for event in visible_events:
+        extra = ""
+
+        if event["session_label"]:
+            extra += (
+                "<div class='mini muted' style='margin-top:4px'>"
+                + escape(
+                    event["session_label"]
+                )
+                + "</div>"
+            )
+
+        if event["focus"]:
+            extra += (
+                "<div class='mini' style='margin-top:5px'>"
+                + escape(
+                    event["focus"]
+                )
+                + "</div>"
+            )
+
+        cards.append(
+            f"""
+            <div class='card soft'
+                 style='border-left:5px solid #e3ad24'>
+                <div style='font-weight:700'>
+                    {escape(event["subject_label"])}
+                </div>
+
+                <div class='mini muted'
+                     style='margin-top:4px'>
+                    {escape(timetable_format_date(event["event_date"]))}
+                    • {escape(event["start_time"])}
+                    - {escape(event["end_time"])}
+                </div>
+
+                {extra}
+            </div>
+            """
+        )
+
+    return f"""
+    <div style='margin-bottom:16px'>
+        <h3 style='margin-bottom:8px'>Official Timetable</h3>
+
+        <div class='grid'
+             style='gap:10px'>
+            {''.join(cards)}
+        </div>
+    </div>
+    """
+
+
+def timetable_tutor_html(
+    conn,
+    month,
+    assigned_subjects
+):
+    allowed_by_grade = {}
+
+    for subject in assigned_subjects:
+        grade = str(
+            subject["grade"] or ""
+        ).strip()
+
+        key = timetable_subject_key(
+            subject["subject_name"]
+        )
+
+        if grade and key:
+            allowed_by_grade.setdefault(
+                grade,
+                set()
+            ).add(
+                key
+            )
+
+    if not allowed_by_grade:
+        return ""
+
+    all_events = []
+
+    for grade in sorted(
+        allowed_by_grade
+    ):
+        events = timetable_fetch_visible_events(
+            conn,
+            month,
+            grade=grade
+        )
+
+        for event in events:
+            keys = timetable_event_subject_keys(
+                event
+            )
+
+            if keys.intersection(
+                allowed_by_grade[grade]
+            ):
+                all_events.append(
+                    event
+                )
+
+    if not all_events:
+        return ""
+
+    all_events.sort(
+        key=lambda row: (
+            row["event_date"],
+            row["start_time"],
+            row["subject_label"]
+        )
+    )
+
+    seen = set()
+    cards = []
+
+    for event in all_events:
+        duplicate_key = (
+            event["event_date"],
+            event["start_time"],
+            event["end_time"],
+            event["grade"],
+            event["subject_label"],
+        )
+
+        if duplicate_key in seen:
+            continue
+
+        seen.add(
+            duplicate_key
+        )
+
+        extra = ""
+
+        if event["session_label"]:
+            extra += (
+                "<div class='mini muted' style='margin-top:4px'>"
+                + escape(
+                    event["session_label"]
+                )
+                + "</div>"
+            )
+
+        if event["focus"]:
+            extra += (
+                "<div class='mini' style='margin-top:5px'>"
+                + escape(
+                    event["focus"]
+                )
+                + "</div>"
+            )
+
+        cards.append(
+            f"""
+            <div class='card soft'
+                 style='border-left:5px solid #e3ad24'>
+                <div style='font-weight:700'>
+                    {escape(grade_label(event["grade"]))}
+                    - {escape(event["subject_label"])}
+                </div>
+
+                <div class='mini muted'
+                     style='margin-top:4px'>
+                    {escape(timetable_format_date(event["event_date"]))}
+                    • {escape(event["start_time"])}
+                    - {escape(event["end_time"])}
+                </div>
+
+                {extra}
+            </div>
+            """
+        )
+
+    if not cards:
+        return ""
+
+    return f"""
+    <div class='card'
+         style='border-left:5px solid #e3ad24'>
+        <h2>Official Timetable</h2>
+
+        <div class='grid'
+             style='gap:10px'>
+            {''.join(cards)}
+        </div>
+    </div>
+    """
+
+
+def admin_timetable_import_panel():
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            ti.*,
+            COUNT(te.id) AS event_count,
+            MIN(te.event_date) AS first_date,
+            MAX(te.event_date) AS last_date
+        FROM timetable_imports ti
+        LEFT JOIN timetable_events te
+          ON te.import_id=ti.id
+        GROUP BY ti.id
+        ORDER BY ti.id DESC
+        LIMIT 30
+    """)
+
+    imports = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for item in imports:
+        shown = int(
+            item["is_visible"] or 0
+        ) == 1
+
+        if item["first_date"]:
+            date_range = (
+                timetable_format_date(
+                    item["first_date"]
+                )
+            )
+
+            if (
+                item["last_date"]
+                and item["last_date"]
+                != item["first_date"]
+            ):
+                date_range += (
+                    " - "
+                    + timetable_format_date(
+                        item["last_date"]
+                    )
+                )
+        else:
+            date_range = "—"
+
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(item["title"])}</strong>
+                <div class='mini muted'>
+                    {escape(item["source_filename"])}
+                </div>
+            </td>
+
+            <td>
+                {escape(pretty_month_label(item["portal_month"]))}
+            </td>
+
+            <td>
+                {escape(date_range)}
+            </td>
+
+            <td>
+                {int(item["event_count"] or 0)}
+            </td>
+
+            <td>
+                {
+                    "<span class='chip active'>Shown</span>"
+                    if shown
+                    else "<span class='chip lapsed'>Hidden</span>"
+                }
+            </td>
+
+            <td style='white-space:nowrap'>
+                <a class='btn mini secondary'
+                   href='{url_for("admin_timetable_import_view", import_id=item["id"])}'>
+                    View
+                </a>
+
+                <form method='post'
+                      action='{url_for("admin_timetable_import_toggle", import_id=item["id"])}'
+                      style='display:inline'>
+                    <button class='btn mini secondary'>
+                        {"Hide" if shown else "Show"}
+                    </button>
+                </form>
+
+                <form method='post'
+                      action='{url_for("admin_timetable_import_delete", import_id=item["id"])}'
+                      style='display:inline'
+                      onsubmit="return confirm('Delete this imported timetable?');">
+                    <button class='btn mini danger'>
+                        Delete
+                    </button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    if not rows:
+        rows = """
+        <tr>
+            <td colspan='6'>
+                <div class='empty'>
+                    No timetable files have been uploaded yet.
+                </div>
+            </td>
+        </tr>
+        """
+
+    imported_events = request.args.get(
+        "timetable_events",
+        ""
+    ).strip()
+
+    imported_files = request.args.get(
+        "timetable_files",
+        ""
+    ).strip()
+
+    failed_files = request.args.get(
+        "timetable_failed",
+        ""
+    ).strip()
+
+    notice = ""
+
+    if imported_events:
+        notice = f"""
+        <div class='card soft'
+             style='border-left:5px solid #22c55e;margin-bottom:12px'>
+            <strong>Timetable updated</strong>
+            <div class='mini'
+                 style='margin-top:4px'>
+                {escape(imported_events)} time slot(s) imported
+                from {escape(imported_files or "1")} file(s).
+                {
+                    escape(failed_files) + " file(s) could not be imported."
+                    if failed_files and failed_files != "0"
+                    else ""
+                }
+            </div>
+        </div>
+        """
+
+    return f"""
+    <div class='card'
+         style='border-left:5px solid #e3ad24;margin-bottom:16px'>
+        <h2>Upload Timetable</h2>
+
+        <p class='mini muted'>
+            Upload one or more EBTA timetable PDFs. Excel is also supported.
+        </p>
+
+        {notice}
+
+        <form method='post'
+              action='{url_for("admin_timetable_import")}'
+              enctype='multipart/form-data'
+              class='grid'
+              style='gap:10px'>
+            <div>
+                <label>Timetable file(s)</label>
+                <input type='file'
+                       name='timetable_files'
+                       accept='.pdf,.xlsx,.xlsm'
+                       multiple
+                       required>
+            </div>
+
+            <div class='toolbar'>
+                <button class='btn success'>
+                    Upload Timetable
+                </button>
+
+                <a class='btn secondary'
+                   href='{url_for("admin_timetable_excel_template")}'>
+                    Excel Template
+                </a>
+            </div>
+        </form>
+
+        <div class='scroll-x'
+             style='margin-top:16px'>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Timetable</th>
+                        <th>Portal Month</th>
+                        <th>Dates</th>
+                        <th>Slots</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+
+
+@app.post('/admin/timetable/import')
+@require_high_admin
+def admin_timetable_import():
+    r = require_admin()
+
+    if r:
+        return r
+
+    uploads = [
+        item
+        for item in request.files.getlist(
+            "timetable_files"
+        )
+        if item and item.filename
+    ]
+
+    if not uploads:
+        return page(
+            "No Timetable File",
+            admin_nav()
+            + card_msg(
+                "Please choose a PDF or Excel timetable."
+            )
+        )
+
+    uploads = uploads[:10]
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    imported_files = 0
+    imported_events = 0
+    failed_files = 0
+    failures = []
+
+    for upload in uploads:
+        filename = Path(
+            upload.filename
+        ).name
+
+        extension = Path(
+            filename
+        ).suffix.lower()
+
+        if extension not in {
+            ".pdf",
+            ".xlsx",
+            ".xlsm"
+        }:
+            failed_files += 1
+            failures.append(
+                f"{filename}: unsupported file type"
+            )
+            continue
+
+        file_bytes = upload.read()
+
+        if (
+            not file_bytes
+            or len(file_bytes) > 15 * 1024 * 1024
+        ):
+            failed_files += 1
+            failures.append(
+                f"{filename}: file could not be read"
+            )
+            continue
+
+        try:
+            if extension == ".pdf":
+                parsed = timetable_parse_pdf(
+                    file_bytes,
+                    filename
+                )
+                source_type = "PDF"
+            else:
+                parsed = timetable_parse_excel(
+                    file_bytes,
+                    filename
+                )
+                source_type = "EXCEL"
+
+        except Exception as exc:
+            failed_files += 1
+            failures.append(
+                f"{filename}: {str(exc)}"
+            )
+            continue
+
+        events = parsed.get(
+            "events"
+        ) or []
+
+        if not events:
+            failed_files += 1
+            failures.append(
+                f"{filename}: no timetable slots were found"
+            )
+            continue
+
+        source_hash = hashlib.sha256(
+            file_bytes
+        ).hexdigest()
+
+        portal_month = str(
+            parsed.get("portal_month") or ""
+        ).strip()
+
+        if not re.fullmatch(
+            r"20\d{2}-\d{2}",
+            portal_month
+        ):
+            portal_month = events[0][
+                "event_date"
+            ][:7]
+
+        title = timetable_clean_text(
+            parsed.get("title")
+        ) or Path(
+            filename
+        ).stem
+
+        # If the same exact file was already uploaded, keep only one copy.
+        cur.execute(
+            """
+            SELECT id
+            FROM timetable_imports
+            WHERE source_hash=?
+            ORDER BY id DESC
+            """,
+            (source_hash,)
+        )
+
+        duplicate_ids = [
+            int(row["id"])
+            for row in cur.fetchall()
+        ]
+
+        for duplicate_id in duplicate_ids:
+            cur.execute(
+                "DELETE FROM timetable_imports WHERE id=?",
+                (duplicate_id,)
+            )
+
+        # Re-uploading the same named timetable for the same month replaces it.
+        cur.execute(
+            """
+            SELECT id
+            FROM timetable_imports
+            WHERE source_filename=?
+              AND portal_month=?
+            ORDER BY id DESC
+            """,
+            (
+                filename,
+                portal_month
+            )
+        )
+
+        replaced_ids = [
+            int(row["id"])
+            for row in cur.fetchall()
+        ]
+
+        for replaced_id in replaced_ids:
+            cur.execute(
+                "DELETE FROM timetable_imports WHERE id=?",
+                (replaced_id,)
+            )
+
+        cur.execute(
+            """
+            INSERT INTO timetable_imports(
+                title,
+                source_filename,
+                source_type,
+                source_hash,
+                portal_month,
+                is_visible,
+                created_at
+            )
+            VALUES(?,?,?,?,?,?,?)
+            """,
+            (
+                title,
+                filename,
+                source_type,
+                source_hash,
+                portal_month,
+                1,
+                now_utc_iso()
+            )
+        )
+
+        import_id = cur.lastrowid
+
+        for event in events:
+            cur.execute(
+                """
+                INSERT INTO timetable_events(
+                    import_id,
+                    grade,
+                    event_date,
+                    start_time,
+                    end_time,
+                    subject_label,
+                    subject_keys_json,
+                    session_label,
+                    focus,
+                    source_page,
+                    created_at
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    import_id,
+                    event["grade"],
+                    event["event_date"],
+                    event["start_time"],
+                    event["end_time"],
+                    event["subject_label"],
+                    json.dumps(
+                        event.get(
+                            "subject_keys"
+                        ) or []
+                    ),
+                    event.get(
+                        "session_label"
+                    ) or None,
+                    event.get(
+                        "focus"
+                    ) or None,
+                    event.get(
+                        "source_page"
+                    ),
+                    now_utc_iso()
+                )
+            )
+
+        imported_files += 1
+        imported_events += len(
+            events
+        )
+
+    conn.commit()
+    conn.close()
+
+    if not imported_files:
+        details = ""
+
+        if failures:
+            details = (
+                "<ul>"
+                + "".join(
+                    f"<li>{escape(item)}</li>"
+                    for item in failures[:10]
+                )
+                + "</ul>"
+            )
+
+        return page(
+            "Timetable Import",
+            f"""
+            {admin_nav()}
+
+            <section class='card'>
+                <h1>Timetable Import</h1>
+
+                <p>
+                    No timetable slots were imported.
+                </p>
+
+                {details}
+
+                <a class='btn secondary'
+                   href='{url_for("admin_sessions")}'>
+                    Back to Sessions
+                </a>
+            </section>
+            """
+        )
+
+    return redirect(
+        url_for(
+            "admin_sessions",
+            timetable_events=imported_events,
+            timetable_files=imported_files,
+            timetable_failed=failed_files
+        )
+    )
+
+
+@app.get('/admin/timetable/template.xlsx')
+@require_high_admin
+def admin_timetable_excel_template():
+    r = require_admin()
+
+    if r:
+        return r
+
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+    except Exception:
+        return page(
+            "Excel Template",
+            admin_nav()
+            + card_msg(
+                "The Excel template is not available right now."
+            )
+        )
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Timetable"
+
+    headers = [
+        "Grade",
+        "Date",
+        "Start Time",
+        "End Time",
+        "Subject",
+        "Session",
+        "Focus",
+        "Portal Month",
+    ]
+
+    worksheet.append(
+        headers
+    )
+
+    worksheet.append([
+        "G12",
+        datetime.date.today().replace(
+            day=1
+        ),
+        "18:00",
+        "20:00",
+        "Mathematics",
+        "Session 1",
+        "Revision",
+        datetime.date.today().strftime(
+            "%Y-%m"
+        ),
+    ])
+
+    for cell in worksheet[1]:
+        cell.font = Font(
+            bold=True,
+            color="FFFFFF"
+        )
+
+        cell.fill = PatternFill(
+            "solid",
+            fgColor="1B5E20"
+        )
+
+    worksheet.column_dimensions["A"].width = 14
+    worksheet.column_dimensions["B"].width = 16
+    worksheet.column_dimensions["C"].width = 14
+    worksheet.column_dimensions["D"].width = 14
+    worksheet.column_dimensions["E"].width = 28
+    worksheet.column_dimensions["F"].width = 18
+    worksheet.column_dimensions["G"].width = 42
+    worksheet.column_dimensions["H"].width = 16
+
+    output = io.BytesIO()
+    workbook.save(
+        output
+    )
+    output.seek(0)
+
+    return send_file(
+        output,
+        mimetype=(
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet"
+        ),
+        as_attachment=True,
+        download_name="EBTA_Timetable_Import_Template.xlsx"
+    )
+
+
+@app.get('/admin/timetable/import/<int:import_id>')
+@require_high_admin
+def admin_timetable_import_view(import_id):
+    r = require_admin()
+
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT *
+        FROM timetable_imports
+        WHERE id=?
+        LIMIT 1
+        """,
+        (import_id,)
+    )
+
+    timetable_import = cur.fetchone()
+
+    if not timetable_import:
+        conn.close()
+        return redirect(
+            url_for(
+                "admin_sessions"
+            )
+        )
+
+    cur.execute(
+        """
+        SELECT *
+        FROM timetable_events
+        WHERE import_id=?
+        ORDER BY
+            event_date,
+            start_time,
+            grade,
+            subject_label,
+            id
+        """,
+        (import_id,)
+    )
+
+    events = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for event in events:
+        detail = ""
+
+        if event["session_label"]:
+            detail += (
+                "<div class='mini'>"
+                + escape(
+                    event["session_label"]
+                )
+                + "</div>"
+            )
+
+        if event["focus"]:
+            detail += (
+                "<div class='mini muted'>"
+                + escape(
+                    event["focus"]
+                )
+                + "</div>"
+            )
+
+        rows += f"""
+        <tr>
+            <td>{escape(timetable_format_date(event["event_date"]))}</td>
+            <td>{escape(event["start_time"])} - {escape(event["end_time"])}</td>
+            <td>{escape(grade_label(event["grade"]))}</td>
+            <td>{escape(event["subject_label"])}</td>
+            <td>{detail or "—"}</td>
+        </tr>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class='card'>
+        <div style='display:flex;
+                    justify-content:space-between;
+                    align-items:center;
+                    gap:12px;
+                    flex-wrap:wrap'>
+            <div>
+                <h1>{escape(timetable_import["title"])}</h1>
+
+                <div class='mini muted'>
+                    {escape(timetable_import["source_filename"])}
+                    • {escape(pretty_month_label(timetable_import["portal_month"]))}
+                    • {len(events)} slot(s)
+                </div>
+            </div>
+
+            <a class='btn secondary'
+               href='{url_for("admin_sessions")}'>
+                Back
+            </a>
+        </div>
+
+        <div class='scroll-x'
+             style='margin-top:16px'>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Time</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Details</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {rows or "<tr><td colspan='5'>No timetable slots found.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    return page(
+        "Imported Timetable",
+        body
+    )
+
+
+@app.post('/admin/timetable/import/<int:import_id>/toggle')
+@require_high_admin
+def admin_timetable_import_toggle(import_id):
+    r = require_admin()
+
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT is_visible
+        FROM timetable_imports
+        WHERE id=?
+        LIMIT 1
+        """,
+        (import_id,)
+    )
+
+    row = cur.fetchone()
+
+    if row:
+        new_value = (
+            0
+            if int(row["is_visible"] or 0) == 1
+            else 1
+        )
+
+        cur.execute(
+            """
+            UPDATE timetable_imports
+            SET is_visible=?
+            WHERE id=?
+            """,
+            (
+                new_value,
+                import_id
+            )
+        )
+
+        conn.commit()
+
+    conn.close()
+
+    return redirect(
+        url_for(
+            "admin_sessions"
+        )
+    )
+
+
+@app.post('/admin/timetable/import/<int:import_id>/delete')
+@require_high_admin
+def admin_timetable_import_delete(import_id):
+    r = require_admin()
+
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        DELETE FROM timetable_imports
+        WHERE id=?
+        """,
+        (import_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return redirect(
+        url_for(
+            "admin_sessions"
+        )
+    )
+
+
 @app.get('/admin/sessions')
 @require_high_admin
 def admin_sessions():
@@ -57871,6 +60200,9 @@ def admin_sessions():
 
     body = f"""
     {admin_nav()}
+
+    {admin_timetable_import_panel()}
+
     <section class="card">
         <h1>Subject Session Links</h1>
 
