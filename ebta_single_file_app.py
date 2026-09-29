@@ -23396,7 +23396,14 @@ def student_home():
 
 
     # Sessions + meeting links follow the Student Live Access Mode
-    # selected by High Admin.
+    # selected by High Admin. If an official imported timetable exists
+    # for this month, only the recurring day/time text is hidden by default.
+    # Meeting links, IDs and passcodes remain available.
+    show_recurring_session_times = recurring_session_times_should_show(
+        conn,
+        month
+    )
+
     sessions_html = "<div class='empty'>No session links have been added for these subjects yet.</div>"
 
     if student_live_access_allowed:
@@ -23423,6 +23430,16 @@ def student_home():
                     </a>
                     """
 
+                session_time_html = (
+                    f"""
+                    <div class="mini muted">
+                        {DOW[r['day_of_week']]} • {r['start_time']} - {r['end_time']}
+                    </div>
+                    """
+                    if show_recurring_session_times
+                    else ""
+                )
+
                 cards.append(f"""
                 <div class="card soft" style="border-left:5px solid #3b82f6">
 
@@ -23440,10 +23457,7 @@ def student_home():
                                 {grade_label(r['grade'])} — {r['subject_name']}
                             </div>
 
-                            <div class="mini muted">
-                                {DOW[r['day_of_week']]} • {r['start_time']} - {r['end_time']}
-
-                            </div>
+                            {session_time_html}
                             
                             {f"""
                             <div style="margin-top:6px;font-size:13px">
@@ -28397,16 +28411,34 @@ def tutor_student_view():
         assessments_html = "<div class='empty'>No published assessments for your subjects in this month yet.</div>"
 
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    show_recurring_session_times = recurring_session_times_should_show(
+        conn,
+        month
+    )
+
     sessions_html = ""
     for row in session_rows:
         try:
             day_label = days[int(row["day_of_week"])]
         except Exception:
             day_label = "Session day"
+
+        if show_recurring_session_times:
+            session_meta_html = (
+                f"<p class='mini muted'>"
+                f"{escape(grade_label(row['grade']))} • {safe(day_label)} • "
+                f"{safe(row['start_time'])} - {safe(row['end_time'])}"
+                f"</p>"
+            )
+        else:
+            session_meta_html = (
+                f"<p class='mini muted'>{escape(grade_label(row['grade']))}</p>"
+            )
+
         sessions_html += f"""
         <div class="card soft student-view-card">
             <h3>{safe(row['subject_name'])}</h3>
-            <p class="mini muted">{escape(grade_label(row['grade']))} • {safe(day_label)} • {safe(row['start_time'])} - {safe(row['end_time'])}</p>
+            {session_meta_html}
         </div>
         """
     if not sessions_html:
@@ -29613,7 +29645,14 @@ def tutor_home():
 
 
 
-    # Sessions for this tutor
+    # Sessions for this tutor. The recurring weekly day/time line is hidden
+    # by default whenever an official imported timetable is active for the
+    # selected month. Links, meeting details and attendance tools stay visible.
+    show_recurring_session_times = recurring_session_times_should_show(
+        conn,
+        month
+    )
+
     cur.execute("""
         SELECT 
             se.id,
@@ -29655,6 +29694,16 @@ def tutor_home():
         </a>
         """
 
+        session_time_html = (
+            f"""
+            <div class="mini muted">
+                {DOW[r['day_of_week']]} • {r['start_time']} - {r['end_time']}
+            </div>
+            """
+            if show_recurring_session_times
+            else ""
+        )
+
         session_cards.append(f"""
         <div class="card soft"
              style="border-left:5px solid #3b82f6">
@@ -29673,9 +29722,7 @@ def tutor_home():
                         {grade_label(r['grade'])} — {r['subject_name']}
                     </div>
 
-                    <div class="mini muted">
-                        {DOW[r['day_of_week']]} • {r['start_time']} - {r['end_time']}
-                    </div>
+                    {session_time_html}
                     
                     {f"""
                     <div style="margin-top:6px;font-size:13px">
@@ -58968,6 +59015,53 @@ def timetable_fetch_visible_events(
     return cur.fetchall()
 
 
+# When an official imported timetable is active for a month, the imported
+# exact-date schedule is the source of truth for class dates and times.
+# Recurring session rows still remain available for meeting links, IDs,
+# passcodes and attendance, but their weekly day/time line is hidden by
+# default to avoid showing two potentially conflicting schedules.
+_RECURRING_TIMES_WITH_IMPORTED_TIMETABLE_SETTING = (
+    "show_recurring_session_times_with_imported_timetable"
+)
+
+
+def timetable_month_has_visible_events(conn, month):
+    month = str(month or "").strip()
+
+    if not re.fullmatch(r"20\d{2}-\d{2}", month):
+        return False
+
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT 1
+        FROM timetable_events te
+        JOIN timetable_imports ti
+          ON ti.id=te.import_id
+        WHERE ti.is_visible=1
+          AND (ti.portal_month=? OR substr(te.event_date,1,7)=?)
+        LIMIT 1
+        """,
+        (month, month)
+    )
+
+    return cur.fetchone() is not None
+
+
+def recurring_session_times_should_show(conn, month):
+    # No official imported timetable for this month means the original
+    # recurring weekly times remain visible as before.
+    if not timetable_month_has_visible_events(conn, month):
+        return True
+
+    # With an imported timetable, hide weekly times unless High Admin
+    # explicitly chooses to show them alongside the official timetable.
+    return get_setting(
+        _RECURRING_TIMES_WITH_IMPORTED_TIMETABLE_SETTING,
+        "0"
+    ) == "1"
+
+
 def timetable_format_date(value):
     try:
         date_obj = datetime.date.fromisoformat(
@@ -59252,8 +59346,8 @@ def timetable_render_smart_view(
         next_html = """
         <div class='empty'
              style='margin-top:12px'>
-            There are no more upcoming classes in this timetable.
-            You can still open the full timetable below to view previous dates.
+            No more classes are scheduled for this month.
+            You can still view the full timetable below.
         </div>
         """
 
@@ -59310,13 +59404,10 @@ def timetable_render_smart_view(
                 flex-wrap:wrap'>
         <div>
             <h3 style='margin-bottom:3px'>Official Timetable</h3>
-            <div class='mini muted'>
-                Your imported EBTA class schedule, filtered for you.
-            </div>
         </div>
 
         <span class='chip active'>
-            {upcoming_count} upcoming
+            {upcoming_count} coming up
         </span>
     </div>
     """
@@ -59642,7 +59733,7 @@ def admin_timetable_import_panel():
                 <form method='post'
                       action='{url_for("admin_timetable_import_delete", import_id=item["id"])}'
                       style='display:inline'
-                      onsubmit="return confirm('Delete this imported timetable?');">
+                      onsubmit="return confirm('Delete this timetable?');">
                     <button class='btn mini danger'>
                         Delete
                     </button>
@@ -59686,10 +59777,9 @@ def admin_timetable_import_panel():
             <strong>Timetable updated</strong>
             <div class='mini'
                  style='margin-top:4px'>
-                {escape(imported_events)} time slot(s) imported
-                from {escape(imported_files or "1")} file(s).
+                {escape(imported_events)} classes added successfully.
                 {
-                    escape(failed_files) + " file(s) could not be imported."
+                    escape(failed_files) + " file(s) could not be added."
                     if failed_files and failed_files != "0"
                     else ""
                 }
@@ -59740,9 +59830,9 @@ def admin_timetable_import_panel():
                 <thead>
                     <tr>
                         <th>Timetable</th>
-                        <th>Portal Month</th>
+                        <th>Month</th>
                         <th>Dates</th>
-                        <th>Slots</th>
+                        <th>Classes</th>
                         <th>Status</th>
                         <th>Actions</th>
                     </tr>
@@ -59852,7 +59942,7 @@ def admin_timetable_import():
         if not events:
             failed_files += 1
             failures.append(
-                f"{filename}: no timetable slots were found"
+                f"{filename}: no classes were found in the timetable"
             )
             continue
 
@@ -60003,6 +60093,15 @@ def admin_timetable_import():
     conn.commit()
     conn.close()
 
+    if imported_files:
+        # A newly imported official timetable becomes the date/time source of
+        # truth. Hide the older recurring weekly time text by default so the
+        # learner and tutor dashboards do not show two competing schedules.
+        set_setting(
+            _RECURRING_TIMES_WITH_IMPORTED_TIMETABLE_SETTING,
+            "0"
+        )
+
     if not imported_files:
         details = ""
 
@@ -60025,7 +60124,7 @@ def admin_timetable_import():
                 <h1>Timetable Import</h1>
 
                 <p>
-                    No timetable slots were imported.
+                    No classes were found in the timetable.
                 </p>
 
                 {details}
@@ -60236,7 +60335,7 @@ def admin_timetable_import_view(import_id):
                 <div class='mini muted'>
                     {escape(timetable_import["source_filename"])}
                     • {escape(pretty_month_label(timetable_import["portal_month"]))}
-                    • {len(events)} slot(s)
+                    • {len(events)} classes
                 </div>
             </div>
 
@@ -60260,7 +60359,7 @@ def admin_timetable_import_view(import_id):
                 </thead>
 
                 <tbody>
-                    {rows or "<tr><td colspan='5'>No timetable slots found.</td></tr>"}
+                    {rows or "<tr><td colspan='5'>No classes found.</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -60406,8 +60505,39 @@ def admin_sessions():
     """)
     sessions_rows = cur.fetchall()
 
+    cur.execute(
+        "SELECT value FROM settings WHERE key=? LIMIT 1",
+        (_RECURRING_TIMES_WITH_IMPORTED_TIMETABLE_SETTING,)
+    )
+    recurring_time_setting_row = cur.fetchone()
+    recurring_times_with_timetable = bool(
+        recurring_time_setting_row
+        and str(recurring_time_setting_row["value"] or "0") == "1"
+    )
+
     conn.commit()
     conn.close()
+
+    recurring_times_status = (
+        "Weekly session times are currently shown."
+        if recurring_times_with_timetable
+        else
+        "Weekly session times are currently hidden."
+    )
+    recurring_times_chip = (
+        "<span class='chip active'>Weekly times shown</span>"
+        if recurring_times_with_timetable
+        else "<span class='chip pending'>Weekly times hidden</span>"
+    )
+
+    recurring_times_next_value = (
+        "0" if recurring_times_with_timetable else "1"
+    )
+    recurring_times_button_label = (
+        "Hide weekly times"
+        if recurring_times_with_timetable
+        else "Show weekly times"
+    )
 
     subject_options = "".join(
         f"<option value='{s['id']}'>{escape(grade_label(s['grade']))} — {escape(s['name'])}</option>"
@@ -60489,7 +60619,7 @@ def admin_sessions():
                 <form method="post"
                       action="{url_for('admin_session_delete', sid=row['id'])}"
                       style="display:inline"
-                      onsubmit="return confirm('Delete this subject session and its linked tutor runtime sessions?');">
+                      onsubmit="return confirm('Delete this session for all linked tutors?');">
                     <button class="btn danger mini">Delete</button>
                 </form>
             </td>
@@ -60503,6 +60633,40 @@ def admin_sessions():
     {admin_nav()}
 
     {admin_timetable_import_panel()}
+
+    <section class="card soft" style="border-left:5px solid #3b82f6">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+            <div>
+                <h2 style="margin-bottom:5px">Weekly Session Times</h2>
+                <div class="mini muted">
+                    Choose whether the usual weekly day and time should also appear under
+                    <strong>Your sessions</strong> while the Official Timetable is in use.
+                    Meeting links, Meeting IDs, passcodes, Join buttons and Attendance are not affected.
+                </div>
+                <div class="mini" style="margin-top:8px">
+                    <strong>Current setting:</strong> {escape(recurring_times_status)}
+                </div>
+            </div>
+
+            <div>{recurring_times_chip}</div>
+        </div>
+
+        <form method="post"
+              action="{url_for('admin_recurring_session_times_visibility')}"
+              style="margin-top:12px">
+            <input type="hidden"
+                   name="enabled"
+                   value="{recurring_times_next_value}">
+            <button class="btn secondary">
+                {recurring_times_button_label}
+            </button>
+        </form>
+
+        <div class="mini muted" style="margin-top:8px">
+            A new timetable will hide the weekly times automatically. If there is no
+            timetable for the selected month, the weekly times will appear as normal.
+        </div>
+    </section>
 
     <section class="card">
         <h1>Subject Session Links</h1>
@@ -60563,6 +60727,29 @@ def admin_sessions():
     """
     return page("Subject Session Links", body)
     
+
+@app.post('/admin/sessions/recurring-times-visibility')
+@require_high_admin
+def admin_recurring_session_times_visibility():
+    r = require_admin()
+    if r:
+        return r
+
+    enabled = (
+        "1"
+        if request.form.get("enabled", "0") == "1"
+        else "0"
+    )
+
+    set_setting(
+        _RECURRING_TIMES_WITH_IMPORTED_TIMETABLE_SETTING,
+        enabled
+    )
+
+    return redirect(
+        url_for("admin_sessions")
+    )
+
 
 @app.post('/admin/sessions/toggle/<int:sid>')
 @require_high_admin
