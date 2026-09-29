@@ -58677,6 +58677,12 @@ def timetable_parse_excel(
     file_bytes,
     filename
 ):
+    """
+    Parse an EBTA Excel timetable without depending on worksheet dimension
+    metadata. Some valid XLSX writers omit the <dimension> range, which makes
+    openpyxl read-only worksheets report max_row/max_column as None even though
+    the sheet contains data. Streaming rows directly keeps imports reliable.
+    """
     try:
         from openpyxl import load_workbook
     except Exception as exc:
@@ -58684,176 +58690,175 @@ def timetable_parse_excel(
             "The Excel timetable could not be opened."
         ) from exc
 
-    workbook = load_workbook(
-        io.BytesIO(file_bytes),
-        data_only=True,
-        read_only=True
-    )
+    try:
+        workbook = load_workbook(
+            io.BytesIO(file_bytes),
+            data_only=True,
+            read_only=True
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "The Excel timetable could not be opened."
+        ) from exc
 
     events = []
     workbook_portal_month = ""
 
-    for worksheet in workbook.worksheets:
-        header_row_number = None
-        header_map = {}
+    try:
+        for worksheet in workbook.worksheets:
+            header_map = {}
+            row_iterator = worksheet.iter_rows(
+                values_only=True
+            )
 
-        max_header_scan = min(
-            int(worksheet.max_row or 0),
-            20
-        )
-
-        for row_number in range(
-            1,
-            max_header_scan + 1
-        ):
-            values = [
-                worksheet.cell(
-                    row=row_number,
-                    column=column_number
-                ).value
-                for column_number in range(
-                    1,
-                    int(worksheet.max_column or 0) + 1
-                )
-            ]
-
-            candidate_map = {}
-
-            for column_number, value in enumerate(
-                values,
+            # Search the first 20 physical rows for the import headers.
+            # Do not use worksheet.max_row/max_column here: both can be None
+            # for perfectly valid XLSX files that omit worksheet dimensions.
+            for row_number, values in enumerate(
+                row_iterator,
                 start=1
             ):
-                key = timetable_excel_header_key(
-                    value
-                )
+                if row_number > 20:
+                    break
 
-                if key:
-                    candidate_map[
-                        key
-                    ] = column_number
+                values = tuple(values or ())
+                candidate_map = {}
 
-            has_grade = "grade" in candidate_map
-            has_date = "date" in candidate_map
-            has_subject = "subject" in candidate_map
-            has_time = (
-                "time" in candidate_map
-                or (
-                    "start_time" in candidate_map
-                    and "end_time" in candidate_map
-                )
-            )
+                for column_number, value in enumerate(
+                    values,
+                    start=1
+                ):
+                    key = timetable_excel_header_key(
+                        value
+                    )
 
-            if (
-                has_date
-                and has_subject
-                and has_time
-                and (
-                    has_grade
-                    or timetable_normalize_grade(
-                        worksheet.title
+                    if key:
+                        candidate_map[key] = column_number
+
+                has_grade = "grade" in candidate_map
+                has_date = "date" in candidate_map
+                has_subject = "subject" in candidate_map
+                has_time = (
+                    "time" in candidate_map
+                    or (
+                        "start_time" in candidate_map
+                        and "end_time" in candidate_map
                     )
                 )
-            ):
-                header_row_number = row_number
-                header_map = candidate_map
-                break
 
-        if not header_row_number:
-            continue
+                if (
+                    has_date
+                    and has_subject
+                    and has_time
+                    and (
+                        has_grade
+                        or timetable_normalize_grade(
+                            worksheet.title
+                        )
+                    )
+                ):
+                    header_map = candidate_map
+                    break
 
-        sheet_grade = timetable_normalize_grade(
-            worksheet.title
-        )
-
-        for row_number in range(
-            header_row_number + 1,
-            int(worksheet.max_row or 0) + 1
-        ):
-            def cell_for(header_key):
-                column_number = header_map.get(
-                    header_key
-                )
-
-                if not column_number:
-                    return None
-
-                return worksheet.cell(
-                    row=row_number,
-                    column=column_number
-                ).value
-
-            grade = timetable_normalize_grade(
-                cell_for("grade")
-            ) or sheet_grade
-
-            date_value = timetable_parse_date_value(
-                cell_for("date")
-            )
-
-            subject_label = timetable_subject_label_for_display(
-                cell_for("subject")
-            )
-
-            if "time" in header_map:
-                time_value = timetable_parse_time_range(
-                    cell_for("time")
-                )
-            else:
-                start_time = timetable_excel_time_value(
-                    cell_for("start_time")
-                )
-                end_time = timetable_excel_time_value(
-                    cell_for("end_time")
-                )
-
-                time_value = (
-                    (start_time, end_time)
-                    if start_time
-                    and end_time
-                    and start_time < end_time
-                    else None
-                )
-
-            if (
-                not grade
-                or not date_value
-                or not subject_label
-                or not time_value
-            ):
+            if not header_map:
                 continue
 
-            portal_month_value = timetable_clean_text(
-                cell_for("portal_month")
+            sheet_grade = timetable_normalize_grade(
+                worksheet.title
             )
 
-            if (
-                not workbook_portal_month
-                and re.fullmatch(
-                    r"20\d{2}-\d{2}",
-                    portal_month_value
+            # Continue from the same streaming iterator so every row after the
+            # detected header is processed, even when sheet dimensions are absent.
+            for values in row_iterator:
+                values = tuple(values or ())
+
+                def cell_for(header_key):
+                    column_number = header_map.get(
+                        header_key
+                    )
+
+                    if not column_number:
+                        return None
+
+                    index = int(column_number) - 1
+
+                    if index < 0 or index >= len(values):
+                        return None
+
+                    return values[index]
+
+                grade = timetable_normalize_grade(
+                    cell_for("grade")
+                ) or sheet_grade
+
+                date_value = timetable_parse_date_value(
+                    cell_for("date")
                 )
-            ):
-                workbook_portal_month = portal_month_value
 
-            events.append({
-                "grade": grade,
-                "event_date": date_value.isoformat(),
-                "start_time": time_value[0],
-                "end_time": time_value[1],
-                "subject_label": subject_label,
-                "subject_keys": timetable_expand_subject_keys(
-                    subject_label
-                ),
-                "session_label": timetable_clean_text(
-                    cell_for("session")
-                ),
-                "focus": timetable_clean_text(
-                    cell_for("focus")
-                ),
-                "source_page": None,
-            })
+                subject_label = timetable_subject_label_for_display(
+                    cell_for("subject")
+                )
 
-    workbook.close()
+                if "time" in header_map:
+                    time_value = timetable_parse_time_range(
+                        cell_for("time")
+                    )
+                else:
+                    start_time = timetable_excel_time_value(
+                        cell_for("start_time")
+                    )
+                    end_time = timetable_excel_time_value(
+                        cell_for("end_time")
+                    )
+
+                    time_value = (
+                        (start_time, end_time)
+                        if start_time
+                        and end_time
+                        and start_time < end_time
+                        else None
+                    )
+
+                if (
+                    not grade
+                    or not date_value
+                    or not subject_label
+                    or not time_value
+                ):
+                    continue
+
+                portal_month_value = timetable_clean_text(
+                    cell_for("portal_month")
+                )
+
+                if (
+                    not workbook_portal_month
+                    and re.fullmatch(
+                        r"20\d{2}-\d{2}",
+                        portal_month_value
+                    )
+                ):
+                    workbook_portal_month = portal_month_value
+
+                events.append({
+                    "grade": grade,
+                    "event_date": date_value.isoformat(),
+                    "start_time": time_value[0],
+                    "end_time": time_value[1],
+                    "subject_label": subject_label,
+                    "subject_keys": timetable_expand_subject_keys(
+                        subject_label
+                    ),
+                    "session_label": timetable_clean_text(
+                        cell_for("session")
+                    ),
+                    "focus": timetable_clean_text(
+                        cell_for("focus")
+                    ),
+                    "source_page": None,
+                })
+    finally:
+        workbook.close()
 
     unique_events = {}
 
@@ -58897,7 +58902,6 @@ def timetable_parse_excel(
         "portal_month": portal_month,
         "events": events,
     }
-
 
 def timetable_event_subject_keys(event_row):
     try:
