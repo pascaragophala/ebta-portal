@@ -3102,7 +3102,24 @@ def init_db():
     ensure_column(conn, "subjects", "uploads_locked", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "materials", "admin_unlocked", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "materials", "delivery_mode", "TEXT NOT NULL DEFAULT 'GROUP'")
+    ensure_column(conn, "materials", "assignment_scope", "TEXT NOT NULL DEFAULT 'ALL'")
     ensure_column(conn, "tutor_subjects", "delivery_mode", "TEXT NOT NULL DEFAULT 'GROUP'")
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS material_student_targets(
+        material_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(material_id, student_id),
+        FOREIGN KEY(material_id) REFERENCES materials(id) ON DELETE CASCADE,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_material_student_targets_student
+        ON material_student_targets(student_id, material_id)
+    """)
     ensure_column(conn, "students", "phone_type", "TEXT DEFAULT 'SA'")
     ensure_column(conn, "students", "guardian_phone_type", "TEXT DEFAULT 'SA'")
     ensure_column(conn, "sessions", "meeting_id", "TEXT")
@@ -3779,7 +3796,24 @@ def init_db():
     
     ensure_column(conn, "assessment_questions", "question_file_path", "TEXT")
     ensure_column(conn, "assessments", "max_attempts", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "assessments", "target_scope", "TEXT NOT NULL DEFAULT 'ALL'")
     ensure_column(conn, "assessment_attempts", "used_attempts", "INTEGER NOT NULL DEFAULT 0")
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS assessment_student_targets(
+        assessment_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(assessment_id, student_id),
+        FOREIGN KEY(assessment_id) REFERENCES assessments(id) ON DELETE CASCADE,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_assessment_student_targets_student
+        ON assessment_student_targets(student_id, assessment_id)
+    """)
     
     cur.execute("""
         UPDATE assessment_attempts
@@ -7158,6 +7192,7 @@ def queue_material_student_emails(conn, material_id):
     cur = conn.cursor()
     cur.execute("""
         SELECT m.id,m.subject_id,m.tutor_id,m.month,m.title,m.kind,m.is_assignment,m.open_date,m.due_date,
+               COALESCE(m.assignment_scope,'ALL') AS assignment_scope,
                s.name AS subject_name,s.grade,t.full_name AS tutor_name
         FROM materials m JOIN subjects s ON s.id=m.subject_id JOIN tutors t ON t.id=m.tutor_id
         WHERE m.id=? LIMIT 1
@@ -7178,8 +7213,25 @@ def queue_material_student_emails(conn, material_id):
         SELECT DISTINCT st.id,st.full_name,st.email FROM enrollments e
         JOIN students st ON st.id=e.student_id
         WHERE e.subject_id=? AND e.month=? AND e.status='ACTIVE'
-          AND st.email IS NOT NULL AND TRIM(st.email)<>'' ORDER BY st.id
-    """, (material["subject_id"], material["month"]))
+          AND st.email IS NOT NULL AND TRIM(st.email)<>''
+          AND (
+                ?=0
+                OR ?<>'SPECIFIC'
+                OR EXISTS (
+                    SELECT 1
+                    FROM material_student_targets mst
+                    WHERE mst.material_id=?
+                      AND mst.student_id=st.id
+                )
+          )
+        ORDER BY st.id
+    """, (
+        material["subject_id"],
+        material["month"],
+        1 if is_assignment else 0,
+        str(material["assignment_scope"] or "ALL").upper(),
+        material["id"]
+    ))
     queued = 0
     for student in cur.fetchall():
         if queue_email_notification(
@@ -23037,7 +23089,16 @@ def student_home():
             AND subject_id IN ({','.join('?'*len(active_sub_ids))})
             AND month = ?
             AND (open_date IS NULL OR TRIM(open_date)='' OR open_date <= ?)
-        """, (*active_sub_ids, month, student_today_iso))
+            AND (
+                COALESCE(assignment_scope,'ALL')='ALL'
+                OR EXISTS (
+                    SELECT 1
+                    FROM material_student_targets mst
+                    WHERE mst.material_id=materials.id
+                      AND mst.student_id=?
+                )
+            )
+        """, (*active_sub_ids, month, student_today_iso, sid))
 
         row = cur.fetchone()
         total_assignments = row["total"] if row else 0
@@ -23070,7 +23131,16 @@ def student_home():
             WHERE a.is_published = 1
               AND a.subject_id IN ({','.join('?' * len(active_sub_ids))})
               AND a.month = ?
-        """, (*active_sub_ids, month))
+              AND (
+                    COALESCE(a.target_scope,'ALL')='ALL'
+                    OR EXISTS (
+                        SELECT 1
+                        FROM assessment_student_targets ast
+                        WHERE ast.assessment_id=a.id
+                          AND ast.student_id=?
+                    )
+              )
+        """, (*active_sub_ids, month, sid))
 
         row = cur.fetchone()
         total_assessments = row["total"] if row else 0
@@ -23353,8 +23423,17 @@ def student_home():
             AND m.subject_id IN ({','.join('?'*len(active_sub_ids))})
             AND m.month = ?
             AND (m.open_date IS NULL OR TRIM(m.open_date)='' OR m.open_date <= ?)
+            AND (
+                COALESCE(m.assignment_scope,'ALL')='ALL'
+                OR EXISTS (
+                    SELECT 1
+                    FROM material_student_targets mst
+                    WHERE mst.material_id=m.id
+                      AND mst.student_id=?
+                )
+            )
             ORDER BY m.created_at DESC
-        """, (*active_sub_ids, month, student_today_iso))
+        """, (*active_sub_ids, month, student_today_iso, sid))
 
         assignments = cur.fetchall()
 
@@ -24480,6 +24559,10 @@ def student_submit(mid):
             f"You were not enrolled for this subject in {pretty_month_label(mat['month'])}."
         ))
 
+    if not student_is_assignment_target(conn, mid, sid):
+        conn.close()
+        return page("Not Assigned", card_msg("This assignment was not assigned to you."))
+
     # Check open date
     if mat["open_date"]:
         try:
@@ -24583,8 +24666,18 @@ def student_open_material(mid):
                 OR TRIM(m.open_date)=''
                 OR m.open_date <= ?
           )
+          AND (
+                (COALESCE(m.is_assignment,0)=0 AND COALESCE(m.kind,'')!='assignment')
+                OR COALESCE(m.assignment_scope,'ALL')='ALL'
+                OR EXISTS (
+                    SELECT 1
+                    FROM material_student_targets mst
+                    WHERE mst.material_id=m.id
+                      AND mst.student_id=?
+                )
+          )
         LIMIT 1
-    """, (mid, sid, student_today_iso))
+    """, (mid, sid, student_today_iso, sid))
 
     material = cur.fetchone()
     conn.close()
@@ -24648,6 +24741,16 @@ def student_materials():
             OR m.open_date <= ?
         )
         AND (
+            (COALESCE(m.is_assignment,0)=0 AND COALESCE(m.kind,'')!='assignment')
+            OR COALESCE(m.assignment_scope,'ALL')='ALL'
+            OR EXISTS (
+                SELECT 1
+                FROM material_student_targets mst
+                WHERE mst.material_id=m.id
+                  AND mst.student_id=?
+            )
+        )
+        AND (
             (
                 COALESCE(m.delivery_mode, 'GROUP') IN ('GROUP','BOTH')
                 AND EXISTS (
@@ -24677,6 +24780,7 @@ def student_materials():
     access_params = [
         month,
         student_today_iso,
+        sid,
         sid,
         month,
         sid
@@ -25226,8 +25330,17 @@ def student_assignments():
             AND m.subject_id IN ({','.join('?'*len(active_sub_ids))})
             AND m.month = ?
             AND (m.open_date IS NULL OR TRIM(m.open_date)='' OR m.open_date <= ?)
+            AND (
+                COALESCE(m.assignment_scope,'ALL')='ALL'
+                OR EXISTS (
+                    SELECT 1
+                    FROM material_student_targets mst
+                    WHERE mst.material_id=m.id
+                      AND mst.student_id=?
+                )
+            )
             ORDER BY m.created_at DESC
-        """, (*active_sub_ids, month, student_today_iso))
+        """, (*active_sub_ids, month, student_today_iso, sid))
 
         assignments = cur.fetchall()
 
@@ -26135,6 +26248,10 @@ def student_submit_assignment(mid:int):
             f"You were not enrolled for this subject in {pretty_month_label(assignment_month)}."
         ))
 
+    if not student_is_assignment_target(conn, mid, sid):
+        conn.close()
+        return page("Not Assigned", card_msg("This assignment was not assigned to you."))
+
     # Check open date
     if m["open_date"]:
         try:
@@ -26666,7 +26783,14 @@ def student_progress_data(student_id, month):
           AND m.month LIKE ?
           AND (m.is_assignment=1 OR m.kind='assignment')
           AND (m.open_date IS NULL OR TRIM(m.open_date)='' OR m.open_date <= ?)
-    """, (*active_subject_ids, month + "%", today_iso))
+          AND (
+                COALESCE(m.assignment_scope,'ALL')='ALL'
+                OR EXISTS (
+                    SELECT 1 FROM material_student_targets mst
+                    WHERE mst.material_id=m.id AND mst.student_id=?
+                )
+          )
+    """, (*active_subject_ids, month + "%", today_iso, student_id))
 
     total_assignments = cur.fetchone()["c"] or 0
 
@@ -26678,7 +26802,14 @@ def student_progress_data(student_id, month):
           AND m.month LIKE ?
           AND (m.is_assignment=1 OR m.kind='assignment')
           AND (m.open_date IS NULL OR TRIM(m.open_date)='' OR m.open_date <= ?)
-    """, (student_id, *active_subject_ids, month + "%", today_iso))
+          AND (
+                COALESCE(m.assignment_scope,'ALL')='ALL'
+                OR EXISTS (
+                    SELECT 1 FROM material_student_targets mst
+                    WHERE mst.material_id=m.id AND mst.student_id=?
+                )
+          )
+    """, (student_id, *active_subject_ids, month + "%", today_iso, student_id))
 
     completed_assignments = cur.fetchone()["c"] or 0
     pending_assignments = max(0, total_assignments - completed_assignments)
@@ -26693,13 +26824,20 @@ def student_progress_data(student_id, month):
           AND m.due_date IS NOT NULL
           AND m.due_date >= ?
           AND m.due_date <= ?
+          AND (
+                COALESCE(m.assignment_scope,'ALL')='ALL'
+                OR EXISTS (
+                    SELECT 1 FROM material_student_targets mst
+                    WHERE mst.material_id=m.id AND mst.student_id=?
+                )
+          )
           AND NOT EXISTS (
               SELECT 1
               FROM submissions sub
               WHERE sub.material_id=m.id
                 AND sub.student_id=?
           )
-    """, (*active_subject_ids, month + "%", today_iso, today_iso, next_7_iso, student_id))
+    """, (*active_subject_ids, month + "%", today_iso, today_iso, next_7_iso, student_id, student_id))
 
     due_soon = cur.fetchone()["c"] or 0
 
@@ -26712,13 +26850,20 @@ def student_progress_data(student_id, month):
           AND (m.open_date IS NULL OR TRIM(m.open_date)='' OR m.open_date <= ?)
           AND m.due_date IS NOT NULL
           AND m.due_date < ?
+          AND (
+                COALESCE(m.assignment_scope,'ALL')='ALL'
+                OR EXISTS (
+                    SELECT 1 FROM material_student_targets mst
+                    WHERE mst.material_id=m.id AND mst.student_id=?
+                )
+          )
           AND NOT EXISTS (
               SELECT 1
               FROM submissions sub
               WHERE sub.material_id=m.id
                 AND sub.student_id=?
           )
-    """, (*active_subject_ids, month + "%", today_iso, today_iso, student_id))
+    """, (*active_subject_ids, month + "%", today_iso, today_iso, student_id, student_id))
 
     overdue = cur.fetchone()["c"] or 0
 
@@ -26813,7 +26958,14 @@ def student_progress_data(student_id, month):
               AND month LIKE ?
               AND (is_assignment=1 OR kind='assignment')
               AND (open_date IS NULL OR TRIM(open_date)='' OR open_date <= ?)
-        """, (subject_id, month + "%", today_iso))
+              AND (
+                    COALESCE(assignment_scope,'ALL')='ALL'
+                    OR EXISTS (
+                        SELECT 1 FROM material_student_targets mst
+                        WHERE mst.material_id=materials.id AND mst.student_id=?
+                    )
+              )
+        """, (subject_id, month + "%", today_iso, student_id))
 
         sub_total_assignments = cur.fetchone()["c"] or 0
 
@@ -26825,7 +26977,14 @@ def student_progress_data(student_id, month):
               AND m.month LIKE ?
               AND (m.is_assignment=1 OR m.kind='assignment')
               AND (m.open_date IS NULL OR TRIM(m.open_date)='' OR m.open_date <= ?)
-        """, (student_id, subject_id, month + "%", today_iso))
+              AND (
+                    COALESCE(m.assignment_scope,'ALL')='ALL'
+                    OR EXISTS (
+                        SELECT 1 FROM material_student_targets mst
+                        WHERE mst.material_id=m.id AND mst.student_id=?
+                    )
+              )
+        """, (student_id, subject_id, month + "%", today_iso, student_id))
 
         sub_completed_assignments = cur.fetchone()["c"] or 0
         sub_assignment_rate = percent_value(sub_completed_assignments, sub_total_assignments)
@@ -28807,6 +28966,128 @@ def tutor_student_view_assessment_questions(assessment_id):
     return page("Assessment Questions", body)
 
 
+
+
+def tutor_subject_active_students(conn, tutor_id, subject_id, month):
+    """Return active learners for one of the tutor's assigned subjects/month."""
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 1
+        FROM tutor_subjects
+        WHERE tutor_id=? AND subject_id=?
+        LIMIT 1
+    """, (int(tutor_id), int(subject_id)))
+
+    if not cur.fetchone():
+        return []
+
+    cur.execute("""
+        SELECT DISTINCT
+            st.id,
+            st.full_name,
+            st.grade,
+            st.email
+        FROM enrollments e
+        JOIN students st ON st.id=e.student_id
+        WHERE e.subject_id=?
+          AND e.month=?
+          AND UPPER(COALESCE(e.status,''))='ACTIVE'
+          AND COALESCE(st.is_active,1)=1
+          AND st.deleted_at IS NULL
+        ORDER BY st.full_name
+    """, (int(subject_id), str(month or '').strip()))
+
+    return cur.fetchall()
+
+
+def tutor_validate_specific_students(conn, tutor_id, subject_id, month, raw_ids):
+    """Validate submitted learner IDs against active learners in the subject/month."""
+    requested = set()
+
+    for value in raw_ids or []:
+        try:
+            requested.add(int(value))
+        except Exception:
+            pass
+
+    rows = tutor_subject_active_students(
+        conn,
+        tutor_id,
+        subject_id,
+        month
+    )
+    valid_ids = {int(row['id']) for row in rows}
+
+    if not requested:
+        return None, "Please select at least one learner."
+
+    if not requested.issubset(valid_ids):
+        return None, "One or more selected learners are not active in this subject for the selected month."
+
+    return sorted(requested), None
+
+
+def student_is_assignment_target(conn, material_id, student_id):
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT COALESCE(assignment_scope,'ALL') AS assignment_scope
+        FROM materials
+        WHERE id=?
+        LIMIT 1
+    """, (int(material_id),))
+    row = cur.fetchone()
+
+    if not row:
+        return False
+
+    if str(row['assignment_scope'] or 'ALL').upper() != 'SPECIFIC':
+        return True
+
+    cur.execute("""
+        SELECT 1
+        FROM material_student_targets
+        WHERE material_id=? AND student_id=?
+        LIMIT 1
+    """, (int(material_id), int(student_id)))
+
+    return cur.fetchone() is not None
+
+
+@app.get('/tutor/subject-students')
+def tutor_subject_students():
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+    subject_id = request.args.get('subject_id', '').strip()
+    month = request.args.get('month', '').strip()
+
+    try:
+        subject_id = int(subject_id)
+    except Exception:
+        return {"students": [], "message": "Choose a subject."}, 400
+
+    if not month:
+        month = get_active_month('tutor')
+
+    conn = get_db()
+    rows = tutor_subject_active_students(conn, tid, subject_id, month)
+    conn.close()
+
+    return {
+        "students": [
+            {
+                "id": int(row['id']),
+                "name": row['full_name'] or 'Learner',
+                "grade": grade_label(row['grade'] or ''),
+            }
+            for row in rows
+        ]
+    }
+
+
 @app.get('/tutor')
 def tutor_home():
   
@@ -29664,6 +29945,7 @@ def tutor_home():
                     <div>
                         <label><b>Subject</b></label>
                         <select name="subject_id"
+                                id="tutorUploadSubject"
                                 required
                                 style="width:100%">
                             {subjects_options}
@@ -29815,6 +30097,37 @@ def tutor_home():
 
                     <div class="tutor-upload-tip">
                         Set the dates learners can access and submit the assignment.
+                    </div>
+
+                    <div class="card soft" style="margin-top:14px;border-left:5px solid #7c3aed">
+                        <label style="font-weight:800">Assign this task to</label>
+
+                        <div style="display:grid;gap:8px;margin-top:9px">
+                            <label style="display:flex;gap:8px;align-items:center">
+                                <input type="radio"
+                                       name="target_scope"
+                                       value="ALL"
+                                       checked>
+                                All students in this subject
+                            </label>
+
+                            <label style="display:flex;gap:8px;align-items:center">
+                                <input type="radio"
+                                       name="target_scope"
+                                       value="SPECIFIC">
+                                Specific student(s)
+                            </label>
+                        </div>
+
+                        <div id="tutorAssignmentStudentPicker"
+                             style="display:none;margin-top:12px">
+                            <div class="mini muted"
+                                 id="tutorAssignmentStudentStatus">
+                                Choose Specific student(s) to load the learner list.
+                            </div>
+                            <div id="tutorAssignmentStudentList"
+                                 style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:9px"></div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -30176,6 +30489,18 @@ def tutor_home():
                     document.getElementById("tutorUploadSubmitButton");
                 const title =
                     document.getElementById("tutorUploadTitle");
+                const subjectSelect =
+                    document.getElementById("tutorUploadSubject");
+                const assignmentTargetRadios = Array.from(
+                    form.querySelectorAll('input[name="target_scope"]')
+                );
+                const assignmentStudentPicker =
+                    document.getElementById("tutorAssignmentStudentPicker");
+                const assignmentStudentStatus =
+                    document.getElementById("tutorAssignmentStudentStatus");
+                const assignmentStudentList =
+                    document.getElementById("tutorAssignmentStudentList");
+                let assignmentStudentsLoadedFor = "";
 
                 function selectedType() {{
                     const selected = radios.find(function (radio) {{
@@ -30191,6 +30516,78 @@ def tutor_home():
 
                 function setDisabled(element, disabled) {{
                     if (element) element.disabled = disabled;
+                }}
+
+                function selectedTargetScope() {{
+                    const selected = assignmentTargetRadios.find(function (radio) {{
+                        return radio.checked;
+                    }});
+                    return selected ? selected.value : "ALL";
+                }}
+
+                async function loadAssignmentStudents(force) {{
+                    if (!assignmentStudentList || !subjectSelect) return;
+
+                    const subjectId = subjectSelect.value || "";
+                    const key = subjectId + "|{escape(month)}";
+
+                    if (!subjectId) {{
+                        assignmentStudentList.innerHTML = "";
+                        if (assignmentStudentStatus) assignmentStudentStatus.textContent = "Choose a subject first.";
+                        return;
+                    }}
+
+                    if (!force && assignmentStudentsLoadedFor === key) return;
+
+                    if (assignmentStudentStatus) assignmentStudentStatus.textContent = "Loading learners...";
+                    assignmentStudentList.innerHTML = "";
+
+                    try {{
+                        const response = await fetch(
+                            "/tutor/subject-students?subject_id="
+                            + encodeURIComponent(subjectId)
+                            + "&month="
+                            + encodeURIComponent("{escape(month)}"),
+                            {{ credentials: "same-origin" }}
+                        );
+                        const data = await response.json();
+                        const students = Array.isArray(data.students) ? data.students : [];
+
+                        assignmentStudentsLoadedFor = key;
+
+                        if (!students.length) {{
+                            if (assignmentStudentStatus) assignmentStudentStatus.textContent = "No active learners found for this subject and month.";
+                            return;
+                        }}
+
+                        if (assignmentStudentStatus) assignmentStudentStatus.textContent = students.length + " learner(s) available";
+
+                        assignmentStudentList.innerHTML = students.map(function(student) {{
+                            const id = String(student.id);
+                            const name = String(student.name || "Learner");
+                            const grade = String(student.grade || "");
+                            return '<label style="display:flex;gap:8px;align-items:flex-start;padding:9px;border:1px solid #e2e8f0;border-radius:10px;background:#fff">'
+                                + '<input type="checkbox" name="target_student_ids" value="' + id + '">'
+                                + '<span><strong>' + name.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</strong>'
+                                + (grade ? '<div class="mini muted">' + grade.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</div>' : '')
+                                + '</span></label>';
+                        }}).join("");
+                    }} catch (error) {{
+                        if (assignmentStudentStatus) assignmentStudentStatus.textContent = "Could not load learners. Please try again.";
+                    }}
+                }}
+
+                function updateAssignmentTargetPicker() {{
+                    const isAssignment = selectedType() === "assignment";
+                    const isSpecific = selectedTargetScope() === "SPECIFIC";
+
+                    if (assignmentStudentPicker) {{
+                        assignmentStudentPicker.style.display = (isAssignment && isSpecific) ? "block" : "none";
+                    }}
+
+                    if (isAssignment && isSpecific) {{
+                        loadAssignmentStudents(false);
+                    }}
                 }}
 
                 function updateUploadForm() {{
@@ -30253,10 +30650,39 @@ def tutor_home():
                                 "Example: Photosynthesis Lesson 1 Notes";
                         }}
                     }}
+
+                    updateAssignmentTargetPicker();
                 }}
 
                 radios.forEach(function (radio) {{
                     radio.addEventListener("change", updateUploadForm);
+                }});
+
+                assignmentTargetRadios.forEach(function (radio) {{
+                    radio.addEventListener("change", updateAssignmentTargetPicker);
+                }});
+
+                if (subjectSelect) {{
+                    subjectSelect.addEventListener("change", function() {{
+                        assignmentStudentsLoadedFor = "";
+                        if (selectedTargetScope() === "SPECIFIC") {{
+                            loadAssignmentStudents(true);
+                        }}
+                    }});
+                }}
+
+                form.addEventListener("submit", function(event) {{
+                    if (selectedType() !== "assignment") return;
+                    if (selectedTargetScope() !== "SPECIFIC") return;
+
+                    const checked = form.querySelectorAll(
+                        'input[name="target_student_ids"]:checked'
+                    );
+
+                    if (!checked.length) {{
+                        event.preventDefault();
+                        alert("Please select at least one learner for this assignment.");
+                    }}
                 }});
 
                 updateUploadForm();
@@ -32817,6 +33243,10 @@ def tutor_upload():
     files = request.files.getlist('file')
 
     is_assignment = 1 if request.form.get('is_assignment') == 'on' else 0
+    target_scope = request.form.get('target_scope', 'ALL').strip().upper()
+    if target_scope not in ('ALL', 'SPECIFIC'):
+        target_scope = 'ALL'
+    target_student_ids = request.form.getlist('target_student_ids')
     open_date = request.form.get('open_date', '').strip() or None
     due = request.form.get('due', '').strip() or None
 
@@ -32880,6 +33310,23 @@ def tutor_upload():
             card_msg("Uploads and assignments are currently locked for this subject. Contact Admin.")
         )
 
+    assignment_target_ids = []
+
+    if is_assignment and target_scope == 'SPECIFIC':
+        assignment_target_ids, target_error = tutor_validate_specific_students(
+            conn,
+            tid,
+            subject_id,
+            month,
+            target_student_ids
+        )
+
+        if target_error:
+            conn.close()
+            return page("Choose Learners", card_msg(target_error))
+    else:
+        target_scope = 'ALL'
+
     file_path, file_count = save_uploaded_files_as_single_file(
         files=files,
         target_dir=MATERIALS_DIR,
@@ -32920,9 +33367,10 @@ def tutor_upload():
             open_date,
             due_date,
             max_points,
-            delivery_mode
+            delivery_mode,
+            assignment_scope
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         subject_id,
         tid,
@@ -32936,10 +33384,23 @@ def tutor_upload():
         open_date,
         due,
         max_points,
-        delivery_mode
+        delivery_mode,
+        target_scope if is_assignment else 'ALL'
     ))
 
     material_id = int(cur.lastrowid)
+
+    if is_assignment and target_scope == 'SPECIFIC':
+        for student_id in assignment_target_ids:
+            cur.execute("""
+                INSERT OR IGNORE INTO material_student_targets(
+                    material_id,
+                    student_id,
+                    created_at
+                )
+                VALUES(?,?,?)
+            """, (material_id, student_id, now))
+
     queue_material_student_emails(conn, material_id)
     conn.commit()
     conn.close()
@@ -33041,6 +33502,7 @@ def tutor_delete_material(mid:int):
             conn.close(); return page("Locked", card_msg("You can only delete within 24 hours."))
     except Exception:
         pass
+    cur.execute("DELETE FROM material_student_targets WHERE material_id=?", (mid,))
     cur.execute("DELETE FROM materials WHERE id=?", (mid,))
     conn.commit(); conn.close()
     return redirect(url_for('tutor_home'))
@@ -33075,18 +33537,27 @@ def tutor_assignment_manage(mid: int):
 
     total = m['max_points'] if m['max_points'] else 100
 
-    # Active students in this subject/month
-    month = get_active_month('tutor')
+    # Learners this assignment was created for.
+    month = m['month']
 
     cur.execute("""
-        SELECT st.id, st.full_name
+        SELECT DISTINCT st.id, st.full_name
         FROM enrollments e
         JOIN students st ON st.id = e.student_id
         WHERE e.subject_id = ?
           AND e.month = ?
           AND e.status = 'ACTIVE'
+          AND (
+                COALESCE(?, 'ALL')='ALL'
+                OR EXISTS (
+                    SELECT 1
+                    FROM material_student_targets mst
+                    WHERE mst.material_id=?
+                      AND mst.student_id=st.id
+                )
+          )
         ORDER BY st.full_name
-    """, (m['subject_id'], month))
+    """, (m['subject_id'], month, m['assignment_scope'], mid))
 
     studs = cur.fetchall()
     rows = []
@@ -116038,8 +116509,17 @@ def student_can_access_assessment(student_id, assessment_id):
           AND e.status='ACTIVE'
           AND e.month = a.month
           AND a.is_published=1
+          AND (
+                COALESCE(a.target_scope,'ALL')='ALL'
+                OR EXISTS (
+                    SELECT 1
+                    FROM assessment_student_targets ast
+                    WHERE ast.assessment_id=a.id
+                      AND ast.student_id=?
+                )
+          )
         LIMIT 1
-    """, (assessment_id, student_id))
+    """, (assessment_id, student_id, student_id))
 
     allowed = cur.fetchone() is not None
 
@@ -116808,14 +117288,35 @@ def tutor_new_assessment():
 
             <div>
                 <label>Subject</label>
-                <select name="subject_id" required>
+                <select name="subject_id" id="assessmentSubjectSelect" required>
                     {subject_options}
                 </select>
             </div>
 
             <div>
                 <label>Month</label>
-                <input type="month" name="month" value="{escape(month)}" required>
+                <input type="month" id="assessmentMonthInput" name="month" value="{escape(month)}" required>
+            </div>
+
+            <div style="grid-column:1/-1" class="card soft">
+                <label style="font-weight:800">Assign this assessment to</label>
+
+                <div style="display:grid;gap:8px;margin-top:9px">
+                    <label style="display:flex;gap:8px;align-items:center">
+                        <input type="radio" name="target_scope" value="ALL" checked>
+                        All students in this subject
+                    </label>
+                    <label style="display:flex;gap:8px;align-items:center">
+                        <input type="radio" name="target_scope" value="SPECIFIC">
+                        Specific student(s)
+                    </label>
+                </div>
+
+                <div id="assessmentStudentPicker" style="display:none;margin-top:12px">
+                    <div class="mini muted" id="assessmentStudentStatus"></div>
+                    <div id="assessmentStudentList"
+                         style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:9px"></div>
+                </div>
             </div>
 
             <div style="grid-column:1/-1">
@@ -116892,6 +117393,106 @@ def tutor_new_assessment():
                 </button>
             </div>
         </form>
+
+        <script>
+        (function() {{
+            const form = document.querySelector('form[action="/tutor/assessments/new"]');
+            if (!form) return;
+
+            const subject = document.getElementById("assessmentSubjectSelect");
+            const monthInput = document.getElementById("assessmentMonthInput");
+            const picker = document.getElementById("assessmentStudentPicker");
+            const status = document.getElementById("assessmentStudentStatus");
+            const list = document.getElementById("assessmentStudentList");
+            const radios = Array.from(form.querySelectorAll('input[name="target_scope"]'));
+            let loadedKey = "";
+
+            function scope() {{
+                const checked = radios.find(function(r) {{ return r.checked; }});
+                return checked ? checked.value : "ALL";
+            }}
+
+            function safe(value) {{
+                return String(value || "")
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;");
+            }}
+
+            async function loadStudents(force) {{
+                const subjectId = subject ? subject.value : "";
+                const month = monthInput ? monthInput.value : "";
+                const key = subjectId + "|" + month;
+
+                if (!subjectId || !month) {{
+                    list.innerHTML = "";
+                    status.textContent = "Choose a subject and month first.";
+                    return;
+                }}
+
+                if (!force && loadedKey === key) return;
+
+                status.textContent = "Loading learners...";
+                list.innerHTML = "";
+
+                try {{
+                    const response = await fetch(
+                        "/tutor/subject-students?subject_id=" + encodeURIComponent(subjectId)
+                        + "&month=" + encodeURIComponent(month),
+                        {{ credentials: "same-origin" }}
+                    );
+                    const data = await response.json();
+                    const students = Array.isArray(data.students) ? data.students : [];
+                    loadedKey = key;
+
+                    if (!students.length) {{
+                        status.textContent = "No active learners found for this subject and month.";
+                        return;
+                    }}
+
+                    status.textContent = students.length + " learner(s) available";
+                    list.innerHTML = students.map(function(student) {{
+                        return '<label style="display:flex;gap:8px;align-items:flex-start;padding:9px;border:1px solid #e2e8f0;border-radius:10px;background:#fff">'
+                            + '<input type="checkbox" name="target_student_ids" value="' + safe(student.id) + '">'
+                            + '<span><strong>' + safe(student.name) + '</strong>'
+                            + (student.grade ? '<div class="mini muted">' + safe(student.grade) + '</div>' : '')
+                            + '</span></label>';
+                    }}).join("");
+                }} catch (error) {{
+                    status.textContent = "Could not load learners. Please try again.";
+                }}
+            }}
+
+            function refreshPicker() {{
+                const specific = scope() === "SPECIFIC";
+                picker.style.display = specific ? "block" : "none";
+                if (specific) loadStudents(false);
+            }}
+
+            radios.forEach(function(radio) {{
+                radio.addEventListener("change", refreshPicker);
+            }});
+
+            [subject, monthInput].forEach(function(field) {{
+                if (!field) return;
+                field.addEventListener("change", function() {{
+                    loadedKey = "";
+                    if (scope() === "SPECIFIC") loadStudents(true);
+                }});
+            }});
+
+            form.addEventListener("submit", function(event) {{
+                if (scope() !== "SPECIFIC") return;
+                if (!form.querySelector('input[name="target_student_ids"]:checked')) {{
+                    event.preventDefault();
+                    alert("Please select at least one learner for this assessment.");
+                }}
+            }});
+
+            refreshPicker();
+        }})();
+        </script>
     </section>
     """
 
@@ -116912,6 +117513,10 @@ def tutor_create_assessment():
     title = request.form.get("title", "").strip()
     description = request.form.get("description", "").strip()
     instructions = request.form.get("instructions", "").strip()
+    target_scope = request.form.get("target_scope", "ALL").strip().upper()
+    if target_scope not in {"ALL", "SPECIFIC"}:
+        target_scope = "ALL"
+    target_student_ids = request.form.getlist("target_student_ids")
 
     try:
         duration_minutes = int(request.form.get("duration_minutes", 30))
@@ -116956,6 +117561,21 @@ def tutor_create_assessment():
         conn.close()
         return page("Error", card_msg("This subject is not assigned to you."))
 
+    assessment_target_ids = []
+
+    if target_scope == "SPECIFIC":
+        assessment_target_ids, target_error = tutor_validate_specific_students(
+            conn,
+            tid,
+            subject_id,
+            month,
+            target_student_ids
+        )
+
+        if target_error:
+            conn.close()
+            return page("Choose Learners", card_msg(target_error))
+
     cur.execute("""
         INSERT INTO assessments(
             subject_id,
@@ -116971,10 +117591,11 @@ def tutor_create_assessment():
             shuffle_questions,
             show_results,
             lockdown_required,
+            target_scope,
             created_at,
             updated_at
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         subject_id,
         tid,
@@ -116989,11 +117610,23 @@ def tutor_create_assessment():
         shuffle_questions,
         show_results,
         lockdown_required,
+        target_scope,
         now_utc_iso(),
         now_utc_iso()
     ))
 
     assessment_id = cur.lastrowid
+
+    if target_scope == "SPECIFIC":
+        for student_id in assessment_target_ids:
+            cur.execute("""
+                INSERT OR IGNORE INTO assessment_student_targets(
+                    assessment_id,
+                    student_id,
+                    created_at
+                )
+                VALUES(?,?,?)
+            """, (assessment_id, student_id, now_utc_iso()))
 
     conn.commit()
     conn.close()
@@ -117023,6 +117656,27 @@ def tutor_edit_assessment(assessment_id):
     """, (assessment_id, tid))
 
     a = cur.fetchone()
+
+    if a:
+        assessment_students = tutor_subject_active_students(
+            conn,
+            tid,
+            a["subject_id"],
+            a["month"]
+        )
+        cur.execute("""
+            SELECT student_id
+            FROM assessment_student_targets
+            WHERE assessment_id=?
+        """, (assessment_id,))
+        selected_target_ids = {
+            int(row["student_id"])
+            for row in cur.fetchall()
+        }
+    else:
+        assessment_students = []
+        selected_target_ids = set()
+
     conn.close()
 
     if not a:
@@ -117032,6 +117686,27 @@ def tutor_edit_assessment(assessment_id):
         if not value:
             return ""
         return str(value)[:16]
+
+    assessment_target_scope = str(a["target_scope"] or "ALL").upper()
+    assessment_target_rows = ""
+
+    for student in assessment_students:
+        checked = "checked" if int(student["id"]) in selected_target_ids else ""
+        assessment_target_rows += f"""
+        <label style="display:flex;gap:8px;align-items:flex-start;padding:9px;border:1px solid #e2e8f0;border-radius:10px;background:#fff">
+            <input type="checkbox"
+                   name="target_student_ids"
+                   value="{student['id']}"
+                   {checked}>
+            <span>
+                <strong>{escape(student['full_name'] or 'Learner')}</strong>
+                <div class="mini muted">{escape(grade_label(student['grade'] or ''))}</div>
+            </span>
+        </label>
+        """
+
+    if not assessment_target_rows:
+        assessment_target_rows = "<div class='mini muted'>No active learners found for this subject and month.</div>"
 
     body = f"""
     <section class="card">
@@ -117061,6 +117736,34 @@ def tutor_edit_assessment(assessment_id):
               action="/tutor/assessments/{assessment_id}/edit"
               class="grid"
               style="grid-template-columns:1fr 1fr;gap:12px">
+
+            <div style="grid-column:1/-1" class="card soft">
+                <label style="font-weight:800">Assign this assessment to</label>
+
+                <div style="display:grid;gap:8px;margin-top:9px">
+                    <label style="display:flex;gap:8px;align-items:center">
+                        <input type="radio"
+                               name="target_scope"
+                               value="ALL"
+                               {'checked' if assessment_target_scope != 'SPECIFIC' else ''}>
+                        All students in this subject
+                    </label>
+                    <label style="display:flex;gap:8px;align-items:center">
+                        <input type="radio"
+                               name="target_scope"
+                               value="SPECIFIC"
+                               {'checked' if assessment_target_scope == 'SPECIFIC' else ''}>
+                        Specific student(s)
+                    </label>
+                </div>
+
+                <div id="assessmentEditStudentPicker"
+                     style="margin-top:12px;{'display:block' if assessment_target_scope == 'SPECIFIC' else 'display:none'}">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px">
+                        {assessment_target_rows}
+                    </div>
+                </div>
+            </div>
 
             <div style="grid-column:1/-1">
                 <label>Title</label>
@@ -117139,6 +117842,39 @@ def tutor_edit_assessment(assessment_id):
                 </button>
             </div>
         </form>
+
+        <script>
+        (function() {{
+            const form = document.querySelector('form[action="/tutor/assessments/{assessment_id}/edit"]');
+            const picker = document.getElementById("assessmentEditStudentPicker");
+            if (!form || !picker) return;
+
+            const radios = Array.from(form.querySelectorAll('input[name="target_scope"]'));
+
+            function scope() {{
+                const checked = radios.find(function(r) {{ return r.checked; }});
+                return checked ? checked.value : "ALL";
+            }}
+
+            function refresh() {{
+                picker.style.display = scope() === "SPECIFIC" ? "block" : "none";
+            }}
+
+            radios.forEach(function(radio) {{
+                radio.addEventListener("change", refresh);
+            }});
+
+            form.addEventListener("submit", function(event) {{
+                if (scope() !== "SPECIFIC") return;
+                if (!form.querySelector('input[name="target_student_ids"]:checked')) {{
+                    event.preventDefault();
+                    alert("Please select at least one learner for this assessment.");
+                }}
+            }});
+
+            refresh();
+        }})();
+        </script>
     </section>
     """
 
@@ -117157,6 +117893,10 @@ def tutor_update_assessment(assessment_id):
     title = request.form.get("title", "").strip()
     description = request.form.get("description", "").strip()
     instructions = request.form.get("instructions", "").strip()
+    target_scope = request.form.get("target_scope", "ALL").strip().upper()
+    if target_scope not in {"ALL", "SPECIFIC"}:
+        target_scope = "ALL"
+    target_student_ids = request.form.getlist("target_student_ids")
 
     try:
         duration_minutes = int(request.form.get("duration_minutes", 30))
@@ -117194,16 +117934,42 @@ def tutor_update_assessment(assessment_id):
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT id
+        SELECT id, subject_id, month
         FROM assessments
         WHERE id=?
           AND tutor_id=?
         LIMIT 1
     """, (assessment_id, tid))
 
-    if not cur.fetchone():
+    assessment_row = cur.fetchone()
+
+    if not assessment_row:
         conn.close()
         return page("Not Found", card_msg("Assessment not found or not owned by you."))
+
+    assessment_target_ids = []
+
+    if target_scope == "SPECIFIC":
+        assessment_target_ids, target_error = tutor_validate_specific_students(
+            conn,
+            tid,
+            assessment_row["subject_id"],
+            assessment_row["month"],
+            target_student_ids
+        )
+
+        if target_error:
+            conn.close()
+            return page("Choose Learners", card_msg(target_error))
+
+        # Learners who already started/submitted stay attached to the assessment.
+        cur.execute("""
+            SELECT DISTINCT student_id
+            FROM assessment_attempts
+            WHERE assessment_id=?
+        """, (assessment_id,))
+        attempted_ids = {int(row["student_id"]) for row in cur.fetchall()}
+        assessment_target_ids = sorted(set(assessment_target_ids) | attempted_ids)
 
     cur.execute("""
         UPDATE assessments
@@ -117217,6 +117983,7 @@ def tutor_update_assessment(assessment_id):
             shuffle_questions=?,
             show_results=?,
             lockdown_required=?,
+            target_scope=?,
             updated_at=?
         WHERE id=?
           AND tutor_id=?
@@ -117231,10 +117998,27 @@ def tutor_update_assessment(assessment_id):
         shuffle_questions,
         show_results,
         lockdown_required,
+        target_scope,
         now_utc_iso(),
         assessment_id,
         tid
     ))
+
+    cur.execute("""
+        DELETE FROM assessment_student_targets
+        WHERE assessment_id=?
+    """, (assessment_id,))
+
+    if target_scope == "SPECIFIC":
+        for student_id in assessment_target_ids:
+            cur.execute("""
+                INSERT OR IGNORE INTO assessment_student_targets(
+                    assessment_id,
+                    student_id,
+                    created_at
+                )
+                VALUES(?,?,?)
+            """, (assessment_id, student_id, now_utc_iso()))
 
     conn.commit()
     conn.close()
@@ -118068,8 +118852,17 @@ def student_assessments():
                ON at.assessment_id = a.id
               AND at.student_id = e.student_id
         WHERE a.is_published = 1
+          AND (
+                COALESCE(a.target_scope,'ALL')='ALL'
+                OR EXISTS (
+                    SELECT 1
+                    FROM assessment_student_targets ast
+                    WHERE ast.assessment_id=a.id
+                      AND ast.student_id=?
+                )
+          )
         ORDER BY a.month DESC, a.created_at DESC
-    """, (sid,))
+    """, (sid, sid))
 
     rows = cur.fetchall()
     conn.close()
