@@ -57860,8 +57860,10 @@ def timetable_month_number(value):
 def timetable_normalize_grade(value):
     raw = timetable_clean_text(value).upper()
 
+    # Accept all common EBTA grade formats:
+    # G8, G 8, Grade 8, or just 8.
     match = re.search(
-        r"\b(?:GRADE\s*)?(8|9|10|11|12|13)\b",
+        r"\b(?:(?:GRADE|G)\s*)?(8|9|10|11|12|13)\b",
         raw
     )
 
@@ -58023,6 +58025,19 @@ def timetable_parse_date_value(value, default_year=None):
 
     if isinstance(value, datetime.date):
         return value
+
+    # Also accept raw Excel serial dates if a workbook stores the Date
+    # column as a number instead of a date-formatted cell.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            serial = float(value)
+            if 1 <= serial <= 100000:
+                return (
+                    datetime.date(1899, 12, 30)
+                    + datetime.timedelta(days=int(serial))
+                )
+        except Exception:
+            pass
 
     raw = timetable_clean_text(value)
 
