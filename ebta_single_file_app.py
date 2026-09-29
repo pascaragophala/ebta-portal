@@ -58977,6 +58977,384 @@ def timetable_format_date(value):
         return str(value or "")
 
 
+def timetable_local_now():
+    """Return the current local portal time as a naive Johannesburg datetime."""
+    try:
+        return datetime.datetime.now(
+            ZoneInfo("Africa/Johannesburg")
+        ).replace(tzinfo=None)
+    except Exception:
+        return datetime.datetime.utcnow() + datetime.timedelta(hours=2)
+
+
+def timetable_event_bounds(event_row):
+    """Return (start_datetime, end_datetime) for a timetable event."""
+    try:
+        event_date = datetime.date.fromisoformat(
+            str(event_row["event_date"])
+        )
+        start_time = datetime.datetime.strptime(
+            str(event_row["start_time"]),
+            "%H:%M"
+        ).time()
+        end_time = datetime.datetime.strptime(
+            str(event_row["end_time"]),
+            "%H:%M"
+        ).time()
+
+        return (
+            datetime.datetime.combine(event_date, start_time),
+            datetime.datetime.combine(event_date, end_time),
+        )
+    except Exception:
+        return None, None
+
+
+def timetable_event_badge(event_row, now_value=None):
+    """Short status label used on timetable cards."""
+    now_value = now_value or timetable_local_now()
+    start_dt, end_dt = timetable_event_bounds(event_row)
+
+    if not start_dt or not end_dt:
+        return ""
+
+    today = now_value.date()
+    event_date = start_dt.date()
+
+    if start_dt <= now_value <= end_dt:
+        return "Happening now"
+
+    if event_date == today:
+        return "Today"
+
+    if event_date == today + datetime.timedelta(days=1):
+        return "Tomorrow"
+
+    if end_dt < now_value:
+        return "Past"
+
+    days_away = (event_date - today).days
+
+    if 2 <= days_away <= 6:
+        return f"In {days_away} days"
+
+    return "Upcoming"
+
+
+def timetable_render_event_card(
+    event_row,
+    show_grade=False,
+    prominent=False,
+    now_value=None
+):
+    now_value = now_value or timetable_local_now()
+    badge = timetable_event_badge(
+        event_row,
+        now_value
+    )
+
+    title = escape(
+        event_row["subject_label"]
+    )
+
+    if show_grade:
+        title = (
+            escape(
+                grade_label(
+                    event_row["grade"]
+                )
+            )
+            + " - "
+            + title
+        )
+
+    details = ""
+
+    if event_row["session_label"]:
+        details += (
+            "<div class='mini muted' style='margin-top:6px'>"
+            + escape(
+                event_row["session_label"]
+            )
+            + "</div>"
+        )
+
+    if event_row["focus"]:
+        details += (
+            "<div class='mini' style='margin-top:6px'>"
+            + escape(
+                event_row["focus"]
+            )
+            + "</div>"
+        )
+
+    badge_html = ""
+
+    if badge:
+        badge_class = "chip"
+
+        if badge in {
+            "Happening now",
+            "Today",
+            "Tomorrow"
+        }:
+            badge_class = "chip active"
+        elif badge == "Past":
+            badge_class = "chip lapsed"
+
+        badge_html = f"""
+        <span class='{badge_class}'
+              style='white-space:nowrap'>
+            {escape(badge)}
+        </span>
+        """
+
+    border_color = "#1b5e20" if prominent else "#e3ad24"
+    background = "#f4fbf5" if prominent else ""
+    extra_style = (
+        f"background:{background};"
+        if background
+        else ""
+    )
+
+    return f"""
+    <div class='card soft'
+         style='border-left:5px solid {border_color};{extra_style}'>
+        <div style='display:flex;
+                    justify-content:space-between;
+                    align-items:flex-start;
+                    gap:10px;
+                    flex-wrap:wrap'>
+            <div style='min-width:180px;flex:1'>
+                <div style='font-weight:800;
+                            font-size:{"18px" if prominent else "15px"}'>
+                    {title}
+                </div>
+
+                <div class='mini muted'
+                     style='margin-top:5px'>
+                    {escape(timetable_format_date(event_row["event_date"]))}
+                    • {escape(event_row["start_time"])}
+                    - {escape(event_row["end_time"])}
+                </div>
+
+                {details}
+            </div>
+
+            {badge_html}
+        </div>
+    </div>
+    """
+
+
+def timetable_render_smart_view(
+    events,
+    show_grade=False,
+    outer_card=False
+):
+    """
+    Show the timetable as a useful dashboard instead of a long wall of cards:
+    next class first, the remaining classes this week, then a collapsible full
+    timetable. Past classes remain available in the full timetable.
+    """
+    if not events:
+        return ""
+
+    now_value = timetable_local_now()
+    today = now_value.date()
+
+    sortable = []
+
+    for event in events:
+        start_dt, end_dt = timetable_event_bounds(
+            event
+        )
+
+        if not start_dt or not end_dt:
+            continue
+
+        sortable.append(
+            (
+                start_dt,
+                end_dt,
+                event
+            )
+        )
+
+    if not sortable:
+        return ""
+
+    sortable.sort(
+        key=lambda item: (
+            item[0],
+            item[2]["grade"] if show_grade else "",
+            item[2]["subject_label"]
+        )
+    )
+
+    upcoming = [
+        item
+        for item in sortable
+        if item[1] >= now_value
+    ]
+
+    next_item = (
+        upcoming[0]
+        if upcoming
+        else None
+    )
+
+    # Calendar week: Monday through Sunday. Only future/ongoing events are
+    # shown here; completed sessions stay in the full timetable below.
+    week_start = today - datetime.timedelta(
+        days=today.weekday()
+    )
+    week_end = week_start + datetime.timedelta(
+        days=6
+    )
+
+    this_week_items = [
+        item
+        for item in upcoming
+        if week_start <= item[0].date() <= week_end
+        and (
+            next_item is None
+            or item[2]["id"] != next_item[2]["id"]
+        )
+    ]
+
+    next_html = ""
+
+    if next_item:
+        next_html = f"""
+        <div style='margin-top:12px'>
+            <div class='mini muted'
+                 style='font-weight:800;
+                        letter-spacing:.04em;
+                        text-transform:uppercase;
+                        margin-bottom:7px'>
+                Next Class
+            </div>
+
+            {timetable_render_event_card(
+                next_item[2],
+                show_grade=show_grade,
+                prominent=True,
+                now_value=now_value
+            )}
+        </div>
+        """
+    else:
+        next_html = """
+        <div class='empty'
+             style='margin-top:12px'>
+            There are no more upcoming classes in this timetable.
+            You can still open the full timetable below to view previous dates.
+        </div>
+        """
+
+    this_week_html = ""
+
+    if this_week_items:
+        week_cards = "".join(
+            timetable_render_event_card(
+                item[2],
+                show_grade=show_grade,
+                now_value=now_value
+            )
+            for item in this_week_items
+        )
+
+        this_week_html = f"""
+        <div style='margin-top:16px'>
+            <div style='display:flex;
+                        justify-content:space-between;
+                        align-items:center;
+                        gap:10px;
+                        flex-wrap:wrap;
+                        margin-bottom:8px'>
+                <h4 style='margin:0'>This Week</h4>
+                <span class='chip'>
+                    {len(this_week_items)} more
+                </span>
+            </div>
+
+            <div class='grid'
+                 style='gap:10px'>
+                {week_cards}
+            </div>
+        </div>
+        """
+
+    full_cards = "".join(
+        timetable_render_event_card(
+            item[2],
+            show_grade=show_grade,
+            now_value=now_value
+        )
+        for item in sortable
+    )
+
+    upcoming_count = len(upcoming)
+    total_count = len(sortable)
+
+    header_html = f"""
+    <div style='display:flex;
+                justify-content:space-between;
+                align-items:flex-start;
+                gap:12px;
+                flex-wrap:wrap'>
+        <div>
+            <h3 style='margin-bottom:3px'>Official Timetable</h3>
+            <div class='mini muted'>
+                Your imported EBTA class schedule, filtered for you.
+            </div>
+        </div>
+
+        <span class='chip active'>
+            {upcoming_count} upcoming
+        </span>
+    </div>
+    """
+
+    full_timetable_html = f"""
+    <details style='margin-top:16px'>
+        <summary class='btn secondary'
+                 style='display:inline-block;
+                        cursor:pointer;
+                        user-select:none'>
+            View Full Timetable ({total_count})
+        </summary>
+
+        <div class='grid'
+             style='gap:10px;margin-top:12px'>
+            {full_cards}
+        </div>
+    </details>
+    """
+
+    content = (
+        header_html
+        + next_html
+        + this_week_html
+        + full_timetable_html
+    )
+
+    if outer_card:
+        return f"""
+        <div class='card'
+             style='border-left:5px solid #e3ad24'>
+            {content}
+        </div>
+        """
+
+    return f"""
+    <div style='margin-bottom:16px'>
+        {content}
+    </div>
+    """
+
+
 def timetable_student_html(
     conn,
     month,
@@ -59039,8 +59417,8 @@ def timetable_student_html(
         elif not known_grade_keys.intersection(
             event_keys
         ):
-            # A timetable subject that does not exist as an enrolment subject
-            # for this grade is treated as a grade-wide timetable item.
+            # If an imported timetable subject is not one of the subjects
+            # configured for this grade, keep it as a grade-wide timetable item.
             include = True
 
         if not include:
@@ -59061,67 +59439,15 @@ def timetable_student_html(
         seen.add(
             duplicate_key
         )
-
         visible_events.append(
             event
         )
 
-    if not visible_events:
-        return ""
-
-    cards = []
-
-    for event in visible_events:
-        extra = ""
-
-        if event["session_label"]:
-            extra += (
-                "<div class='mini muted' style='margin-top:4px'>"
-                + escape(
-                    event["session_label"]
-                )
-                + "</div>"
-            )
-
-        if event["focus"]:
-            extra += (
-                "<div class='mini' style='margin-top:5px'>"
-                + escape(
-                    event["focus"]
-                )
-                + "</div>"
-            )
-
-        cards.append(
-            f"""
-            <div class='card soft'
-                 style='border-left:5px solid #e3ad24'>
-                <div style='font-weight:700'>
-                    {escape(event["subject_label"])}
-                </div>
-
-                <div class='mini muted'
-                     style='margin-top:4px'>
-                    {escape(timetable_format_date(event["event_date"]))}
-                    • {escape(event["start_time"])}
-                    - {escape(event["end_time"])}
-                </div>
-
-                {extra}
-            </div>
-            """
-        )
-
-    return f"""
-    <div style='margin-bottom:16px'>
-        <h3 style='margin-bottom:8px'>Official Timetable</h3>
-
-        <div class='grid'
-             style='gap:10px'>
-            {''.join(cards)}
-        </div>
-    </div>
-    """
+    return timetable_render_smart_view(
+        visible_events,
+        show_grade=False,
+        outer_card=False
+    )
 
 
 def timetable_tutor_html(
@@ -59181,12 +59507,13 @@ def timetable_tutor_html(
         key=lambda row: (
             row["event_date"],
             row["start_time"],
+            row["grade"],
             row["subject_label"]
         )
     )
 
     seen = set()
-    cards = []
+    visible_events = []
 
     for event in all_events:
         duplicate_key = (
@@ -59195,6 +59522,8 @@ def timetable_tutor_html(
             event["end_time"],
             event["grade"],
             event["subject_label"],
+            event["session_label"] or "",
+            event["focus"] or "",
         )
 
         if duplicate_key in seen:
@@ -59203,62 +59532,15 @@ def timetable_tutor_html(
         seen.add(
             duplicate_key
         )
-
-        extra = ""
-
-        if event["session_label"]:
-            extra += (
-                "<div class='mini muted' style='margin-top:4px'>"
-                + escape(
-                    event["session_label"]
-                )
-                + "</div>"
-            )
-
-        if event["focus"]:
-            extra += (
-                "<div class='mini' style='margin-top:5px'>"
-                + escape(
-                    event["focus"]
-                )
-                + "</div>"
-            )
-
-        cards.append(
-            f"""
-            <div class='card soft'
-                 style='border-left:5px solid #e3ad24'>
-                <div style='font-weight:700'>
-                    {escape(grade_label(event["grade"]))}
-                    - {escape(event["subject_label"])}
-                </div>
-
-                <div class='mini muted'
-                     style='margin-top:4px'>
-                    {escape(timetable_format_date(event["event_date"]))}
-                    • {escape(event["start_time"])}
-                    - {escape(event["end_time"])}
-                </div>
-
-                {extra}
-            </div>
-            """
+        visible_events.append(
+            event
         )
 
-    if not cards:
-        return ""
-
-    return f"""
-    <div class='card'
-         style='border-left:5px solid #e3ad24'>
-        <h2>Official Timetable</h2>
-
-        <div class='grid'
-             style='gap:10px'>
-            {''.join(cards)}
-        </div>
-    </div>
-    """
+    return timetable_render_smart_view(
+        visible_events,
+        show_grade=True,
+        outer_card=True
+    )
 
 
 def admin_timetable_import_panel():
