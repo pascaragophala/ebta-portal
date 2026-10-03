@@ -16956,12 +16956,12 @@ def page(title, body_html, extra_head="", extra_js=""):
                     ("👨‍🏫 One-on-One Sessions", "/tutor/one-on-one"),
                     ("⬆️ Upload Learning Content", url_for('tutor_home') + "#upload"),
                     ("📚 My Library", url_for('tutor_uploads_library')),
-                    ("📝 Assignments", url_for('tutor_home') + "#assignments"),
+                    ("📝 Assignments", url_for('tutor_home') + "?section=assignments#assignments"),
                     ("🧪 Assessments", url_for('tutor_assessments')),
                     ("🎮 Game Questions", url_for('tutor_learning_game_questions')),
-                    ("💬 Messages", url_for('tutor_home') + "#messages"),
+                    ("💬 Messages", url_for('tutor_home') + "?section=messages#messages"),
                     ("🌐 EBTA Connect", url_for('staff_connect_home')),
-                    ("👥 Students", url_for('tutor_home') + "#students"),
+                    ("👥 Students", url_for('tutor_home') + "?section=students#students"),
                     ("👀 Student View", url_for('tutor_switch_student_view')),
                     ("🚪 Logout", url_for('tutor_logout'))
                 ]
@@ -28247,8 +28247,6 @@ def tutor_student_view():
         """, subject_ids)
         game_counts = {r["subject_id"]: r["c"] for r in cur.fetchall()}
 
-    conn.close()
-
     preview_today_iso = portal_today_date().isoformat()
     assignment_rows = [
         m for m in material_rows
@@ -28415,6 +28413,8 @@ def tutor_student_view():
         conn,
         month
     )
+
+    conn.close()
 
     sessions_html = ""
     for row in session_rows:
@@ -29880,27 +29880,11 @@ def tutor_home():
                 gap:12px;
             }}
 
-            /*
-               The content type switch is CSS-driven so it still works even if
-               another script on the dashboard fails. JavaScript only enhances
-               validation and assignment learner loading.
-            */
             .tutor-upload-specific {{
                 display:none;
             }}
 
-            #tutorUploadForm:has(input[name="upload_ui_type"][value="document"]:checked)
-            #tutorUploadDocumentSection {{
-                display:block;
-            }}
-
-            #tutorUploadForm:has(input[name="upload_ui_type"][value="assignment"]:checked)
-            #tutorUploadAssignmentSection {{
-                display:block;
-            }}
-
-            #tutorUploadForm:has(input[name="upload_ui_type"][value="recording"]:checked)
-            #tutorUploadRecordingSection {{
+            .tutor-upload-specific.is-active {{
                 display:block;
             }}
 
@@ -30120,7 +30104,7 @@ def tutor_home():
             </div>
 
             <!-- LEARNING MATERIAL -->
-            <div class="tutor-upload-specific"
+            <div class="tutor-upload-specific is-active"
                  id="tutorUploadDocumentSection">
 
                 <div class="tutor-upload-section"
@@ -30184,7 +30168,8 @@ def tutor_home():
                             <button type="button"
                                     class="tutor-drive-btn"
                                     id="tutorDriveAssignmentButton"
-                                    onclick="ebtaChooseFromGoogleDrive('assignment')">
+                                    onclick="ebtaChooseFromGoogleDrive('assignment')"
+                                    disabled>
                                 <span class="tutor-drive-mark" aria-hidden="true">
                                     <span></span><span></span><span></span><span></span>
                                 </span>
@@ -30200,6 +30185,7 @@ def tutor_home():
                                id="tutorUploadAssignmentFiles"
                                accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.ppt,.pptx"
                                multiple
+                               disabled
                                style="width:100%">
                     </div>
 
@@ -30210,6 +30196,7 @@ def tutor_home():
                             <input name="open_date"
                                    id="tutorUploadOpenDate"
                                    type="date"
+                                   disabled
                                    style="width:100%">
                         </div>
 
@@ -30218,6 +30205,7 @@ def tutor_home():
                             <input name="due"
                                    id="tutorUploadDueDate"
                                    type="date"
+                                   disabled
                                    style="width:100%">
                         </div>
 
@@ -30229,6 +30217,7 @@ def tutor_home():
                                    min="1"
                                    max="1000"
                                    placeholder="100"
+                                   disabled
                                    style="width:100%">
                         </div>
 
@@ -30291,6 +30280,7 @@ def tutor_home():
                            id="tutorUploadRecordingUrl"
                            type="url"
                            placeholder="https://youtube.com/... or Google Drive / OneDrive link"
+                           disabled
                            style="width:100%">
 
                     <div class="tutor-upload-tip">
@@ -30309,9 +30299,6 @@ def tutor_home():
 
         </form>
 
-        <script src="https://apis.google.com/js/api.js"></script>
-        <script src="https://accounts.google.com/gsi/client"></script>
-
         <script>
             const EBTA_DRIVE_PICKER_API_KEY = {json.dumps(GOOGLE_DRIVE_PICKER_API_KEY)};
             const EBTA_DRIVE_PICKER_CLIENT_ID = {json.dumps(GOOGLE_DRIVE_PICKER_CLIENT_ID)};
@@ -30321,6 +30308,90 @@ def tutor_home():
             let ebtaDriveTokenClient = null;
             let ebtaDriveAccessToken = "";
             let ebtaDriveTarget = "document";
+            let ebtaGoogleLibrariesPromise = null;
+
+            function ebtaLoadExternalScript(src, readyCheck) {{
+                return new Promise(function(resolve, reject) {{
+                    try {{
+                        if (readyCheck()) {{
+                            resolve();
+                            return;
+                        }}
+                    }} catch (error) {{}}
+
+                    const existing = Array.from(document.scripts).find(function(script) {{
+                        return script.src === src;
+                    }});
+
+                    const script = existing || document.createElement("script");
+
+                    const finish = function() {{
+                        try {{
+                            if (readyCheck()) {{
+                                resolve();
+                            }} else {{
+                                reject(new Error("Google Drive could not be opened."));
+                            }}
+                        }} catch (error) {{
+                            reject(new Error("Google Drive could not be opened."));
+                        }}
+                    }};
+
+                    if (existing) {{
+                        existing.addEventListener("load", finish, {{ once: true }});
+                        existing.addEventListener("error", function() {{
+                            reject(new Error("Google Drive could not be opened."));
+                        }}, {{ once: true }});
+                        setTimeout(function() {{
+                            try {{
+                                if (readyCheck()) resolve();
+                            }} catch (error) {{}}
+                        }}, 0);
+                        return;
+                    }}
+
+                    script.src = src;
+                    script.async = true;
+                    script.defer = true;
+                    script.addEventListener("load", finish, {{ once: true }});
+                    script.addEventListener("error", function() {{
+                        reject(new Error("Google Drive could not be opened."));
+                    }}, {{ once: true }});
+                    document.head.appendChild(script);
+                }});
+            }}
+
+            function ebtaEnsureGoogleLibraries() {{
+                if (
+                    window.gapi
+                    && window.google
+                    && google.accounts
+                    && google.accounts.oauth2
+                ) {{
+                    return Promise.resolve();
+                }}
+
+                if (!ebtaGoogleLibrariesPromise) {{
+                    ebtaGoogleLibrariesPromise = Promise.all([
+                        ebtaLoadExternalScript(
+                            "https://apis.google.com/js/api.js",
+                            function() {{ return !!window.gapi; }}
+                        ),
+                        ebtaLoadExternalScript(
+                            "https://accounts.google.com/gsi/client",
+                            function() {{
+                                return !!(
+                                    window.google
+                                    && google.accounts
+                                    && google.accounts.oauth2
+                                );
+                            }}
+                        )
+                    ]);
+                }}
+
+                return ebtaGoogleLibrariesPromise;
+            }}
 
             function ebtaDriveStatus(target, message) {{
                 const el = document.getElementById(
@@ -30574,6 +30645,7 @@ def tutor_home():
 
                 try {{
                     ebtaDriveStatus(ebtaDriveTarget, "Opening Google Drive...");
+                    await ebtaEnsureGoogleLibraries();
                     await ebtaLoadDrivePickerApi();
                     const token = await ebtaGetDriveToken();
                     await ebtaOpenDrivePicker(token);
@@ -30586,77 +30658,6 @@ def tutor_home():
                     );
                 }}
             }}
-        </script>
-
-        <script>
-            (function () {{
-                const form = document.getElementById("tutorUploadForm");
-                if (!form) return;
-
-                function syncBasicUploadType() {{
-                    const checked = form.querySelector('input[name="upload_ui_type"]:checked');
-                    const type = checked ? checked.value : "document";
-                    const isDocument = type === "document";
-                    const isAssignment = type === "assignment";
-                    const isRecording = type === "recording";
-
-                    const flag = document.getElementById("tutorUploadAssignmentFlag");
-                    const documentFiles = document.getElementById("tutorUploadDocumentFiles");
-                    const assignmentFiles = document.getElementById("tutorUploadAssignmentFiles");
-                    const assignmentDriveButton = document.getElementById("tutorDriveAssignmentButton");
-                    const openDate = document.getElementById("tutorUploadOpenDate");
-                    const dueDate = document.getElementById("tutorUploadDueDate");
-                    const maxPoints = document.getElementById("tutorUploadMaxPoints");
-                    const recordingUrl = document.getElementById("tutorUploadRecordingUrl");
-                    const submitButton = document.getElementById("tutorUploadSubmitButton");
-                    const title = document.getElementById("tutorUploadTitle");
-
-                    if (flag) flag.value = isAssignment ? "on" : "";
-
-                    if (documentFiles) {{
-                        documentFiles.disabled = !isDocument;
-                        documentFiles.required = isDocument;
-                    }}
-                    if (assignmentFiles) {{
-                        assignmentFiles.disabled = !isAssignment;
-                        assignmentFiles.required = isAssignment;
-                    }}
-                    if (assignmentDriveButton) assignmentDriveButton.disabled = !isAssignment;
-                    if (openDate) openDate.disabled = !isAssignment;
-                    if (dueDate) dueDate.disabled = !isAssignment;
-                    if (maxPoints) maxPoints.disabled = !isAssignment;
-                    if (recordingUrl) {{
-                        recordingUrl.disabled = !isRecording;
-                        recordingUrl.required = isRecording;
-                    }}
-
-                    if (submitButton) {{
-                        submitButton.textContent = isAssignment
-                            ? "📝 Upload Assignment"
-                            : (isRecording ? "🎥 Add Recording / Lesson Link" : "📚 Upload Learning Material");
-                    }}
-
-                    if (title) {{
-                        title.placeholder = isAssignment
-                            ? "Example: Algebra Homework 3"
-                            : (isRecording ? "Example: Algebra Lesson Recording" : "Example: Photosynthesis Lesson 1 Notes");
-                    }}
-                }}
-
-                form.addEventListener("click", function(event) {{
-                    if (event.target && event.target.name === "upload_ui_type") {{
-                        syncBasicUploadType();
-                    }}
-                }});
-
-                form.addEventListener("change", function(event) {{
-                    if (event.target && event.target.name === "upload_ui_type") {{
-                        syncBasicUploadType();
-                    }}
-                }});
-
-                syncBasicUploadType();
-            }})();
         </script>
 
         <script>
@@ -31659,7 +31660,7 @@ def tutor_home():
         """
         
     message_form = f"""
-    <div class="card">
+    <div class="card" id="messages" style="scroll-margin-top:18px">
     <h2>Send Message</h2>
 
     <form method="post" action="{url_for('tutor_message_student')}" class="grid">
@@ -32049,7 +32050,7 @@ def tutor_home():
 
     {uploads_html}
 
-    <div class='card'><h2>Your assignments</h2>
+    <div class='card' id="assignments" style="scroll-margin-top:18px"><h2>Your assignments</h2>
         <div class="scroll-x"><table><thead><tr><th>Subject</th><th>Title</th><th>Due</th><th>Total</th><th>Manage</th></tr></thead><tbody>{asg_rows}</tbody></table></div>
     </div>
     {message_form}
@@ -32075,8 +32076,12 @@ def tutor_home():
         </a>
     </div>
 
-    <div id="students">
-        {''.join(stu_sections)}
+    <div id="students" class="card" style="scroll-margin-top:18px">
+        <h2>Students</h2>
+        <p class="mini muted">Learners currently active in your assigned subjects for {pretty_month_label(month)}.</p>
+        <div class="grid" style="gap:12px;margin-top:12px">
+            {''.join(stu_sections) if stu_sections else "<div class='empty'>No active students for this month.</div>"}
+        </div>
     </div>
 
     </section>
