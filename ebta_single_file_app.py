@@ -29880,11 +29880,27 @@ def tutor_home():
                 gap:12px;
             }}
 
+            /*
+               The content type switch is CSS-driven so it still works even if
+               another script on the dashboard fails. JavaScript only enhances
+               validation and assignment learner loading.
+            */
             .tutor-upload-specific {{
                 display:none;
             }}
 
-            .tutor-upload-specific.is-active {{
+            #tutorUploadForm:has(input[name="upload_ui_type"][value="document"]:checked)
+            #tutorUploadDocumentSection {{
+                display:block;
+            }}
+
+            #tutorUploadForm:has(input[name="upload_ui_type"][value="assignment"]:checked)
+            #tutorUploadAssignmentSection {{
+                display:block;
+            }}
+
+            #tutorUploadForm:has(input[name="upload_ui_type"][value="recording"]:checked)
+            #tutorUploadRecordingSection {{
                 display:block;
             }}
 
@@ -30104,7 +30120,7 @@ def tutor_home():
             </div>
 
             <!-- LEARNING MATERIAL -->
-            <div class="tutor-upload-specific is-active"
+            <div class="tutor-upload-specific"
                  id="tutorUploadDocumentSection">
 
                 <div class="tutor-upload-section"
@@ -30168,8 +30184,7 @@ def tutor_home():
                             <button type="button"
                                     class="tutor-drive-btn"
                                     id="tutorDriveAssignmentButton"
-                                    onclick="ebtaChooseFromGoogleDrive('assignment')"
-                                    disabled>
+                                    onclick="ebtaChooseFromGoogleDrive('assignment')">
                                 <span class="tutor-drive-mark" aria-hidden="true">
                                     <span></span><span></span><span></span><span></span>
                                 </span>
@@ -30185,7 +30200,6 @@ def tutor_home():
                                id="tutorUploadAssignmentFiles"
                                accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.ppt,.pptx"
                                multiple
-                               disabled
                                style="width:100%">
                     </div>
 
@@ -30196,7 +30210,6 @@ def tutor_home():
                             <input name="open_date"
                                    id="tutorUploadOpenDate"
                                    type="date"
-                                   disabled
                                    style="width:100%">
                         </div>
 
@@ -30205,7 +30218,6 @@ def tutor_home():
                             <input name="due"
                                    id="tutorUploadDueDate"
                                    type="date"
-                                   disabled
                                    style="width:100%">
                         </div>
 
@@ -30217,7 +30229,6 @@ def tutor_home():
                                    min="1"
                                    max="1000"
                                    placeholder="100"
-                                   disabled
                                    style="width:100%">
                         </div>
 
@@ -30280,7 +30291,6 @@ def tutor_home():
                            id="tutorUploadRecordingUrl"
                            type="url"
                            placeholder="https://youtube.com/... or Google Drive / OneDrive link"
-                           disabled
                            style="width:100%">
 
                     <div class="tutor-upload-tip">
@@ -30576,6 +30586,77 @@ def tutor_home():
                     );
                 }}
             }}
+        </script>
+
+        <script>
+            (function () {{
+                const form = document.getElementById("tutorUploadForm");
+                if (!form) return;
+
+                function syncBasicUploadType() {{
+                    const checked = form.querySelector('input[name="upload_ui_type"]:checked');
+                    const type = checked ? checked.value : "document";
+                    const isDocument = type === "document";
+                    const isAssignment = type === "assignment";
+                    const isRecording = type === "recording";
+
+                    const flag = document.getElementById("tutorUploadAssignmentFlag");
+                    const documentFiles = document.getElementById("tutorUploadDocumentFiles");
+                    const assignmentFiles = document.getElementById("tutorUploadAssignmentFiles");
+                    const assignmentDriveButton = document.getElementById("tutorDriveAssignmentButton");
+                    const openDate = document.getElementById("tutorUploadOpenDate");
+                    const dueDate = document.getElementById("tutorUploadDueDate");
+                    const maxPoints = document.getElementById("tutorUploadMaxPoints");
+                    const recordingUrl = document.getElementById("tutorUploadRecordingUrl");
+                    const submitButton = document.getElementById("tutorUploadSubmitButton");
+                    const title = document.getElementById("tutorUploadTitle");
+
+                    if (flag) flag.value = isAssignment ? "on" : "";
+
+                    if (documentFiles) {{
+                        documentFiles.disabled = !isDocument;
+                        documentFiles.required = isDocument;
+                    }}
+                    if (assignmentFiles) {{
+                        assignmentFiles.disabled = !isAssignment;
+                        assignmentFiles.required = isAssignment;
+                    }}
+                    if (assignmentDriveButton) assignmentDriveButton.disabled = !isAssignment;
+                    if (openDate) openDate.disabled = !isAssignment;
+                    if (dueDate) dueDate.disabled = !isAssignment;
+                    if (maxPoints) maxPoints.disabled = !isAssignment;
+                    if (recordingUrl) {{
+                        recordingUrl.disabled = !isRecording;
+                        recordingUrl.required = isRecording;
+                    }}
+
+                    if (submitButton) {{
+                        submitButton.textContent = isAssignment
+                            ? "📝 Upload Assignment"
+                            : (isRecording ? "🎥 Add Recording / Lesson Link" : "📚 Upload Learning Material");
+                    }}
+
+                    if (title) {{
+                        title.placeholder = isAssignment
+                            ? "Example: Algebra Homework 3"
+                            : (isRecording ? "Example: Algebra Lesson Recording" : "Example: Photosynthesis Lesson 1 Notes");
+                    }}
+                }}
+
+                form.addEventListener("click", function(event) {{
+                    if (event.target && event.target.name === "upload_ui_type") {{
+                        syncBasicUploadType();
+                    }}
+                }});
+
+                form.addEventListener("change", function(event) {{
+                    if (event.target && event.target.name === "upload_ui_type") {{
+                        syncBasicUploadType();
+                    }}
+                }});
+
+                syncBasicUploadType();
+            }})();
         </script>
 
         <script>
@@ -33365,6 +33446,11 @@ def tutor_upload():
 
     subject_id = request.form.get('subject_id', '').strip()
     title = request.form.get('title', '').strip()
+
+    upload_ui_type = request.form.get('upload_ui_type', 'document').strip().lower()
+    if upload_ui_type not in ('document', 'assignment', 'recording'):
+        upload_ui_type = 'document'
+
     youtube = request.form.get('youtube', '').strip()
     delivery_mode = request.form.get('delivery_mode', 'GROUP').strip().upper()
     if delivery_mode not in ('GROUP', 'ONE_ON_ONE', 'BOTH'):
@@ -33372,7 +33458,15 @@ def tutor_upload():
 
     files = request.files.getlist('file')
 
-    is_assignment = 1 if request.form.get('is_assignment') == 'on' else 0
+    # upload_ui_type is submitted by the radio buttons even when JavaScript is
+    # unavailable, so assignment/recording uploads no longer depend on the UI
+    # script successfully running.
+    is_assignment = 1 if upload_ui_type == 'assignment' else 0
+
+    if upload_ui_type == 'recording':
+        files = []
+    else:
+        youtube = ''
     target_scope = request.form.get('target_scope', 'ALL').strip().upper()
     if target_scope not in ('ALL', 'SPECIFIC'):
         target_scope = 'ALL'
@@ -33382,6 +33476,7 @@ def tutor_upload():
 
     if not is_assignment:
         open_date = None
+        due = None
 
     if is_assignment and open_date and due:
         try:
