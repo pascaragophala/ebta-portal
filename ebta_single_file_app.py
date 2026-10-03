@@ -1724,6 +1724,32 @@ def init_db():
     );
     """)
     
+    # ================= TUTOR MANAGER SESSION LINKS =================
+    # High Admin manages one meeting/session link for each Tutor Manager.
+    # The link is visible only to that Tutor Manager and tutors assigned to them.
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS tutor_manager_session_links(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        manager_id INTEGER NOT NULL UNIQUE,
+        title TEXT NOT NULL DEFAULT 'Tutor Manager Session',
+        session_link TEXT NOT NULL,
+        meeting_id TEXT,
+        meeting_passcode TEXT,
+        notes TEXT,
+        is_visible INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        FOREIGN KEY(manager_id)
+            REFERENCES tutor_managers(id)
+            ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tutor_manager_session_links_visibility
+        ON tutor_manager_session_links(manager_id, is_visible)
+    """)
+    
     # ================= STAFF WHATSAPP GROUP LINKS =================
     # Invite links are saved in the database and edited through High Admin.
     # No WhatsApp invite URL is hard-coded in the application.
@@ -6218,6 +6244,22 @@ def safe_url(endpoint, fallback):
         return url_for(endpoint)
     except Exception:
         return fallback
+
+
+def tutor_manager_session_url_is_valid(value):
+    """Allow normal HTTP(S) meeting links such as Teams, Zoom or Google Meet."""
+    from urllib.parse import urlparse
+
+    link = str(value or "").strip()
+    if not link or len(link) > 2000:
+        return False
+
+    try:
+        parsed = urlparse(link)
+    except Exception:
+        return False
+
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
@@ -31899,7 +31941,7 @@ def tutor_home():
         else:
             manager_action = """
             <span class="chip">
-                Link not available yet
+                No link yet
             </span>
             """
 
@@ -31920,7 +31962,7 @@ def tutor_home():
                     </div>
 
                     <div class="mini muted">
-                        Your assigned Tutor Manager team group.
+                        Your Tutor Manager's team group.
                     </div>
                 </div>
 
@@ -31932,7 +31974,7 @@ def tutor_home():
     if not tutor_staff_groups_html:
         tutor_staff_groups_html = """
         <div class="empty">
-            No official tutor or Tutor Manager team group link is available yet.
+            No group links have been added yet.
         </div>
         """
 
@@ -31942,6 +31984,102 @@ def tutor_home():
     </div>
     """
 
+    # Tutor Manager meeting link(s) for this tutor.
+    cur.execute("""
+        SELECT DISTINCT
+            tm.full_name AS manager_name,
+            sl.title,
+            sl.session_link,
+            sl.meeting_id,
+            sl.meeting_passcode
+        FROM manager_tutors mt
+        JOIN tutor_managers tm
+          ON tm.id=mt.manager_id
+        LEFT JOIN tutor_manager_session_links sl
+          ON sl.manager_id=tm.id
+         AND sl.is_visible=1
+        WHERE mt.tutor_id=?
+          AND COALESCE(tm.is_active,1)=1
+          AND tm.deleted_at IS NULL
+        ORDER BY tm.full_name
+    """, (tid,))
+
+    tutor_manager_session_rows = cur.fetchall()
+    tutor_manager_session_dashboard_html = ""
+
+    for tm_session in tutor_manager_session_rows:
+        tm_link = str(
+            tm_session["session_link"]
+            or ""
+        ).strip()
+
+        if tm_link:
+            tm_action = f"""
+            <a class="btn success mini"
+               href="{escape(tm_link, quote=True)}"
+               target="_blank"
+               rel="noopener noreferrer">
+                Join Session
+            </a>
+            """
+        else:
+            tm_action = """
+            <span class="chip">
+                No link yet
+            </span>
+            """
+
+        meeting_bits = []
+
+        if tm_session["meeting_id"]:
+            meeting_bits.append(
+                f"Meeting ID: {escape(tm_session['meeting_id'])}"
+            )
+
+        if tm_session["meeting_passcode"]:
+            meeting_bits.append(
+                f"Passcode: {escape(tm_session['meeting_passcode'])}"
+            )
+
+        meeting_line = (
+            "<div class='mini muted' style='margin-top:4px'>"
+            + " · ".join(meeting_bits)
+            + "</div>"
+            if meeting_bits
+            else ""
+        )
+
+        tutor_manager_session_dashboard_html += f"""
+        <div class="card soft"
+             style="border-left:5px solid #1b5e20">
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                gap:10px;
+                align-items:center;
+                flex-wrap:wrap;
+            ">
+                <div>
+                    <strong>
+                        {escape(tm_session['title'] or 'Tutor Manager Session')}
+                    </strong>
+                    <div class="mini muted">
+                        With {escape(tm_session['manager_name'] or 'your Tutor Manager')}
+                    </div>
+                    {meeting_line}
+                </div>
+
+                {tm_action}
+            </div>
+        </div>
+        """
+
+    if not tutor_manager_session_dashboard_html:
+        tutor_manager_session_dashboard_html = """
+        <div class="empty">
+            No Tutor Manager meeting has been added yet.
+        </div>
+        """
 
     conn.close()
 
@@ -32021,9 +32159,29 @@ def tutor_home():
     <div class='card'>
         <h2>Tutor WhatsApp Groups</h2>
         <p class="mini muted">
-            Official tutor group and the team group connected to your assigned Tutor Manager.
+            Your tutor groups and Tutor Manager team group.
         </p>
         {tutor_staff_groups_html}
+    </div>
+
+    <div class='card' id="tutor-manager-session" style="border-left:5px solid #1b5e20">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap">
+            <div>
+                <h2 style="margin-bottom:4px">Tutor Manager Session</h2>
+                <p class="mini muted" style="margin:0">
+                    Use this link for your Tutor Manager meeting.
+                </p>
+            </div>
+
+            <a class="btn mini secondary"
+               href="{url_for('tutor_manager_session_page')}">
+                View Details
+            </a>
+        </div>
+
+        <div class="grid" style="gap:10px;margin-top:12px">
+            {tutor_manager_session_dashboard_html}
+        </div>
     </div>
 
     <div class='card'>
@@ -32033,7 +32191,7 @@ def tutor_home():
 
     <div class='card' style="border-left:5px solid #1b5e20">
         <h2>Google Drive Links</h2>
-        <p class="mini muted">Drive links available for your assigned subjects.</p>
+        <p class="mini muted">Google Drive links for your subjects.</p>
         {tutor_google_drive_html}
     </div>
 
@@ -32089,6 +32247,163 @@ def tutor_home():
     return page("Tutor Portal", body)
   
   
+
+@app.get('/tutor/tutor-manager-session')
+def tutor_manager_session_page():
+
+    r = require_tutor()
+    if r:
+        return r
+
+    tid = is_tutor()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT
+            tm.id AS manager_id,
+            tm.full_name AS manager_name,
+            sl.title,
+            sl.session_link,
+            sl.meeting_id,
+            sl.meeting_passcode,
+            sl.notes
+        FROM manager_tutors mt
+        JOIN tutor_managers tm
+          ON tm.id=mt.manager_id
+        LEFT JOIN tutor_manager_session_links sl
+          ON sl.manager_id=tm.id
+         AND sl.is_visible=1
+        WHERE mt.tutor_id=?
+          AND COALESCE(tm.is_active,1)=1
+          AND tm.deleted_at IS NULL
+        ORDER BY tm.full_name
+    """, (tid,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    cards = ""
+
+    for row in rows:
+        session_link = str(
+            row["session_link"]
+            or ""
+        ).strip()
+
+        title = (
+            row["title"]
+            or "Tutor Manager Session"
+        )
+
+        details = ""
+
+        if row["meeting_id"]:
+            details += f"""
+            <div>
+                <b>Meeting ID:</b>
+                {escape(row['meeting_id'])}
+            </div>
+            """
+
+        if row["meeting_passcode"]:
+            details += f"""
+            <div>
+                <b>Passcode:</b>
+                {escape(row['meeting_passcode'])}
+            </div>
+            """
+
+        if session_link:
+            action = f"""
+            <a class="btn success"
+               href="{escape(session_link, quote=True)}"
+               target="_blank"
+               rel="noopener noreferrer">
+                Join Tutor Manager Session
+            </a>
+            """
+        else:
+            action = """
+            <span class="chip">
+                No meeting link has been added yet
+            </span>
+            """
+
+        notes_html = (
+            f"""
+            <div class="card soft" style="margin-top:12px">
+                {escape(row['notes'])}
+            </div>
+            """
+            if row["notes"]
+            else ""
+        )
+
+        cards += f"""
+        <section class="card"
+                 style="border-left:5px solid #1b5e20">
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                gap:12px;
+                align-items:flex-start;
+                flex-wrap:wrap;
+            ">
+                <div>
+                    <h2 style="margin:0 0 4px">
+                        {escape(title)}
+                    </h2>
+                    <div class="mini muted">
+                        With {escape(row['manager_name'] or 'your Tutor Manager')}
+                    </div>
+                </div>
+
+                {action}
+            </div>
+
+            {f'<div style="margin-top:12px">{details}</div>' if details else ''}
+
+            {notes_html}
+        </section>
+        """
+
+    if not rows:
+        cards = """
+        <section class="card">
+            <h2>Tutor Manager Session</h2>
+            <div class="empty">
+                You are not currently assigned to a Tutor Manager.
+            </div>
+        </section>
+        """
+
+    body = f"""
+    <section class="card">
+        <a class="btn mini secondary"
+           href="{url_for('tutor_home')}">
+            ← Back to Tutor Portal
+        </a>
+
+        <h1 style="margin-top:14px">
+            Tutor Manager Session
+        </h1>
+
+        <p class="muted">
+            Your Tutor Manager meeting details are below.
+        </p>
+    </section>
+
+    {cards}
+    """
+
+    return page(
+        "Tutor Manager Session",
+        body
+    )
+
+
 @app.post('/tutor/manager-rating/save')
 def tutor_manager_rating_save():
 
@@ -63691,9 +64006,15 @@ def admin_tutor_tracker():
 
     <section class='card'>
 
-        <h1>Tutor Managers</h1>
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap">
+            <h1 style="margin:0">Tutor Managers</h1>
+            <a class="btn mini secondary"
+               href="{url_for('admin_tutor_manager_session_links')}">
+                Manager Meeting Links
+            </a>
+        </div>
 
-        <form method="post" action="/admin/managers/add">
+        <form method="post" action="/admin/managers/add" style="margin-top:14px">
 
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px">
 
@@ -64216,7 +64537,99 @@ def manager_dashboard():
     """, (session["manager_id"],))
 
     tutors = cur.fetchall()
+
+    cur.execute("""
+        SELECT
+            title,
+            session_link,
+            meeting_id,
+            meeting_passcode
+        FROM tutor_manager_session_links
+        WHERE manager_id=?
+          AND is_visible=1
+        LIMIT 1
+    """, (manager_id,))
+
+    manager_session_row = cur.fetchone()
     conn.close()
+
+    if manager_session_row and str(manager_session_row["session_link"] or "").strip():
+        manager_session_meeting_bits = []
+
+        if manager_session_row["meeting_id"]:
+            manager_session_meeting_bits.append(
+                f"Meeting ID: {escape(manager_session_row['meeting_id'])}"
+            )
+
+        if manager_session_row["meeting_passcode"]:
+            manager_session_meeting_bits.append(
+                f"Passcode: {escape(manager_session_row['meeting_passcode'])}"
+            )
+
+        manager_session_detail_line = (
+            "<div class='mini muted' style='margin-top:4px'>"
+            + " · ".join(manager_session_meeting_bits)
+            + "</div>"
+            if manager_session_meeting_bits
+            else ""
+        )
+
+        manager_session_dashboard_html = f"""
+        <section class="card"
+                 style="border-left:5px solid #1b5e20">
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                gap:12px;
+                align-items:center;
+                flex-wrap:wrap;
+            ">
+                <div>
+                    <h2 style="margin:0 0 4px">
+                        {escape(manager_session_row['title'] or 'Tutor Manager Session')}
+                    </h2>
+                    <div class="mini muted">
+                        Your tutor team uses this same meeting link.
+                    </div>
+                    {manager_session_detail_line}
+                </div>
+
+                <a class="btn success"
+                   href="{escape(manager_session_row['session_link'], quote=True)}"
+                   target="_blank"
+                   rel="noopener noreferrer">
+                    Join Session
+                </a>
+            </div>
+        </section>
+        """
+    else:
+        manager_session_dashboard_html = f"""
+        <section class="card"
+                 style="border-left:5px solid #64748b">
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                gap:12px;
+                align-items:center;
+                flex-wrap:wrap;
+            ">
+                <div>
+                    <h2 style="margin:0 0 4px">
+                        Tutor Manager Session
+                    </h2>
+                    <div class="mini muted">
+                        Your meeting link has not been added yet.
+                    </div>
+                </div>
+
+                <a class="btn mini secondary"
+                   href="{url_for('manager_tutor_manager_session')}">
+                    View Details
+                </a>
+            </div>
+        </section>
+        """
 
     total_tutors = len(tutors)
 
@@ -64373,6 +64786,8 @@ def manager_dashboard():
     {manager_nav()}
 
     {manager_welcome_hero(month, total_tutors, average_progress, high_risk_tutors)}
+
+    {manager_session_dashboard_html}
 
     <section class="card">
 
@@ -65057,6 +65472,376 @@ def admin_reset_manager_pin(manager_id):
     return redirect(url_for("admin_tutor_tracker"))
 
 
+
+@app.route("/admin/tutor-manager-session-links", methods=["GET", "POST"])
+@require_high_admin
+def admin_tutor_manager_session_links():
+
+    r = require_admin()
+    if r:
+        return r
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    if request.method == "POST":
+        action = request.form.get("action", "save").strip().lower()
+
+        try:
+            manager_id = int(request.form.get("manager_id", "").strip())
+        except Exception:
+            conn.close()
+            return page(
+                "Tutor Manager Sessions",
+                f"{admin_nav()}{card_msg('Please choose a valid Tutor Manager.')}"
+            )
+
+        cur.execute("""
+            SELECT id, full_name
+            FROM tutor_managers
+            WHERE id=?
+              AND COALESCE(is_active,1)=1
+              AND deleted_at IS NULL
+            LIMIT 1
+        """, (manager_id,))
+        manager = cur.fetchone()
+
+        if not manager:
+            conn.close()
+            return page(
+                "Tutor Manager Sessions",
+                f"{admin_nav()}{card_msg('Tutor Manager not found or is inactive.')}"
+            )
+
+        if action == "delete":
+            cur.execute("""
+                DELETE FROM tutor_manager_session_links
+                WHERE manager_id=?
+            """, (manager_id,))
+            conn.commit()
+            conn.close()
+            return redirect(url_for(
+                "admin_tutor_manager_session_links",
+                removed=1
+            ))
+
+        title = request.form.get(
+            "title",
+            "Tutor Manager Session"
+        ).strip() or "Tutor Manager Session"
+
+        session_link = request.form.get(
+            "session_link",
+            ""
+        ).strip()
+
+        meeting_id = request.form.get(
+            "meeting_id",
+            ""
+        ).strip()
+
+        meeting_passcode = request.form.get(
+            "meeting_passcode",
+            ""
+        ).strip()
+
+        notes = request.form.get(
+            "notes",
+            ""
+        ).strip()
+
+        is_visible = (
+            1
+            if request.form.get("is_visible") == "1"
+            else 0
+        )
+
+        if not tutor_manager_session_url_is_valid(session_link):
+            conn.close()
+            return page(
+                "Tutor Manager Sessions",
+                f"""
+                {admin_nav()}
+                <section class="card">
+                    <h1>Tutor Manager Sessions</h1>
+                    {card_msg(
+                        "Please enter a valid session link beginning with http:// or https://."
+                    )}
+                    <a class="btn" href="{url_for('admin_tutor_manager_session_links')}">
+                        Back
+                    </a>
+                </section>
+                """
+            )
+
+        title = title[:160]
+        meeting_id = meeting_id[:160]
+        meeting_passcode = meeting_passcode[:160]
+        notes = notes[:1200]
+        now = now_utc_iso()
+
+        cur.execute("""
+            INSERT INTO tutor_manager_session_links(
+                manager_id,
+                title,
+                session_link,
+                meeting_id,
+                meeting_passcode,
+                notes,
+                is_visible,
+                created_at,
+                updated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(manager_id)
+            DO UPDATE SET
+                title=excluded.title,
+                session_link=excluded.session_link,
+                meeting_id=excluded.meeting_id,
+                meeting_passcode=excluded.meeting_passcode,
+                notes=excluded.notes,
+                is_visible=excluded.is_visible,
+                updated_at=excluded.updated_at
+        """, (
+            manager_id,
+            title,
+            session_link,
+            meeting_id or None,
+            meeting_passcode or None,
+            notes or None,
+            is_visible,
+            now,
+            now
+        ))
+
+        conn.commit()
+        conn.close()
+
+        return redirect(url_for(
+            "admin_tutor_manager_session_links",
+            saved=1
+        ))
+
+    cur.execute("""
+        SELECT
+            tm.id,
+            tm.full_name,
+            tm.email,
+            tm.phone,
+            sl.title,
+            sl.session_link,
+            sl.meeting_id,
+            sl.meeting_passcode,
+            sl.notes,
+            sl.is_visible,
+            sl.updated_at,
+            (
+                SELECT COUNT(*)
+                FROM manager_tutors mt
+                JOIN tutors t ON t.id=mt.tutor_id
+                WHERE mt.manager_id=tm.id
+                  AND COALESCE(t.is_active,1)=1
+                  AND t.deleted_at IS NULL
+            ) AS tutor_count
+        FROM tutor_managers tm
+        LEFT JOIN tutor_manager_session_links sl
+          ON sl.manager_id=tm.id
+        WHERE COALESCE(tm.is_active,1)=1
+          AND tm.deleted_at IS NULL
+        ORDER BY tm.full_name
+    """)
+
+    managers = cur.fetchall()
+    conn.close()
+
+    notice = ""
+    if request.args.get("saved") == "1":
+        notice = """
+        <div class="card soft" style="border-left:5px solid #16a34a">
+            Meeting link saved.
+        </div>
+        """
+    elif request.args.get("removed") == "1":
+        notice = """
+        <div class="card soft" style="border-left:5px solid #64748b">
+            Meeting link removed.
+        </div>
+        """
+
+    manager_cards = ""
+
+    for row in managers:
+        configured = bool(
+            str(row["session_link"] or "").strip()
+        )
+
+        visible_checked = (
+            "checked"
+            if (
+                row["is_visible"] is None
+                or int(row["is_visible"] or 0) == 1
+            )
+            else ""
+        )
+
+        status_chip = (
+            "<span class='chip active'>Visible</span>"
+            if configured and visible_checked
+            else (
+                "<span class='chip pending'>Hidden</span>"
+                if configured
+                else "<span class='chip'>Not set</span>"
+            )
+        )
+
+        existing_actions = ""
+
+        if configured:
+            existing_actions = f"""
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+                <a class="btn mini success"
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   href="{escape(row['session_link'], quote=True)}">
+                    Open Link
+                </a>
+
+                <form method="post"
+                      action="{url_for('admin_tutor_manager_session_links')}"
+                      style="margin:0"
+                      onsubmit="return confirm('Remove this meeting link?')">
+                    <input type="hidden"
+                           name="manager_id"
+                           value="{row['id']}">
+                    <input type="hidden"
+                           name="action"
+                           value="delete">
+                    <button class="btn mini danger">
+                        Remove Link
+                    </button>
+                </form>
+            </div>
+            """
+
+        manager_cards += f"""
+        <section class="card"
+                 style="border-left:5px solid #1b5e20">
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                gap:12px;
+                align-items:flex-start;
+                flex-wrap:wrap;
+            ">
+                <div>
+                    <h2 style="margin:0 0 4px">
+                        {escape(row['full_name'])}
+                    </h2>
+                    <div class="mini muted">
+                        {int(row['tutor_count'] or 0)} tutor(s) assigned
+                    </div>
+                </div>
+
+                {status_chip}
+            </div>
+
+            <form method="post"
+                  action="{url_for('admin_tutor_manager_session_links')}"
+                  class="grid"
+                  style="margin-top:14px">
+
+                <input type="hidden"
+                       name="manager_id"
+                       value="{row['id']}">
+                <input type="hidden"
+                       name="action"
+                       value="save">
+
+                <div>
+                    <label>Session name</label>
+                    <input name="title"
+                           maxlength="160"
+                           value="{escape(row['title'] or 'Tutor Manager Session', quote=True)}"
+                           placeholder="Tutor Manager Session">
+                </div>
+
+                <div>
+                    <label>Meeting link</label>
+                    <input name="session_link"
+                           type="url"
+                           required
+                           value="{escape(row['session_link'] or '', quote=True)}"
+                           placeholder="https://teams.microsoft.com/...">
+                </div>
+
+                <div>
+                    <label>Meeting ID <span class="mini muted">(optional)</span></label>
+                    <input name="meeting_id"
+                           value="{escape(row['meeting_id'] or '', quote=True)}">
+                </div>
+
+                <div>
+                    <label>Passcode <span class="mini muted">(optional)</span></label>
+                    <input name="meeting_passcode"
+                           value="{escape(row['meeting_passcode'] or '', quote=True)}">
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <label>Notes <span class="mini muted">(optional)</span></label>
+                    <textarea name="notes"
+                              maxlength="1200"
+                              placeholder="Example: Weekly Tutor Manager check-in">{escape(row['notes'] or '')}</textarea>
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <label style="display:flex;gap:8px;align-items:center">
+                        <input type="checkbox"
+                               name="is_visible"
+                               value="1"
+                               {visible_checked}>
+                        Show this meeting to the Tutor Manager and their tutors
+                    </label>
+                </div>
+
+                <div style="grid-column:1/-1">
+                    <button class="btn success">
+                        Save Meeting Link
+                    </button>
+                </div>
+            </form>
+
+            {existing_actions}
+        </section>
+        """
+
+    if not manager_cards:
+        manager_cards = """
+        <div class="empty">
+            No active Tutor Managers are available.
+        </div>
+        """
+
+    body = f"""
+    {admin_nav()}
+
+    <section class="card">
+        <h1>Tutor Manager Sessions</h1>
+        <p class="muted">
+            Add or update the meeting link for each Tutor Manager. Their tutors will see the same link on their dashboard.
+        </p>
+    </section>
+
+    {notice}
+
+    {manager_cards}
+    """
+
+    return page(
+        "Tutor Manager Sessions",
+        body
+    )
+
+
 @app.post("/admin/assign-tutor")
 @require_high_admin
 def assign_tutor():
@@ -65487,7 +66272,7 @@ def manager_nav():
         </a>
         
         <a class="btn mini" href="/manager/session-links">
-            Session Links
+            Class Session Links
         </a>
 
         <a class="btn mini" href="/manager/google-drive-links">
@@ -65510,6 +66295,160 @@ def manager_nav():
     """
     
     
+
+@app.get('/manager/tutor-manager-session')
+def manager_tutor_manager_session():
+
+    r = require_manager()
+    if r:
+        return r
+
+    manager_id = int(
+        session.get("manager_id")
+    )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            tm.full_name AS manager_name,
+            sl.title,
+            sl.session_link,
+            sl.meeting_id,
+            sl.meeting_passcode,
+            sl.notes
+        FROM tutor_managers tm
+        LEFT JOIN tutor_manager_session_links sl
+          ON sl.manager_id=tm.id
+         AND sl.is_visible=1
+        WHERE tm.id=?
+          AND COALESCE(tm.is_active,1)=1
+          AND tm.deleted_at IS NULL
+        LIMIT 1
+    """, (manager_id,))
+
+    row = cur.fetchone()
+
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM manager_tutors mt
+        JOIN tutors t ON t.id=mt.tutor_id
+        WHERE mt.manager_id=?
+          AND COALESCE(t.is_active,1)=1
+          AND t.deleted_at IS NULL
+    """, (manager_id,))
+
+    tutor_count = int(
+        cur.fetchone()["c"]
+        or 0
+    )
+
+    conn.close()
+
+    if not row:
+        return redirect(
+            url_for("manager_login")
+        )
+
+    session_link = str(
+        row["session_link"]
+        or ""
+    ).strip()
+
+    title = (
+        row["title"]
+        or "Tutor Manager Session"
+    )
+
+    if session_link:
+        details = ""
+
+        if row["meeting_id"]:
+            details += f"""
+            <div>
+                <b>Meeting ID:</b>
+                {escape(row['meeting_id'])}
+            </div>
+            """
+
+        if row["meeting_passcode"]:
+            details += f"""
+            <div>
+                <b>Passcode:</b>
+                {escape(row['meeting_passcode'])}
+            </div>
+            """
+
+        session_content = f"""
+        <div style="
+            display:flex;
+            justify-content:space-between;
+            gap:12px;
+            align-items:flex-start;
+            flex-wrap:wrap;
+        ">
+            <div>
+                <h2 style="margin:0 0 4px">
+                    {escape(title)}
+                </h2>
+                <div class="mini muted">
+                    Your tutors use this same meeting link.
+                </div>
+            </div>
+
+            <a class="btn success"
+               href="{escape(session_link, quote=True)}"
+               target="_blank"
+               rel="noopener noreferrer">
+                Join Session
+            </a>
+        </div>
+
+        {f'<div style="margin-top:12px">{details}</div>' if details else ''}
+
+        {
+            f'<div class="card soft" style="margin-top:12px">{escape(row["notes"])}</div>'
+            if row["notes"]
+            else ""
+        }
+        """
+    else:
+        session_content = """
+        <div class="empty">
+            Your meeting link has not been added yet.
+        </div>
+        """
+
+    body = f"""
+    {manager_compact_ui_styles()}
+    {manager_nav()}
+
+    <section class="card">
+        <h1>Tutor Manager Session</h1>
+        <p class="muted">
+            Meeting details for you and your tutor team.
+        </p>
+
+        <div class="card soft"
+             style="margin-top:12px">
+            <strong>{tutor_count}</strong>
+            assigned tutor(s)
+        </div>
+    </section>
+
+    <section class="card"
+             style="border-left:5px solid #1b5e20">
+        {session_content}
+    </section>
+    """
+
+    return page(
+        "Tutor Manager Session",
+        body
+    )
+
+
 def manager_ranking_default_week(month):
     try:
         now = datetime.datetime.now(ZoneInfo("Africa/Johannesburg"))
@@ -65927,7 +66866,7 @@ def manager_session_links():
     conn = get_db()
     cur = conn.cursor()
 
-    # Session links are subject-owned. Newly assigned tutors inherit
+    # Meeting links are subject-owned. Newly assigned tutors inherit
     # the subject session automatically.
     sync_subject_session_templates(conn)
 
